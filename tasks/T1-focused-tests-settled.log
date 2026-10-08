@@ -1,0 +1,79 @@
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+    Finished `test` profile [optimized] target(s) in 2.11s
+     Running unittests src/lib.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/9f4354ffa1b10f17/out/purrdf_bench-9f4354ffa1b10f17)
+
+running 35 tests
+test lubm::generate::tests::actual_emitter_propagates_failed_writes ... ok
+test tests::both_mix_tables_sum_to_one_thousand_and_name_their_entries_uniquely ... ok
+test tests::class_mix_is_exercised_and_indexed_minting_is_stable ... ok
+test lubm::tests::public_configuration_revalidation_precedes_directory_creation ... ok
+test tests::manifest_carries_both_mixes ... ok
+test tests::manifest_computes_no_digest ... ok
+test tests::new_rejects_shard_at_or_past_shards ... ok
+test tests::new_rejects_zero_iris ... ok
+test tests::new_rejects_zero_quads ... ok
+test tests::new_rejects_zero_shards ... ok
+test tests::shard_range_covers_shards_equal_one ... ok
+test tests::shard_range_last_shard_absorbs_the_remainder ... ok
+test lubm::output::tests::actual_payload_finish_refuses_flush_failure ... ok
+test tests::shard_range_stitches_exactly_when_shards_outnumber_quads ... ok
+test tests::stream_tags_are_all_distinct ... ok
+test tests::skew_map_accepts_the_boundary_iris_values ... ok
+test tests::class_mix_measured_shares_match_the_pinned_table ... ok
+test tests::generation_is_deterministic_and_shard_concat_equals_whole ... ok
+test tests::manifest_reports_the_shard_line_count_exactly ... ok
+test tests::golden_digest_pins_the_profile ... ok
+test tests::skew_map_keeps_its_shape ... ok
+test tests::every_row_parses_as_strict_nquads ... ok
+test lubm::tests::bounded_draws_reach_both_endpoints_and_selections_are_distinct ... ok
+test tests::numeric_long_class_emits_exactly_36_digits_beyond_u64_and_2_53 ... ok
+test tests::skew_map_survives_iris_above_two_to_the_thirty_two ... ok
+test tests::skew_map_is_not_funnelled_through_a_thirty_two_bit_intermediate ... ok
+test tests::the_emitted_text_is_the_kind_the_mix_chose ... ok
+test tests::irregular_class_escapes_reserved_octets_in_genuinely_mixed_case ... ok
+test tests::subject_iri_byte_length_bands_match_measurement ... ok
+test tests::every_typed_literal_lexical_form_is_valid_for_its_datatype ... ok
+test tests::rdf12_and_term_kind_coverage_is_non_vacuous ... ok
+test tests::row_mix_measured_shares_match_the_pinned_table ... ok
+test tests::named_graph_membership_is_independent_of_row_kind ... ok
+test tests::literal_payload_shapes_match_measurement ... ok
+test tests::generated_terms_survive_the_strict_reader_intact ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+     Running tests/corpus_cli.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/e2b02277f35dd62b/out/corpus_cli-e2b02277f35dd62b)
+
+running 20 tests
+test shards_one_is_accepted ... ok
+test quads_one_iris_one_is_accepted ... ok
+test help_long_flag_prints_usage_to_stdout_with_empty_stderr ... ok
+test manifest_reports_every_field_correctly ... ok
+test manifest_honours_out_writing_to_file_with_empty_stdout ... ok
+test shard_stitch_shards_one_partitions_the_whole ... ok
+test out_accepts_a_leading_dash_filename_and_a_relative_path ... ok
+test cross_process_stdout_is_byte_identical ... ok
+test shard_stitch_final_shard_equals_the_tail_of_the_whole ... ok
+test hard_fail_matrix_reports_the_exact_exit_code_and_diagnostic ... ok
+test manifest_emitted_lines_equals_the_lines_the_same_invocation_produces ... ok
+test help_to_a_failing_sink_reports_failure_instead_of_panicking ... ok
+test help_short_flag_prints_usage_to_stdout_with_empty_stderr ... ok
+test last_shard_index_is_accepted ... ok
+test shard_stitch_uneven_division_partitions_the_whole ... ok
+test ten_billion_iris_mints_only_in_range_entity_indexes ... ok
+test shard_stitch_shards_outnumber_quads_partitions_the_whole ... ok
+test generated_rows_parse_as_strict_nquads_with_exact_line_count ... ok
+test very_large_iris_is_accepted ... ok
+test generated_corpus_contains_every_promised_term_kind ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/lubm_cli.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/fe53a3cd384cc9c1/out/lubm_cli-fe53a3cd384cc9c1)
+
+running 4 tests
+test invalid_arguments_and_existing_outputs_never_succeed_or_overwrite ... ok
+test independent_graph_controls_refuse_removed_relationships_and_invented_membership ... ok
+test processes_paths_locale_ranges_and_configuration_have_declared_identity ... ok
+test named_seed_index_matrix_satisfies_every_published_graph_constraint ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+

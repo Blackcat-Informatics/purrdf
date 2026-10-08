@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "rows": 14,
+  "full": 14,
+  "budget": 100000000,
+  "q1": 0,
+  "q14": 14294,
+  "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/nondefault/run.FtoSMGIo",
+  "recheck_exit": 0,
+  "files": 96
+}

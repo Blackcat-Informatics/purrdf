@@ -1,0 +1,34 @@
+OK: self-test sample digest 921be79c6c6926b1ada6a93f5e5848c94d75f042c58a5cfb0e7128315a2da1bd
+OK: self-test — verify_digest accepts matching bytes
+OK: self-test — verify_digest rejects wrong bytes naming expected and actual
+OK: self-test — a verified cache entry is a cache hit with no fetch
+OK: self-test — a cache miss installs bytes that verify
+OK: self-test — a cached file that stops verifying is a hard failure, not a cache miss
+OK: self-test — corrupt cache bytes are quarantined, not deleted or overwritten
+OK: self-test — wrong fetched bytes are rejected before installation
+OK: self-test — unverified fetched bytes never reach the cached name
+OK: self-test — right size with wrong content still fails the digest
+OK: self-test — bytes matching sha256 but not the publisher's md5 are refused
+OK: self-test — an md5 mismatch is refused and nothing is installed
+OK: self-test — the licensing posture sentence is derived from the pins (2 carry no licence grant at all, 2 are citation-ware with no redistribution grant)
+OK: self-test — a cached entry whose publisher md5 disagrees is refused, not reported OK
+OK: self-test — a cached md5 mismatch is quarantined and nothing is refetched
+OK: self-test — 25 workload pin name(s) are well formed and unique
+OK: self-test — all 4 digest pin(s) are 64 lowercase hex characters
+OK: self-test — an absent workload pin exits 2 and says which name was asked for
+OK: self-test — a recorded pin exits 0 and prints only its value
+OK: self-test — all 20 answer pin(s) are decimal counts
+OK: self-test — all 20 answer pin(s) are classified, so a new workload family is a failure to classify rather than a silent pass
+OK: self-test — the 20 per-query pins sum to 434748, matching the aggregate pin
+OK: self-test — every version-keyed pin names the workspace version (3.0.1)
+OK: self-test — the LUBM published-query count is pinned (14)
+OK: self-test — the template count and every dataset row pin are positive and pinned
+OK: self-test — the git-visibility matcher flags the cache tree and nothing else
+OK: self-test — all 4 pins are well formed and uniquely named
+OK: self-test — select_artifacts(None) selects every pinned artifact
+OK: self-test — select_artifacts selects a single named artifact (queries-sparql.txt)
+OK: self-test — select_artifacts follows ARTIFACTS order and de-duplicates a repeated name
+OK: self-test — select_artifacts refuses an unknown name, naming it and listing valid names
+OK: self-test — a valid --only name still works immediately after a refusal
+OK: self-test — select_artifacts refuses a mix of one known and one unknown name
+SELF-TEST PASS

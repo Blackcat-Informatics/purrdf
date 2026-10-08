@@ -1,0 +1,4 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.15s

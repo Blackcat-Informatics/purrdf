@@ -1,0 +1,2 @@
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme1n1p2  1.8T  1.5T  306G  83% /opt

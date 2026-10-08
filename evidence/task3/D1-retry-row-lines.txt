@@ -1,0 +1,14 @@
+Q1   no inference                         -        full      OK                     2      103
+Q2   no inference                         -        full      OK                     0      102
+Q3   subClassOf                           rdfs     one-file  OK                    10      489
+Q4   subClassOf                           rdfs     one-file  OK                    29      430
+Q5   subClassOf + subPropertyOf           rdfs     one-file  OK                   648      395
+Q6   implicit GraduateStudent-to-Student  owl-rl   one-file  OK                   613      730
+Q7   implicit GraduateStudent-to-Student  owl-rl   one-file  OK                    70      739
+Q8   implicit GraduateStudent-to-Student  owl-rl   one-file  OK                   613      757
+Q9   implicit GraduateStudent-to-Student  owl-rl   one-file  OK                    22      845
+Q10  implicit GraduateStudent-to-Student  owl-rl   one-file  OK                     2      828
+Q11  transitive property                  owl-rl   one-file  OK                    19      793
+Q12  realization (defined class Chair)    owl-rl   one-file  OK                     1      801
+Q13  inverseOf + subPropertyOf            owl-rl   one-file  OK                     0      802
+Q14  no inference                         -        full      OK                  6141      114

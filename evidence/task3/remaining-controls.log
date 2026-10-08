@@ -1,0 +1,25 @@
+Running as unit: purrdf-lubm-475-remaining-controls-20261008.scope; invocation ID: 4281222bdffa42c09fced28c0c4f31a1
+PASS admission count-zero
+PASS admission count-malformed
+PASS admission seed-overflow
+PASS admission index-count-overflow
+PASS admission schema-relative
+PASS admission base-relative
+PASS admission schema-malformed
+PASS admission base-malformed
+PASS admission missing-cli
+PASS admission unusable-cli
+PASS admission budget-zero
+PASS admission budget-malformed
+PASS admission budget-overflow
+PASS cache queries-sparql.txt
+PASS cache univ-bench.owl
+PASS tamper missing-payload
+PASS tamper extra-payload
+PASS tamper wrong-config
+PASS tamper source-alteration
+PASS tamper converted-alteration
+PASS tamper duplicate-aggregate
+PASS tamper generation-receipt
+PASS tamper graph-acceptance
+ALL remaining runtime controls PASS; all four positive siblings unchanged

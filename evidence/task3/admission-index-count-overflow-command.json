@@ -1,0 +1,8 @@
+[
+  "make",
+  "lubm",
+  "LUBM_MAX_JOIN_STEPS=100000000",
+  "LUBM_BIN=/opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-a82d2426e-current",
+  "LUBM_OUT=/opt/purrdf-lubm-task3-20261008.tp3x3z8f/admission/index-count-overflow",
+  "LUBM_INDEX=18446744073709551615"
+]

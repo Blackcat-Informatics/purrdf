@@ -1,0 +1,187 @@
+Running as unit: purrdf-lubm-475-n2-20261008.scope; invocation ID: 8e4926d37a084107b2aa84dea3d5fa3f
+    Finished `release` profile [optimized] target(s) in 0.14s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check config 0042 0002 2 'https://example.org/lubm-task3-schema' 'https://example.org/lubm-task3-documents/'`
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check executable`
+
+=== 1/7 artifacts (external ontology and queries, fetched by digest) ===
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+OK: univ-bench.owl digest e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+     cache-hit  unlicensed (no grant published)
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+PASS: 2 artifacts verified (0 fetched, 2 already cached) in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+      None of them is vendored or redistributable from here. Results derived from
+      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);
+      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run.
+
+=== 2/7 purrdf CLI ===
+purrdf: /opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-a82d2426e-current  (purrdf 3.0.1)
+
+=== 3/7 native generator (Cargo freshness, original first-party Rust) ===
+    Finished `release` profile [optimized] target(s) in 0.05s
+generator: /opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-corpus profile=purrdf-lubm-native-v1
+
+=== 4/7 generate native LUBM(2, 2) seed=42 ===
+run artifacts: /opt/purrdf-lubm-task3-20261008.tp3x3z8f/nondefault/run.tan3Q0rp
+
+=== 5/7 convert native N-Triples through purrdf and verify actual RDF graphs ===
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+OK: univ-bench.owl digest e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+     cache-hit  unlicensed (no grant published)
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+PASS: 2 artifacts verified (0 fetched, 2 already cached) in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+      None of them is vendored or redistributable from here. Results derived from
+      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);
+      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run.
+native: 36 department files; 250033 converted statements
+receipt sha256: 0d4950a2cbb0bb79c9efd0059d3761e41b1f6ecb1eada15b099b70b074753631; graph acceptance sha256: 96fa784a622261a9229d6f567a5d6141404f49c6c5c5ea45fef3bb0b75fd75bb
+external ontology sha256: e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a; projected schema sha256: 045f3e5e35e79228273c7fe6f93fbc9c71758453d4b018013fcb093a1ec802a4
+
+=== 6/7 normalise the 14 published queries (mechanical rules, recorded) ===
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+OK: univ-bench.owl digest e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+     cache-hit  unlicensed (no grant published)
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+PASS: 2 artifacts verified (0 fetched, 2 already cached) in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+      None of them is vendored or redistributable from here. Results derived from
+      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);
+      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run.
+OK: all 14 queries normalise
+OK: every query binds ub: to http://swat.cse.lehigh.edu/onto/univ-bench.owl#
+OK: no query still carries the 2004 draft namespace
+OK: R2 PATTERN-COMMA touched exactly Query 7 (touched [7])
+OK: R3 BARE-IRI touched exactly Queries 1 and 3 (touched [1, 3])
+OK: R1 PROJECTION-COMMA touched the six multi-variable projections (touched [2, 4, 7, 8, 9, 12])
+OK: no normalised query contains a comma
+OK: no normalised query contains an unbracketed IRI
+OK: every projection keeps its variables, spelling and order
+OK: every regime maps to an --entailment value the CLI offers
+OK: exactly Q1, Q2 and Q14 need no inference
+SELF-TEST PASS
+wrote 14 normalised queries to /opt/purrdf-lubm-task3-20261008.tp3x3z8f/nondefault/run.tan3Q0rp/queries
+provenance: /opt/purrdf-lubm-task3-20261008.tp3x3z8f/nondefault/run.tan3Q0rp/queries/provenance.txt
+sha256(queries) = 757b234159543035942437bd8a448f43f2bd715beceb551ba5e3d6997f7ed12f
+sha256(query regimes) = c65dc853575d605152f76a5fd7a214d8a67350fdbd96092258aa1942d4c11402
+sha256(query normalisation) = a87ac13c5d9beccd8a86a4829a4f76f29b471c79591429c1008fcab2b8b5e279
+  ^ NOT checked against a pin: LUBM_ONTO is not the default, so this is a
+    different query set and no pin is recorded for it.
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+OK: univ-bench.owl digest e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+     cache-hit  unlicensed (no grant published)
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+PASS: 2 artifacts verified (0 fetched, 2 already cached) in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+      None of them is vendored or redistributable from here. Results derived from
+      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);
+      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run.
+
+=== 7/7 run the queries, per regime ===
+probing each regime's closure against the dataset ladder:
+  regime owl-rl   rung full      250326 rows -- CLOSURE OK
+  regime rdfs     rung full      250326 rows -- CLOSURE OK
+
+ID   REGIME                               CLI      RUNG      STATUS              ROWS       MS
+----------------------------------------------------------------------------------------------------
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+OK: univ-bench.owl digest e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+     cache-hit  unlicensed (no grant published)
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+PASS: 2 artifacts verified (0 fetched, 2 already cached) in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+      None of them is vendored or redistributable from here. Results derived from
+      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);
+      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run.
+Q1   no inference                         -        full      OK                     0      203
+Q2   no inference                         -        full      OK                     0      214
+Q3   subClassOf                           rdfs     full      OK                     0    13031
+Q4   subClassOf                           rdfs     full      OK                     0    13380
+Q5   subClassOf + subPropertyOf           rdfs     full      OK                     0    14507
+Q6   implicit GraduateStudent-to-Student  owl-rl   full      OK                 18877     4678
+Q7   implicit GraduateStudent-to-Student  owl-rl   full      OK                     0     4581
+Q8   implicit GraduateStudent-to-Student  owl-rl   full      OK                     0     4703
+Q9   implicit GraduateStudent-to-Student  owl-rl   full      OK                   469     4651
+Q10  implicit GraduateStudent-to-Student  owl-rl   full      OK                     0     4534
+Q11  transitive property                  owl-rl   full      OK                     0     4703
+Q12  realization (defined class Chair)    owl-rl   full      OK                     0     4690
+Q13  inverseOf + subPropertyOf            owl-rl   full      OK                     0     4714
+Q14  no inference                         -        full      OK                 14294      692
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+OK: univ-bench.owl digest e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+     cache-hit  unlicensed (no grant published)
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+PASS: 2 artifacts verified (0 fetched, 2 already cached) in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+      None of them is vendored or redistributable from here. Results derived from
+      WatDiv must cite Aluc, Hartig, Ozsu and Daudjee (ISWC 2014, pages 197-212);
+      WatDiv v0.6 has no seed flag: pin a generated dataset, never a generation run.
+
+oracle: Q1 and Q14 exactly match independent parsed native graph sets
+SUMMARY
+  qualification      COMPLETE: every published query answered on the full corpus
+  run artifacts      /opt/purrdf-lubm-task3-20261008.tp3x3z8f/nondefault/run.tan3Q0rp
+  binary             /opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-a82d2426e-current (purrdf 3.0.1)
+  dataset            LUBM(2, 2) seed=42
+  profile            purrdf-lubm-native-v1
+  max join steps     100000000 (every entailment probe and query)
+  generator sha256   088baa01091b584fa5161f63e900278006ac60b1688aa0fb6a2f74b942eeeba5
+  checker sha256     25cdeed637a111b5cd89d218954b8e20b47a07e17cc84d892dc1d71a360aa2f4
+  binary sha256      805ad0e7e0265f64b9d4ef59e86999e3b4f19997ac38ac9afd798b93af56b0e2
+  receipt sha256     0d4950a2cbb0bb79c9efd0059d3761e41b1f6ecb1eada15b099b70b074753631
+  graph acceptance   96fa784a622261a9229d6f567a5d6141404f49c6c5c5ea45fef3bb0b75fd75bb
+  ontology original  e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+  queries original   c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+  ontology projected 045f3e5e35e79228273c7fe6f93fbc9c71758453d4b018013fcb093a1ec802a4
+  entailment full    e7154ae14de662440731e516ea577d469818320cd3c98dc2ee2b7cba2f70ed09
+  entailment file    62c56aa9400748a4aa2556f59a281db337ca1e3e6aa94fa6936ac8c72fa2fe99
+  entailment slice   7a86eb13bbecf05c853de4946d8a5cd617d1db9300e7f16855b3d080ce36c948
+  generated          36 N-Triples department files, 537 ms
+  converted          250033 rows, 39133815 bytes, 1809 ms
+  sha256             853b63a640d820aef50e2585ce9fdd314253534825b2019d80082c063548d8b4
+  queries sha256     757b234159543035942437bd8a448f43f2bd715beceb551ba5e3d6997f7ed12f
+  queries executed   14 of 14 (79281 ms total)
+  comparable rows    14 of 14 (answered on rung 'full')
+  matched nothing    11
+  not executed       0
+
+HOW TO READ THIS
+  Every row names the REGIME it was answered under and the RUNG of the dataset
+  ladder it was answered over. Compare two engines on a query ONLY when both
+  answered it under the same regime and over the same data. LUBM never asserts
+  Student, Professor or Chair, so an engine that applies no inference answers
+  eleven of these queries 0 -- instantly, and wrongly.
+
+  A ROW COUNT ON A RUNG BELOW 'full' IS NOT THE COMPLETE NATIVE-PROFILE ANSWER. It is the
+  answer over that rung, which is a strict subset of the corpus, so a query whose
+  matching individuals fall outside the subset legitimately reports 0. Those counts
+  say the regime WORKS and what it costs; they are not comparable against another engine
+  over these same complete native-profile bytes. Only 'full' rows are.
+
+  A rung below 'full' appears when the 'full' attempt did not succeed. The usual
+  cause is materializing that regime's closure passing an admitted resource limit.
+  LUBM_MAX_JOIN_STEPS controls its join budget; the probe lines carry whatever the
+  engine said in full -- including the observed and permitted counts when that is
+  the cause -- so the reason is read rather than inferred from a missing row. Any
+  non-zero exit demotes the rung, so read the probe line rather than assuming the
+  ceiling.
+
+  Timing is report-only. Exact native graph, conversion and Q1/Q14 answer sets
+  are acceptance checks. Historical UBA answer counts do not apply to this profile.
+
+CITE
+  Y. Guo, Z. Pan and J. Heflin, "LUBM: A Benchmark for OWL Knowledge Base
+  Systems", Journal of Web Semantics 3(2).

@@ -1,0 +1,5 @@
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check config 18446744073709551616 0 1 'http://swat.cse.lehigh.edu/onto/univ-bench.owl' 'http://example.org/lubm/'`
+invalid seed: number too large to fit in target type
+lubm-lane: invalid native configuration: LUBM_SEED='18446744073709551616' LUBM_INDEX='0' LUBM_UNIVERSITIES='1' LUBM_ONTO='http://swat.cse.lehigh.edu/onto/univ-bench.owl' LUBM_DOC_BASE='http://example.org/lubm/'; no acquisition or generation occurred
+make: *** [Makefile:563: lubm] Error 1

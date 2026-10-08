@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "rows": 14,
+  "full": 14,
+  "budget": 100000000,
+  "q1": 2,
+  "q14": 6141,
+  "run": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/lubm-task3-20261008/default/run.nHCeQNdr",
+  "all56files_identical_to_D1": true,
+  "recheck_exit": 0
+}

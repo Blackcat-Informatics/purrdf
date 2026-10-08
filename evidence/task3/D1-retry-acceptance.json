@@ -1,0 +1,16 @@
+{
+  "child_exit": 0,
+  "acceptance": "FAILED",
+  "reason": "PARTIAL;3of14full;11one-file",
+  "run": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/lubm-task3-20261008/default/run.09d7lCiA",
+  "retained_files": 56,
+  "source_unchanged": true,
+  "native_q1": 2,
+  "native_q14": 6141,
+  "full_probe_rows": 109647,
+  "rdfs_observed_join_steps": 1048577,
+  "owl_rl_observed_join_steps": 1048577,
+  "default_join_steps_permitted": 1048576,
+  "dependent_matrix": "STOPPED",
+  "preserved_initial_run_unchanged": true
+}

@@ -1,0 +1,1 @@
+a82d2426e8bcd7ad6e9ba3484301fd604e7b7861 Apply an explicit entailment join budget throughout the LUBM lane

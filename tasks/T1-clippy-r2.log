@@ -1,0 +1,191 @@
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-results)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf)
+error: you appear to be counting bytes the naive way
+   --> crates/bench/tests/lubm_cli.rs:112:13
+    |
+112 |             bytes.iter().filter(|byte| **byte == b'\n').count(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using the bytecount crate: `bytecount::count(bytes, b'\n')`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#naive_bytecount
+    = note: `-D clippy::naive-bytecount` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::naive_bytecount)]`
+
+error: used `assert!` to check that a value is not empty
+   --> crates/bench/tests/lubm_cli.rs:207:17
+    |
+207 | /                 assert!(
+208 | |                     !graph
+209 | |                         .literals
+210 | |                         .get(&(person.to_string(), term(property)))
+211 | |                         .unwrap()
+212 | |                         .is_empty()
+213 | |                 );
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+    |
+207 ~                 assert_ne!(
+208 ~                     graph
+209 +                         .literals
+210 +                         .get(&(person.to_string(), term(property)))
+211 +                         .unwrap(), ""
+    |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/bench/tests/lubm_cli.rs:240:17
+    |
+240 | /                 assert!(
+241 | |                     !graph
+242 | |                         .literals
+243 | |                         .get(&(course.to_string(), term("name")))
+244 | |                         .unwrap()
+245 | |                         .is_empty()
+246 | |                 );
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+240 ~                 assert_ne!(
+241 ~                     graph
+242 +                         .literals
+243 +                         .get(&(course.to_string(), term("name")))
+244 +                         .unwrap(), ""
+    |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/bench/tests/lubm_cli.rs:274:9
+    |
+274 | /         assert!(
+275 | |             !graph
+276 | |                 .literals
+277 | |                 .get(&(publication.to_string(), term("name")))
+278 | |                 .unwrap()
+279 | |                 .is_empty()
+280 | |         );
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+274 ~         assert_ne!(
+275 ~             graph
+276 +                 .literals
+277 +                 .get(&(publication.to_string(), term("name")))
+278 +                 .unwrap(), ""
+    |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/bench/tests/lubm_cli.rs:291:17
+    |
+291 | /                 assert!(
+292 | |                     !graph
+293 | |                         .literals
+294 | |                         .get(&(person.to_string(), term(property)))
+295 | |                         .unwrap()
+296 | |                         .is_empty()
+297 | |                 );
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+291 ~                 assert_ne!(
+292 ~                     graph
+293 +                         .literals
+294 +                         .get(&(person.to_string(), term(property)))
+295 +                         .unwrap(), ""
+    |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/bench/tests/lubm_cli.rs:326:21
+    |
+326 | /                     assert!(
+327 | |                         !graph
+328 | |                             .objects(publication, &term("publicationAuthor"))
+329 | |                             .intersection(&professors)
+330 | |                             .collect::<Vec<_>>()
+331 | |                             .is_empty()
+332 | |                     );
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+326 ~                     assert_ne!(
+327 ~                         graph
+328 +                             .objects(publication, &term("publicationAuthor"))
+329 +                             .intersection(&professors)
+330 +                             .collect::<Vec<_>>(), [] as [&&str; 0]
+    |
+
+error: avoid using `collect()` when not needed
+   --> crates/bench/tests/lubm_cli.rs:330:30
+    |
+330 |   ...                   .collect::<Vec<_>>()
+    |  ________________________^
+331 | | ...                   .is_empty()
+    | |_________________________________^ help: replace with: `next().is_none()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_collect
+    = note: `-D clippy::needless-collect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_collect)]`
+
+error: used `assert!` to check that a value is not empty
+   --> crates/bench/tests/lubm_cli.rs:421:9
+    |
+421 |         assert!(!bytes.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+421 -         assert!(!bytes.is_empty());
+421 +         assert_ne!(bytes.as_slice(), []);
+    |
+
+error: case-sensitive file extension comparison
+   --> crates/bench/tests/lubm_cli.rs:469:27
+    |
+469 |         .find(|(name, _)| name.ends_with(".nt"))
+    |                           ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a case-insensitive comparison instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#case_sensitive_file_extension_comparisons
+    = note: `-D clippy::case-sensitive-file-extension-comparisons` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::case_sensitive_file_extension_comparisons)]`
+help: use std::path::Path
+    |
+469 ~         .find(|(name, _)| std::path::Path::new(name)
+470 +             .extension()
+471 ~             .is_some_and(|ext| ext.eq_ignore_ascii_case("nt")))
+    |
+
+error: could not compile `purrdf-bench` (test "lubm_cli") due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: items after a test module
+   --> crates/bench/src/lubm/generate.rs:90:1
+    |
+ 90 |   mod tests {
+    |   ^^^^^^^^^
+...
+117 | / fn department_document<W: Write>(
+118 | |     spec: &Spec,
+119 | |     index: u64,
+120 | |     number: usize,
+121 | |     draw: &mut Draw,
+122 | |     output: &mut W,
+123 | | ) -> io::Result<()> {
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: could not compile `purrdf-bench` (lib test) due to 1 previous error

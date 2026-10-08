@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "systemd-run",
+    "--user",
+    "--scope",
+    "--same-dir",
+    "--unit=purrdf-lubm-475-fault-q1-exit-20261008",
+    "--property=MemoryMax=64G",
+    "--property=MemorySwapMax=0",
+    "env",
+    "CARGO_BUILD_JOBS=8",
+    "LUBM_FAULT_REAL_BIN=/opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-a82d2426e-current",
+    "LUBM_FAULT_QUERY_FILE=/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/lubm-task3-20261008/default/run.qNx2WtZR/queries/Q01.rq",
+    "LUBM_FAULT_MODE=exit",
+    "make",
+    "lubm",
+    "LUBM_MAX_JOIN_STEPS=100000000",
+    "LUBM_OUT=/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q1-exit",
+    "LUBM_BIN=/opt/purrdf-lubm-fault-controls-20261008.2p06nl4h/lubm_fault_cli"
+  ],
+  "query_sha256": "623b615f5d52a9b85d6552a8fb740ef06d28e4d3a593fb698efe451bb2a14d40",
+  "driver_sha256": "41158387d1baa91146caa50014f878b22fd3f14d74a62902faabd7bcc94aa416",
+  "cli_sha256": "805ad0e7e0265f64b9d4ef59e86999e3b4f19997ac38ac9afd798b93af56b0e2"
+}

@@ -1,0 +1,5 @@
+owned smoke artifacts: /opt/purrdf-native-lubm-task2-smoke.or8g65vq
+checker: /opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check
+CLI: /opt/.cargo/slots/589dcf4f131a442c/0/target/release/purrdf
+Q1 actual exact-set accepted rows: 2
+Q14 actual exact-set accepted rows: 6141

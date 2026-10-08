@@ -1,0 +1,64 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/hash)
+    Checking cpufeatures v0.3.0
+   Compiling crossbeam-utils v0.8.21
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-events)
+    Checking regex-syntax v0.8.11
+    Checking cmov v0.5.4
+   Compiling libc v0.2.186
+    Checking cpubits v0.1.1
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-core)
+    Checking ctutils v0.4.2
+    Checking either v1.16.0
+    Checking crossbeam-epoch v0.9.18
+    Checking regex-automata v0.4.14
+   Compiling getrandom v0.3.4
+    Checking hashbrown v0.17.1
+    Checking fastrand v2.4.1
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/lex)
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/deflate)
+    Checking twox-hash v2.1.2
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking inout v0.2.2
+    Checking structured-zstd v0.0.49
+    Checking universal-hash v0.6.1
+    Checking digest v0.11.3
+    Checking cipher v0.5.2
+    Checking rayon v1.12.0
+    Checking regex v1.12.4
+    Checking polyval v0.7.3
+    Checking aead v0.6.1
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/iri)
+    Checking sha2 v0.11.0
+    Checking ctr v0.10.1
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/stack)
+    Checking visual-hashing v1.0.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/cdt)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/ed25519)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/testkit)
+    Checking aes-gcm v0.11.1
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-algebra)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/gts)
+error: allocating a local array larger than 16384 bytes
+  --> crates/bench/src/lubm/output.rs:75:30
+   |
+75 |             let mut buffer = [0_u8; 65536];
+   |                              ^^^^^^^^^^^^^
+   |
+   = help: consider allocating on the heap with `vec![0_u8; 65536].into_boxed_slice()`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_stack_arrays
+   = note: `-D clippy::large-stack-arrays` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::large_stack_arrays)]`
+
+error: could not compile `purrdf-bench` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,12 @@
+{
+  "session": 86116,
+  "actual_exit": 0,
+  "source": "a82d2426e",
+  "command": "systemd-run --user --scope --same-dir --unit=purrdf-lubm-475-task4-full-20261008 --property=MemoryMax=64G --property=MemorySwapMax=0 env CARGO_BUILD_JOBS=8 RUST_TEST_THREADS=8 CI=1 make check",
+  "reported_rust_result_blocks": 684,
+  "reported_passed_in_log": 22261,
+  "reported_failed_in_log": 0,
+  "counts_scope": "All reported Rust result blocks in full log, including generator/tool subtests; not an independent unique-case census",
+  "source_diff_exit": 0,
+  "scope_note": "Compiler children relocated by normal Stage wrapper into inherited stage-builds.slice48GiB memory/8GiB swap; outer64GiB/Swap0 is not effective compiler no-swap proof. Slice-wide historical peaks not attributed to gate."
+}

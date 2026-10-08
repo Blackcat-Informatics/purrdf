@@ -1,0 +1,15 @@
+id	regime	cli_regime	file
+Q1	no inference	-	Q01.rq
+Q2	no inference	-	Q02.rq
+Q3	subClassOf	rdfs	Q03.rq
+Q4	subClassOf	rdfs	Q04.rq
+Q5	subClassOf + subPropertyOf	rdfs	Q05.rq
+Q6	implicit GraduateStudent-to-Student	owl-rl	Q06.rq
+Q7	implicit GraduateStudent-to-Student	owl-rl	Q07.rq
+Q8	implicit GraduateStudent-to-Student	owl-rl	Q08.rq
+Q9	implicit GraduateStudent-to-Student	owl-rl	Q09.rq
+Q10	implicit GraduateStudent-to-Student	owl-rl	Q10.rq
+Q11	transitive property	owl-rl	Q11.rq
+Q12	realization (defined class Chair)	owl-rl	Q12.rq
+Q13	inverseOf + subPropertyOf	owl-rl	Q13.rq
+Q14	no inference	-	Q14.rq

@@ -1,0 +1,5 @@
+lubm-lane: LUBM_MAX_JOIN_STEPS must be at most 9223372036854775807 (got '9223372036854775808').
+  Bash arithmetic is signed 64-bit and wraps silently, so accepting this would
+  substitute a different number -- possibly a negative one -- and then publish it
+  as the value you asked for.
+make: *** [Makefile:563: lubm] Error 1

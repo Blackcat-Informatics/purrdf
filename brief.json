@@ -1,0 +1,91 @@
+{
+  "issue": 475,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Benchmarks: replace the Java LUBM generator with a deterministic Rust generator",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 407,
+      "title": "text: analyzer stages for stemming, accent folding, dictionary segmentation, void stripping, token bounds, phonetic codes and substring matching",
+      "state": "CLOSED"
+    },
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 393,
+      "title": "EXPLAIN aborts the process on a large join",
+      "state": "CLOSED"
+    },
+    {
+      "number": 392,
+      "title": "A pattern after OPTIONAL or BIND, or an OPTIONAL body, is evaluated without the bindings before it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 85,
+      "title": "Eliminate avoidable Rust allocations across core, query, validation, GTS, and bindings for 0.5.0",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 297,
+      "title": "perf: similar to gmeow-ontology - use optimized builds in check and conformance.",
+      "state": "CLOSED"
+    },
+    {
+      "number": 320,
+      "title": "Offer: a deterministic HNSW index for the ANN slot PURREMB declares but PurRDF cannot fill",
+      "state": "CLOSED"
+    },
+    {
+      "number": 10,
+      "title": "EPIC \u2014 purrdf public maturity: full conformance \u00b7 optimization \u00b7 ecosystem",
+      "state": "CLOSED"
+    },
+    {
+      "number": 97,
+      "title": "Explore: wavelet-tree predicate/object index for the succinct pack codec",
+      "state": "CLOSED"
+    },
+    {
+      "number": 77,
+      "title": "Harden npm wasm package into RDF 1.2 TypeScript toolkit and SPARQL platform",
+      "state": "CLOSED"
+    },
+    {
+      "number": 139,
+      "title": "research-objects: no Croissant/RO-Crate/DataCite/Frictionless generators from RDF instance data",
+      "state": "CLOSED"
+    },
+    {
+      "number": 111,
+      "title": "epic(rdf): research-object codecs (Croissant, RO-Crate, DataCite, DCAT, Frictionless)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "performance": 1,
+    "none": 12
+  },
+  "coverage": [
+    "issue #475 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Benchmarks:', 'replace', 'generator']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits"
+  ]
+}

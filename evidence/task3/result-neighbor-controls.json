@@ -1,0 +1,25 @@
+{
+  "results": [
+    {
+      "control": "unbound",
+      "exit": 1,
+      "status": "PASS"
+    },
+    {
+      "control": "literal",
+      "exit": 1,
+      "status": "PASS"
+    },
+    {
+      "control": "blank",
+      "exit": 1,
+      "status": "PASS"
+    },
+    {
+      "control": "valid",
+      "exit": 0,
+      "status": "PASS"
+    }
+  ],
+  "unchanged_acceptance_sha256": "b348fe75d324637396773a923232408e17168ae5af77298aeedcaa5670c5d1ed"
+}

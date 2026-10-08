@@ -1,0 +1,10 @@
+command	exit
+release-build	0
+initial-example-test	101
+initial-all-target-clippy	0
+corrected-example-test	0
+corrected-all-target-clippy	0
+corrected-release-build	0
+22-runtime-controls	0
+fmt	0
+whitespace	0

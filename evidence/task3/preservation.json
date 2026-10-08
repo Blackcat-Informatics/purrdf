@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "source_cache": "/opt/.cargo/target/475-benchmarks-replace-the-java-lubm-589dcf4f/bench-artifacts",
+  "preserved_cache": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/D1-verified-input-cache-preserved",
+  "preserved_failed_run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/D1-failed-run-preserved",
+  "original_failed_run_unchanged": true,
+  "cache_sha256": {
+    "queries-sparql.txt": "c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104",
+    "univ-bench.owl": "e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a"
+  },
+  "failed_run_files": 34
+}

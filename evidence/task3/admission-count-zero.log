@@ -1,0 +1,2 @@
+lubm-lane: LUBM_UNIVERSITIES must be positive (got '0')
+make: *** [Makefile:563: lubm] Error 1

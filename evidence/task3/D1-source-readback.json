@@ -1,0 +1,23 @@
+{
+  "unchanged": true,
+  "changed": [],
+  "sha256": {
+    "Cargo.toml": "02b43e188d489473ab2948e8517910c48e644cd56c9247dea42d251c480f0b60",
+    "Cargo.lock": "dd954efcbc80fc7d8c57ef64046ddce9d81d940f042767e37793f6f16b7c040e",
+    "rust-toolchain.toml": "fb4564a4be0c39a9f5114a0bd965c737884fa9623ebd99800f27d3711ae2e800",
+    "Makefile": "372482abe809e2801547ba5b23353d334ea14d89bac75519834e50ab2c989e16",
+    "scripts/lubm-lane.sh": "fc92495b4b819313ea17f3a337ba2fca3e4a63d2eade0d114d469618a6309457",
+    "scripts/lane-common.sh": "6c4b8370e5d22179c202842a3074fb70b2ef4873a3b94803c8677a8e11274882",
+    "scripts/lubm-queries.py": "abc81b5fc16b77a7daefaf4371004bb5b274f05e44d9ace6f0e6fe2a8c220417",
+    "scripts/benchmark-acquire.py": "2e01cd2774ba185b862b7d15a107f1c8cef5267ce63f79684f2660b3137079b2",
+    "crates/bench/examples/lubm_fault_cli.rs": "a56550a1e8c47cb8eff2fd6f9642cba6317c99a159139e8f52793934b5e8d0a3",
+    "crates/bench/LUBM_PROFILE.md": "76a154c9585a2514f13ab1e9cfb4310da73da825cd9556dde3819b9779c7e152",
+    "crates/datalog/src/seminaive.rs": "88bb0bfad578aa403c3ef15d96894175c8803c0e708b421961498fcfea6dcac6",
+    "crates/datalog/src/seminaive/factors.rs": "978725bc55e7f08d33e55d31abc7b2a8f560d6f0a9eab4c6f2db9cf5bf38d9cc",
+    "crates/entail/src/calculus/mod.rs": "281a62de9f85fd0536ad445c98b65625a711053fd159fa9dcc0d9597b0da9c37",
+    "crates/bench/src/lubm/mod.rs": "23b110227f5b12c5d4c6455b4247882aeb83db7e7cf48b1aed1f0a7e1bf2c345",
+    "crates/bench/src/lubm/generate.rs": "0d1d41b8244f80ad410ddcda5fa008e3d4b6285c2bd1ad3d8da94ba5a9a617c0",
+    "crates/bench/src/lubm/output.rs": "064774ce22e94bbeedeb624c61ff3cd1326ac4b2a957212020c58bce4a74c057",
+    "crates/bench/src/lubm/check.rs": "dbb46eacc62e7f52bb8f2ac539af88a71dd2c1fc2a8185a70158f6c7ede2c1c3"
+  }
+}

@@ -1,0 +1,123 @@
+[
+  {
+    "control": "count-zero",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "count-malformed",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "seed-overflow",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "index-count-overflow",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "schema-relative",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "base-relative",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "schema-malformed",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "base-malformed",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "missing-cli",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "unusable-cli",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "budget-zero",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "budget-malformed",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "budget-overflow",
+    "exit": 2,
+    "status": "PASS"
+  },
+  {
+    "control": "cache-queries-sparql.txt",
+    "exit": 2,
+    "quarantine": [
+      "/opt/.cargo/target/475-benchmarks-replace-the-java-lubm-589dcf4f/bench-artifacts/queries-sparql.txt.rejected-a6a1047cffa68bc4"
+    ],
+    "status": "PASS"
+  },
+  {
+    "control": "cache-univ-bench.owl",
+    "exit": 2,
+    "quarantine": [
+      "/opt/.cargo/target/475-benchmarks-replace-the-java-lubm-589dcf4f/bench-artifacts/univ-bench.owl.rejected-a6a1047cffa68bc4"
+    ],
+    "status": "PASS"
+  },
+  {
+    "control": "missing-payload",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "extra-payload",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "wrong-config",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "source-alteration",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "converted-alteration",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "duplicate-aggregate",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "generation-receipt",
+    "exit": 1,
+    "status": "PASS"
+  },
+  {
+    "control": "graph-acceptance",
+    "exit": 1,
+    "status": "PASS"
+  }
+]

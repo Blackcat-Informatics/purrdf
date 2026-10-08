@@ -1,0 +1,4 @@
+lubm-lane: LUBM_BIN='/opt/purrdf-lubm-task3-20261008.tp3x3z8f/absent-cli' does not exist
+  The path is used exactly as given, byte for byte; nothing in it is expanded.
+  Leave LUBM_BIN unset to have this lane build the purrdf CLI itself.
+make: *** [Makefile:563: lubm] Error 1

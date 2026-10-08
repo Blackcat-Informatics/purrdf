@@ -1,0 +1,2 @@
+lubm-lane: LUBM_DOC_BASE must be an absolute IRI (got 'relative')
+make: *** [Makefile:563: lubm] Error 1

@@ -1,0 +1,13 @@
+[
+  "/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check",
+  "recheck",
+  "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/tamper/missing-payload/gen",
+  "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/tamper/missing-payload/converted",
+  "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/tamper/missing-payload/lubm-data.nq",
+  "0",
+  "0",
+  "1",
+  "http://swat.cse.lehigh.edu/onto/univ-bench.owl",
+  "http://example.org/lubm/",
+  "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/tamper/missing-payload/graph-acceptance.json"
+]

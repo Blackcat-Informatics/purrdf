@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "partial_run_files": 56,
+  "copied_run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/D1-partial-56files-preserved",
+  "original_unchanged": true,
+  "cache_source_absent": true,
+  "preserved_cache": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/D1-partial-verified-input-cache-preserved",
+  "cache_sha256": {
+    "queries-sparql.txt": "c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104",
+    "univ-bench.owl": "e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a"
+  }
+}

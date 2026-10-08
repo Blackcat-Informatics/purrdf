@@ -1,0 +1,104 @@
+{
+  "origin": "/opt/purrdf-lubm-task4-20261008.YhDb3PFd",
+  "selection": "essential complete gate, terminal, scope/resource and tool/source context only",
+  "copied_files": [
+    {
+      "path": "make-check.log",
+      "bytes": 1782299,
+      "mode": "0o644"
+    },
+    {
+      "path": "make-check.exit",
+      "bytes": 2,
+      "mode": "0o644"
+    },
+    {
+      "path": "fullgate-terminal.json",
+      "bytes": 781,
+      "mode": "0o644"
+    },
+    {
+      "path": "active-scope.txt",
+      "bytes": 72,
+      "mode": "0o644"
+    },
+    {
+      "path": "effective-build-slice.txt",
+      "bytes": 149,
+      "mode": "0o644"
+    },
+    {
+      "path": "effective-cargo-scope.txt",
+      "bytes": 141,
+      "mode": "0o644"
+    },
+    {
+      "path": "terminal-scope.txt",
+      "bytes": 44,
+      "mode": "0o644"
+    },
+    {
+      "path": "rustc.txt",
+      "bytes": 214,
+      "mode": "0o644"
+    },
+    {
+      "path": "cargo.txt",
+      "bytes": 45,
+      "mode": "0o644"
+    },
+    {
+      "path": "node.txt",
+      "bytes": 9,
+      "mode": "0o644"
+    },
+    {
+      "path": "binaryen.txt",
+      "bytes": 21,
+      "mode": "0o644"
+    },
+    {
+      "path": "python.txt",
+      "bytes": 14,
+      "mode": "0o644"
+    },
+    {
+      "path": "make.txt",
+      "bytes": 300,
+      "mode": "0o644"
+    },
+    {
+      "path": "cc.txt",
+      "bytes": 227,
+      "mode": "0o644"
+    },
+    {
+      "path": "targets.txt",
+      "bytes": 568,
+      "mode": "0o644"
+    },
+    {
+      "path": "executable-paths.txt",
+      "bytes": 227,
+      "mode": "0o644"
+    },
+    {
+      "path": "source-status.txt",
+      "bytes": 11,
+      "mode": "0o644"
+    },
+    {
+      "path": "source-diff.txt",
+      "bytes": 0,
+      "mode": "0o644"
+    }
+  ],
+  "copied_bytes": 1785124,
+  "exact_copy_readback": true,
+  "excluded": [
+    "siblings.txt",
+    "memory.txt",
+    "disk.txt"
+  ],
+  "replay_note": "Records contain complete observed log and versions, not compiler/dependency artifacts. Reexecution requires source a82d2426e, floating prescribed SDK and observed configuration, installed tools/wasm target, normal Stage Cargo managed build slice; source historical result is not a promise of byte-identical logs."
+}

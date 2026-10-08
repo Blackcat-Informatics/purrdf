@@ -1,0 +1,2 @@
+Running as unit: purrdf-lubm-475-full-rdfs-diagnosis-20261008.scope; invocation ID: 460ccf352f3a44259ea8dfd22a134ebb
+{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://example.org/lubm/University0_0.nt"}}]}}

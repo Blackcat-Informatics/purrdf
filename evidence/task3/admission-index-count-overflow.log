@@ -1,0 +1,5 @@
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check config 0 18446744073709551615 1 'http://swat.cse.lehigh.edu/onto/univ-bench.owl' 'http://example.org/lubm/'`
+university count must be positive and the exclusive range end must fit u64
+lubm-lane: invalid native configuration: LUBM_SEED='0' LUBM_INDEX='18446744073709551615' LUBM_UNIVERSITIES='1' LUBM_ONTO='http://swat.cse.lehigh.edu/onto/univ-bench.owl' LUBM_DOC_BASE='http://example.org/lubm/'; no acquisition or generation occurred
+make: *** [Makefile:563: lubm] Error 1

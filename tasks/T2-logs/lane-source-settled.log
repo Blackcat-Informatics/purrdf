@@ -1,0 +1,71 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-algebra)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf)
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+    Finished `test` profile [optimized] target(s) in 1.31s
+     Running tests/lane_common_laws.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/24edc1b4402ca3ce/out/lane_common_laws-24edc1b4402ca3ce)
+
+running 35 tests
+test a_binary_that_cannot_run_is_refused_for_every_lane_at_once ... ok
+test a_capture_is_read_only_when_there_is_something_to_read ... ok
+test a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal ... ok
+test a_certificate_does_not_depend_on_the_scratch_directory ... ok
+test a_certificate_does_not_outlive_the_run_that_wrote_it ... ok
+test a_file_that_is_not_n_quads_is_refused_and_a_real_one_is_not ... ok
+test a_file_whose_magic_is_wrong_is_refused_and_a_correct_one_is_not ... ok
+test a_missing_query_file_is_refused_naming_the_file_and_the_arena_knob ... ok
+test a_multi_line_diagnostic_survives_flattening_instead_of_being_truncated ... ok
+test a_positive_knob_refuses_zero_and_accepts_one ... ok
+test a_query_file_is_accepted_when_it_is_present_readable_and_non_empty ... ok
+test a_required_pin_is_returned_and_a_missing_one_is_refused_by_name ... ok
+test a_short_query_set_is_refused_and_a_complete_one_is_not ... ok
+test a_uint_knob_accepts_the_largest_value_it_can_carry_intact ... ok
+test a_uint_knob_is_normalised_so_one_run_cannot_publish_two_labels_for_one_number ... ok
+test a_uint_knob_refuses_a_value_bash_would_wrap_rather_than_substituting_a_different_number ... ok
+test a_uint_knob_refuses_what_is_not_an_unsigned_integer_and_quotes_it_back ... ok
+test a_write_that_cannot_be_opened_names_the_knob_and_not_the_payload ... ok
+test an_empty_artifact_is_refused_and_a_non_empty_one_is_not ... ok
+test an_empty_query_file_is_refused_rather_than_sent_to_the_engine ... ok
+test an_optional_pin_reports_absence_and_dies_on_a_broken_lookup ... ok
+test an_unreadable_query_file_is_refused_when_the_process_genuinely_cannot_read_it ... ok
+test an_unwritable_capture_path_is_a_scratch_failure_named_as_one ... ok
+test digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read ... ok
+test every_shared_lane_helper_appears_in_the_design_doc_inventory ... ok
+test every_stderr_capture_into_the_scratch_directory_is_reset_first ... ok
+test sourcing_the_shared_laws_pins_collation_whatever_the_caller_had ... ok
+test the_digest_fallback_names_the_directory_once_and_quotes_the_status_it_has ... ok
+test the_query_set_digest_distinguishes_sets_a_concatenation_would_conflate ... ok
+test the_query_set_digest_is_identical_for_identical_content_elsewhere ... ok
+test the_query_set_digest_names_a_vanished_directory_instead_of_raising ... ok
+test the_query_set_digest_refuses_a_name_a_manifest_record_cannot_represent ... ok
+test the_query_set_digest_refuses_a_symlink_so_the_certificate_stays_closed ... ok
+test the_query_set_digest_refuses_an_empty_directory_rather_than_certifying_nothing ... ok
+test the_query_set_tripwire_fires_when_the_set_changes_under_it ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+     Running tests/make_bench_lanes.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/34e0b95a9ec15857/out/make_bench_lanes-34e0b95a9ec15857)
+
+running 16 tests
+test a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names ... ok
+test every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path ... ok
+test every_lane_names_its_arena_knob_when_the_arena_cannot_be_created ... ok
+test every_lane_refuses_a_binary_knob_that_does_not_exist_and_quotes_the_bytes_back ... ok
+test every_lane_refuses_a_binary_that_cannot_run_without_blaming_the_corpus ... ok
+test every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes_no_digest ... ok
+test every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest ... ok
+test every_lane_refuses_a_directory_as_its_binary_knob_and_names_it ... ok
+test native_lubm_seed_index_keep_u64_identity_before_acquisition ... ok
+test the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri ... ok
+test the_lubm_lane_refuses_a_zero_university_count_and_accepts_one ... ok
+test the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute ... ok
+test the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed ... ok
+test the_watdiv_lane_refuses_a_pack_that_is_not_a_pack_and_stamps_nothing ... ok
+test the_watdiv_lane_refuses_a_seed_that_is_not_a_number ... ok
+test the_watdiv_lane_refuses_an_unpinned_scale_by_name ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.60s
+

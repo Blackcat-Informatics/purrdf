@@ -1,0 +1,85 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-events)
+   Compiling cmov v0.5.4
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling regex-syntax v0.8.11
+   Compiling libc v0.2.186
+   Compiling ctutils v0.4.2
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling either v1.16.0
+   Compiling hybrid-array v0.4.15
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/deflate)
+   Compiling regex-automata v0.4.14
+   Compiling visual-hashing v1.0.0
+   Compiling structured-zstd v0.0.49
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling universal-hash v0.6.1
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling sha2 v0.11.0
+   Compiling rayon v1.12.0
+   Compiling aead v0.6.1
+   Compiling ctr v0.10.1
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/xsd)
+   Compiling ghash v0.6.0
+   Compiling regex v1.12.4
+   Compiling aes v0.9.3
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/ed25519)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/stack)
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf)
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+error[E0308]: `?` operator has incompatible types
+   --> crates/bench/src/lubm/check.rs:177:36
+    |
+177 |         let original = statements(&parse(&bytes, "application/n-triples")?)?;
+    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RdfDataset`, found `Arc<RdfDataset>`
+    |
+    = note: `?` operator cannot convert from `Arc<RdfDataset>` to `RdfDataset`
+    = note: expected struct `RdfDataset`
+               found struct `Arc<RdfDataset>`
+
+error[E0308]: `?` operator has incompatible types
+   --> crates/bench/src/lubm/check.rs:215:34
+    |
+215 |         let actual = statements(&parse(&bytes, "application/n-quads")?)?;
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RdfDataset`, found `Arc<RdfDataset>`
+    |
+    = note: `?` operator cannot convert from `Arc<RdfDataset>` to `RdfDataset`
+    = note: expected struct `RdfDataset`
+               found struct `Arc<RdfDataset>`
+
+error[E0308]: `?` operator has incompatible types
+   --> crates/bench/src/lubm/check.rs:238:29
+    |
+238 |     let graph = statements(&parse(&bytes, "application/n-quads")?)?;
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RdfDataset`, found `Arc<RdfDataset>`
+    |
+    = note: `?` operator cannot convert from `Arc<RdfDataset>` to `RdfDataset`
+    = note: expected struct `RdfDataset`
+               found struct `Arc<RdfDataset>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-bench` (lib) due to 3 previous errors

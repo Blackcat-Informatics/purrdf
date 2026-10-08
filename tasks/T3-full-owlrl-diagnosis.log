@@ -1,0 +1,2 @@
+Running as unit: purrdf-lubm-475-full-owlrl-diagnosis-20261008.scope; invocation ID: e19f6f8153bd4f51b7bfe454deb665c1
+{"head":{"vars":["s"]},"results":{"bindings":[{"s":{"type":"uri","value":"http://example.org/lubm/University0_0.nt"}}]}}

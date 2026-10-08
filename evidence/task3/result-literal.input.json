@@ -1,0 +1,1 @@
+{"head": {"vars": ["X"]}, "results": {"bindings": [{"X": {"type": "literal", "value": "not an IRI"}}]}}

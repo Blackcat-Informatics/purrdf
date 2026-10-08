@@ -1,0 +1,2 @@
+ActiveState=inactive
+TasksCurrent=[not set]

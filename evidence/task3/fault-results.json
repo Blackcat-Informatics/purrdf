@@ -1,0 +1,62 @@
+[
+  {
+    "query": "Q1",
+    "mode": "malformed",
+    "status": "PASS",
+    "selected_row": "Q1   no inference                         -        full      BAD-RESULTS            -        3",
+    "make_exit": 2,
+    "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q1-malformed/run.Iu8aQadw",
+    "revoked_graph_acceptance": true,
+    "generation_receipt_retained": true
+  },
+  {
+    "query": "Q1",
+    "mode": "wrong-uri",
+    "status": "PASS",
+    "selected_row": "Q1   no inference                         -        full      BAD-RESULTS            -        4",
+    "make_exit": 2,
+    "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q1-wrong-uri/run.DpwnNKVH",
+    "revoked_graph_acceptance": true,
+    "generation_receipt_retained": true
+  },
+  {
+    "query": "Q1",
+    "mode": "exit",
+    "status": "PASS",
+    "selected_row": "Q1   no inference                         -        full      CANNOT-EXECUTE         -        3",
+    "make_exit": 2,
+    "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q1-exit/run.JiP920pk",
+    "revoked_graph_acceptance": true,
+    "generation_receipt_retained": true
+  },
+  {
+    "query": "Q14",
+    "mode": "malformed",
+    "status": "PASS",
+    "selected_row": "Q14  no inference                         -        full      BAD-RESULTS            -        1",
+    "make_exit": 2,
+    "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q14-malformed/run.iSiw7MyZ",
+    "revoked_graph_acceptance": true,
+    "generation_receipt_retained": true
+  },
+  {
+    "query": "Q14",
+    "mode": "wrong-uri",
+    "status": "PASS",
+    "selected_row": "Q14  no inference                         -        full      BAD-RESULTS            -        1",
+    "make_exit": 2,
+    "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q14-wrong-uri/run.dxZVpiNQ",
+    "revoked_graph_acceptance": true,
+    "generation_receipt_retained": true
+  },
+  {
+    "query": "Q14",
+    "mode": "exit",
+    "status": "PASS",
+    "selected_row": "Q14  no inference                         -        full      CANNOT-EXECUTE         -        2",
+    "make_exit": 2,
+    "run": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/faults/Q14-exit/run.pLDGE9qZ",
+    "revoked_graph_acceptance": true,
+    "generation_receipt_retained": true
+  }
+]

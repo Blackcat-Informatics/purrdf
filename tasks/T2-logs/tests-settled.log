@@ -1,0 +1,216 @@
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+    Finished `test` profile [optimized] target(s) in 3.06s
+     Running unittests src/lib.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/237dac29468119c3/out/purrdf_bench-237dac29468119c3)
+
+running 35 tests
+test lubm::generate::tests::actual_emitter_propagates_failed_writes ... ok
+test lubm::output::tests::actual_payload_finish_refuses_flush_failure ... ok
+test lubm::tests::bounded_draws_reach_both_endpoints_and_selections_are_distinct ... ok
+test lubm::tests::public_configuration_revalidation_precedes_directory_creation ... ok
+test tests::both_mix_tables_sum_to_one_thousand_and_name_their_entries_uniquely ... ok
+test tests::class_mix_is_exercised_and_indexed_minting_is_stable ... ok
+test tests::class_mix_measured_shares_match_the_pinned_table ... ok
+test tests::every_row_parses_as_strict_nquads ... ok
+test tests::every_typed_literal_lexical_form_is_valid_for_its_datatype ... ok
+test tests::generated_terms_survive_the_strict_reader_intact ... ok
+test tests::generation_is_deterministic_and_shard_concat_equals_whole ... ok
+test tests::golden_digest_pins_the_profile ... ok
+test tests::irregular_class_escapes_reserved_octets_in_genuinely_mixed_case ... ok
+test tests::literal_payload_shapes_match_measurement ... ok
+test tests::manifest_carries_both_mixes ... ok
+test tests::manifest_computes_no_digest ... ok
+test tests::manifest_reports_the_shard_line_count_exactly ... ok
+test tests::named_graph_membership_is_independent_of_row_kind ... ok
+test tests::new_rejects_shard_at_or_past_shards ... ok
+test tests::new_rejects_zero_iris ... ok
+test tests::new_rejects_zero_quads ... ok
+test tests::new_rejects_zero_shards ... ok
+test tests::numeric_long_class_emits_exactly_36_digits_beyond_u64_and_2_53 ... ok
+test tests::rdf12_and_term_kind_coverage_is_non_vacuous ... ok
+test tests::row_mix_measured_shares_match_the_pinned_table ... ok
+test tests::shard_range_covers_shards_equal_one ... ok
+test tests::shard_range_last_shard_absorbs_the_remainder ... ok
+test tests::shard_range_stitches_exactly_when_shards_outnumber_quads ... ok
+test tests::skew_map_accepts_the_boundary_iris_values ... ok
+test tests::skew_map_is_not_funnelled_through_a_thirty_two_bit_intermediate ... ok
+test tests::skew_map_keeps_its_shape ... ok
+test tests::skew_map_survives_iris_above_two_to_the_thirty_two ... ok
+test tests::stream_tags_are_all_distinct ... ok
+test tests::subject_iri_byte_length_bands_match_measurement ... ok
+test tests::the_emitted_text_is_the_kind_the_mix_chose ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+
+     Running unittests src/main.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/2a8aa8b917b70662/out/bench_corpus-2a8aa8b917b70662)
+
+running 10 tests
+test tests::duplicate_flags_are_rejected ... ok
+test tests::duplicate_help_is_rejected ... ok
+test tests::help_short_and_long_both_short_circuit ... ok
+test tests::manifest_flag_defaults_out_to_none ... ok
+test tests::manifest_honours_out ... ok
+test tests::non_duplicate_flags_do_not_collide ... ok
+test tests::out_accepts_a_path_that_merely_starts_with_a_dash ... ok
+test tests::out_rejects_a_recognized_flag_as_its_operand ... ok
+test tests::out_requires_an_operand ... ok
+test tests::unknown_argument_is_rejected ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lubm_check_main.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/fb91e56c0f7e9fff/out/lubm_check-fb91e56c0f7e9fff)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lubm_main.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/5d8af3d26c094623/out/lubm_corpus-5d8af3d26c094623)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/corpus_cli.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/2b883d63c10f0c6c/out/corpus_cli-2b883d63c10f0c6c)
+
+running 20 tests
+test cross_process_stdout_is_byte_identical ... ok
+test generated_corpus_contains_every_promised_term_kind ... ok
+test generated_rows_parse_as_strict_nquads_with_exact_line_count ... ok
+test hard_fail_matrix_reports_the_exact_exit_code_and_diagnostic ... ok
+test help_long_flag_prints_usage_to_stdout_with_empty_stderr ... ok
+test help_short_flag_prints_usage_to_stdout_with_empty_stderr ... ok
+test help_to_a_failing_sink_reports_failure_instead_of_panicking ... ok
+test last_shard_index_is_accepted ... ok
+test manifest_emitted_lines_equals_the_lines_the_same_invocation_produces ... ok
+test manifest_honours_out_writing_to_file_with_empty_stdout ... ok
+test manifest_reports_every_field_correctly ... ok
+test out_accepts_a_leading_dash_filename_and_a_relative_path ... ok
+test quads_one_iris_one_is_accepted ... ok
+test shard_stitch_final_shard_equals_the_tail_of_the_whole ... ok
+test shard_stitch_shards_one_partitions_the_whole ... ok
+test shard_stitch_shards_outnumber_quads_partitions_the_whole ... ok
+test shard_stitch_uneven_division_partitions_the_whole ... ok
+test shards_one_is_accepted ... ok
+test ten_billion_iris_mints_only_in_range_entity_indexes ... ok
+test very_large_iris_is_accepted ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/lane_common_laws.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/24edc1b4402ca3ce/out/lane_common_laws-24edc1b4402ca3ce)
+
+running 35 tests
+test a_binary_that_cannot_run_is_refused_for_every_lane_at_once ... ok
+test a_capture_is_read_only_when_there_is_something_to_read ... ok
+test a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal ... ok
+test a_certificate_does_not_depend_on_the_scratch_directory ... ok
+test a_certificate_does_not_outlive_the_run_that_wrote_it ... ok
+test a_file_that_is_not_n_quads_is_refused_and_a_real_one_is_not ... ok
+test a_file_whose_magic_is_wrong_is_refused_and_a_correct_one_is_not ... ok
+test a_missing_query_file_is_refused_naming_the_file_and_the_arena_knob ... ok
+test a_multi_line_diagnostic_survives_flattening_instead_of_being_truncated ... ok
+test a_positive_knob_refuses_zero_and_accepts_one ... ok
+test a_query_file_is_accepted_when_it_is_present_readable_and_non_empty ... ok
+test a_required_pin_is_returned_and_a_missing_one_is_refused_by_name ... ok
+test a_short_query_set_is_refused_and_a_complete_one_is_not ... ok
+test a_uint_knob_accepts_the_largest_value_it_can_carry_intact ... ok
+test a_uint_knob_is_normalised_so_one_run_cannot_publish_two_labels_for_one_number ... ok
+test a_uint_knob_refuses_a_value_bash_would_wrap_rather_than_substituting_a_different_number ... ok
+test a_uint_knob_refuses_what_is_not_an_unsigned_integer_and_quotes_it_back ... ok
+test a_write_that_cannot_be_opened_names_the_knob_and_not_the_payload ... ok
+test an_empty_artifact_is_refused_and_a_non_empty_one_is_not ... ok
+test an_empty_query_file_is_refused_rather_than_sent_to_the_engine ... ok
+test an_optional_pin_reports_absence_and_dies_on_a_broken_lookup ... ok
+test an_unreadable_query_file_is_refused_when_the_process_genuinely_cannot_read_it ... ok
+test an_unwritable_capture_path_is_a_scratch_failure_named_as_one ... ok
+test digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read ... ok
+test every_shared_lane_helper_appears_in_the_design_doc_inventory ... ok
+test every_stderr_capture_into_the_scratch_directory_is_reset_first ... ok
+test sourcing_the_shared_laws_pins_collation_whatever_the_caller_had ... ok
+test the_digest_fallback_names_the_directory_once_and_quotes_the_status_it_has ... ok
+test the_query_set_digest_distinguishes_sets_a_concatenation_would_conflate ... ok
+test the_query_set_digest_is_identical_for_identical_content_elsewhere ... ok
+test the_query_set_digest_names_a_vanished_directory_instead_of_raising ... ok
+test the_query_set_digest_refuses_a_name_a_manifest_record_cannot_represent ... ok
+test the_query_set_digest_refuses_a_symlink_so_the_certificate_stays_closed ... ok
+test the_query_set_digest_refuses_an_empty_directory_rather_than_certifying_nothing ... ok
+test the_query_set_tripwire_fires_when_the_set_changes_under_it ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+     Running tests/lubm_check_cli.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/0d6ce906697fd6b9/out/lubm_check_cli-0d6ce906697fd6b9)
+
+running 5 tests
+test complete_graph_receipts_and_exact_native_oracles_use_real_entrypoints ... ok
+test external_output_admission_uses_source_rules_and_rejects_personal_exclusions ... ok
+test native_config_results_and_cargo_readers_fail_actionably ... ok
+test retained_receipts_refuse_inventory_payload_conversion_and_acceptance_tampering ... ok
+test schema_projection_changes_all_rdf_positions_and_preserves_w3c_and_lexical_content ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.42s
+
+     Running tests/lubm_cli.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/8788767d2aa3c739/out/lubm_cli-8788767d2aa3c739)
+
+running 4 tests
+test independent_graph_controls_refuse_removed_relationships_and_invented_membership ... ok
+test invalid_arguments_and_existing_outputs_never_succeed_or_overwrite ... ok
+test named_seed_index_matrix_satisfies_every_published_graph_constraint ... ok
+test processes_paths_locale_ranges_and_configuration_have_declared_identity ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.47s
+
+     Running tests/make_bench_lanes.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/34e0b95a9ec15857/out/make_bench_lanes-34e0b95a9ec15857)
+
+running 16 tests
+test a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names ... ok
+test every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path ... ok
+test every_lane_names_its_arena_knob_when_the_arena_cannot_be_created ... ok
+test every_lane_refuses_a_binary_knob_that_does_not_exist_and_quotes_the_bytes_back ... ok
+test every_lane_refuses_a_binary_that_cannot_run_without_blaming_the_corpus ... ok
+test every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes_no_digest ... ok
+test every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest ... ok
+test every_lane_refuses_a_directory_as_its_binary_knob_and_names_it ... ok
+test native_lubm_seed_index_keep_u64_identity_before_acquisition ... ok
+test the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri ... ok
+test the_lubm_lane_refuses_a_zero_university_count_and_accepts_one ... ok
+test the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute ... ok
+test the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed ... ok
+test the_watdiv_lane_refuses_a_pack_that_is_not_a_pack_and_stamps_nothing ... ok
+test the_watdiv_lane_refuses_a_seed_that_is_not_a_number ... ok
+test the_watdiv_lane_refuses_an_unpinned_scale_by_name ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.55s
+
+     Running tests/make_scale_corpus.rs (/opt/.cargo/slots/589dcf4f131a442c/0/build/debug/build/purrdf-bench/573200dbee09b62e/out/make_scale_corpus-573200dbee09b62e)
+
+running 29 tests
+test documented_pipe_idiom_is_banner_free_under_a_wrapper_make_on_every_make_version ... ok
+test make_scale_corpus_accepts_a_scale_bin_reached_by_symlink_or_a_relative_path ... ok
+test make_scale_corpus_accepts_a_scale_bin_whose_path_is_unusual_but_real ... ok
+test make_scale_corpus_accepts_empty_and_absolute_path_knobs ... ok
+test make_scale_corpus_fails_the_shard_when_a_binary_exits_zero_without_writing_its_file ... ok
+test make_scale_corpus_files_mode_fails_loudly_when_a_shard_cannot_be_written ... ok
+test make_scale_corpus_files_mode_sorted_cat_matches_a_direct_whole_run_byte_for_byte ... ok
+test make_scale_corpus_keeps_every_shard_manifest_of_a_run_that_succeeded ... ok
+test make_scale_corpus_keeps_the_whole_run_manifest_of_a_run_that_succeeded ... ok
+test make_scale_corpus_leaves_no_shard_manifest_behind_a_failed_run ... ok
+test make_scale_corpus_leaves_no_whole_run_manifest_behind_a_failed_run ... ok
+test make_scale_corpus_manifest_path_with_a_space_survives_the_make_entry_point ... ok
+test make_scale_corpus_names_the_knob_when_the_whole_run_manifest_cannot_be_written ... ok
+test make_scale_corpus_never_certifies_a_corpus_a_binary_did_not_produce ... ok
+test make_scale_corpus_never_lets_a_manifest_path_reach_a_shell ... ok
+test make_scale_corpus_out_path_with_a_space_survives_the_make_entry_point ... ok
+test make_scale_corpus_pipe_mode_at_level_one_is_bare_banner_free_only_from_gnu_make_4_4 ... ok
+test make_scale_corpus_pipe_mode_fails_when_a_shard_fails ... ok
+test make_scale_corpus_pipe_mode_is_banner_free_at_level_one_when_suppression_is_explicit ... ok
+test make_scale_corpus_pipe_mode_matches_a_direct_whole_run_byte_for_byte ... ok
+test make_scale_corpus_refuses_a_directory_as_scale_bin ... ok
+test make_scale_corpus_refuses_a_run_that_produced_less_than_its_manifest_certifies ... ok
+test make_scale_corpus_rejects_an_unrunnable_sink_with_a_lane_diagnostic ... ok
+test make_scale_corpus_reproduces_a_whole_run_at_uneven_and_oversized_shard_counts ... ok
+test make_scale_corpus_scale_bin_is_taken_literally_and_never_resolves_to_another_binary ... ok
+test make_scale_corpus_sink_argument_survives_the_make_entry_point ... ok
+test make_scale_corpus_still_runs_a_legitimately_tiny_corpus ... ok
+test make_scale_corpus_stream_mode_fails_when_a_shard_fails ... ok
+test make_scale_corpus_takes_shell_and_make_metacharacters_in_a_path_literally ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.83s
+

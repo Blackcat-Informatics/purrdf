@@ -1,0 +1,6 @@
+{
+  "session": 77015,
+  "actual_terminal_exit": 0,
+  "tool_completion_output": "PASS actualMakefault Q14-exit CANNOT-EXECUTE exit2; All6actualMakefaultsPASS",
+  "individual_results": "fault-results.json"
+}

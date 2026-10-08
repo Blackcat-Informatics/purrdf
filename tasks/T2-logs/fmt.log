@@ -1,0 +1,12 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench/tests/lane_common_laws.rs:1701:
+         root.display()
+     ));
+     assert_eq!(code, 0, "output:\n{out}");
+-    assert!(out.contains("found=[5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8]"), "output:\n{out}");
++    assert!(
++        out.contains("found=[5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8]"),
++        "output:\n{out}"
++    );
+ 
+     // Recorded nowhere: returns 1 WITHOUT dying, because a version-keyed pin is expected to
+     // be absent the first time a new binary runs. `LANE_PIN_VALUE` must be cleared, or a

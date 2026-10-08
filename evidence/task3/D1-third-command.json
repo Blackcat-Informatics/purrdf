@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "systemd-run",
+    "--user",
+    "--scope",
+    "--same-dir",
+    "--unit=purrdf-lubm-475-d1third-20261008",
+    "--property=MemoryMax=64G",
+    "--property=MemorySwapMax=0",
+    "env",
+    "CARGO_BUILD_JOBS=8",
+    "make",
+    "lubm",
+    "LUBM_OUT=target/lubm-task3-20261008/default"
+  ],
+  "cwd": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm",
+  "start_ns": 1791449935838989719,
+  "initial_cache_absent": true,
+  "lane_max_join_steps": 100000000
+}

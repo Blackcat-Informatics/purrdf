@@ -1,0 +1,8 @@
+/home/paudley/stage/root/bin/cargo
+/home/paudley/stage/root/bin/rustc
+/home/paudley/stage/root/bin/rustup
+/home/paudley/stage/root/bin/node
+/usr/bin/wasm-opt
+/home/paudley/stage/root/bin/python3
+/usr/bin/make
+/usr/local/bin/cc

@@ -1,0 +1,45 @@
+{
+  "status": "PASS",
+  "rows": 14,
+  "full": 14,
+  "max_join_steps": 100000000,
+  "q1": 2,
+  "q14": 6141,
+  "recheck_exit": 0,
+  "run": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/lubm-task3-20261008/default/run.qNx2WtZR",
+  "actual_selected_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/cli#purrdf-cli@3.0.1",
+    "manifest_path": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/cli/Cargo.toml",
+    "target": {
+      "kind": [
+        "bin"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "purrdf",
+      "src_path": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/cli/src/main.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/opt/.cargo/slots/589dcf4f131a442c/0/target/release/purrdf"
+    ],
+    "executable": "/opt/.cargo/slots/589dcf4f131a442c/0/target/release/purrdf",
+    "fresh": true
+  },
+  "frozen_cli": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-a82d2426e-current",
+  "cli_sha256": "805ad0e7e0265f64b9d4ef59e86999e3b4f19997ac38ac9afd798b93af56b0e2",
+  "source_unchanged": true
+}

@@ -1,0 +1,4 @@
+ActiveState=active
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-lubm-475-d1-20261008.scope
+MemoryMax=68719476736
+MemorySwapMax=0

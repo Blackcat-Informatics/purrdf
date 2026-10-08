@@ -1,0 +1,71 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling cmov v0.5.4
+   Compiling libc v0.2.186
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf-core)
+   Compiling ctutils v0.4.2
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling either v1.16.0
+   Compiling hashbrown v0.17.1
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling fastrand v2.4.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling twox-hash v2.1.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/lex)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/stack)
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling universal-hash v0.6.1
+   Compiling rayon v1.12.0
+   Compiling sha2 v0.11.0
+   Compiling aead v0.6.1
+   Compiling structured-zstd v0.0.49
+   Compiling aes v0.9.3
+   Compiling regex v1.12.4
+   Compiling polyval v0.7.3
+   Compiling ctr v0.10.1
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/xsd)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling ghash v0.6.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/testkit)
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/cdt)
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-algebra)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/rdf)
+error[E0282]: type annotations needed for `BTreeSet<(_, _, _)>`
+   --> crates/bench/tests/lubm_cli.rs:75:13
+    |
+ 75 |         let mut triples = BTreeSet::new();
+    |             ^^^^^^^^^^^
+...
+119 |                 .entry((subject.clone(), predicate.clone()))
+    |                         ------- type must be known at this point
+    |
+help: consider giving `triples` an explicit type, where the placeholders `_` are specified
+    |
+ 75 |         let mut triples: BTreeSet<(_, _, _)> = BTreeSet::new();
+    |                        +++++++++++++++++++++
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `purrdf-bench` (test "lubm_cli") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

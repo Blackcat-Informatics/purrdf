@@ -1,0 +1,15 @@
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+error[E0432]: unresolved import `support`
+  --> crates/bench/tests/make_bench_lanes.rs:22:5
+   |
+22 | use support::{scratch, unique_tag, write_executable};
+   |     ^^^^^^^ use of unresolved module or unlinked crate `support`
+   |
+help: to make use of source file crates/bench/tests/support/mod.rs, use `mod support` in this file to declare the module
+   |
+20 + mod support;
+   |
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `purrdf-bench` (test "make_bench_lanes") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

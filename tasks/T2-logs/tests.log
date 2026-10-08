@@ -1,0 +1,130 @@
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/crates/bench)
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+  --> crates/bench/tests/lubm_check_cli.rs:42:31
+   |
+42 |         let generated = owned.path().join("generated");
+   |                               ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+   |
+note: the method `path` exists on the type `TempDir`
+  --> crates/testkit/src/temp.rs:91:5
+   |
+91 |     pub fn path(&self) -> &Path {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+   |
+42 |         let generated = owned.expect("REASON").path().join("generated");
+   |                              +++++++++++++++++
+
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+  --> crates/bench/tests/lubm_check_cli.rs:43:31
+   |
+43 |         let converted = owned.path().join("converted");
+   |                               ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+   |
+note: the method `path` exists on the type `TempDir`
+  --> crates/testkit/src/temp.rs:91:5
+   |
+91 |     pub fn path(&self) -> &Path {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+   |
+43 |         let converted = owned.expect("REASON").path().join("converted");
+   |                              +++++++++++++++++
+
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+  --> crates/bench/tests/lubm_check_cli.rs:76:31
+   |
+76 |         let aggregate = owned.path().join("aggregate.nq");
+   |                               ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+   |
+note: the method `path` exists on the type `TempDir`
+  --> crates/testkit/src/temp.rs:91:5
+   |
+91 |     pub fn path(&self) -> &Path {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+   |
+76 |         let aggregate = owned.expect("REASON").path().join("aggregate.nq");
+   |                              +++++++++++++++++
+
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+  --> crates/bench/tests/lubm_check_cli.rs:78:34
+   |
+78 |         let receipt_path = owned.path().join("acceptance.json");
+   |                                  ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+   |
+note: the method `path` exists on the type `TempDir`
+  --> crates/testkit/src/temp.rs:91:5
+   |
+91 |     pub fn path(&self) -> &Path {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+   |
+78 |         let receipt_path = owned.expect("REASON").path().join("acceptance.json");
+   |                                 +++++++++++++++++
+
+error[E0308]: mismatched types
+  --> crates/bench/tests/lubm_check_cli.rs:80:21
+   |
+80 |             _owned: owned,
+   |                     ^^^^^ expected `TempDir`, found `Result<TempDir, Error>`
+   |
+   = note: expected struct `TempDir`
+                found enum `std::result::Result<TempDir, std::io::Error>`
+help: consider using `Result::expect` to unwrap the `std::result::Result<TempDir, std::io::Error>` value, panicking if the value is a `Result::Err`
+   |
+80 |             _owned: owned.expect("REASON"),
+   |                          +++++++++++++++++
+
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/bench/tests/lubm_check_cli.rs:364:40
+    |
+364 |     success(&command(&["output", owned.path().to_str().unwrap()], b""));
+    |                                        ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+    |
+note: the method `path` exists on the type `TempDir`
+   --> crates/testkit/src/temp.rs:91:5
+    |
+ 91 |     pub fn path(&self) -> &Path {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+    |
+364 |     success(&command(&["output", owned.expect("REASON").path().to_str().unwrap()], b""));
+    |                                       +++++++++++++++++
+
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/bench/tests/lubm_check_cli.rs:377:26
+    |
+377 |     let personal = owned.path().join("personal-excludes");
+    |                          ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+    |
+note: the method `path` exists on the type `TempDir`
+   --> crates/testkit/src/temp.rs:91:5
+    |
+ 91 |     pub fn path(&self) -> &Path {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+    |
+377 |     let personal = owned.expect("REASON").path().join("personal-excludes");
+    |                         +++++++++++++++++
+
+error[E0599]: no method named `path` found for enum `std::result::Result<T, E>` in the current scope
+   --> crates/bench/tests/lubm_check_cli.rs:390:24
+    |
+390 |     let broken = owned.path().join("broken-repository");
+    |                        ^^^^ method not found in `std::result::Result<TempDir, std::io::Error>`
+    |
+note: the method `path` exists on the type `TempDir`
+   --> crates/testkit/src/temp.rs:91:5
+    |
+ 91 |     pub fn path(&self) -> &Path {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `TempDir` value, panicking if the value is a `Result::Err`
+    |
+390 |     let broken = owned.expect("REASON").path().join("broken-repository");
+    |                       +++++++++++++++++
+
+Some errors have detailed explanations: E0308, E0599.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-bench` (test "lubm_check_cli") due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...

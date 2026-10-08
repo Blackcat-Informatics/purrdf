@@ -1,0 +1,5 @@
+lubm-lane: LUBM_BIN='/bin/false' is not a working purrdf binary: it exited 1 when asked for its version
+  This check runs before the lane's first step, so nothing has been fetched,
+  generated, extracted, converted or loaded, and no failure downstream can be
+  mistaken for a problem with the corpus.
+make: *** [Makefile:563: lubm] Error 1

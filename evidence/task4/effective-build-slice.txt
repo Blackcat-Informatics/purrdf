@@ -1,0 +1,6 @@
+MemoryCurrent=2437767168
+MemoryPeak=59071864832
+MemorySwapCurrent=263094272
+MemorySwapPeak=8589934592
+MemoryMax=51539607552
+MemorySwapMax=8589934592

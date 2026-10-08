@@ -1,0 +1,19 @@
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check config 0 0 1 'http://swat.cse.lehigh.edu/onto/univ-bench.owl' 'http://example.org/lubm/'`
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check executable`
+
+=== 1/7 artifacts (external ontology and queries, fetched by digest) ===
+OK: 'target/' is ignored by the repository's own rules; the cache cannot be committed
+cache: /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts
+OK: queries-sparql.txt digest c34fd26ecb6fb9f0a2f185d73b72505ef0abf25705d831e6eed3c896557cd104
+     cache-hit  unlicensed (no grant published)
+FAIL: cached univ-bench.owl no longer matches its pin
+  path     /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts/univ-bench.owl
+  expected e6eca926fcb7d6c7925ea0c48f7c5d79abc2818f89e7432fd16561aafeb3f67a
+  actual   a6a1047cffa68bc4828a37508751bc260c7b0704a9e6cb97f599db0d6b168bc1
+  quarantined at /home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm/target/bench-artifacts/univ-bench.owl.rejected-a6a1047cffa68bc4
+  a cached file that stops verifying is an error, not a cache miss: nothing was
+  re-downloaded over it. Inspect the quarantined copy, then remove it to refetch.
+lubm-lane: artifact acquisition failed -- stopping
+make: *** [Makefile:563: lubm] Error 1

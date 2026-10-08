@@ -1,0 +1,57 @@
+{
+  "issue": 475,
+  "branch": "paudley/475-benchmarks-replace-the-java-lubm",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "a82d2426e8bcd7ad6e9ba3484301fd604e7b7861",
+      "subject": "Apply an explicit entailment join budget throughout the LUBM lane",
+      "date": "2026-10-08"
+    },
+    {
+      "oid": "d526fc530bf311152ca5e8786e687671ad65f08f",
+      "subject": "Supply the native graph acceptance certificate description",
+      "date": "2026-10-08"
+    },
+    {
+      "oid": "b994b61d0bae88a39b0cc31d90ed68b409f33a50",
+      "subject": "bench: run and verify LUBM through the native corpus lane",
+      "date": "2026-10-07"
+    },
+    {
+      "oid": "5f7c8b6fbe6175080b51fb5f6008f3d7f556dbd4",
+      "subject": "Add deterministic native university corpus generator",
+      "date": "2026-10-07"
+    }
+  ],
+  "files": [
+    "AGENTS.md",
+    "Cargo.lock",
+    "Makefile",
+    "README.md",
+    "README_zh.md",
+    "crates/bench/Cargo.toml",
+    "crates/bench/LUBM_PROFILE.md",
+    "crates/bench/README.md",
+    "crates/bench/examples/lubm_fault_cli.rs",
+    "crates/bench/src/lib.rs",
+    "crates/bench/src/lubm/check.rs",
+    "crates/bench/src/lubm/generate.rs",
+    "crates/bench/src/lubm/mod.rs",
+    "crates/bench/src/lubm/output.rs",
+    "crates/bench/src/lubm_check_main.rs",
+    "crates/bench/src/lubm_main.rs",
+    "crates/bench/tests/lane_common_laws.rs",
+    "crates/bench/tests/lubm_check_cli.rs",
+    "crates/bench/tests/lubm_cli.rs",
+    "crates/bench/tests/make_bench_lanes.rs",
+    "docs/BENCHMARKS.md",
+    "docs/design/purrdf-bench-lane-laws.md",
+    "layers.toml",
+    "scripts/benchmark-acquire.py",
+    "scripts/lane-common.sh",
+    "scripts/lubm-lane.sh",
+    "scripts/lubm-queries.py"
+  ],
+  "adrs_touched": []
+}

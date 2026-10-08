@@ -1,0 +1,8 @@
+OK: prose naming 'Query 11, 12 and 13' does not split a block (got [1, 2])
+OK: the fixture OPENS on the prose line the split must survive, not merely contains it
+OK: projection commas are removed (got 'SELECT ?X ?Y')
+OK: the projection keeps both variables in order (got ['?X', '?Y'])
+OK: a queries file that is not in the cache is refused, naming the fetch step
+OK: a file holding fewer than 14 queries is refused, naming the count
+OK: this script's PUBLISHED_QUERIES (14) equals the pinned count (14)
+OFFLINE SELF-TEST PASS

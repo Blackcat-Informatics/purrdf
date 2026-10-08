@@ -1,0 +1,6 @@
+{
+  "actual_production_selected_cli": "/opt/.cargo/slots/589dcf4f131a442c/0/target/release/purrdf",
+  "frozen_copy": "/opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-current-fe4660d06",
+  "sha256": "805ad0e7e0265f64b9d4ef59e86999e3b4f19997ac38ac9afd798b93af56b0e2",
+  "selection": "actual production cargo JSON via lubm-check artifact, path recorded by lane"
+}

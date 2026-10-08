@@ -1,0 +1,2 @@
+lubm-lane: LUBM_MAX_JOIN_STEPS must be a decimal unsigned integer (got 'junk')
+make: *** [Makefile:563: lubm] Error 1

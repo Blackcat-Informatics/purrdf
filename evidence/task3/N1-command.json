@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "systemd-run",
+    "--user",
+    "--scope",
+    "--same-dir",
+    "--unit=purrdf-lubm-475-n1-20261008",
+    "--property=MemoryMax=64G",
+    "--property=MemorySwapMax=0",
+    "env",
+    "CARGO_BUILD_JOBS=8",
+    "make",
+    "lubm",
+    "LUBM_UNIVERSITIES=2",
+    "LUBM_SEED=42",
+    "LUBM_INDEX=2",
+    "LUBM_ONTO=https://example.org/lubm-task3-schema",
+    "LUBM_DOC_BASE=https://example.org/lubm-task3-documents/",
+    "LUBM_OUT=/opt/purrdf-lubm-task3-20261008.tp3x3z8f/nondefault",
+    "LUBM_BIN=/opt/purrdf-lubm-task3-20261008.tp3x3z8f/purrdf-a82d2426e-current"
+  ],
+  "cwd": "/home/paudley/Active/purrdf/.worktrees/475-benchmarks-replace-the-java-lubm",
+  "start_ns": 1791450179443204019,
+  "budget": 100000000
+}

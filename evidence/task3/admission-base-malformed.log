@@ -1,0 +1,5 @@
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running `/opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check config 0 0 1 'http://swat.cse.lehigh.edu/onto/univ-bench.owl' 'http://['`
+invalid document base: malformed authority: unterminated IP-literal '['
+lubm-lane: invalid native configuration: LUBM_SEED='0' LUBM_INDEX='0' LUBM_UNIVERSITIES='1' LUBM_ONTO='http://swat.cse.lehigh.edu/onto/univ-bench.owl' LUBM_DOC_BASE='http://['; no acquisition or generation occurred
+make: *** [Makefile:563: lubm] Error 1

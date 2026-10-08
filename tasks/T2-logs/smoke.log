@@ -1,0 +1,4 @@
+owned smoke artifacts: /opt/purrdf-native-lubm-task2-smoke.MArdvpqe
+checker: /opt/.cargo/slots/589dcf4f131a442c/0/target/release/lubm-check
+CLI: /opt/.cargo/slots/589dcf4f131a442c/0/target/release/purrdf
+purrdf: --base has no effect on this run: on the source `/opt/purrdf-lubm-native-v1-task1.wjKdyJ/default/University0_0.nt`, ntriples's grammar admits no relative IRI reference, so nothing in the document resolves against a base; and on the --to target, nquads can express no base directive, so nothing is written under one or relativized against it. Drop --base, or name a syntax that carries one (turtle, trig, rdfxml, jsonld, yamlld)
