@@ -3,6 +3,8 @@
 
 //! Failure and comparison contracts of the host-only profiling controller.
 
+#[path = "support/hosted.rs"]
+mod hosted;
 #[path = "support/phases.rs"]
 mod phases;
 #[path = "support/profile.rs"]

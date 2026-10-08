@@ -404,7 +404,26 @@ pub(crate) fn run(input: &Path) -> IoResult<()> {
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_BUILD_BUILD_DIR", &build)
         .env("PURRDF_C_PHASE_RECEIPT", telemetry.join("c-phases.json"));
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| invalid(error.to_string()))?
+        .as_nanos();
     let result = recorder.run("actual-native-command", &mut command);
+    let finished = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| invalid(error.to_string()))?
+        .as_nanos();
+    recorder.evidence(
+        "execution_window",
+        Object::new()
+            .with("started_unix_ns", started.to_string())
+            .with("finished_unix_ns", finished.to_string())
+            .with(
+                "clock",
+                "host wall clock; cross-runner synchronization is not independently certified",
+            )
+            .into(),
+    )?;
     // A failed native command still retains compiler inventories and its truthful
     // failure phase. Collection errors also hard-fail instead of losing telemetry.
     let collection = recorder.check("cargo-telemetry-inventory", || collect(&telemetry, &roots));
