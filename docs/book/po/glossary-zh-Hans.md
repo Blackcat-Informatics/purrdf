@@ -76,6 +76,7 @@ How the gate reads the table:
   fenced blocks in a `msgstr` are never matched (a page may write
   「不要写 `蕴含`」).
 * **K rows** — every Anchor token is an invariant: if the `msgid` carries it
+  literally (a slash-delimited regex is invalid on a K row),
   as a whole token (case-sensitively, not inside another word — `RDF` in
   `RDFLib` does not count), the `msgstr` must carry the same whole token
   (`RDF` inside `PurRDF` does not satisfy it).

@@ -18,7 +18,70 @@ struct Restore {
 
 impl Drop for Restore {
     fn drop(&mut self) {
-        std::fs::write(&self.path, &self.bytes).expect("restore exact catalogue bytes");
+        if let Err(error) = std::fs::write(&self.path, &self.bytes) {
+            // Preserve an existing panic while reporting the restoration failure;
+            // an ordinary failed restoration must still fail qualification.
+            if std::thread::panicking() {
+                // A failed diagnostic write must not create a second panic.
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "failed to restore exact catalogue bytes at {}: {error}",
+                    self.path.display()
+                );
+            } else {
+                panic!(
+                    "failed to restore exact catalogue bytes at {}: {error}",
+                    self.path.display()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_writes_exact_original_bytes() {
+        let root = purrdf_testkit::TempDir::for_unit_test().unwrap();
+        let path = root.path().join("catalogue.po");
+        let original = b"original\0catalogue\n".to_vec();
+        std::fs::write(&path, "poisoned catalogue").unwrap();
+        drop(Restore {
+            path: path.clone(),
+            bytes: original.clone(),
+        });
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn restore_failure_on_normal_exit_is_refused() {
+        let root = purrdf_testkit::TempDir::for_unit_test().unwrap();
+        // Writing to an existing directory fails without permission assumptions.
+        let path = root.path().to_owned();
+        assert!(
+            std::panic::catch_unwind(move || drop(Restore {
+                path,
+                bytes: b"original".to_vec(),
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn restore_failure_during_unwind_preserves_original_panic() {
+        let root = purrdf_testkit::TempDir::for_unit_test().unwrap();
+        let path = root.path().to_owned();
+        let error = std::panic::catch_unwind(move || {
+            let _restore = Restore {
+                path,
+                bytes: b"original".to_vec(),
+            };
+            panic!("original probe panic");
+        })
+        .unwrap_err();
+        assert_eq!(error.downcast_ref::<&str>(), Some(&"original probe panic"));
     }
 }
 

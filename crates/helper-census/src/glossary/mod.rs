@@ -148,6 +148,13 @@ fn parse_glossary(text: &str, path: &Path) -> Result<Vec<Row>, String> {
         let mut anchor_patterns = Vec::new();
         let mut token_patterns = Vec::new();
         for anchor in &anchors {
+            if keep && regex_body(anchor).is_some() {
+                return Err(format!(
+                    "glossary:{} row {:?}: K rows require literal anchors, not {anchor:?}",
+                    index + 1,
+                    cells[1]
+                ));
+            }
             let source = regex_body(anchor).map_or_else(|| literal(anchor), str::to_owned);
             anchor_patterns.push(
                 Pattern::anchor(&source).map_err(|error| {
@@ -1410,6 +1417,38 @@ mod tests {
         ] {
             assert!(parse_glossary(text, Path::new("fixture.md")).is_err());
         }
+    }
+
+    #[test]
+    fn keep_english_requires_literal_anchors_and_non_keep_regex_remains_active() {
+        let table = |anchor: &str, basis: &str| {
+            format!(
+                "| {} |\n| - | - | - | - | - | - | - |\n| 1 | literal | {anchor} | literal | {basis} | — | |\n",
+                HEADER.join(" | ")
+            )
+        };
+        for anchor in ["`/literal(?!ly)/`", "`literal`、`/other/`"] {
+            let error = parse_glossary(&table(anchor, "K"), Path::new("fixture.md")).unwrap_err();
+            assert!(error.contains("glossary:3 row \"literal\""));
+            assert!(error.contains("K rows require literal anchors"));
+        }
+        let literal_rows =
+            parse_glossary(&table("`literal`", "K"), Path::new("fixture.md")).unwrap();
+        assert_eq!(
+            offences("fixture.po:7", Some("literal"), "字面。", &literal_rows)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            offences("fixture.po:7", Some("literal"), "literal。", &literal_rows)
+                .unwrap()
+                .is_empty()
+        );
+        let regex_rows =
+            parse_glossary(&table("`/literal(?!ly)/`", "E"), Path::new("fixture.md")).unwrap();
+        assert!(regex_rows[0].anchored("literal").unwrap());
+        assert!(!regex_rows[0].anchored("literally").unwrap());
     }
 
     #[test]
