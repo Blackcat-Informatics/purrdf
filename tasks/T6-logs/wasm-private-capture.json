@@ -1,0 +1,8 @@
+{
+  "schema": "purrdf-private-wasm-capture-v1",
+  "registered_output": "/opt/purrdf-479-t6-wasm-scratch/tmp.Z2RkzOI70Q/compiler-target-lway23f4/wasm32-unknown-unknown/release/purrdf_wasm.wasm",
+  "private_target_directory": "/opt/purrdf-479-t6-wasm-scratch/tmp.Z2RkzOI70Q/compiler-target-lway23f4",
+  "captured_output": "/opt/purrdf-479-t6-wasm-scratch/tmp.Z2RkzOI70Q/purrdf_wasm.wasm",
+  "sha256": "44d55eea5947a19b81bad374f8b207cd7f8956f3e234993d89a81f2293125475",
+  "cargo_fresh": false
+}

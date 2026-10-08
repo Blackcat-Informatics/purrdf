@@ -1,0 +1,44 @@
+   Compiling utf8parse v0.2.2
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/entail)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/text)
+   Compiling clap_lex v1.1.0
+   Compiling strsim v0.11.1
+   Compiling anstyle-parse v1.0.0
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/geo)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/columnar)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shex)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/markdown)
+   Compiling anstream v1.0.0
+   Compiling clap_builder v4.6.0
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/json)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/retrieval)
+   Compiling clap v4.6.1
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/cli)
+    Finished `test` profile [optimized] target(s) in 29.92s
+     Running tests/shapes_tools_cli.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-cli/57f659dca7ff5888/out/shapes_tools_cli-57f659dca7ff5888)
+
+running 14 tests
+test cli_node_expr_reports_the_mandatory_diagnostic ... ok
+test the_shacl_prefix_idiom_validates_without_an_import_and_a_header_import_is_refused ... ok
+test every_run_reports_an_empty_in_list ... ok
+test cli_node_expr ... ok
+test cli_rules_shapes_graph ... ok
+test cli_shapes_lint_reports_superseded_builtin_validators ... ok
+test cli_node_expr_selectors ... ok
+test cli_rules_capacity_limits ... ok
+test cli_rules_check ... ok
+test every_shapes_lane_gives_the_same_owl_imports_verdict ... ok
+test cli_rules ... ok
+test cli_shapes_lint ... ok
+test cli_rules_nonlinear_closure_needs_a_raised_join_step_limit ... ok
+test cli_rules_per_focus_divergence_is_refused_by_a_term_limit ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.06s
+

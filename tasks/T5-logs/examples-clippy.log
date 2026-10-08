@@ -1,0 +1,99 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+    Checking utf8parse v0.2.2
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking is_terminal_polyfill v1.70.2
+    Checking anstyle v1.0.14
+    Checking anstyle-parse v1.0.0
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shapes)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/entail)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/text)
+   Compiling heck v0.5.0
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+    Checking anstream v1.0.0
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/geo)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/columnar)
+    Checking clap_builder v4.6.0
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/markdown)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shex)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/json)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/retrieval)
+   Compiling syn v2.0.118
+   Compiling clap_derive v4.6.1
+    Checking clap v4.6.1
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/cli)
+error: this `if` statement can be collapsed
+   --> crates/cli/examples/rules_campaign.rs:314:21
+    |
+314 | /                     if !allocation && !two {
+315 | |                         if let Some((previous_time, previous_rss)) =
+316 | |                             prior.insert(kind, (elapsed, rss))
+...   |
+322 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+314 ~                     if !allocation && !two
+315 ~                         && let Some((previous_time, previous_rss)) =
+316 |                             prior.insert(kind, (elapsed, rss))
+...
+320 |                             }
+321 ~                         }
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/cli/examples/rules_campaign.rs:315:25
+    |
+315 | /                         if let Some((previous_time, previous_rss)) =
+316 | |                             prior.insert(kind, (elapsed, rss))
+317 | |                         {
+318 | |                             if elapsed > previous_time * 20 || rss > previous_rss * 20 {
+...   |
+321 | |                         }
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+316 ~                             prior.insert(kind, (elapsed, rss))
+317 ~                             && (elapsed > previous_time * 20 || rss > previous_rss * 20) {
+318 |                                 return Err(format!("{kind}: tenfold input growth exceeded conservative linear timing/RSS envelope").into());
+319 ~                             }
+    |
+
+error: use of `format!` to build up a string from an iterator
+   --> crates/cli/examples/rules_campaign.rs:340:30
+    |
+340 |                   let output = facts
+    |  ______________________________^
+341 | |                     .iter()
+342 | |                     .map(|line| format!("{line}\n"))
+343 | |                     .collect::<String>();
+    | |________________________________________^
+    |
+help: call `fold` instead
+   --> crates/cli/examples/rules_campaign.rs:342:22
+    |
+342 |                     .map(|line| format!("{line}\n"))
+    |                      ^^^
+help: ... and use the `write!` macro here
+   --> crates/cli/examples/rules_campaign.rs:342:33
+    |
+342 |                     .map(|line| format!("{line}\n"))
+    |                                 ^^^^^^^^^^^^^^^^^^^
+    = note: this can be written more efficiently by appending to a `String` directly
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#format_collect
+    = note: `-D clippy::format-collect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::format_collect)]`
+
+error: could not compile `purrdf-cli` (example "rules_campaign") due to 3 previous errors

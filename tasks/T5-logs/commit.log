@@ -1,0 +1,7 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 6273b6173f3b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/479-rules-two-rdf-type-patterns-with 9867eba22] perf(datalog): skip impossible initial join variants and qualify rules scaling
+ 151 files changed, 6218 insertions(+), 1013 deletions(-)
+ create mode 100644 crates/cli/examples/rules_alloc.rs
+ create mode 100644 crates/cli/examples/rules_campaign.rs
+ create mode 100644 crates/datalog/tests/factor_allocation.rs
+ create mode 100644 crates/datalog/tests/rules_runtime.rs

@@ -1,0 +1,16 @@
+EXTRA crates/entail/tests/goldens/named_graph.golden OWL-RL: 3066 -> 3152, delta=86
+EXTRA crates/entail/tests/goldens/named_graph.golden D: 0 -> 64, delta=64
+EXTRA crates/entail/tests/goldens/named_graph_closure.golden OWL-RL: 3026 -> 3112, delta=86
+EXTRA crates/entail/tests/goldens/named_graph_closure.golden D: 0 -> 64, delta=64
+EXTRA crates/entail/tests/goldens/named_graph_closure_near_miss.golden OWL-RL: 4383 -> 4512, delta=129
+EXTRA crates/entail/tests/goldens/named_graph_closure_near_miss.golden D: 0 -> 96, delta=96
+EXTRA crates/entail/tests/goldens/one_of_near_miss.golden OWL-RL: 1858 -> 1862, delta=4
+EXTRA crates/entail/tests/goldens/union_instance.golden OWL-RL: 1908 -> 1911, delta=3
+EXTRA crates/entail/tests/goldens/union_instance_near_miss.golden OWL-RL: 1925 -> 1929, delta=4
+EXTRA crates/entail/tests/goldens/union_of.golden OWL-RL: 1858 -> 1862, delta=4
+PASS 142 goldens: only contract-hash and join-steps differ; every other byte unchanged
+D: old_steps=402 new_steps=5074 increased_sections=142 decreased_sections=0
+OWL-RL: old_steps=243810 new_steps=249931 increased_sections=142 decreased_sections=0
+RDF: old_steps=4911 new_steps=4911 increased_sections=0 decreased_sections=0
+RDFS: old_steps=1282254 new_steps=1282254 increased_sections=0 decreased_sections=0
+Simple: old_steps=0 new_steps=0 increased_sections=0 decreased_sections=0

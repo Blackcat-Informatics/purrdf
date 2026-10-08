@@ -1,0 +1,60 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/hash)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/alloc-probe)
+   Compiling syn v2.0.118
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/deflate)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/ed25519)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/testkit)
+   Compiling clap_derive v4.6.1
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/xsd)
+    Checking clap v4.6.1
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/datalog)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/columnar)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/json)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/retrieval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/entail)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/cli)
+error: use of `format!` to build up a string from an iterator
+   --> crates/cli/examples/rules_campaign.rs:626:22
+    |
+626 |           let output = facts
+    |  ______________________^
+627 | |             .iter()
+628 | |             .map(|fact| format!("{fact}\n"))
+629 | |             .collect::<String>();
+    | |________________________________^
+    |
+help: call `fold` instead
+   --> crates/cli/examples/rules_campaign.rs:628:14
+    |
+628 |             .map(|fact| format!("{fact}\n"))
+    |              ^^^
+help: ... and use the `write!` macro here
+   --> crates/cli/examples/rules_campaign.rs:628:25
+    |
+628 |             .map(|fact| format!("{fact}\n"))
+    |                         ^^^^^^^^^^^^^^^^^^^
+    = note: this can be written more efficiently by appending to a `String` directly
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#format_collect
+    = note: `-D clippy::format-collect` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::format_collect)]`
+
+error: could not compile `purrdf-cli` (example "rules_campaign") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

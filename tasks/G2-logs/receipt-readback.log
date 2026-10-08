@@ -1,0 +1,13 @@
+crates/cli/examples/rules_campaign.rs: OK
+crates/datalog/src/seminaive.rs: OK
+crates/datalog/src/seminaive/factors.rs: OK
+crates/datalog/tests/rules_runtime.rs: OK
+Cargo.toml: OK
+Cargo.lock: OK
+rust-toolchain.toml: OK
+crates/validate/tests/fixtures/regime-boundary.vectors: OK
+crates/validate/tests/fixtures/dl-proof.vectors: OK
+crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: OK
+bindings/python/python/src/purrdf/purrdf_native.abi3.so: OK
+/opt/purrdf-rules-479-g2-qualification/purrdf-fixed: OK
+/opt/purrdf-rules-479-g2-qualification/rules_campaign: OK

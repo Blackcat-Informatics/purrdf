@@ -1,0 +1,11 @@
+seminaive_fanout/8: benchmark
+seminaive_fanout/24: benchmark
+seminaive_fanout/48: benchmark
+seminaive_frame_width/2: benchmark
+seminaive_frame_width/6: benchmark
+seminaive_frame_width/12: benchmark
+seminaive_recursion/16: benchmark
+seminaive_recursion/48: benchmark
+seminaive_recursion/96: benchmark
+
+0 benchmarks listed; 0 failed

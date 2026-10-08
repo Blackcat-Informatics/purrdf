@@ -1,0 +1,9 @@
+
+running 1 test
+independent_factors n=100 join_steps=300 requested_bytes=994911 retained_bytes=66136 peak_working_bytes=138450
+independent_factors n=1000 join_steps=3000 requested_bytes=9762171 retained_bytes=615316 peak_working_bytes=1342194
+independent_factors n=10000 join_steps=30000 requested_bytes=101923859 retained_bytes=6739660 peak_working_bytes=13377650
+test independent_existential_factor_work_and_allocation_grow_additively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+

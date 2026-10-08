@@ -1,0 +1,7 @@
+error: no test target named `pack_parity` in `purrdf-entail` package
+help: available test targets:
+    oracle
+    owlrl_oracle
+    pack_view_parity
+    reasoner
+    report_order

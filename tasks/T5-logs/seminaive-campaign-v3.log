@@ -1,0 +1,21 @@
+seminaive_fanout/8       time:   [267.7 µs 268.4 µs 269.5 µs]  mad: 2.159 µs  (100 samples × 188 iterations)
+                         outliers: 15 of 100 (0 low severe, 0 low mild, 6 high mild, 9 high severe)
+seminaive_fanout/24      time:   [6.435 ms 6.447 ms 6.460 ms]  mad: 34.12 µs  (100 samples × 8 iterations)
+                         outliers: 10 of 100 (0 low severe, 1 low mild, 4 high mild, 5 high severe)
+warning: seminaive_fanout/48: 100 samples cannot finish in 5.0 s; they will take about 9.8 s
+seminaive_fanout/48      time:   [48.57 ms 48.78 ms 48.94 ms]  mad: 494.0 µs  (100 samples × 2 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 3 high mild, 0 high severe)
+seminaive_frame_width/2  time:   [4.761 µs 4.781 µs 4.801 µs]  mad: 59.92 ns  (100 samples × 10374 iterations)
+                         outliers: 21 of 100 (0 low severe, 4 low mild, 4 high mild, 13 high severe)
+seminaive_frame_width/6  time:   [13.33 µs 13.36 µs 13.40 µs]  mad: 159.3 ns  (100 samples × 3796 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 3 high mild, 0 high severe)
+seminaive_frame_width/12 time:   [31.53 µs 31.61 µs 31.66 µs]  mad: 257.3 ns  (100 samples × 1326 iterations)
+                         outliers: 1 of 100 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+seminaive_recursion/16   time:   [445.4 µs 448.6 µs 455.4 µs]  mad: 14.64 µs  (100 samples × 114 iterations)
+                         outliers: 23 of 100 (0 low severe, 0 low mild, 2 high mild, 21 high severe)
+seminaive_recursion/48   time:   [2.282 ms 2.312 ms 2.349 ms]  mad: 100.7 µs  (100 samples × 15 iterations)
+                         outliers: 1 of 100 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+seminaive_recursion/96   time:   [10.33 ms 10.52 ms 10.85 ms]  mad: 728.7 µs  (100 samples × 5 iterations)
+                         outliers: 13 of 100 (0 low severe, 0 low mild, 1 high mild, 12 high severe)
+
+9 benchmarks measured; 0 failed

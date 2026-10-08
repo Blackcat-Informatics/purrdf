@@ -1,0 +1,142 @@
+   Compiling once_cell v1.21.4
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/validate)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/rdf-capi)
+   Compiling wasm-bindgen v0.2.125
+   Compiling purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/rdf-wasm)
+    Finished `test` profile [optimized] target(s) in 14.15s
+     Running unittests src/lib.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-capi/8d290aa34ea1453b/out/purrdf-8d290aa34ea1453b)
+
+running 3 tests
+test entail::tests::the_dl_proof_golden_vector_matches ... ok
+test entail::tests::the_golden_proof_bytes_survive_the_c_abi ... ok
+test entail::tests::the_golden_vector_matches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 98 filtered out; finished in 0.02s
+
+     Running tests/abi.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-capi/16c3af024f47f0f9/out/abi-16c3af024f47f0f9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 0.00s
+
+     Running tests/abi_signatures.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-capi/c25b60b265e6ba0b/out/abi_signatures-c25b60b265e6ba0b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/c_smoke.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-capi/55706f3c532de1ba/out/c_smoke-55706f3c532de1ba)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/084045befaa094c2/out/purrdf_validate-084045befaa094c2)
+
+running 5 tests
+test regime::tests::regenerate_regime_golden_vectors ... ignored, writes the committed golden vector; run deliberately
+test model::tests::matches_golden ... ok
+test regime::tests::the_golden_vector_is_well_formed ... ok
+test regime::proof_tests::the_dl_proof_golden_vector_matches_natively ... ok
+test regime::tests::the_golden_vector_matches ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 191 filtered out; finished in 0.02s
+
+     Running tests/dl_consistency_search_budget.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/4a51f2b3bfa82d42/out/dl_consistency_search_budget-4a51f2b3bfa82d42)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/dl_nominal_witnesses.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/00e7c74c8cc746f7/out/dl_nominal_witnesses-00e7c74c8cc746f7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/dl_step_ledger.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/340aa31d95c03f5b/out/dl_step_ledger-340aa31d95c03f5b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/dl_work_budget.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/f3b646f02884639c/out/dl_work_budget-f3b646f02884639c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/evaluation_limits.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/c7a1d315509ad67f/out/evaluation_limits-c7a1d315509ad67f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/identity_empty_component.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/27b45014dfc367ae/out/identity_empty_component-27b45014dfc367ae)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/import_key_policy.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/dda67ecc5a674b21/out/import_key_policy-dda67ecc5a674b21)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/node_expr_selectors.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/c85449759388dbc1/out/node_expr_selectors-c85449759388dbc1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/premise_iri_policy.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/134b8b8ad0fc998c/out/premise_iri_policy-134b8b8ad0fc998c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/rules_shapes_graph_iri.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/87eddf28d0cbfef0/out/rules_shapes_graph_iri-87eddf28d0cbfef0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/sarif_components.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/aae9913b2273a082/out/sarif_components-aae9913b2273a082)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+
+     Running tests/shapes_graph_iri.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/9965f44ed71f3bbe/out/shapes_graph_iri-9965f44ed71f3bbe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/shapes_graph_links.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/94f6916881f1423b/out/shapes_graph_links-94f6916881f1423b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/shapes_owl_imports.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/dbd49e9cfd25341e/out/shapes_owl_imports-dbd49e9cfd25341e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/srl_imports.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-validate/85af69e99bac17fc/out/srl_imports-85af69e99bac17fc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/opt/purrdf-479-t6-full/build/debug/build/purrdf-wasm/c9231a6bbb74d2bb/out/purrdf_wasm-c9231a6bbb74d2bb)
+
+running 2 tests
+test entail::tests::the_dl_proof_golden_vector_matches_natively ... ok
+test entail::tests::the_golden_vector_matches_natively ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 244 filtered out; finished in 0.02s
+

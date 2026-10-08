@@ -1,0 +1,19 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0 -- /opt/purrdf-479-9867-t6-python/bin/python
+cachedir: .pytest_cache
+rootdir: /home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/bindings/python
+configfile: pyproject.toml
+collecting ... collected 87 items / 77 deselected / 10 selected
+
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_artifact_is_readable PASSED [ 10%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[simple-copies-a-named-graph-verbatim] PASSED [ 20%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[rdf-types-every-predicate] PASSED [ 30%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[rdfs-subclass-domain-and-range] PASSED [ 40%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[owl-rl-transitive-symmetric-and-inverse] PASSED [ 50%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[rdfs-abandons-a-generalized-conclusion] PASSED [ 60%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[d-types-every-supported-datatype] PASSED [ 70%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[owl-rl-class-expressions-and-equality] PASSED [ 80%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[owl-direct-augments-with-what-the-tableau-decides] PASSED [ 90%]
+bindings/python/tests/test_entail_regimes.py::test_the_golden_vector_matches_through_python[rif-entails-under-the-supplied-rule-set] PASSED [100%]
+
+====================== 10 passed, 77 deselected in 0.10s =======================

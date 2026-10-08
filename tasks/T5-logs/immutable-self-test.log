@@ -1,0 +1,1 @@
+Error: Custom { kind: NotFound, error: "/opt/purrdf-rules-479-3ec2dbba8-qualification/rules_campaign is not inside a cargo build directory: no ancestor holds CACHEDIR.TAG" }

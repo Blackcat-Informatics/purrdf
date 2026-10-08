@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 479,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with",
+  "branch": "paudley/479-rules-two-rdf-type-patterns-with",
+  "slug": "rules-two-rdf-type-patterns-with",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/.stage/rules-two-rdf-type-patterns-with",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "6273b6173f3b3d98f49629a162ba88da8bc26477",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with",
+    "branch:paudley/479-rules-two-rdf-type-patterns-with",
+    "stage:/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/.stage/rules-two-rdf-type-patterns-with",
+    "issue:/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/.stage/rules-two-rdf-type-patterns-with/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-07T19:54:34-0600"
+}

@@ -1,0 +1,104 @@
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling libc v0.2.186
+   Compiling getrandom v0.3.4
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling ctutils v0.4.2
+   Compiling cipher v0.5.2
+   Compiling aead v0.6.1
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/datalog)
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/jsonschema)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/alloc-probe)
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/stack)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/gts)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 42.76s
+     Running tests/rule_capacity_limits.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-shapes/21579e419fbb4325/out/rule_capacity_limits-21579e419fbb4325)
+
+running 6 tests
+test the_join_step_limit_names_its_knob_and_its_neighbour_completes ... ok
+test a_divergent_rule_set_is_refused_by_a_term_limit_with_the_capacity_limits_raised ... ok
+test a_seventy_thousand_triple_copy_completes_natively_and_names_the_knob_on_wasm ... ok
+test a_divergent_shape_rule_is_refused_by_the_round_limit_not_the_join_step_limit ... ok
+test a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_join_step_limit ... ok
+test a_thousand_node_transitive_closure_completes_natively_through_both_frontends ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.03s
+
+     Running tests/rules_engine.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-shapes/d24789f1f46dbff0/out/rules_engine-d24789f1f46dbff0)
+
+running 26 tests
+test rule_nodes_are_checked_against_the_census ... ok
+test an_ill_formed_element_rule_is_refused ... ok
+test data_blocks_join_the_inference_graph ... ok
+test a_derived_triple_explains_itself ... ok
+test a_stratifiable_negation_evaluates_and_a_cycle_through_one_is_refused_by_name ... ok
+test now_is_one_point_in_time_per_evaluation ... ok
+test not_data_matches_the_base_graph_only ... ok
+test source_rules_are_tracked_on_request ... ok
+test global_rules_run_without_a_focus_node ... ok
+test element_rules_lower_filters_assignments_blanks_and_triple_terms ... ok
+test a_transitive_closure_over_a_chain_is_complete ... ok
+test a_class_condition_brings_its_superclasses ... ok
+test a_rule_set_selects_its_rules ... ok
+test opaque_shacl_producers_preserve_multirow_fresh_templates ... ok
+test rules_entailment_runs_the_rules_before_validation ... ok
+test temporary_triples_are_visible_then_deleted ... ok
+test same_order_rules_run_concurrently_and_orders_run_in_sequence ... ok
+test a_known_rule_processor_loads_and_an_unknown_one_is_refused ... ok
+test a_bound_template_runs_and_a_missing_parameter_is_refused ... ok
+test element_readings_infer_what_their_producers_do ... ok
+test an_iterating_blank_minting_rule_reports_its_limit ... ok
+test the_term_generating_round_limit_is_the_callers ... ok
+test a_data_bounded_counter_completes_under_the_default ... ok
+test deep_countdowns_complete_under_the_default_limits ... ok
+test an_unbounded_counter_is_refused_at_the_round_limit ... ok
+test an_exponential_rule_set_is_refused_at_the_generated_term_budget ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+     Running tests/srl_language.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-shapes/2415c5604d78a95f/out/srl_language-2415c5604d78a95f)
+
+running 23 tests
+test a_declaration_inside_a_rule_or_a_bodiless_rule_is_refused ... ok
+test check_answers_each_level_and_refuses_by_stage ... ok
+test paths_expand_and_annotations_need_one_triple ... ok
+test stages_are_typed ... ok
+test lang_dir_and_version ... ok
+test builtins_are_srls_list ... ok
+test multi_character_terminals_must_be_contiguous ... ok
+test an_empty_head_generates_nothing ... ok
+test the_version_announcement_is_made_early ... ok
+test imports_resolve_through_the_callers_resolver ... ok
+test triple_term_dependencies_are_exact ... ok
+test a_non_rdf_head_instantiation_is_refused ... ok
+test check_resolves_imports_from_the_table ... ok
+test declarations_and_rule_blocks_interleave_freely ... ok
+test a_negation_sees_only_earlier_variables ... ok
+test an_assigned_variable_joins_a_later_pattern ... ok
+test data_block_blank_nodes_are_standardized_apart ... ok
+test computed_assignment_values_reach_negative_patterns ... ok
+test an_assigned_blank_node_is_fresh_per_solution ... ok
+test numeric_and_boolean_terms ... ok
+test independent_guarded_components_preserve_both_blank_mints ... ok
+test a_closure_deeper_than_the_floor_completes ... ok
+test a_rule_nesting_triple_terms_every_round_is_refused_at_a_limit ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.17s
+

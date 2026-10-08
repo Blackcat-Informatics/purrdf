@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized] target(s) in 0.05s
+     Running tests/rules_runtime.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/wasm32-unknown-unknown/debug/build/purrdf-datalog/9d78c1fc5d2ce658/out/rules_runtime-9d78c1fc5d2ce658.wasm)
+
+running 4 tests
+test later_partial_delta_keeps_both_productive_anchors ... ok
+test original_guarded_pair_has_exact_connected_work_and_authored_proofs ... ok
+test connected_rule_restores_all_authored_premises ... ok
+test independent_head_projects_without_cartesian_work ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

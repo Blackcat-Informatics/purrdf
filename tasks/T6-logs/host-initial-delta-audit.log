@@ -1,0 +1,3 @@
+owl-rl-transitive-symmetric-and-inverse	owl-rl	budget join-steps 1903	budget join-steps 1910
+owl-rl-class-expressions-and-equality	owl-rl	budget join-steps 1809	budget join-steps 1821
+PASS: all nine case/input/program/closure/proof/tally/non-work-budget bytes unchanged; 2 hash/work lines differ

@@ -1,0 +1,100 @@
+# Independent completion review
+
+VERDICT: PASS
+
+**PASS for local completion and PR readiness at 87d6c3272.** Reviewed current
+source, the sole six-task plan, complete captured issue body and acceptance
+comment, accepted T1–T5 reviews/evidence, and the accepted T6 dependent-host
+correction. No required source/acceptance gap remains. Root explicitly confirmed
+actual execution session 76482 completed with exit 0; the complete retained
+make-check-settled.log reaches the final workspace wasm release build. This
+conclusion uses that terminal receipt, not a successful-looking log tail.
+Integration candidate hash qualification now also passes as recorded below.
+Hosted qualification and merge remain pending.
+
+This reviewer did not implement the delivery. Review is read-only apart from this
+Stage report: no builds, tests, scans, timing, source edits, Git/forge actions or
+extra agents. Applicable AGENTS, main .baseline/.goals and the sole plan govern.
+The tracked worktree is clean and the emergency deficiency ledger has no entries.
+
+## Acceptance and production paths
+
+| Sole-plan / original acceptance | Reviewed evidence and result |
+| --- | --- |
+| Connected bridge before another disconnected type | Production atom_priority and binding_aware_order in plan.rs:349–415 prioritize a bound variable in any carrier position before static known/constants/repetition/authored ties. Same/different-class type, predicate/graph, repeated-variable and static-tie regressions cover actual lowered plans. Constants cannot falsely connect components. |
+| Hybrid connectivity, certification and coordinates | plan.rs:759 uses the same selection loop and any-member group connectivity. Certification/internal cycle descent remain intact. Lowered operators follow group order and restore authored sources; the six-premise analytic runtime oracle compares planned and forced-binary kernels across insertion permutations. |
+| Genuine independent components avoid irrelevant products | factors.rs:51 certifies positive-variable incidence plus negative outer-slot coupling; local negative variables stay local. Full matching is once per frozen round and mode tables borrow it. Old/New/Full first-new-factor decomposition excludes entirely old firings; empty factors and ground negative preconditions block correctly. Guard callbacks disqualify collapse. |
+| Per-head projection and necessary output products | factors.rs:329–562 projects all four head positions separately, collapses only existential dimensions, and streams required products through shared emission. Complete facts/proofs match exhaustive small oracles over 64 seed subsets, delta/insertion/head permutations, negative coupling, constant/conjunctive heads and predicate/graph cases. Exact 3N work and retained-state/allocation controls establish additive one-factor-head behavior. Necessary multi-factor output remains output-sensitive. |
+| Global canonical witnesses | factors.rs:262–487 retains sum-first and pure-lex height frontiers, using the global saturated height threshold and saturated-sum law. seminaive.rs:2993–3074 supplies one preference/arithmetic home: height, source-height sum, sorted facts, authored rule and authored sources. Masked-height, u32 boundary and neighboring u64 saturation controls prevent arbitrary local winners. |
+| Canonical assumed confirmations across schedules | Confirmation keeps owned facts/source surfaces and summed heights; schedule.rs:342–398 and :480 merge canonical witnesses across all reached groups/iterations before public derivations. Group/insertion permutations, later improvement and retraction tests cover ownership and preference; ordinary previous admissions remain unchanged. |
+| Opaque guard and negative semantics | Certification excludes body/negative callbacks. The existing stage-major guarded path runs on the caller thread and preserves multiplicity, mint state, computed surfaces and reached errors. Actual public SRL/SHACL Producer, FreshBlank, assignment BNODE, triple terms, computed negation and multirow/empty controls qualify production callers, supplemented by crossed-error/malformed-row seam tests. |
+| Round-wide admission before touched owned expansion | seminaive.rs:679–743 shares one successful-credit pool and one refusal latch, including the last u64MAX credit. evaluate_round restores authored parallel reduction and reports the pool observation. Absorption checks refusal before candidate commit. Positive/cyclic/factor/head/negative/guard expansion and the corrected negative-row post-refusal loop reserve/check before owned work. Exact/one-below/zero, 1/4/32 workers, wide heads, broad partitions, large callbacks and actual allocation-negative controls pass. Exhaustion remains a total typed refusal. |
+| Versioned observation changes, stable authored identity | cache.rs:70 and :286 advance planner/calculus to v2. Authored rule pins remain unchanged. First-party 142 entail goldens and dependent nine-case host/mechanism fixtures were regenerated by owning Rust generators; audits preserve facts, proofs, inputs/programs, tallies, stored/arena coordinates and admit only identity/work/documentation changes. No external frozen payload is changed. |
+| Original default-limit 1k/10k/100k real CLI acceptance | T5's immutable actual campaign covers single/pair/notype production and separate allocator observer at all three sizes, plus a positive two-Spool pair neighbour: 20 successful cases. Exact complete fact/proof/authored-premise/counter/channel checks pass, including empty pair and nonempty neighbour. Default limits are unchanged. Whole-snapshot empty-OldOnly skipping in both kernels makes the original pair 9N and neighbour 18N; partial deltas retain every productive anchor. |
+| Actual growth and resource evidence | Production wait4 elapsed/OS peak RSS and separate public-dispatch allocator windows remain distinct. Recorded tenfold input steps stay inside stated twentyfold empirical growth envelopes; static exact-work and independent allocation/state controls support the algorithmic claim. Nine existing fanout/frame/recursion benchmarks actually run, without inventing a prior timing baseline or a statistical speedup. Host activity and measurement limits are retained. |
+| Native/wasm/host consumers | Settled T5 evidence includes 334 Datalog library cases, factor allocation and four native portable cases; 59 shapes, 14 real CLI shapes and 683 entail library plus 86 consumer cases. Four affected wasm crates build and Node executes all four exact portable cases. T6 correction adds four native shared checks, the mechanism oracle, ten actual isolated Python cases and two public packaged Node tests over all nine shared vectors. Ignores/filters/generator runs are not counted as executed acceptance. |
+
+## Identity, remediation and full-gate boundary
+
+T5 campaign source and copied executable identities were independently verified
+in its accepted review. Later 87d6c3272 changes only two first-party dependent
+fixtures and mechanism-test documentation; the production planner/evaluator bytes
+were restored after causal probes. T6's ten source/package capture hashes also
+independently match, including the strict private compiler artifact and optimized
+public package. Normal task hooks/commits/pushes and durable progress records are
+present through the host correction. No review count beyond useful independent
+assessment was invented.
+
+The initial full make check at 9867eba22 failed with actual exit 2 on the stale
+C ABI shared simple-regime hash. Its log remains intact. The scoped correction
+proved nine shared hash and three work changes plus the mechanism hash/+43;
+connectivity-only controls produced zero delta, while disabling only initial
+empty-suffix skipping restored seven/twelve OWL credits. Native/CPython/public
+Node execution and final clippy/fmt/frozen-corpus controls passed. The initial
+Stage-wrapper private-WASM refusal also remains preserved beside corrected
+same-active-nightly packaging; strict capture was not weakened.
+
+The new settled full run at 87d6c3272 establishes the complete local make check:
+formatting, workspace/downstream strict clippy and builds/checks, hygiene and
+generated/preflight checks, workspace runtime and downstream consumer tests,
+core ring-fence hygiene and final workspace wasm release build. Root confirmed
+actual exit 0 on session 76482. The previously failing C ABI host check passes
+in this settled run. Intentional ignored generators and unrelated filtered cases
+are not relabelled runtime coverage. The earlier failed full attempt remains
+failed and does not supply missing portions of this settled run.
+
+The source is ready for the authorized PR handoff. Hosted CI/review, candidate
+qualification, ghprsq integration and cleanup remain subsequent actions; local
+completion is not a merged-delivery or hosted-success claim.
+
+## Integration interaction assessment
+
+Read-only comparison of clean candidate 4c4298e28276eb45c2ae7855898837567693243e
+against delivery HEAD finds only CHANGELOG.md and 132 additive lines in
+crates/hash/src/blake3.rs. They introduce subtree chaining-value/root-fold APIs,
+their conversion helpers and three tests. Existing digest, streaming Hasher,
+compression and dispatch bodies are unchanged. The new APIs call those existing
+primitives and add no mutable global state or dependency/feature edge.
+
+Delivery contract/plan hashing in datalog/cache.rs uses the unchanged streaming
+Hasher/update path; CLI/campaign identities use unchanged existing hash functions.
+No 479 production caller reaches the new subtree entry points. No semantic
+interaction or invalidation of the source-bound 479 evidence was found. Root's
+focused hash qualification on the isolated candidate is proportionate to this
+additive difference. Root confirmed actual session 77193 exit 0: candidate
+purrdf-hash library tests pass 59/59, zero ignored, strict all-target hash clippy
+passes, and the wasm32 release hash library builds successfully. All three
+commands ran sequentially under set-e, eight jobs and the same active SDK/private
+build environment. The additive integration difference is therefore qualified.
+A full rerun solely because this clean additive main change exists is not a
+review requirement. Hosted CI/review and ghprsq integration still remain required.
+
+## Broader portfolio boundary
+
+This delivery owns the complete original 479 acceptance and the sole-plan
+correctness/admission additions. It does not close 364. Callback-owned eager
+Vec/string/SHACL Producer allocations, caller-configured term arena, physical
+memory accounting, unlimited evaluation and certified continuation remain
+unfinished work in their accepted portfolio deliveries. Static cardinality ties
+are intentionally left to the already owned statistics work; original 479's
+connectivity/additivity/scaling/proof requirements do not depend on it.

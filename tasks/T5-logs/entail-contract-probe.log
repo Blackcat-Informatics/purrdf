@@ -1,0 +1,35 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/entail)
+    Finished `test` profile [optimized] target(s) in 16.87s
+     Running unittests src/lib.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-entail/43862694fd4ce3ff/out/purrdf_entail-43862694fd4ce3ff)
+
+running 1 test
+PIN wasm Simple 42b60c6d0ce2cf3f4a48ab5ce4e98e9b76447390d68cd26dbac9bbadcfe01a12
+PIN wasm Rdf d72ae8a144ea0aaca3ef4554c79de1ab0797f7845175a668af410c521a67a42a
+PIN wasm Rdfs acbe19a727950484a0e3f02895fb400700ccaf5ab3855557f79f11e6137f8154
+PIN wasm OwlRl da953ef936794dfb21dc21cbe35305603613729a411084d0c1eefd8601f02747
+PIN wasm OwlDirect 42b60c6d0ce2cf3f4a48ab5ce4e98e9b76447390d68cd26dbac9bbadcfe01a12
+PIN wasm Rif 42b60c6d0ce2cf3f4a48ab5ce4e98e9b76447390d68cd26dbac9bbadcfe01a12
+PIN wasm D f6e0e28474ddc3e6277fb638f2f9f3689a7eccd2b8e2ea6a7643ad5eb16c3f57
+PIN native Simple 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+PIN native Rdf 35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7
+PIN native Rdfs 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
+PIN native OwlRl f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
+PIN native OwlDirect 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+PIN native Rif 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
+PIN native D fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
+
+thread 'calculus::tests::the_contract_hashes_are_pinned' (1422166) panicked at crates/entail/src/calculus/mod.rs:974:17:
+assertion `left == right` failed: Simple under EvalOptions { stored_facts: Some(131072), join_steps: Some(1048576), term_generating_rounds: None, generated_terms: None }
+  left: "42b60c6d0ce2cf3f4a48ab5ce4e98e9b76447390d68cd26dbac9bbadcfe01a12"
+ right: "4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test calculus::tests::the_contract_hashes_are_pinned ... FAILED
+
+failures:
+
+failures:
+    calculus::tests::the_contract_hashes_are_pinned
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 682 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-entail --lib`

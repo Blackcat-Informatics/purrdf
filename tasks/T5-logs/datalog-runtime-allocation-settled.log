@@ -1,0 +1,20 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/datalog)
+    Finished `test` profile [optimized] target(s) in 1.15s
+     Running tests/factor_allocation.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-datalog/6d0b98aa12aeee74/out/factor_allocation-6d0b98aa12aeee74)
+
+running 1 test
+independent_factors n=100 join_steps=300 requested_bytes=994911 retained_bytes=66136 peak_working_bytes=138450
+independent_factors n=1000 join_steps=3000 requested_bytes=9762171 retained_bytes=615316 peak_working_bytes=1342194
+independent_factors n=10000 join_steps=30000 requested_bytes=101923859 retained_bytes=6739660 peak_working_bytes=13377650
+test independent_existential_factor_work_and_allocation_grow_additively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/rules_runtime.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-datalog/194ed7bfa895a9e6/out/rules_runtime-194ed7bfa895a9e6)
+
+running 2 tests
+test connected_rule_restores_all_authored_premises ... ok
+test independent_head_projects_without_cartesian_work ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

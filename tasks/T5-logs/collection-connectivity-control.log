@@ -1,0 +1,30 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/entail)
+    Finished `test` profile [optimized] target(s) in 12.69s
+     Running tests/oracle.rs (/opt/.cargo/slots/c1fc6c159374197f/0/build/debug/build/purrdf-entail/bd3c13a54690a9a3/out/oracle-bd3c13a54690a9a3)
+
+running 1 test
+CONTROL union_of === regime Simple ===   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
+CONTROL union_of === regime RDF ===   budget: join-steps=51 stored-facts=12 term-arena-bytes=665
+CONTROL union_of === regime RDFS ===   budget: join-steps=8781 stored-facts=188 term-arena-bytes=1977
+CONTROL union_of === regime OWL-RL ===   budget: join-steps=1901 stored-facts=118 term-arena-bytes=2573
+CONTROL union_of === regime D ===   budget: join-steps=32 stored-facts=37 term-arena-bytes=1829
+CONTROL union_instance === regime Simple ===   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
+CONTROL union_instance === regime RDF ===   budget: join-steps=35 stored-facts=13 term-arena-bytes=687
+CONTROL union_instance === regime RDFS ===   budget: join-steps=9020 stored-facts=193 term-arena-bytes=1999
+CONTROL union_instance === regime OWL-RL ===   budget: join-steps=1951 stored-facts=121 term-arena-bytes=2595
+CONTROL union_instance === regime D ===   budget: join-steps=32 stored-facts=38 term-arena-bytes=1851
+CONTROL union_instance_near_miss === regime Simple ===   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
+CONTROL union_instance_near_miss === regime RDF ===   budget: join-steps=35 stored-facts=13 term-arena-bytes=709
+CONTROL union_instance_near_miss === regime RDFS ===   budget: join-steps=9066 stored-facts=194 term-arena-bytes=2021
+CONTROL union_instance_near_miss === regime OWL-RL ===   budget: join-steps=1968 stored-facts=121 term-arena-bytes=2617
+CONTROL union_instance_near_miss === regime D ===   budget: join-steps=32 stored-facts=38 term-arena-bytes=1873
+CONTROL one_of_near_miss === regime Simple ===   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
+CONTROL one_of_near_miss === regime RDF ===   budget: join-steps=51 stored-facts=12 term-arena-bytes=665
+CONTROL one_of_near_miss === regime RDFS ===   budget: join-steps=8781 stored-facts=188 term-arena-bytes=1977
+CONTROL one_of_near_miss === regime OWL-RL ===   budget: join-steps=1901 stored-facts=118 term-arena-bytes=2573
+CONTROL one_of_near_miss === regime D ===   budget: join-steps=32 stored-facts=37 term-arena-bytes=1829
+test trace_collection_candidate_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.03s
+

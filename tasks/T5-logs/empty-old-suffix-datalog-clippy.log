@@ -1,0 +1,29 @@
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/datalog)
+error: the borrowed expression implements the required traits
+  --> crates/datalog/tests/rules_runtime.rs:98:33
+   |
+98 |                 ClauseTerm::iri(&format!("{NS}Vault")),
+   |                                 ^^^^^^^^^^^^^^^^^^^^^ help: change this to: `format!("{NS}Vault")`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+   = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: the borrowed expression implements the required traits
+   --> crates/datalog/tests/rules_runtime.rs:105:33
+    |
+105 |                 ClauseTerm::iri(&format!("{NS}Spool")),
+    |                                 ^^^^^^^^^^^^^^^^^^^^^ help: change this to: `format!("{NS}Spool")`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: the borrowed expression implements the required traits
+   --> crates/datalog/tests/rules_runtime.rs:110:33
+    |
+110 |                 ClauseTerm::iri(&format!("{NS}Spool")),
+    |                                 ^^^^^^^^^^^^^^^^^^^^^ help: change this to: `format!("{NS}Spool")`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: could not compile `purrdf-datalog` (test "rules_runtime") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

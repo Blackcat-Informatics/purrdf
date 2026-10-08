@@ -1,0 +1,72 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-algebra)
+    Checking cpubits v0.1.1
+    Checking libc v0.2.186
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-results)
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/ed25519)
+   Compiling proc-macro2 v1.0.106
+    Checking structured-zstd v0.0.49
+    Checking cipher v0.5.2
+    Checking ctutils v0.4.2
+    Checking aead v0.6.1
+    Checking visual-hashing v1.0.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+   Compiling quote v1.0.46
+    Checking universal-hash v0.6.1
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/datalog)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/stack)
+    Checking getrandom v0.3.4
+    Checking polyval v0.7.3
+    Checking utf8parse v0.2.2
+    Checking anstyle-query v1.1.5
+    Checking anstyle-parse v1.0.0
+    Checking is_terminal_polyfill v1.70.2
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/sparql-eval)
+    Checking ghash v0.6.0
+    Checking anstyle v1.0.14
+    Checking colorchoice v1.0.5
+    Checking strsim v0.11.1
+    Checking aes-gcm v0.11.1
+    Checking clap_lex v1.1.0
+   Compiling heck v0.5.0
+    Checking anstream v1.0.0
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/columnar)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/markdown)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/gts)
+    Checking clap_builder v4.6.0
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/json)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/testkit)
+   Compiling syn v2.0.118
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/alloc-probe)
+   Compiling clap_derive v4.6.1
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/hnsw)
+    Checking clap v4.6.1
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/retrieval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/entail)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/479-rules-two-rdf-type-patterns-with/crates/cli)
+error: unreachable `pub` item
+   --> crates/cli/examples/rules_campaign.rs:211:5
+    |
+211 |     pub fn run() -> Result<(), Box<dyn Error>> {
+    |     ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     |
+    |     help: consider restricting its visibility: `pub(crate)`
+    |
+    = help: or consider exporting it for use by other crates
+    = note: `-D unreachable-pub` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unreachable_pub)]`
+
+error: could not compile `purrdf-cli` (example "rules_campaign") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
