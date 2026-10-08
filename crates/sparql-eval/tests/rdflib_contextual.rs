@@ -8,6 +8,196 @@ use purrdf_sparql_algebra::{GroundTerm, NamedNode, Variable};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 
 #[test]
+fn contextual_graph_selection_deduplicates_statement_roles_without_resurrection() {
+    use purrdf_core::{SparqlRequest, ir::QuadValues};
+    use purrdf_iri::vocab::rdf::REIFIES;
+    use purrdf_sparql_eval::select_query_dataset;
+
+    for has_named in [false, true] {
+        let mut builder = RdfDatasetBuilder::new();
+        let a = builder.intern_iri("http://example.org/a");
+        let b = builder.intern_iri("http://example.org/b");
+        let p = builder.intern_iri("http://example.org/p");
+        let r = builder.intern_iri("http://example.org/r");
+        let annotation = builder.intern_iri("http://example.org/annotation");
+        let selected = builder.intern_iri("http://example.org/selected");
+        let other = builder.intern_iri("http://example.org/other");
+        let empty = builder.intern_iri("http://example.org/empty");
+        let excluded = builder.intern_iri("http://example.org/excluded");
+        let reifies = builder.intern_iri(REIFIES);
+        let triple = builder.intern_triple(a, p, b);
+        let blank = builder.intern_blank("scoped", purrdf_core::BlankScope(37));
+        builder.push_quad(r, reifies, triple, None);
+        builder.push_reifier(r, triple);
+        builder.push_quad(r, annotation, b, None);
+        builder.push_annotation(r, annotation, b);
+        builder.push_quad(excluded, p, b, None);
+        if has_named {
+            builder.push_quad(r, reifies, triple, Some(selected));
+            builder.push_quad(r, annotation, b, Some(selected));
+            builder.push_quad(a, p, b, Some(selected));
+            builder.push_quad(blank, p, triple, Some(selected));
+            builder.push_quad(other, p, b, Some(other));
+            builder.declare_named_graph(empty);
+        }
+        let source = builder.freeze().expect("cross-role source");
+        let before = QuadValues::surface_of(&source);
+        for invalid in [TermValue::integer(1), TermValue::iri("relative")] {
+            assert!(select_query_dataset(&source, false, Some(&invalid), false).is_err());
+        }
+        let missing = TermValue::iri("http://example.org/missing");
+        let missing_projection = select_query_dataset(&source, true, Some(&missing), false)
+            .expect("valid missing graph is empty");
+        assert!(
+            !missing_projection
+                .named_graphs()
+                .any(|id| missing_projection.term_value(id) == missing)
+        );
+        let graph = source.term_value(selected);
+        let engine = NativeSparqlEngine::new();
+        let answers = |data: &purrdf_core::RdfDataset, query, single_graph| {
+            let result = engine
+                .query_rdflib_with_options_view(
+                    data,
+                    SparqlRequest {
+                        query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY,
+                    single_graph,
+                )
+                .expect("selected production query");
+            let SparqlResult::Solutions {
+                rows, variables, ..
+            } = result
+            else {
+                panic!("solutions")
+            };
+            assert_eq!(variables, ["s", "p", "o"]);
+            rows
+        };
+        let row = |s, p, o| {
+            vec![
+                Some(source.term_value(s)),
+                Some(source.term_value(p)),
+                Some(source.term_value(o)),
+            ]
+        };
+        let shared = [row(r, reifies, triple), row(r, annotation, b)];
+        let default_rows = [shared[0].clone(), shared[1].clone(), row(excluded, p, b)];
+        let selected_rows = [
+            shared[0].clone(),
+            shared[1].clone(),
+            row(a, p, b),
+            row(blank, p, triple),
+        ];
+        assert_eq!(
+            answers(
+                &missing_projection,
+                "SELECT ?s ?p ?o WHERE { ?s ?p ?o }",
+                false
+            ),
+            Vec::<Vec<Option<TermValue>>>::new()
+        );
+        for dataset_scope in [false, true] {
+            for (graph, union) in [
+                (None, false),
+                (None, true),
+                (Some(&graph), false),
+                (Some(&graph), true),
+            ] {
+                if !has_named && graph.is_some() {
+                    continue;
+                }
+                let mut expected: std::collections::BTreeSet<_> = if union || graph.is_none() {
+                    default_rows.iter().cloned().collect()
+                } else {
+                    std::collections::BTreeSet::new()
+                };
+                if has_named && (union || graph.is_some()) {
+                    expected.extend(selected_rows.iter().cloned());
+                }
+                if has_named && union {
+                    expected.insert(row(other, p, b));
+                }
+                let projected =
+                    select_query_dataset(&source, dataset_scope, graph, union).expect("selection");
+                let rows = answers(
+                    &projected,
+                    "SELECT ?s ?p ?o WHERE { ?s ?p ?o }",
+                    !dataset_scope,
+                );
+                assert_eq!(
+                    rows.len(),
+                    expected.len(),
+                    "{has_named}/{dataset_scope}/{graph:?}/{union}: {rows:?}"
+                );
+                let unique: std::collections::BTreeSet<_> = rows.iter().cloned().collect();
+                assert_eq!(unique.len(), rows.len(), "each RDF triple occurs once");
+                assert_eq!(
+                    unique, expected,
+                    "exact RDF terms, scopes, quoted terms and absent excluded graphs"
+                );
+                if graph.is_some() && !union {
+                    assert!(!rows.iter().any(|row| {
+                        row.iter().any(|cell|
+                matches!(cell, Some(TermValue::Iri(iri)) if iri == "http://example.org/excluded"))
+                    }));
+                }
+                if dataset_scope && has_named {
+                    let named = answers(
+                        &projected,
+                        "SELECT ?s ?p ?o WHERE { GRAPH <http://example.org/selected> { ?s ?p ?o } }",
+                        false,
+                    );
+                    assert_eq!(named.len(), selected_rows.len());
+                    assert_eq!(
+                        named.into_iter().collect::<std::collections::BTreeSet<_>>(),
+                        selected_rows.iter().cloned().collect()
+                    );
+                    assert!(projected.named_graphs().any(|id| projected.term_value(id)
+                        == TermValue::Iri("http://example.org/empty".into())));
+                } else if !dataset_scope {
+                    assert!(projected.named_graphs().next().is_none());
+                }
+            }
+        }
+        assert_eq!(QuadValues::surface_of(&source), before);
+    }
+}
+
+#[test]
+fn contextual_graph_selection_preserves_configured_content_and_derivation_recognition() {
+    use purrdf_core::ContentIdScheme;
+    use purrdf_sparql_eval::select_query_dataset;
+    let scheme = ContentIdScheme::new("blake3:").unwrap();
+    let derivation = "http://example.org/derivedFrom";
+    let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, Some(derivation.into()));
+    let successor = builder.intern_iri(&format!("blake3:{}", "a".repeat(64)));
+    let predecessor = builder.intern_iri(&format!("blake3:{}", "b".repeat(64)));
+    let predicate = builder.intern_iri(derivation);
+    let graph = builder.intern_iri("http://example.org/selected");
+    let triple = builder.intern_triple(successor, predicate, predecessor);
+    builder.push_reifier_in_graph(successor, triple, Some(graph));
+    builder.push_annotation_in_graph(successor, predicate, predecessor, Some(graph));
+    let source = builder.freeze().unwrap();
+    let successor = source.term_value(successor);
+    let predecessor = source.term_value(predecessor);
+    let graph = source.term_value(graph);
+    let projected = select_query_dataset(&source, false, Some(&graph), false).unwrap();
+    assert_eq!(projected.content_id_scheme(), source.content_id_scheme());
+    let successor = projected.term_id_by_value(&successor).unwrap();
+    assert!(projected.content_id(successor).is_some());
+    let parents: Vec<_> = projected
+        .predecessors(successor)
+        .iter()
+        .map(|id| projected.term_value(*id))
+        .collect();
+    assert_eq!(parents, [predecessor]);
+}
+
+#[test]
 fn contextual_query_preserves_caller_division_policy() {
     use purrdf_core::SparqlRequest;
     use purrdf_xsd::exact::DivisionPolicy;

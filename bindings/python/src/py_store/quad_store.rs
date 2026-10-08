@@ -73,31 +73,10 @@ impl QueryMode for (bool, Option<&Bound<'_, PyAny>>, bool) {
         ))
     }
     fn dataset(scope: &Self::Selection, dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>> {
-        // Metadata includes quads, reifiers, annotations and declared-empty
-        // graphs. Reuse a default-only snapshot without owning its full surface.
-        if !scope.2 && scope.1.is_none() && (scope.0 || dataset.named_graphs().next().is_none()) {
-            return Ok(dataset);
-        }
-        let mut selected = MutableDataset::new(Arc::clone(&dataset));
-        if !scope.0 {
-            selected.withdraw_named_graph_declarations();
-        }
-        for quad in purrdf_core::ir::QuadValues::surface_of(&dataset) {
-            let include = scope.2 || quad.g == scope.1;
-            if (!scope.0 && quad.g.is_some()) || (scope.1.is_some() && quad.g.is_none()) {
-                selected.remove(&quad);
-            }
-            if include && (scope.2 || scope.1.is_some()) {
-                selected
-                    .insert(purrdf_core::ir::QuadValues::triple(quad.s, quad.p, quad.o))
-                    .map_err(|error| {
-                        PyValueError::new_err(format!("query graph selection failed: {error}"))
-                    })?;
-            }
-        }
-        selected.freeze().map_err(|error| {
-            PyValueError::new_err(format!("query graph selection failed: {error}"))
-        })
+        purrdf_sparql_eval::select_query_dataset(&dataset, scope.0, scope.1.as_ref(), scope.2)
+            .map_err(|error| {
+                PyValueError::new_err(format!("query graph selection failed: {error}"))
+            })
     }
     fn single_graph(scope: &Self::Selection) -> bool {
         !scope.0

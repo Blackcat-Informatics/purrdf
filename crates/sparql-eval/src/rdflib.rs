@@ -14,7 +14,83 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_xsd::datatype::XSD_BOOLEAN;
 
+/// Materialize the compatibility query's graph selection as one RDF value set.
+/// Named source graphs remain available for a dataset-scoped query; the selected
+/// graph or union is also projected into the default graph. The ordinary query
+/// entry does not call this materialization boundary.
+///
+/// # Errors
+/// Returns the native diagnostic when declaration or freeze fails.
+pub fn select_query_dataset(
+    dataset: &std::sync::Arc<purrdf_core::RdfDataset>,
+    dataset_scope: bool,
+    default_graph: Option<&purrdf_core::TermValue>,
+    default_union: bool,
+) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, purrdf_core::RdfDiagnostic> {
+    use purrdf_core::{
+        DatasetMut,
+        ir::{MutableDataset, QuadValues},
+    };
+    // Even a default-only source can hold equal values in different physical
+    // statement tables. Compatibility graphs expose each RDF value once.
+    let surface = QuadValues::surface_of(dataset);
+    let mut emptied = MutableDataset::new(std::sync::Arc::clone(dataset));
+    if let Some(graph) = default_graph {
+        // Reuse the core graph-name admission; the temporary slot is withdrawn
+        // below, so a valid missing selector never fabricates a source graph.
+        emptied.declare_named_graph(graph.clone())?;
+    }
+    for quad in &surface {
+        emptied.remove(quad);
+    }
+    emptied.withdraw_named_graph_declarations();
+    // Keep the original content-addressing configuration in an empty frozen base.
+    // Fresh delta insertion cannot resurrect excluded physical base occurrences.
+    let mut selected = MutableDataset::new(emptied.freeze()?);
+    let insertion_error = |error: purrdf_iri::IriError| {
+        purrdf_core::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+    };
+    if dataset_scope {
+        for graph in dataset.named_graphs() {
+            selected.declare_named_graph(dataset.as_ref().term_value(graph))?;
+        }
+    }
+    for quad in surface {
+        if dataset_scope && quad.g.is_some() || default_graph.is_none() && quad.g.is_none() {
+            selected.insert(quad.clone()).map_err(insertion_error)?;
+        }
+        if default_union || (quad.g.as_ref() == default_graph && default_graph.is_some()) {
+            selected
+                .insert(QuadValues::triple(quad.s, quad.p, quad.o))
+                .map_err(insertion_error)?;
+        }
+    }
+    selected.freeze()
+}
+
 type Mapping = BTreeMap<Variable, Variable>;
+
+/// Shared authored policies for native visitor and admission controls.
+#[cfg(test)]
+// Apply's policy slot is boxed; this fixture home constructs that complete slot
+// once rather than making every independent visitor fixture repack the policy.
+#[allow(clippy::unnecessary_box_returns)]
+pub(crate) fn test_application_policy(
+    inputs: Vec<(Variable, Variable)>,
+    optional: bool,
+) -> Box<ApplicationPolicy> {
+    Box::new(ApplicationPolicy {
+        dataset_required: false,
+        row_pipeline: false,
+        reduced_adjacent: false,
+        group_domain: None,
+        optional: optional.then(|| OptionalApplication {
+            retry_inputs: inputs.clone(),
+            forget_marker: Variable::new("remembered"),
+        }),
+        inputs,
+    })
+}
 
 #[derive(Default)]
 struct Facts {
@@ -325,13 +401,27 @@ impl<const SINGLE_GRAPH: bool> Compiler<SINGLE_GRAPH> {
         let mut inputs = Vec::new();
         for (name, input) in context {
             let fallback = value(&input);
-            let actual = selected
-                .get(&name)
-                .map_or_else(|| Expression::Coalesce(Vec::new().into()), value);
-            let choice = Expression::If(
-                Child::new(value(&marker)),
-                Child::new(actual),
-                Child::new(fallback),
+            // A bound selected cell implies `marker` is true. Put that cell first
+            // so certainty survives transport, while a missing cell still cannot
+            // fall back when another selected cell makes the mapping nonempty.
+            let choice = selected.get(&name).map_or_else(
+                || {
+                    Expression::If(
+                        Child::new(value(&marker)),
+                        Child::new(Expression::Coalesce(Vec::new().into())),
+                        Child::new(fallback.clone()),
+                    )
+                },
+                |actual| {
+                    coalesce([
+                        value(actual),
+                        Expression::If(
+                            Child::new(value(&marker)),
+                            Child::new(Expression::Coalesce(Vec::new().into())),
+                            Child::new(fallback.clone()),
+                        ),
+                    ])
+                },
             );
             let choice = if let Some(initial) = self.initial.get(&name) {
                 coalesce([value(initial), choice])
@@ -1232,6 +1322,111 @@ pub(crate) fn compile<const SINGLE_GRAPH: bool>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn contextual_thaw_preserves_reachable_value_error_and_initial_choices() {
+        use super::*;
+        use crate::{eval::EvalCtx, expr::eval_expr, scratch::SolutionTerm, solution::VarSchema};
+        use purrdf_core::{BlankScope, RdfDatasetBuilder};
+
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_blank("scoped", BlankScope(37));
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        let quoted = builder.intern_triple(subject, predicate, object);
+        let yes = builder.intern_literal(purrdf_core::RdfLiteral::typed("true", XSD_BOOLEAN));
+        let no = builder.intern_literal(purrdf_core::RdfLiteral::typed("false", XSD_BOOLEAN));
+        let dataset = builder.freeze().unwrap();
+        let name = Variable::new("name");
+        let other = Variable::new("other");
+        let actual = Variable::new("actual");
+        let other_actual = Variable::new("other_actual");
+        let input = Variable::new("input");
+        let initial = Variable::new("initial");
+        let marker = Variable::new("transport0000000000000000");
+        let schema = VarSchema::from_vars([
+            actual.clone(),
+            input.clone(),
+            marker.clone(),
+            initial.clone(),
+        ]);
+        for remember_name in [false, true] {
+            for has_initial in [false, true] {
+                let mut compiler = Compiler::<false> {
+                    prefix: "transport".to_owned(),
+                    next: 0,
+                    context: Mapping::from([(name.clone(), input.clone())]),
+                    initial: if has_initial {
+                        Mapping::from([(name.clone(), initial.clone())])
+                    } else {
+                        Mapping::new()
+                    },
+                    forget_marker: None,
+                    facts: BTreeMap::new(),
+                    built: BTreeMap::new(),
+                };
+                let mapping = Mapping::from([
+                    (name.clone(), actual.clone()),
+                    (other.clone(), other_actual.clone()),
+                ]);
+                let remembered = if remember_name {
+                    BTreeSet::from([name.clone(), other.clone()])
+                } else {
+                    BTreeSet::from([other.clone()])
+                };
+                let (driver, _) =
+                    compiler.thaw(GraphPattern::empty_bgp(), &mapping, Some(&remembered));
+                let GraphPattern::Extend { expression, .. } = driver else {
+                    panic!("transport extend")
+                };
+                for actual_bound in [false, true] {
+                    for other_bound in [false, true] {
+                        for fallback_bound in [false, true] {
+                            for initial_bound in [false, true] {
+                                let present = (remember_name && actual_bound) || other_bound;
+                                let original = Expression::If(
+                                    Child::new(value(&marker)),
+                                    Child::new(if remember_name {
+                                        value(&actual)
+                                    } else {
+                                        coalesce([])
+                                    }),
+                                    Child::new(value(&input)),
+                                );
+                                let original = if has_initial {
+                                    coalesce([value(&initial), original])
+                                } else {
+                                    original
+                                };
+                                let row = [
+                                    actual_bound.then_some(SolutionTerm::Existing(quoted)),
+                                    fallback_bound.then_some(SolutionTerm::Existing(subject)),
+                                    Some(SolutionTerm::Existing(if present { yes } else { no })),
+                                    initial_bound.then_some(SolutionTerm::Existing(object)),
+                                ];
+                                let mut ctx = EvalCtx::new(&dataset);
+                                let expected =
+                                    eval_expr(&original, &row, &schema, &mut ctx).unwrap();
+                                let received =
+                                    eval_expr(&expression, &row, &schema, &mut ctx).unwrap();
+                                assert_eq!(received, expected);
+                                let exact = if has_initial && initial_bound {
+                                    Some(object)
+                                } else if remember_name && actual_bound {
+                                    Some(quoted)
+                                } else if !present && fallback_bound {
+                                    Some(subject)
+                                } else {
+                                    None
+                                };
+                                assert_eq!(received, exact.map(SolutionTerm::Existing));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn deep_compilation_clone_and_drop_use_iterative_homes() {
         purrdf_stack::on_stack(128 * 1024, || {

@@ -2155,10 +2155,8 @@ impl<'q> ShapeWalk<'q> {
                 right,
                 policy,
             } => {
-                frames.push(WalkFrame::Resume(if policy.optional.is_some() {
-                    Resume::LeftJoin
-                } else {
-                    Resume::Join { pattern, left }
+                frames.push(WalkFrame::Resume(Resume::Apply {
+                    optional: policy.optional.is_some(),
                 }));
                 frames.push(WalkFrame::Enter(right));
                 frames.push(WalkFrame::Enter(left));
@@ -2377,6 +2375,18 @@ impl<'q> ShapeWalk<'q> {
                 let read = join_read(pattern, left, right_read);
                 (conjunction(left_columns, right_columns), read)
             }
+            Resume::Apply {
+                optional: is_optional,
+            } => {
+                let (right_columns, _) = pop_result(results);
+                let (left_columns, _) = pop_result(results);
+                let columns = if is_optional {
+                    optional(left_columns, right_columns)
+                } else {
+                    conjunction(left_columns, right_columns)
+                };
+                (columns, Err(not_one_call("a contextual application")))
+            }
             Resume::LeftJoin => {
                 let (right_columns, _) = pop_result(results);
                 let (left_columns, _) = pop_result(results);
@@ -2544,6 +2554,9 @@ enum Resume<'q> {
         pattern: &'q GraphPattern,
         left: &'q GraphPattern,
         depth: usize,
+    },
+    Apply {
+        optional: bool,
     },
     LeftJoin,
     Minus,
@@ -3518,6 +3531,56 @@ mod tests {
     }
 
     // ---- test relations ---------------------------------------------------
+
+    #[test]
+    fn contextual_mapped_inputs_execute_a_bound_only_registered_relation() {
+        let relation = Arc::new(RecordingRelation::new(
+            1,
+            1,
+            &["bf"],
+            vec![vec![iri("a"), iri("1")]],
+        ));
+        let registry = registry_of(vec![(PF_LOOKUP, relation.clone())]);
+        let env = crate::extension_env::ExtensionEnv::over_relations(registry).unwrap();
+        let engine = NativeSparqlEngine::new();
+        let dataset = documents();
+        for (value, expected) in [("<http://example.org/a>", true), ("UNDEF", false)] {
+            let query = format!(
+                "SELECT ?answer WHERE {{ VALUES ?driver {{ {value} }} BIND(?driver AS ?renamed) ?renamed <{PF_LOOKUP}> ?answer }}"
+            );
+            let result = engine.query_rdflib_with_options_view(
+                &*dataset,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                crate::engine::QueryOptions::EMPTY.with_env(&env),
+                false,
+            );
+            if expected {
+                let SparqlResult::Solutions {
+                    variables, rows, ..
+                } = result.expect("mapped bound mode executes")
+                else {
+                    panic!("solutions")
+                };
+                assert_eq!(variables, ["answer"]);
+                assert_eq!(rows, [vec![Some(iri("1"))]]);
+                assert_eq!(relation.calls(), ["bf"]);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "unbound mapped input refuses bound-only mode"
+                );
+                assert_eq!(
+                    relation.calls(),
+                    ["bf"],
+                    "refused neighbor never opens the relation"
+                );
+            }
+        }
+    }
 
     /// A relation whose declared modes are fixed by the constructor, recording the
     /// access pattern of every invocation it is opened with.
@@ -6069,7 +6132,7 @@ mod walk_tests {
                 },
             };
         }
-        match choices.choose(21) {
+        match choices.choose(22) {
             0 => call(choices),
             1 => GraphPattern::Bgp {
                 patterns: vec![triple(choices)],
@@ -6170,6 +6233,14 @@ mod walk_tests {
                     )
                     .expect("COUNT(*)"),
                 )],
+            },
+            21 => GraphPattern::Apply {
+                left: Child::new(pattern(choices)),
+                right: Child::new(call(choices)),
+                policy: crate::rdflib::test_application_policy(
+                    vec![(var(choices), var(choices))],
+                    choices.choose(2) == 0,
+                ),
             },
             _ => GraphPattern::Unfold {
                 inner: Child::new(pattern(choices)),
@@ -6455,7 +6526,7 @@ mod walk_tests {
     fn the_spine_and_predicate_walks_agree_with_their_recursive_references() {
         let mut refused = 0;
         let mut driven = 0;
-        for seed in 0..400_u64 {
+        for seed in 0..512_u64 {
             let mut choices = Choices::new(seed);
             let shape = pattern(&mut choices);
             let graphs = vec![graph_name(&mut choices)];
@@ -6483,7 +6554,7 @@ mod walk_tests {
         assert!(
             refused > 60 && refused < 340 && driven > 20,
             "the generator produces admitted and refused predicates ({refused} refused of \
-             400) and driven calls ({driven})"
+             512) and driven calls ({driven})"
         );
     }
 
@@ -6590,6 +6661,29 @@ mod walk_tests {
             "the generator produces readable shapes ({reads} of 600) and renamed GRAPH \
              variables ({minted})"
         );
+    }
+
+    #[test]
+    fn contextual_application_refuses_on_demand_reads_with_both_column_laws() {
+        for is_optional in [false, true] {
+            let shape = GraphPattern::Apply {
+                left: Child::new(empty()),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: format!("{EX}rel"),
+                    subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                    object_args: vec![TermPattern::Variable(Variable::new("o"))],
+                })),
+                policy: crate::rdflib::test_application_policy(Vec::new(), is_optional),
+            };
+            let mut walked = ShapeWalk::over(&shape);
+            let actual = walked.walk(&shape);
+            let mut recursive = ShapeWalk::over(&shape);
+            let expected = recursive.reference_walk(&shape);
+            assert_eq!(walk_key(&walked, &actual), walk_key(&recursive, &expected));
+            assert!(actual.1.is_err());
+            assert_eq!(actual.0.len(), 2);
+            assert!(actual.0.iter().all(|column| column.always != is_optional));
+        }
     }
 
     /// A call under a hundred thousand `FILTER`s is read on demand through every one of

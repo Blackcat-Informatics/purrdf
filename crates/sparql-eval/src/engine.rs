@@ -5332,6 +5332,47 @@ fn resolve_governed<D: DatasetView + Sync>(
 // The compatibility tests still name both `ShaclPrebinding` values.
 #[allow(deprecated)]
 mod tests {
+    #[test]
+    fn public_cursor_refuses_contextual_application_and_accepts_ordinary_call() {
+        use crate::property_fn::{MemoryRelation, PropertyFunctionRegistry};
+        use std::sync::Arc;
+        let iri = "http://example.org/relation";
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(
+            iri,
+            Arc::new(
+                MemoryRelation::new(
+                    1,
+                    1,
+                    vec![vec![
+                        purrdf_core::TermValue::iri("http://example.org/a"),
+                        purrdf_core::TermValue::iri("http://example.org/b"),
+                    ]],
+                )
+                .unwrap(),
+            ),
+        );
+        let env = crate::extension_env::ExtensionEnv::over_relations(registry).unwrap();
+        let options = QueryOptions::EMPTY.with_env(&env);
+        let engine = NativeSparqlEngine::new();
+        let query = format!("SELECT ?s ?o WHERE {{ ?s <{iri}> ?o }}");
+        let ordinary = engine
+            .prepare_query_with_options(&query, None, options)
+            .unwrap();
+        assert!(engine.open_call_cursor(&ordinary, options).is_ok());
+        for query in [
+            query,
+            format!("SELECT ?s ?o WHERE {{ OPTIONAL {{ ?s <{iri}> ?o }} }}"),
+        ] {
+            let contextual = engine
+                .prepare_rdflib_query(&query, None, &[], options)
+                .unwrap();
+            let Err(error) = engine.open_call_cursor(&contextual.prepared, options) else {
+                panic!("contextual cursor is refused")
+            };
+            assert!(error.message.contains("contextual application"), "{error}");
+        }
+    }
     use super::*;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::Child;

@@ -1162,17 +1162,47 @@ impl<'a> Planner<'a, '_> {
                 let mut certain = scope.get(&self.scopes).clone();
                 self.widen(&mut certain, scope, left, promise);
                 let mut right_scope = scope.get(&self.scopes).clone();
+                let mut supplied = promise
+                    .view(&self.scopes)
+                    .for_calls()
+                    .cloned()
+                    .unwrap_or_default();
+                for (input, _) in &policy.inputs {
+                    right_scope.remove(input);
+                    supplied.remove(input);
+                }
                 for (input, driver) in &policy.inputs {
-                    if certain.contains(driver) {
+                    if (certain.contains(driver)
+                        || promise.view(&self.scopes).written().writes(driver))
+                        && policy.optional.as_ref().is_none_or(|optional| {
+                            optional
+                                .retry_inputs
+                                .iter()
+                                .any(|(retry_input, retry_driver)| {
+                                    retry_input == input
+                                        && (certain.contains(retry_driver)
+                                            || promise
+                                                .view(&self.scopes)
+                                                .written()
+                                                .writes(retry_driver))
+                                })
+                        })
+                    {
                         right_scope.insert(input.clone());
+                        supplied.insert(input.clone());
                     }
                 }
                 if let Some(optional) = &policy.optional {
                     right_scope.insert(optional.forget_marker.clone());
+                    supplied.insert(optional.forget_marker.clone());
                 }
                 let right_scope = self.own(right_scope);
+                // Apply substitutes these values into the whole RHS, through
+                // projections too; they are writes, not narrowable outer context.
+                let right_promise = Prom::Everywhere(self.own(supplied));
                 self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, right_scope, promise));
+                self.steps
+                    .push(Step::Pattern(right, right_scope, right_promise));
                 self.steps.push(Step::Pattern(left, scope, promise));
             }
             // A leaf is planned as written. So is a `SERVICE`: its body is forwarded to a
@@ -2014,7 +2044,7 @@ impl Written<'_> {
 fn collect_bound(
     pattern: &GraphPattern,
     context: &DetHashSet<Variable>,
-    written: Written<'_>,
+    given_written: Written<'_>,
     out: &mut DetHashSet<Variable>,
 ) {
     /// The context a node is evaluated under: the caller's, or one a `LATERAL` or a
@@ -2024,15 +2054,51 @@ fn collect_bound(
         Given,
         Owned(usize),
     }
+    #[derive(Clone, Copy)]
+    enum Writes {
+        Given,
+        Owned(std::num::NonZeroUsize),
+    }
+    // The original caller writes remain outside the worklist. A one-based arena
+    // index uses its zero niche, preserving the former per-frame pointer width.
+    const _: () = assert!(size_of::<Writes>() == size_of::<Written<'_>>());
+    impl Writes {
+        fn set<'s>(
+            self,
+            given: Written<'s>,
+            arena: &'s [DetHashSet<Variable>],
+        ) -> Option<&'s DetHashSet<Variable>> {
+            match self {
+                Self::Given => given.everywhere,
+                Self::Owned(index) => Some(&arena[index.get() - 1]),
+            }
+        }
+        fn writes(
+            self,
+            variable: &Variable,
+            given: Written<'_>,
+            arena: &[DetHashSet<Variable>],
+        ) -> bool {
+            self.set(given, arena)
+                .is_some_and(|set| set.contains(variable))
+        }
+    }
     /// One step of the walk.
-    enum Step<'p, 'w> {
+    enum Step<'p> {
         /// Enter a node: a leaf's set is computed at once, a node's children are pushed.
-        Enter(&'p GraphPattern, Context, Written<'w>),
+        Enter(&'p GraphPattern, Context, Writes),
         /// Combine a node's set from its children's; the arena is cut back to `mark`.
-        Exit(&'p GraphPattern, Context, Written<'w>, usize),
+        Exit(&'p GraphPattern, Context, Writes, usize),
         /// A `LATERAL` whose left operand is bound: widen the context for its right
         /// operand, which is named.
-        LateralLeft(&'p GraphPattern, Context, Written<'w>),
+        LateralLeft(&'p GraphPattern, Context, Writes),
+        /// A contextual driver is bound before its renamed inputs reach the RHS.
+        ApplyLeft(
+            &'p GraphPattern,
+            &'p purrdf_sparql_algebra::algebra::ApplicationPolicy,
+            Context,
+            Writes,
+        ),
         /// A `LATERAL` whose right operand is bound too: its set is the union of both,
         /// the left operand's carried here; the arena is cut back to `mark`.
         LateralRight(DetHashSet<Variable>, usize),
@@ -2050,7 +2116,7 @@ fn collect_bound(
     }
     let mut arena: Vec<DetHashSet<Variable>> = Vec::new();
     let mut values: Vec<DetHashSet<Variable>> = Vec::new();
-    let mut steps = vec![Step::Enter(pattern, Context::Given, written)];
+    let mut steps = vec![Step::Enter(pattern, Context::Given, Writes::Given)];
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node, ctx, written) => {
@@ -2116,9 +2182,10 @@ fn collect_bound(
                         right,
                         policy,
                     } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        if policy.optional.is_none() {
-                            steps.push(Step::Enter(right, ctx, written));
+                        if policy.optional.is_some() {
+                            steps.push(Step::Exit(node, ctx, written, mark));
+                        } else {
+                            steps.push(Step::ApplyLeft(right, policy, ctx, written));
                         }
                         steps.push(Step::Enter(left, ctx, written));
                     }
@@ -2167,6 +2234,43 @@ fn collect_bound(
                         steps.push(Step::Enter(inner, Context::Owned(mark), written));
                     }
                 }
+            }
+            Step::ApplyLeft(right, policy, ctx, written) => {
+                let left_bound = values.pop().expect("the driver is bound first");
+                let outer = resolve(ctx, context, &arena);
+                let mut right_context = outer.clone();
+                let mut supplied = written
+                    .set(given_written, &arena)
+                    .cloned()
+                    .unwrap_or_default();
+                for (input, _) in &policy.inputs {
+                    right_context.remove(input);
+                    supplied.remove(input);
+                }
+                for (input, driver) in &policy.inputs {
+                    if left_bound.contains(driver)
+                        || outer.contains(driver)
+                        || written.writes(driver, given_written, &arena)
+                    {
+                        right_context.insert(input.clone());
+                        supplied.insert(input.clone());
+                    }
+                }
+                let mark = arena.len();
+                arena.push(right_context);
+                arena.push(supplied);
+                steps.push(Step::LateralRight(left_bound, mark));
+                steps.push(Step::Enter(
+                    right,
+                    Context::Owned(mark),
+                    Writes::Owned(
+                        std::num::NonZeroUsize::new(
+                            mark.checked_add(2)
+                                .expect("an allocated arena index is representable"),
+                        )
+                        .expect("one-based arena index"),
+                    ),
+                ));
             }
             Step::LateralLeft(right, ctx, written) => {
                 let left_bound = values.pop().expect("the left operand is bound first");
@@ -2227,7 +2331,9 @@ fn collect_bound(
                             requires(expr, Outcome::Truth)
                                 .unwrap_or_default()
                                 .into_iter()
-                                .filter(|variable| !written.writes(variable)),
+                                .filter(|variable| {
+                                    !written.writes(variable, given_written, &arena)
+                                }),
                         );
                         bound
                     }
@@ -2255,7 +2361,9 @@ fn collect_bound(
                         let mut bound = values.pop().expect("the inner pattern is bound");
                         let context = resolve(ctx, context, &arena);
                         if expression_reads_only_bound(expression, &|read| {
-                            bound.contains(read) || context.contains(read) || written.writes(read)
+                            bound.contains(read)
+                                || context.contains(read)
+                                || written.writes(read, given_written, &arena)
                         }) {
                             bound.insert(variable.clone());
                         }
@@ -2298,7 +2406,7 @@ fn collect_bound(
                         let grouped = !variables.is_empty();
                         for (variable, aggregate) in aggregates {
                             if aggregate_certainly_binds(aggregate, grouped, &|read| {
-                                row_binds(read) || written.writes(read)
+                                row_binds(read) || written.writes(read, given_written, &arena)
                             }) {
                                 bound.insert(variable.clone());
                             }
@@ -4495,18 +4603,36 @@ mod iterative_walk_tests {
                 let mut certain = outer.clone();
                 reference_collect_bound(left, outer, promise.written(), &mut certain);
                 let mut right_scope = outer.clone();
+                let mut supplied = promise.for_calls().cloned().unwrap_or_default();
+                for (input, _) in &policy.inputs {
+                    right_scope.remove(input);
+                    supplied.remove(input);
+                }
                 for (input, driver) in &policy.inputs {
-                    if certain.contains(driver) {
+                    if (certain.contains(driver) || promise.written().writes(driver))
+                        && policy.optional.as_ref().is_none_or(|optional| {
+                            optional
+                                .retry_inputs
+                                .iter()
+                                .any(|(retry_input, retry_driver)| {
+                                    retry_input == input
+                                        && (certain.contains(retry_driver)
+                                            || promise.written().writes(retry_driver))
+                                })
+                        })
+                    {
                         right_scope.insert(input.clone());
+                        supplied.insert(input.clone());
                     }
                 }
                 if let Some(optional) = &policy.optional {
                     right_scope.insert(optional.forget_marker.clone());
+                    supplied.insert(optional.forget_marker.clone());
                 }
                 let optional = policy.optional.clone();
                 GraphPattern::Apply {
                     left: recurse(left, outer, promise)?,
-                    right: recurse(right, &right_scope, promise)?,
+                    right: recurse(right, &right_scope, Promise::Everywhere(&supplied))?,
                     policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
                         dataset_required: policy.dataset_required,
                         row_pipeline: policy.row_pipeline,
@@ -4962,10 +5088,18 @@ mod iterative_walk_tests {
                 reference_collect_bound(left, context, beneath, &mut left_bound);
                 if policy.optional.is_none() {
                     let mut right_context = context.clone();
-                    for (input, driver) in &policy.inputs {
-                        if left_bound.contains(driver) || context.contains(driver) { right_context.insert(input.clone()); }
+                    let mut supplied = beneath.everywhere.cloned().unwrap_or_default();
+                    for (input, _) in &policy.inputs {
+                        right_context.remove(input);
+                        supplied.remove(input);
                     }
-                    reference_collect_bound(right, &right_context, beneath, out);
+                    for (input, driver) in &policy.inputs {
+                        if left_bound.contains(driver) || context.contains(driver) || beneath.writes(driver) {
+                            right_context.insert(input.clone());
+                            supplied.insert(input.clone());
+                        }
+                    }
+                    reference_collect_bound(right, &right_context, Written { everywhere: Some(&supplied) }, out);
                 }
                 out.extend(left_bound);
             }
@@ -5642,7 +5776,15 @@ mod iterative_walk_tests {
                 return self.leaf();
             }
             *budget -= 1;
-            match self.below(19) {
+            match self.below(20) {
+                19 => GraphPattern::Apply {
+                    left: self.child(budget),
+                    right: self.child(budget),
+                    policy: crate::rdflib::test_application_policy(
+                        vec![(self.variable(), self.variable())],
+                        self.one_in(2),
+                    ),
+                },
                 0 => GraphPattern::Join {
                     left: self.child(budget),
                     right: self.child(budget),
@@ -5996,6 +6138,168 @@ mod iterative_walk_tests {
                     "seed {seed}, writes {which}: the same variables are certainly bound"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn contextual_input_shadowing_survives_nested_projection_and_retry() {
+        let input = Variable::new("input");
+        let driver = Variable::new("driver");
+        let parent_driver = Variable::new("parent_driver");
+        let output = Variable::new("output");
+        let iri = GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/value"));
+        let inherited = DetHashSet::from_iter([input.clone()]);
+        for (first, retry, optional, expected) in [
+            (false, false, false, false),
+            (true, true, false, true),
+            (true, false, true, false),
+            (true, true, true, true),
+        ] {
+            let retry_driver = Variable::new("retry_driver");
+            let mut policy = crate::rdflib::test_application_policy(
+                vec![(input.clone(), driver.clone())],
+                optional,
+            );
+            if let Some(optional) = &mut policy.optional {
+                optional.retry_inputs = vec![(input.clone(), retry_driver.clone())];
+            }
+            let projected = GraphPattern::Project {
+                inner: Child::new(GraphPattern::Lateral {
+                    left: Child::new(GraphPattern::Extend {
+                        inner: Child::new(GraphPattern::empty_bgp()),
+                        variable: output.clone(),
+                        expression: Expression::Variable(input.clone()),
+                    }),
+                    right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                        iri: REL_BOUND.to_owned(),
+                        subject_args: vec![TermPattern::Variable(output.clone())],
+                        object_args: vec![TermPattern::Variable(Variable::new("answer"))],
+                    })),
+                }),
+                variables: vec![output.clone()],
+            };
+            let nested = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![driver.clone(), retry_driver],
+                    bindings: vec![vec![first.then(|| iri.clone()), retry.then(|| iri.clone())]],
+                }),
+                right: Child::new(projected),
+                policy,
+            };
+            // An outer mapped value and a prepared parameter both supply `input`,
+            // but the inner declared input shadows them even when its driver is UNDEF.
+            let pattern = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![parent_driver.clone()],
+                    bindings: vec![vec![Some(iri.clone())]],
+                }),
+                right: Child::new(nested),
+                policy: crate::rdflib::test_application_policy(
+                    vec![(input.clone(), parent_driver.clone())],
+                    false,
+                ),
+            };
+            assert_eq!(
+                plan_pattern(
+                    &pattern,
+                    &relations(),
+                    &aggregates(),
+                    &inherited,
+                    Promise::Everywhere(&inherited)
+                )
+                .is_ok(),
+                expected
+            );
+            assert_plans_agree(&pattern, &inherited, Promise::Everywhere(&inherited), 0);
+            let mut certainty = pattern;
+            let GraphPattern::Apply { right: nested, .. } = &mut certainty else {
+                unreachable!()
+            };
+            let GraphPattern::Apply {
+                right: projected, ..
+            } = &mut **nested
+            else {
+                unreachable!()
+            };
+            let GraphPattern::Project { inner, .. } = &mut **projected else {
+                unreachable!()
+            };
+            let GraphPattern::Lateral { left, .. } = &**inner else {
+                unreachable!()
+            };
+            *inner = left.clone();
+            let written = Written {
+                everywhere: Some(&inherited),
+            };
+            let mut iterative = DetHashSet::default();
+            collect_bound(&certainty, &inherited, written, &mut iterative);
+            let mut recursive = DetHashSet::default();
+            reference_collect_bound(&certainty, &inherited, written, &mut recursive);
+            assert_eq!(iterative, recursive);
+            assert_eq!(iterative.contains(&output), first && !optional);
+        }
+    }
+
+    #[test]
+    fn contextual_inputs_drive_certain_bindings_and_downstream_call_admission() {
+        let driver = Variable::new("driver");
+        let input = Variable::new("renamed_input");
+        let output = Variable::new("output");
+        for (left_bound, outer_bound, optional, expected) in [
+            (true, false, false, true),
+            (false, true, false, true),
+            (false, false, false, false),
+            (true, false, true, false),
+        ] {
+            let application = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![driver.clone()],
+                    bindings: vec![vec![left_bound.then(|| {
+                        GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/value"))
+                    })]],
+                }),
+                right: Child::new(GraphPattern::Project {
+                    inner: Child::new(GraphPattern::Extend {
+                        inner: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                        variable: output.clone(),
+                        expression: Expression::Variable(input.clone()),
+                    }),
+                    variables: vec![output.clone()],
+                }),
+                policy: crate::rdflib::test_application_policy(
+                    vec![(input.clone(), driver.clone())],
+                    optional,
+                ),
+            };
+            let mut context = DetHashSet::default();
+            if outer_bound {
+                context.insert(driver.clone());
+            }
+            let mut bound = DetHashSet::default();
+            collect_bound(&application, &context, Written::NOTHING, &mut bound);
+            assert_eq!(bound.contains(&output), expected);
+            let consumer = GraphPattern::Lateral {
+                left: Child::new(application),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: REL_BOUND.to_owned(),
+                    subject_args: vec![TermPattern::Variable(output.clone())],
+                    object_args: vec![TermPattern::Variable(Variable::new("answer"))],
+                })),
+            };
+            assert_eq!(
+                plan_pattern(
+                    &consumer,
+                    &relations(),
+                    &aggregates(),
+                    &context,
+                    Promise::None
+                )
+                .is_ok(),
+                expected,
+                "{left_bound}/{outer_bound}/{optional}"
+            );
         }
     }
 
