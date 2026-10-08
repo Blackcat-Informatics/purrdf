@@ -47,6 +47,9 @@ impl CompiledPattern {
     /// Empty-match patterns raise FORX0003; invalid replacement text raises
     /// FORX0004. Work, live storage and output exhaustion are distinct operational
     /// refusals. No partial output is returned after any failure.
+    // Out of line: a host evaluator that dispatches to the matcher must not
+    // absorb the matcher's frames into its own, which every nesting level pays.
+    #[inline(never)]
     pub fn replace_all<'h>(
         &self,
         input: &'h str,
@@ -60,12 +63,12 @@ impl CompiledPattern {
             while next(&mut template, &mut budget)?.is_some() {}
         }
         let mut empty = Vm::new(self, "", limits);
-        empty.budget = budget;
+        *empty.budget() = budget;
         if empty.find_from(0)?.is_some() {
             return Err(Error::EmptyMatch);
         }
         let mut vm = Vm::new(self, input, limits);
-        vm.budget = empty.budget;
+        *vm.budget() = std::mem::replace(empty.budget(), Budget::new(limits));
         let mut out = String::new();
         let mut position = 0;
         let mut changed = false;
@@ -76,17 +79,17 @@ impl CompiledPattern {
                     // byte is produced, so none is admitted.
                     return Ok(Cow::Borrowed(input));
                 }
-                append(&mut out, &input[position..], &mut vm.budget)?;
+                append(&mut out, &input[position..], vm.budget())?;
                 return Ok(Cow::Owned(out));
             };
             let matched = captures.get(0).expect("successful match has capture zero");
             debug_assert!(matched.end > matched.start, "empty-match guard was passed");
-            append(&mut out, &input[position..matched.start], &mut vm.budget)?;
+            append(&mut out, &input[position..matched.start], vm.budget())?;
             if self.modes.quoted {
-                append(&mut out, replacement, &mut vm.budget)?;
+                append(&mut out, replacement, vm.budget())?;
             } else {
                 let mut template = Cursor::new(replacement, self.captures);
-                while let Some(part) = next(&mut template, &mut vm.budget)? {
+                while let Some(part) = next(&mut template, vm.budget())? {
                     let text = match part {
                         Part::Literal(text) => text,
                         Part::Group(Some(number)) => {
@@ -94,7 +97,7 @@ impl CompiledPattern {
                         }
                         Part::Group(None) => "",
                     };
-                    append(&mut out, text, &mut vm.budget)?;
+                    append(&mut out, text, vm.budget())?;
                 }
             }
             position = matched.end;
@@ -309,6 +312,68 @@ mod tests {
             program.replace_all("z", "unused", Limits::new()),
             Ok(Cow::Borrowed("z"))
         ));
+    }
+
+    #[test]
+    fn counted_ambiguous_replacements_over_a_megabyte_answer_like_the_compatibility_engine() {
+        // Runs of `a` closed by `b` or `c`, after a run of a hundred thousand
+        // `a` that no `b` closes within a thousand iterations: the first
+        // search's backtracking attempt is abandoned there, and that search
+        // and every later one are walked from the starts the set machine marks.
+        let mut input = "a".repeat(100_000);
+        let mut index = 0_usize;
+        while input.len() < 1 << 20 {
+            input.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+            input.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+            index += 1;
+        }
+        for (source, replacement) in [
+            ("(a|aa){1,1000}b", "[$1]"),
+            ("(a|aa){2,5}b", "<$1>"),
+            ("(aa|a){1,3}?(b|c)", "$2$1"),
+            ("((a|aa){1,4})(b|c)", "$3$1$2"),
+            ("(a|ab|b){3,6}c", "#$1"),
+        ] {
+            let expected = crate::xsd_regex::compile(source, "")
+                .unwrap()
+                .replace_all(&input, replacement)
+                .unwrap();
+            let actual = pattern(source, "")
+                .replace_all(&input, replacement, Limits::new())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn replacement_continues_on_the_thread_machine_and_resets_every_capture() {
+        // The first search's backtracking attempt explores exponentially many
+        // splits of the leading run and is abandoned; that search and every
+        // later one run on the thread machine, each with fresh captures.
+        let forty = "a".repeat(40);
+        let program = pattern("(a|aa)*(b)|(c)", "");
+        let input = format!("{forty}-ab-aab-b-c");
+        assert_eq!(
+            program
+                .replace_all(&input, "[$1$2$3]", Limits::new())
+                .unwrap(),
+            format!("{forty}-[ab]-[ab]-[b]-[c]")
+        );
+        // A large group repetition over a megabyte, replaced whole.
+        let pairs = "ab".repeat(1 << 19);
+        assert_eq!(
+            pattern("^(a|b)+$", "")
+                .replace_all(&pairs, "$1", Limits::new())
+                .unwrap(),
+            "b"
+        );
+        // FORX0003 is still decided first, by the same machines.
+        assert_eq!(
+            pattern("(a|aa)*", "")
+                .replace_all(&forty, "x", Limits::new())
+                .unwrap_err(),
+            Error::EmptyMatch
+        );
     }
 
     #[test]

@@ -199,14 +199,14 @@ the IRI failure without parsing English. The error message and the record's
   would have two shippable libraries answering `purrdf_abi_version` identically
   while offering different surfaces, and telling a host they agree right before it
   fails to resolve a symbol is the one thing this number exists to prevent.
-  `0.8.0` → `0.9.0` adds symbols and one status and changes no existing prototype:
+  `0.8.0` → `0.9.0` adds one symbol and changes nothing else:
   `purrdf_serialize_empty_named_graphs_dropped(dataset, media_type, out_count,
   out_error)`, the number of declared empty named graphs a whole-dataset
   `purrdf_serialize` to that target drops (N-Quads, HexTuples and the single-graph
   syntaxes cannot write a graph that holds no row). `purrdf_serialize` keeps its
   prototype. It bumps because `0.8.0` is the ABI of the released `3.0.x` libraries,
   which do not export the symbol.
-  `0.9.0` → `0.10.0` adds two symbols and changes nothing else:
+  `0.9.0` → `0.10.0` adds symbols and one status and changes no existing prototype:
   `purrdf_xsd_canonical_lexical(lexical, datatype, out_buffer, out_error)` and
   `purrdf_xsd_value_compare(left_lexical, left_datatype, right_lexical,
   right_datatype, out_comparable, out_order, out_error)` (see

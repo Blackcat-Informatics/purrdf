@@ -17,6 +17,12 @@
 //! | `ecma-properties` | `crates/jsonschema/src/ecma/property_tables.rs` | the property names and values an ECMA-262 `\p{…}` escape may spell |
 //! | `ecma-ranges` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | the code point ranges of each of those properties, and simple case folding |
 //! | `xpath` | `crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs` | XPath categories, blocks and the direct full-case-variant relation |
+//! | `xpath-dated-names` | `crates/rdf-core/src/xsd_regex/xpath/dated_names.rs` | the XML 1.0 Second Edition name classes behind both dated XPath laws' `\i` and `\c` |
+//! | `xpath-dated-blocks` | `crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs` | the XML Schema Part 2 Second Edition block-name table both dated XPath laws recognize |
+//!
+//! The two `xpath-dated-*` sets are not Unicode Character Database data: they
+//! read the W3C Recommendations vendored verbatim under `vectors/w3c-recs/`
+//! (see its `PROVENANCE.md`), held byte-frozen like the database.
 //!
 //! Every UCD file read names its release in its header, and the generator
 //! refuses to run unless each names [`UNICODE_VERSION`]. The `normalization`
@@ -391,7 +397,12 @@ fn emit_two_stage<T: Copy + std::fmt::Display>(
 /// The file header: licence, `@generated` line naming `set`, and the module
 /// documentation lines `doc`.
 fn emit_header(out: &mut String, set: &str, doc: &[&str]) {
-    out.push_str(SPDX);
+    emit_licensed_header(out, SPDX, set, doc);
+}
+
+/// [`emit_header`] under the licence header `spdx`.
+fn emit_licensed_header(out: &mut String, spdx: &str, set: &str, doc: &[&str]) {
+    out.push_str(spdx);
     out.push('\n');
     let _ = writeln!(
         out,
@@ -2408,6 +2419,377 @@ fn xpath() -> String {
     out
 }
 
+// ---------------------------------------------------------------------------
+// `xpath-dated-names` and `xpath-dated-blocks`: the two tables both dated XPath
+// laws take from W3C Recommendations rather than from the Unicode Character
+// Database, read out of the Recommendations vendored under `vectors/w3c-recs/`.
+
+/// The licence header of a table generated from a vendored W3C Recommendation:
+/// the first-party offer. The table holds the code points the Recommendation
+/// enumerates and none of its text (`vectors/w3c-recs/PROVENANCE.md`).
+const W3C_TABLE_SPDX: &str = "// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>\n\
+                              // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0\n";
+
+/// XML 1.0 Second Edition, vendored verbatim.
+const XML_SECOND_EDITION: (&str, &str) = (
+    "REC-xml-20001006.html",
+    "Extensible Markup Language (XML) 1.0 (Second Edition)",
+);
+
+/// XML Schema Part 2 Second Edition, vendored verbatim.
+const XSD_SECOND_EDITION: (&str, &str) = (
+    "REC-xmlschema-2-20041028.html",
+    "XML Schema Part 2: Datatypes Second Edition",
+);
+
+/// The productions of XML 1.0 Second Edition that `\i` and `\c` reach, with
+/// their production numbers: \[4\] and Appendix B's \[84\] to \[89\].
+const XML_NAME_PRODUCTIONS: &[(&str, &str)] = &[
+    ("NameChar", "4"),
+    ("Letter", "84"),
+    ("BaseChar", "85"),
+    ("Ideographic", "86"),
+    ("CombiningChar", "87"),
+    ("Digit", "88"),
+    ("Extender", "89"),
+];
+
+/// A vendored Recommendation's text, line ends normalized to LF. Refuses a
+/// file that is not ASCII or whose title is not `title`, so another document
+/// cannot stand in for the one named.
+fn w3c_document((name, title): (&str, &str)) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vectors/w3c-recs")
+        .join(name);
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+    assert!(text.is_ascii(), "{name} is not ASCII");
+    assert!(
+        text.contains(&format!("<title>{title}</title>")),
+        "{name} is not {title:?}"
+    );
+    text.replace("\r\n", "\n")
+}
+
+/// The text between `open` and the next `close` at or after `from`, and the
+/// offset just past that `close`.
+fn between<'a>(text: &'a str, from: usize, open: &str, close: &str) -> (&'a str, usize) {
+    let Some(at) = text[from..].find(open) else {
+        panic!("no {open:?} after offset {from}");
+    };
+    let start = from + at + open.len();
+    let Some(length) = text[start..].find(close) else {
+        panic!("no {close:?} after offset {start}");
+    };
+    let end = start + length;
+    (&text[start..end], end + close.len())
+}
+
+/// `html` as text: tags removed, the character references these documents use
+/// in a grammar decoded, and every whitespace run one space.
+fn html_text(html: &str) -> String {
+    let mut text = String::new();
+    let mut rest = html;
+    while let Some(open) = rest.find('<') {
+        text.push_str(&rest[..open]);
+        let close = rest[open..]
+            .find('>')
+            .unwrap_or_else(|| panic!("unclosed tag in {html:?}"));
+        rest = &rest[open + close + 1..];
+    }
+    text.push_str(rest);
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&#xa0;", " ")
+        .replace("&#xb7;", "\u{b7}")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    assert!(
+        !text.contains('&'),
+        "an undecoded character reference in {text:?}"
+    );
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One XML 1.0 `#xN` character reference.
+fn xml_char_ref(text: &str) -> u32 {
+    hex(text
+        .strip_prefix("#x")
+        .unwrap_or_else(|| panic!("{text:?} is not #xN")))
+}
+
+/// The right-hand side of the XML 1.0 production `name`, numbered `number`,
+/// as text.
+fn xml_production(xml: &str, name: &str, number: &str) -> String {
+    let anchor = format!("<a name=\"NT-{name}\"></a>[{number}]");
+    let at = xml
+        .find(&anchor)
+        .unwrap_or_else(|| panic!("XML 1.0 has no production [{number}] {name}"));
+    let (lhs, after) = between(xml, at, "<td><code>", "</code></td>");
+    assert_eq!(lhs, name, "production [{number}]");
+    let (defines, after) = between(xml, after, "<td>", "</td>");
+    assert_eq!(html_text(defines), "::=", "production [{number}] {name}");
+    html_text(between(xml, after, "<td><code>", "</code></td>").0)
+}
+
+/// The code points an XML 1.0 character-class expression matches: a choice
+/// (`|`) of `[#xN-#xN]` ranges, `#xN` characters, `'c'` literals and names of
+/// the productions in `grammar`, which are resolved recursively.
+fn xml_class(expression: &str, grammar: &BTreeMap<&str, String>) -> Spans {
+    merge(expression.split('|').flat_map(|choice| {
+        let choice = choice.trim();
+        if let Some(range) = choice.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+            let (low, high) = range
+                .split_once('-')
+                .unwrap_or_else(|| panic!("{choice:?} is not [#xN-#xN]"));
+            let (low, high) = (xml_char_ref(low), xml_char_ref(high));
+            assert!(low <= high, "{choice:?} is empty");
+            vec![(low, high)]
+        } else if choice.starts_with("#x") {
+            let point = xml_char_ref(choice);
+            vec![(point, point)]
+        } else if let Some(literal) = choice.strip_prefix('\'').and_then(|c| c.strip_suffix('\'')) {
+            let mut chars = literal.chars();
+            let (Some(only), None) = (chars.next(), chars.next()) else {
+                panic!("{choice:?} is not one quoted character");
+            };
+            vec![(u32::from(only), u32::from(only))]
+        } else {
+            let body = grammar
+                .get(choice)
+                .unwrap_or_else(|| panic!("{choice:?} is not a production this table reads"));
+            xml_class(body, grammar)
+        }
+    }))
+}
+
+/// The class XML Schema Part 2 Second Edition's multi-character escape
+/// `escape` stands for, as the XML 1.0 expression its table row names.
+fn xsd_name_escape(xsd: &str, escape: &str) -> String {
+    let row = format!("<td align=\"center\">{escape}</td>");
+    let at = xsd
+        .find(&row)
+        .unwrap_or_else(|| panic!("XML Schema has no {escape} row"));
+    let meaning = html_text(between(xsd, at + row.len(), "<td align=\"center\">", "</td>").0);
+    meaning
+        .split_once("\u{b7}match\u{b7}ed by ")
+        .unwrap_or_else(|| panic!("{escape} is not defined by a match: {meaning:?}"))
+        .1
+        .to_owned()
+}
+
+/// The rows of a code point table: one `(lo, hi)` per line.
+fn emit_point_rows(out: &mut String, doc: &str, name: &str, spans: &[(u32, u32)]) {
+    let _ = writeln!(out, "/// {doc}");
+    let _ = writeln!(out, "pub(super) const {name}: &[(u32, u32)] = &[");
+    for &(low, high) in spans {
+        let _ = writeln!(out, "    (0x{low:04X}, 0x{high:04X}),");
+    }
+    out.push_str("];\n\n");
+}
+
+fn xpath_dated_names() -> String {
+    let xml = w3c_document(XML_SECOND_EDITION);
+    let xsd = w3c_document(XSD_SECOND_EDITION);
+    let grammar: BTreeMap<&str, String> = XML_NAME_PRODUCTIONS
+        .iter()
+        .map(|&(name, number)| (name, xml_production(&xml, name, number)))
+        .collect();
+    let initial = xsd_name_escape(&xsd, "\\i");
+    let name = xsd_name_escape(&xsd, "\\c");
+    let mut out = String::new();
+    emit_licensed_header(
+        &mut out,
+        W3C_TABLE_SPDX,
+        "xpath-dated-names",
+        &[
+            "The name-character classes behind `\\i` and `\\c` in both dated XPath laws.",
+            "",
+            "F&O 2.0 Second Edition section 7.6.1 and F&O 3.1 section 5.6.1 each define",
+            "regular-expression syntax and semantics as identical to XML Schema Part 2",
+            "Second Edition with additions. That edition defines `\\i` as the characters",
+            "matched by `Letter | '_' | ':'` and `\\c` as those matched by `NameChar`,",
+            "both from XML 1.0 Second Edition: productions \\[4\\] and \\[84\\] to \\[89\\] of",
+            "its Appendix B, which enumerate fixed Unicode 2.0 ranges. Later XML editions",
+            "replaced those classes with the wider `NameStartChar`; neither dated law",
+            "adopts them, so for example U+0D7A and U+10000 are outside both classes.",
+            "",
+            "This is the Recommendation's own enumeration, not Unicode Character Database",
+            "data. Rows are sorted, disjoint and non-adjacent.",
+            "",
+            "Source: the two Recommendations vendored verbatim under `vectors/w3c-recs/`",
+            "(`REC-xml-20001006.html` and `REC-xmlschema-2-20041028.html`), read as the",
+            "`\\i` and `\\c` rows of the Schema edition's multi-character escape table",
+            "and the XML productions those rows name.",
+            "",
+            "<https://www.w3.org/TR/2000/REC-xml-20001006#CharClasses>",
+        ],
+    );
+    emit_point_rows(
+        &mut out,
+        &format!("`{initial}`: `Letter` is `{}`.", grammar["Letter"]),
+        "NAME_START",
+        &xml_class(&initial, &grammar),
+    );
+    emit_point_rows(
+        &mut out,
+        &format!("`{name}`: `{}`.", grammar["NameChar"]),
+        "NAME",
+        &xml_class(&name, &grammar),
+    );
+    out.push_str(DATED_NAMES_TESTS);
+    out
+}
+
+fn xpath_dated_blocks() -> String {
+    let xsd = w3c_document(XSD_SECOND_EDITION);
+    let production = xsd
+        .find("<a id=\"nt-IsBlock\" name=\"nt-IsBlock\"/>[36]")
+        .expect("XML Schema has no production [36] IsBlock");
+    let (table, _) = between(&xsd, production, "</table><p>", "</table>");
+    let (_, body) = table
+        .split_once(
+            "<tr><th>Start Code</th><th>End Code</th><th>Block Name</th><th>&#xa0;</th>\
+             <th>Start Code</th><th>End Code</th><th>Block Name</th></tr>",
+        )
+        .expect("the block table after production [36] has another heading");
+    let mut blocks: BTreeMap<String, Spans> = BTreeMap::new();
+    for row in body.split("<tr>").filter(|row| !row.is_empty()) {
+        let cells: Vec<String> = row
+            .trim_end_matches("</tbody>")
+            .strip_suffix("</tr>")
+            .unwrap_or_else(|| panic!("unclosed block-table row {row:?}"))
+            .split("<td")
+            .skip(1)
+            .map(|cell| {
+                cell.strip_prefix("/>")
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        cell.strip_prefix('>')
+                            .and_then(|c| c.strip_suffix("</td>"))
+                            .map(html_text)
+                    })
+                    .unwrap_or_else(|| panic!("unreadable block-table cell {cell:?}"))
+            })
+            .collect();
+        assert_eq!(cells.len(), 7, "block-table row {row:?}");
+        assert_eq!(cells[3], "", "block-table separator {row:?}");
+        for entry in [&cells[..3], &cells[4..]] {
+            if entry.iter().all(String::is_empty) {
+                continue;
+            }
+            let (low, high) = (xml_char_ref(&entry[0]), xml_char_ref(&entry[1]));
+            assert!(low <= high, "block-table entry {entry:?} is empty");
+            let name = &entry[2];
+            assert!(
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+                "block-table name {name:?} is outside production [36]"
+            );
+            blocks
+                .entry(format!("Is{name}"))
+                .or_default()
+                .push((low, high));
+        }
+    }
+    let mut out = String::new();
+    emit_licensed_header(
+        &mut out,
+        W3C_TABLE_SPDX,
+        "xpath-dated-blocks",
+        &[
+            "The block names recognized by XML Schema Part 2 Second Edition.",
+            "",
+            "Appendix F.1.1 of the 28 October 2004 Recommendation lists, in its own",
+            "table, the block names every minimally conforming processor must recognize:",
+            "the Unicode 3.1 blocks current when that edition became a Recommendation.",
+            "Both dated XPath laws state that their syntax and semantics are those of",
+            "that edition with additions, so its table is part of each dated law. Three",
+            "names have no Unicode 17 counterpart (`Greek`, `CombiningMarksforSymbols`",
+            "and `PrivateUse`), and four ranges differ from their Unicode 17 extent.",
+            "",
+            "This is the Recommendation's table, not Unicode Character Database data:",
+            "`Specials` appears there twice, so it carries both of its listed ranges.",
+            "Rows are sorted by name for an exact binary search.",
+            "",
+            "Source: the Recommendation vendored verbatim as",
+            "`vectors/w3c-recs/REC-xmlschema-2-20041028.html`, read as the table that",
+            "follows its production \\[36\\] `IsBlock`, in the table's row order.",
+            "",
+            "<https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/#charcter-classes>",
+        ],
+    );
+    out.push_str("/// `\\p{IsX}` names of the XSD 1.0 Second Edition table, with their ranges.\n");
+    out.push_str("pub(super) const XSD10_SECOND_EDITION: &[(&str, &[(u32, u32)])] = &[\n");
+    for (name, ranges) in &blocks {
+        let ranges: Vec<String> = ranges
+            .iter()
+            .map(|(low, high)| format!("(0x{low:04X}, 0x{high:04X})"))
+            .collect();
+        let _ = writeln!(out, "    (\"{name}\", &[{}]),", ranges.join(", "));
+    }
+    out.push_str("];\n\n");
+    out.push_str(DATED_BLOCKS_TESTS);
+    out
+}
+
+/// The tests `dated_names.rs` carries, emitted after its tables.
+const DATED_NAMES_TESTS: &str = r#"#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::{NAME, NAME_START};
+
+    fn contains(table: &[(u32, u32)], point: u32) -> bool {
+        table.iter().any(|&(lo, hi)| (lo..=hi).contains(&point))
+    }
+
+    #[test]
+    fn tables_are_sorted_disjoint_and_nest() {
+        for table in [NAME_START, NAME] {
+            assert!(table.iter().all(|&(lo, hi)| lo <= hi && hi <= 0xFFFD));
+            assert!(table.windows(2).all(|pair| pair[0].1 + 1 < pair[1].0));
+        }
+        // Every initial name character is a name character.
+        for &(lo, hi) in NAME_START {
+            assert!((lo..=hi).all(|point| contains(NAME, point)), "{lo:#x}");
+        }
+        assert_eq!((NAME_START.len(), NAME.len()), (206, 287));
+    }
+}
+"#;
+
+/// The tests `dated_blocks.rs` carries, emitted after its table.
+const DATED_BLOCKS_TESTS: &str = r#"#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::XSD10_SECOND_EDITION;
+
+    #[test]
+    fn dated_table_is_name_sorted_and_has_the_recommendations_rows() {
+        assert!(
+            XSD10_SECOND_EDITION
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
+        // 85 table rows; `Specials` occupies two of them.
+        let rows: usize = XSD10_SECOND_EDITION
+            .iter()
+            .map(|(_, ranges)| ranges.len())
+            .sum();
+        assert_eq!((XSD10_SECOND_EDITION.len(), rows), (84, 85));
+        for (name, ranges) in XSD10_SECOND_EDITION {
+            assert!(name.starts_with("Is"), "{name}");
+            assert!(
+                ranges.iter().all(|&(lo, hi)| lo <= hi && hi <= 0xFFFD),
+                "{name}"
+            );
+        }
+    }
+}
+"#;
+
 fn main() {
     let set = std::env::args().nth(1).unwrap_or_default();
     assert_one_version();
@@ -2418,9 +2800,11 @@ fn main() {
         "ecma-properties" => ecma_properties(),
         "ecma-ranges" => ecma_ranges(),
         "xpath" => xpath(),
+        "xpath-dated-names" => xpath_dated_names(),
+        "xpath-dated-blocks" => xpath_dated_blocks(),
         other => panic!(
-            "unknown table set {other:?}: expected normalization, text, idna, ecma-properties or \
-             ecma-ranges or xpath"
+            "unknown table set {other:?}: expected normalization, text, idna, ecma-properties, \
+             ecma-ranges, xpath, xpath-dated-names or xpath-dated-blocks"
         ),
     };
     print!("{out}");
@@ -2503,5 +2887,57 @@ mod xpath_tests {
                 "U+{point:04X} belongs to exactly its general category"
             );
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod xpath_dated_tests {
+    use super::{
+        XML_NAME_PRODUCTIONS, XML_SECOND_EDITION, XSD_SECOND_EDITION, html_text, w3c_document,
+        xml_class, xml_production, xsd_name_escape,
+    };
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn class_expressions_resolve_names_and_join_adjacent_choices() {
+        let grammar = BTreeMap::from([("Low", "[#x0041-#x0042] |#x0043".to_owned())]);
+        assert_eq!(
+            xml_class("Low | '_' | #x0044 | [#x0030-#x0031]", &grammar),
+            [(0x30, 0x31), (0x41, 0x44), (0x5F, 0x5F)]
+        );
+        assert_eq!(
+            html_text("<code>[#x0041-#x005A] |&nbsp;<a href=\"#x\">Name</a>\n| ':'</code>"),
+            "[#x0041-#x005A] | Name | ':'"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a production this table reads")]
+    fn class_expressions_refuse_an_unread_production() {
+        xml_class(
+            "Letter | Unknown",
+            &BTreeMap::from([("Letter", "#x0041".to_owned())]),
+        );
+    }
+
+    #[test]
+    fn vendored_recommendations_define_the_dated_escapes() {
+        let xml = w3c_document(XML_SECOND_EDITION);
+        let xsd = w3c_document(XSD_SECOND_EDITION);
+        assert_eq!(xsd_name_escape(&xsd, "\\i"), "Letter | '_' | ':'");
+        assert_eq!(xsd_name_escape(&xsd, "\\c"), "NameChar");
+        let grammar: BTreeMap<&str, String> = XML_NAME_PRODUCTIONS
+            .iter()
+            .map(|&(name, number)| (name, xml_production(&xml, name, number)))
+            .collect();
+        assert_eq!(grammar["Letter"], "BaseChar | Ideographic");
+        assert_eq!(
+            grammar["Ideographic"],
+            "[#x4E00-#x9FA5] | #x3007 | [#x3021-#x3029]"
+        );
+        // U+0D7A, U+10000: outside both classes; `:` and U+00B7 are name characters.
+        let name = xml_class("NameChar", &grammar);
+        let contains = |point: u32| name.iter().any(|&(lo, hi)| (lo..=hi).contains(&point));
+        assert!(contains(0x3A) && contains(0xB7) && !contains(0xD7A) && !contains(0x1_0000));
     }
 }

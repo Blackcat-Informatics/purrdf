@@ -959,6 +959,8 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/sparql-eval/benches/expr_vm.rs` | eval.bgp-join-probe, core.xsd-regex-scan, eval.regex-row-alloc |
 | `crates/sparql-eval/benches/flat_operator_chains.rs` | sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, eval.bgp-cost-planner, eval.bgp-join-probe, eval.solution-compatible |
 | `crates/sparql-eval/benches/governed_eval.rs` | eval.bgp-join-probe |
+| `crates/sparql-eval/benches/governor_allocations.rs` | eval.bgp-join-probe, eval.aggregate-fold, xsd.exact-arith |
+| `crates/sparql-eval/benches/governor_instructions.rs` | eval.bgp-join-probe, eval.aggregate-fold, xsd.exact-arith |
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | eval.bgp-join-probe, core.dataset-scan-filter |
 | `crates/sparql-eval/benches/lateral_service.rs` | eval.solution-compatible |
 | `crates/sparql-eval/benches/lateral_substitution.rs` | eval.solution-compatible |

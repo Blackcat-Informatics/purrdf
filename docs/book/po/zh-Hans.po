@@ -5,13 +5,13 @@
 #
 # Every msgid is a unit of docs/book/src/ as mdbook-xgettext extracts it; an
 # empty msgstr renders as the English source (translation lag is visible to the
-# reader by construction). Gated by scripts/check-i18n-glossary.py (make check)
+# reader by construction). Gated by helper-census --glossary-gate (make check)
 # and scripts/check-i18n-render.py (make check-i18n; the docs workflow).
 # Refresh the msgids after the English source changes: make book-po-update.
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-06T20:58:37-06:00\n"
+"POT-Creation-Date: 2026-10-08T01:08:29-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -34,17 +34,19 @@ msgid "Getting Started"
 msgstr "入门"
 
 #: src/SUMMARY.md:12 src/concepts/projections.md:449 src/concepts/jsonld.md:36
-#: src/validation/shacl.md:302 src/validation/shacl.md:406
-#: src/validation/shacl.md:441 src/validation/shacl.md:1190
-#: src/entailment.md:49 src/entailment.md:94
+#: src/sparql/querying.md:2195 src/validation/shacl.md:302
+#: src/validation/shacl.md:406 src/validation/shacl.md:441
+#: src/validation/shacl.md:1190 src/validation/shacl.md:1464
+#: src/validation/shex.md:74 src/entailment.md:49 src/entailment.md:94
 msgid "Rust"
 msgstr "Rust"
 
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
-#: src/validation/shacl.md:304 src/validation/shacl.md:403
-#: src/validation/shacl.md:438 src/validation/shacl.md:1360
-#: src/entailment.md:51 src/entailment.md:96
+#: src/sparql/querying.md:2197 src/validation/shacl.md:304
+#: src/validation/shacl.md:403 src/validation/shacl.md:438
+#: src/validation/shacl.md:1360 src/validation/shacl.md:1466
+#: src/validation/shex.md:76 src/entailment.md:51 src/entailment.md:96
 msgid "Python"
 msgstr "Python"
 
@@ -53,8 +55,9 @@ msgid "JavaScript / WebAssembly"
 msgstr "JavaScript / WebAssembly"
 
 #: src/SUMMARY.md:15 src/concepts/projections.md:453 src/concepts/jsonld.md:114
-#: src/validation/shacl.md:405 src/validation/shacl.md:440 src/entailment.md:53
-#: src/entailment.md:98
+#: src/sparql/querying.md:2199 src/validation/shacl.md:405
+#: src/validation/shacl.md:440 src/validation/shacl.md:1468
+#: src/entailment.md:53 src/entailment.md:98
 msgid "C"
 msgstr "C"
 
@@ -751,7 +754,7 @@ msgid "// Build a dataset in interned TermId space.\n"
 msgstr "// 在驻留的 TermId 空间中构建数据集。\n"
 
 #: src/getting-started/rust.md:33 src/getting-started/python.md:40
-#: src/validation/shex.md:60
+#: src/validation/shex.md:60 src/validation/shex.md:80
 msgid "\"https://example.org/alice\""
 msgstr "\"https://example.org/alice\""
 
@@ -969,6 +972,7 @@ msgid "\"conforms\""
 msgstr "\"conforms\""
 
 #: src/getting-started/python.md:40 src/validation/shex.md:60
+#: src/validation/shex.md:80
 msgid "\"https://example.org/PersonShape\""
 msgstr "\"https://example.org/PersonShape\""
 
@@ -4145,9 +4149,11 @@ msgstr "其他生产接口"
 msgid "The surface names follow the same profile/config/archive contract:"
 msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
-#: src/concepts/projections.md:447 src/validation/shacl.md:300
-#: src/validation/shacl.md:400 src/validation/shacl.md:435
-#: src/validation/shacl.md:1357 src/entailment.md:47 src/entailment.md:92
+#: src/concepts/projections.md:447 src/sparql/querying.md:2193
+#: src/validation/shacl.md:300 src/validation/shacl.md:400
+#: src/validation/shacl.md:435 src/validation/shacl.md:1357
+#: src/validation/shacl.md:1462 src/validation/shex.md:72 src/entailment.md:47
+#: src/entailment.md:92
 msgid "Host"
 msgstr "宿主"
 
@@ -4184,9 +4190,11 @@ msgid "`lift_archive`"
 msgstr "`lift_archive`"
 
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
-#: src/validation/shacl.md:303 src/validation/shacl.md:402
-#: src/validation/shacl.md:437 src/validation/shacl.md:1190
-#: src/validation/shacl.md:1359 src/entailment.md:50 src/entailment.md:95
+#: src/sparql/querying.md:2196 src/validation/shacl.md:303
+#: src/validation/shacl.md:402 src/validation/shacl.md:437
+#: src/validation/shacl.md:1190 src/validation/shacl.md:1359
+#: src/validation/shacl.md:1465 src/validation/shex.md:75 src/entailment.md:50
+#: src/entailment.md:95
 msgid "CLI"
 msgstr "CLI"
 
@@ -4859,8 +4867,8 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:2176 src/validation/shacl.md:1544
-#: src/validation/shex.md:64 src/entailment.md:365
+#: src/sparql/querying.md:2222 src/validation/shacl.md:1590
+#: src/validation/shex.md:98 src/entailment.md:365
 msgid "Conformance"
 msgstr "一致性"
 
@@ -5117,9 +5125,10 @@ msgstr "Rust 字节 API（`parse_dataset`、`purrdf-rdf`、`purrdf-iri`）"
 msgid "pass a base, or the document must carry one"
 msgstr "传入基准，或文档自身必须携带基准"
 
-#: src/concepts/base-iris.md:53 src/validation/shacl.md:305
-#: src/validation/shacl.md:404 src/validation/shacl.md:439
-#: src/validation/shacl.md:1190 src/validation/shacl.md:1361
+#: src/concepts/base-iris.md:53 src/sparql/querying.md:2198
+#: src/validation/shacl.md:305 src/validation/shacl.md:404
+#: src/validation/shacl.md:439 src/validation/shacl.md:1190
+#: src/validation/shacl.md:1361 src/validation/shacl.md:1467
 msgid "WebAssembly"
 msgstr "WebAssembly"
 
@@ -5350,8 +5359,8 @@ msgstr ""
 #: src/project/diagnostic-codes.md:50 src/project/diagnostic-codes.md:77
 #: src/project/diagnostic-codes.md:94 src/project/diagnostic-codes.md:105
 #: src/project/diagnostic-codes.md:126 src/project/diagnostic-codes.md:148
-#: src/project/diagnostic-codes.md:202 src/project/diagnostic-codes.md:212
-#: src/project/diagnostic-codes.md:222
+#: src/project/diagnostic-codes.md:250 src/project/diagnostic-codes.md:263
+#: src/project/diagnostic-codes.md:273 src/project/diagnostic-codes.md:283
 msgid "Code"
 msgstr "代码"
 
@@ -10944,11 +10953,172 @@ msgstr ""
 "`INSERT WHERE` 基本图模式自身没有 `GROUP BY`）——每个宿主的 `update` 入口都恰"
 "好通过这种嵌套子查询形态到达统计集。"
 
-#: src/sparql/querying.md:2170
+#: src/sparql/querying.md:2170 src/validation/shacl.md:1446
+#: src/validation/shex.md:64
+msgid "Dated XPath regex laws"
+msgstr "带日期的 XPath 正则法则"
+
+#: src/sparql/querying.md:2172
+msgid ""
+"`REGEX` and `REPLACE` run on the compatibility regular expressions unless "
+"the caller selects a dated native XPath law by its stable name:"
+msgstr ""
+"`REGEX` 与 `REPLACE` 运行在兼容正则表达式之上，除非调用方按稳定名称选择一种带"
+"日期的原生 XPath 法则："
+
+#: src/sparql/querying.md:2175
+msgid "Name"
+msgstr "名称"
+
+#: src/sparql/querying.md:2175
+msgid "Law"
+msgstr "法则"
+
+#: src/sparql/querying.md:2177
+msgid "`xpath-2.0-2010-12-14`"
+msgstr "`xpath-2.0-2010-12-14`"
+
+#: src/sparql/querying.md:2177
+msgid ""
+"XPath and XQuery Functions and Operators 2.0 (Second Edition), 14 December "
+"2010"
+msgstr ""
+"XPath and XQuery Functions and Operators 2.0（第二版），2010 年 12 月 14 日"
+
+#: src/sparql/querying.md:2178
+msgid "`xpath-3.1-2017-03-21`"
+msgstr "`xpath-3.1-2017-03-21`"
+
+#: src/sparql/querying.md:2178
+msgid "XPath and XQuery Functions and Operators 3.1, 21 March 2017"
+msgstr "XPath and XQuery Functions and Operators 3.1，2017 年 3 月 21 日"
+
+#: src/sparql/querying.md:2180
+msgid ""
+"Both laws admit backreferences, which the compatibility expressions refuse. "
+"Only 3.1 admits non-capturing groups such as `(?:a)` and the `q` flag. Under "
+"either law, this query keeps every code whose first two characters are the "
+"same:"
+msgstr ""
+"两种法则都接受反向引用，而兼容正则表达式拒绝反向引用。只有 3.1 接受 `(?:a)` "
+"这样的非捕获组和 `q` 标志。在任一法则下，下面的查询保留前两个字符相同的每个 "
+"`?code`："
+
+#: src/sparql/querying.md:2184
+msgid ""
+"```sparql\n"
+"SELECT ?code WHERE {\n"
+"  ?item <http://example.org/code> ?code\n"
+"  FILTER(REGEX(?code, \"^(.)\\\\1\"))\n"
+"}\n"
+"```"
+msgstr ""
+"```sparql\n"
+"SELECT ?code WHERE {\n"
+"  ?item <http://example.org/code> ?code\n"
+"  FILTER(REGEX(?code, \"^(.)\\\\1\"))\n"
+"}\n"
+"```"
+
+#: src/sparql/querying.md:2191
+msgid "Every host selects the law in its own spelling:"
+msgstr "每个宿主都以自己的写法选择法则："
+
+#: src/sparql/querying.md:2193 src/validation/shacl.md:400
+#: src/validation/shacl.md:435 src/validation/shacl.md:1462
+#: src/validation/shex.md:72
+msgid "Spelling"
+msgstr "写法"
+
+#: src/sparql/querying.md:2195
+msgid ""
+"`NativeSparqlEngine::with_xpath_regex(profile, limits)` for every request "
+"the engine runs, or `QueryOptions::with_xpath_regex(profile, limits)` for "
+"one request, with `Profile` and `Limits` from "
+"`purrdf_core::xsd_regex::xpath`; `purrdf_validate::xpath_regex::"
+"{parse_profile, sparql_engine, query_options}` select by name with the "
+"production limits"
+msgstr ""
+"`NativeSparqlEngine::with_xpath_regex(profile, limits)` 作用于该引擎运行的每"
+"个请求，`QueryOptions::with_xpath_regex(profile, limits)` 则只作用于一个请"
+"求，其中 `Profile` 与 `Limits` 来自 `purrdf_core::xsd_regex::xpath`；"
+"`purrdf_validate::xpath_regex::{parse_profile, sparql_engine, query_options}"
+"` 按名称选择，并使用生产限制"
+
+#: src/sparql/querying.md:2196
+msgid "`--xpath-regex <NAME>` on `query` and `update`"
+msgstr "`query` 与 `update` 上的 `--xpath-regex <NAME>`"
+
+#: src/sparql/querying.md:2197
+msgid ""
+"`xpath_regex=` on `query`, `query_governed`, `query_entailment_governed`, "
+"`update`, `update_governed` and `Store.prepare`, and on the rdflib layer's "
+"`Graph.query` and `Graph.update`; `purrdf.XPATH_REGEX_PROFILES` lists the "
+"names"
+msgstr ""
+"`query`、`query_governed`、`query_entailment_governed`、`update`、"
+"`update_governed` 与 `Store.prepare` 上，以及 rdflib 层的 `Graph.query` 与 "
+"`Graph.update` 上的 `xpath_regex=`；`purrdf.XPATH_REGEX_PROFILES` 列出这些名"
+"称"
+
+#: src/sparql/querying.md:2198
+msgid ""
+"an `xpathRegex` option on every evaluating `QueryEngine` method and its "
+"asynchronous twin, and a trailing `xpathRegex` on `Dataset.query`, "
+"`queryRawConfigured` and `queryRawWithContext`"
+msgstr ""
+"每个求值型 `QueryEngine` 方法及其异步孪生方法上的 `xpathRegex` 选项，以及 "
+"`Dataset.query`、`queryRawConfigured` 与 `queryRawWithContext` 的尾随参数 "
+"`xpathRegex`"
+
+#: src/sparql/querying.md:2199
+msgid ""
+"`regex_profile` on `purrdf_query_xpath_regex`, "
+"`purrdf_query_json_xpath_regex`, `purrdf_query_governed_xpath_regex`, "
+"`purrdf_query_entailment_governed_xpath_regex` and "
+"`purrdf_update_governed_xpath_regex`"
+msgstr ""
+"`purrdf_query_xpath_regex`、`purrdf_query_json_xpath_regex`、"
+"`purrdf_query_governed_xpath_regex`、"
+"`purrdf_query_entailment_governed_xpath_regex` 与 "
+"`purrdf_update_governed_xpath_regex` 上的 `regex_profile`"
+
+#: src/sparql/querying.md:2201
+msgid ""
+"Names match exactly, with no case folding or undated alias, so a name such "
+"as `xpath-3.1` is refused with a list of the accepted names. With no "
+"selection (no option, no flag, or a NULL `regex_profile`), the compatibility "
+"regular expressions behave exactly as before. A prepared query keeps its law "
+"for every run, and an unset request inherits the engine's selection."
+msgstr ""
+"名称须精确匹配，不做大小写折叠，也没有不带日期的别名，因此像 `xpath-3.1` 这样"
+"的名称会被拒绝，并附上可接受名称的列表。未作选择时（没有选项、没有标志，或 "
+"`regex_profile` 为 NULL），兼容正则表达式的行为与以往完全一样。预备好的查询在"
+"每次运行中都保留其法则，而未设置法则的请求继承引擎的选择。"
+
+#: src/sparql/querying.md:2207
+msgid ""
+"A pattern or flag the selected law does not define is an ordinary expression "
+"error, so a `FILTER` drops the row and a `BIND` leaves its variable unbound. "
+"A selected law also runs under finite resource bounds, 64 KiB of pattern "
+"source among them. Exceeding one is an operational failure carrying the "
+"resource's [`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-"
+"native-xpath-regular-expressions-purrdf-core), whose page lists the measured "
+"classes of work that reach each bound. It is never a partial answer or a "
+"`false` filter, and a refused update changes nothing."
+msgstr ""
+"所选法则未定义的模式或标志是普通的表达式错误，因此 `FILTER` 会剔除该行，"
+"`BIND` 会使其变量保持未绑定。所选法则还在有限的资源上限下运行，其中包括 64 "
+"KiB 的模式源文本。超出任一上限都是运行层面的失败，并携带该资源的 [`xpath-*` "
+"代码](../project/diagnostic-codes.md#xpath-带日期的原生-xpath-正则表达式"
+"purrdf-core)，该页面列出了触及每个上限的、经过测量的几类工作。它绝不会成为部"
+"分答案或 `false` 的过滤结果，被拒绝的更新也不会改变任何内容。"
+
+#: src/sparql/querying.md:2216
 msgid "Entailment regimes"
 msgstr "蕴涵机制"
 
-#: src/sparql/querying.md:2172
+#: src/sparql/querying.md:2218
 msgid ""
 "SPARQL queries can be answered under an entailment regime by materializing "
 "the dataset first with [`purrdf-entail`](../entailment.md) — "
@@ -10959,7 +11129,7 @@ msgstr ""
 "SPARQL 查询——`Regime::from_iri` 把 `sparql:entailmentRegime` IRI 映射到相应的"
 "引擎。"
 
-#: src/sparql/querying.md:2178
+#: src/sparql/querying.md:2224
 msgid ""
 "The full W3C SPARQL 1.1 query + update evaluation suites plus the SPARQL 1.2 "
 "suite are vendored verbatim and run by `purrdf-sparql-conformance`; every "
@@ -13116,10 +13286,6 @@ msgstr ""
 #: src/validation/shacl.md:398
 msgid "Every host takes the IRI:"
 msgstr "每个宿主都接受该 IRI："
-
-#: src/validation/shacl.md:400 src/validation/shacl.md:435
-msgid "Spelling"
-msgstr "写法"
 
 #: src/validation/shacl.md:402
 msgid ""
@@ -15487,11 +15653,147 @@ msgstr ""
 "SPARQL 结果注解的结果还带有 `annotations`：一个元组列表，每个元组由一个属性 "
 "IRI 与一个采用 N-Triples 语法的值组成。"
 
-#: src/validation/shacl.md:1446
+#: src/validation/shacl.md:1448
+msgid ""
+"`sh:pattern` with its `sh:flags`, and the `REGEX` and `REPLACE` of SHACL-"
+"SPARQL targets, constraints and SHACL-AF functions, run on the compatibility "
+"regular expressions unless the caller selects a dated native XPath law by "
+"name: `xpath-2.0-2010-12-14` (XPath and XQuery Functions and Operators 2.0, "
+"Second Edition) or `xpath-3.1-2017-03-21` (Functions and Operators 3.1). "
+"Both admit backreferences, so `sh:pattern \"^(a)\\\\1$\"` accepts `\"aa\"`. "
+"Only 3.1 admits non-capturing groups and the `q` flag. The shapes-graph "
+"tools that evaluate patterns take the law too. For rules, it covers the "
+"`REGEX`/`REPLACE` of SHACL rules, SHACL-AF functions, node expressions and "
+"SPARQL 1.2 RL filters and assignments, and the `sh:pattern` of rule "
+"conditions. For node expressions, it covers filter-shape `sh:pattern`s and "
+"the `REGEX`/`REPLACE` of function calls and SPARQL-based expressions. A lint "
+"compiles and matches no pattern, so it takes no law."
+msgstr ""
+"`sh:pattern` 及其 `sh:flags`，以及 SHACL-SPARQL 目标、约束与 SHACL-AF 函数中"
+"的 `REGEX` 与 `REPLACE`，都运行在兼容正则表达式之上，除非调用方按名称选择一种"
+"带日期的原生 XPath 法则：`xpath-2.0-2010-12-14`（XPath and XQuery Functions "
+"and Operators 2.0，第二版）或 `xpath-3.1-2017-03-21`（Functions and "
+"Operators 3.1）。两者都接受反向引用，因此 `sh:pattern \"^(a)\\\\1$\"` 接受 "
+"`\"aa\"`。只有 3.1 接受非捕获组和 `q` 标志。求值模式的形状图工具同样接受该法"
+"则。对规则而言，它覆盖 SHACL 规则、SHACL-AF 函数、节点表达式以及 SPARQL 1.2 "
+"RL 过滤器与赋值中的 `REGEX`/`REPLACE`，以及规则条件中的 `sh:pattern`。对节点"
+"表达式而言，它覆盖过滤形状的 `sh:pattern`，以及函数调用与基于 SPARQL 的表达式"
+"中的 `REGEX`/`REPLACE`。lint 不编译也不匹配任何模式，因此不接受法则。"
+
+#: src/validation/shacl.md:1464
+msgid ""
+"`PreparedShapes::with_xpath_regex(profile, limits)`, which returns an "
+"`XPathPreparedShapes`, and the free "
+"`purrdf_shapes::xpath::validate_dataset`; the `purrdf-validate` "
+"`*_with_xpath_regex` twins (`validate_to_sarif_string`, "
+"`validate_changes_to_sarif_string`, `validate_with_shapes_product`, "
+"`validate_with_rebuilt_shapes_product`, `entail_to_ntriples`, "
+"`apply_rules_to_ntriples` and `eval_node_expr`) take the profile "
+"`xpath_regex::parse_profile` returns"
+msgstr ""
+"`PreparedShapes::with_xpath_regex(profile, limits)`（返回一个 "
+"`XPathPreparedShapes`）以及自由函数 "
+"`purrdf_shapes::xpath::validate_dataset`；`purrdf-validate` 的 "
+"`*_with_xpath_regex` 孪生函数（`validate_to_sarif_string`、"
+"`validate_changes_to_sarif_string`、`validate_with_shapes_product`、"
+"`validate_with_rebuilt_shapes_product`、`entail_to_ntriples`、"
+"`apply_rules_to_ntriples` 与 `eval_node_expr`）接受 "
+"`xpath_regex::parse_profile` 返回的 profile"
+
+#: src/validation/shacl.md:1465
+msgid ""
+"`--xpath-regex <NAME>` on `validate` (with `--shapes`, `--shapes-product` or "
+"`--changes`), `rules` and `node-expr`; `rules --check` refuses it and "
+"`shapes lint` does not offer it"
+msgstr ""
+"`validate`（配合 `--shapes`、`--shapes-product` 或 `--changes`）、`rules` 与 "
+"`node-expr` 上的 `--xpath-regex <NAME>`；`rules --check` 拒绝该标志，`shapes "
+"lint` 不提供该标志"
+
+#: src/validation/shacl.md:1466
+msgid ""
+"`xpath_regex=` on `shapes.validate`, `Shapes.validate_nt`, "
+"`Shapes.validate_store`, `PreparedShapes.validate_nt`, "
+"`PreparedShapes.validate_store_changes`, `shapes.entail`, "
+"`shapes.apply_rules` and `shapes.eval_node_expr`"
+msgstr ""
+"`shapes.validate`、`Shapes.validate_nt`、`Shapes.validate_store`、"
+"`PreparedShapes.validate_nt`、`PreparedShapes.validate_store_changes`、"
+"`shapes.entail`、`shapes.apply_rules` 与 `shapes.eval_node_expr` 上的 "
+"`xpath_regex=`"
+
+#: src/validation/shacl.md:1467
+msgid ""
+"a trailing `xpathRegex` on `shaclValidateToSarif`, "
+"`shaclValidateChangesToSarif`, the four `shaclProductValidateToSarif…` "
+"entries, `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr`; their "
+"asynchronous twins take it in their options object"
+msgstr ""
+"`shaclValidateToSarif`、`shaclValidateChangesToSarif`、四个 "
+"`shaclProductValidateToSarif…` 入口、`shaclEntail`、`shaclApplyRules` 与 "
+"`shaclEvalNodeExpr` 的尾随参数 `xpathRegex`；它们的异步孪生方法在选项对象中接"
+"受它"
+
+#: src/validation/shacl.md:1468
+msgid ""
+"`regex_profile` on `purrdf_shacl_validate_to_sarif_xpath_regex`, "
+"`purrdf_shacl_validate_changes_to_sarif_xpath_regex`, "
+"`purrdf_shapes_product_admit_xpath_regex`, "
+"`purrdf_shapes_product_admit_expecting_xpath_regex`, "
+"`purrdf_shapes_product_rebuild_xpath_regex`, "
+"`purrdf_shapes_product_rebuild_expecting_xpath_regex`, "
+"`purrdf_shacl_entail_to_ntriples_xpath_regex`, "
+"`purrdf_shacl_apply_rules_xpath_regex` and "
+"`purrdf_shacl_eval_node_expr_xpath_regex`"
+msgstr ""
+"`purrdf_shacl_validate_to_sarif_xpath_regex`、"
+"`purrdf_shacl_validate_changes_to_sarif_xpath_regex`、"
+"`purrdf_shapes_product_admit_xpath_regex`、"
+"`purrdf_shapes_product_admit_expecting_xpath_regex`、"
+"`purrdf_shapes_product_rebuild_xpath_regex`、"
+"`purrdf_shapes_product_rebuild_expecting_xpath_regex`、"
+"`purrdf_shacl_entail_to_ntriples_xpath_regex`、"
+"`purrdf_shacl_apply_rules_xpath_regex` 与 "
+"`purrdf_shacl_eval_node_expr_xpath_regex` 上的 `regex_profile`"
+
+#: src/validation/shacl.md:1474 src/validation/shex.md:81
+msgid "\"xpath-3.1-2017-03-21\""
+msgstr "\"xpath-3.1-2017-03-21\""
+
+#: src/validation/shacl.md:1478
+msgid ""
+"Names match exactly, so `xpath-3.1` is refused with a list of the accepted "
+"names. With no selection (no keyword, option or flag, or a NULL "
+"`regex_profile`), the compatibility regular expressions behave exactly as "
+"before. A prepared product needs no re-packing, because the law belongs to "
+"the evaluation and not to the prepared shapes."
+msgstr ""
+"名称须精确匹配，因此 `xpath-3.1` 会被拒绝，并附上可接受名称的列表。未作选择时"
+"（没有关键字参数、选项或标志，或 `regex_profile` 为 NULL），兼容正则表达式的"
+"行为与以往完全一样。预备形状产物无需重新打包，因为法则属于求值，而不属于预备"
+"好的形状。"
+
+#: src/validation/shacl.md:1484
+msgid ""
+"A pattern or flag the selected law does not define is reported the way an "
+"invalid pattern always is: a result of the declaring shape. A selected law "
+"also runs under finite resource bounds, 64 KiB of pattern source among them. "
+"Exceeding one fails the validation with the resource's [`xpath-*` code](../"
+"project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-"
+"purrdf-core) and writes no report, dataset or output. A resource refusal "
+"never becomes a conforming graph."
+msgstr ""
+"所选法则未定义的模式或标志，按无效模式一贯的方式报告：作为声明它的形状的一条"
+"结果。所选法则还在有限的资源上限下运行，其中包括 64 KiB 的模式源文本。超出任"
+"一上限会使验证以该资源的 [`xpath-*` 代码](../project/diagnostic-"
+"codes.md#xpath-带日期的原生-xpath-正则表达式purrdf-core)失败，并且不写出任何"
+"报告、数据集或输出。资源拒绝绝不会变成判定为符合约束的图。"
+
+#: src/validation/shacl.md:1492
 msgid "The report is a dataset"
 msgstr "报告是一个数据集"
 
-#: src/validation/shacl.md:1448
+#: src/validation/shacl.md:1494
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -15509,7 +15811,7 @@ msgstr ""
 "以任意语法渲染报告就是 `serialize_dataset(&report.to_dataset(), …)`，这正是 "
 "`purrdf validate --format` 所做的。"
 
-#: src/validation/shacl.md:1456
+#: src/validation/shacl.md:1502
 msgid ""
 "A report carries blank nodes from two graphs: a focus node, a value and an "
 "annotation value come from the data graph, and a source shape from the "
@@ -15540,7 +15842,7 @@ msgstr ""
 "的 `results` 保留原始标签。报告所*生成*的空节点（报告节点、每条结果各一个、复"
 "杂 `sh:path` 的内部节点）与这两个标签空间都不相同。"
 
-#: src/validation/shacl.md:1472
+#: src/validation/shacl.md:1518
 msgid ""
 "Every report a validation produces also states `sh:shapesGraphWellFormed`. "
 "SHACL 1.2 Core §6.7.1.4 says a processor that checks the shapes graph "
@@ -15573,7 +15875,7 @@ msgstr ""
 "点名该规则 id 的问题。`ValidationReport::shapes_graph_well_formed` 携带该值，"
 "SARIF 运行则以 `properties.shaclShapesGraphWellFormed` 携带它。"
 
-#: src/validation/shacl.md:1487
+#: src/validation/shacl.md:1533
 msgid ""
 "Every run reports the same diagnostics, not only the lint. A validation "
 "report carries them in `ValidationReport::diagnostics` — one "
@@ -15625,11 +15927,11 @@ msgstr ""
 "间是统一的：规则与形状是两个独立字段——在 Python 中是字典键，在 WebAssembly 中"
 "是 getter——C 的输出行以相同顺序携带同样的两个字段，规则在前。"
 
-#: src/validation/shacl.md:1512
+#: src/validation/shacl.md:1558
 msgid "SARIF output"
 msgstr "SARIF 输出"
 
-#: src/validation/shacl.md:1514
+#: src/validation/shacl.md:1560
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -15642,7 +15944,7 @@ msgstr ""
 "析器诊断——渲染为可追溯到源位置、逐字节确定性的 SARIF 日志，供编辑器、CI 与代"
 "码扫描仪表板使用："
 
-#: src/validation/shacl.md:1523
+#: src/validation/shacl.md:1569
 msgid ""
 "r#\"\n"
 "    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
@@ -15662,7 +15964,7 @@ msgstr ""
 "      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
 "\"#"
 
-#: src/validation/shacl.md:1531
+#: src/validation/shacl.md:1577
 msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
@@ -15674,15 +15976,15 @@ msgstr ""
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
 "\"#"
 
-#: src/validation/shacl.md:1536
+#: src/validation/shacl.md:1582
 msgid "\"sarif produced\""
 msgstr "\"sarif produced\""
 
-#: src/validation/shacl.md:1537
+#: src/validation/shacl.md:1583
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr "\"\\\"version\\\": \\\"2.1.0\\\"\""
 
-#: src/validation/shacl.md:1540
+#: src/validation/shacl.md:1586
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
@@ -15691,7 +15993,7 @@ msgstr ""
 "更底层的入口点（`build_report_sarif`、`build_diagnostics_sarif`）构建的是 "
 "`SarifLog` 值而非字符串，因此宿主可以在序列化之前合并多个 run。"
 
-#: src/validation/shacl.md:1546
+#: src/validation/shacl.md:1592
 msgid ""
 "The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, "
 "the vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and "
@@ -18048,6 +18350,67 @@ msgstr "从 Python 调用："
 
 #: src/validation/shex.md:66
 msgid ""
+"String-facet `PATTERN`s run on the compatibility regular expressions unless "
+"the caller selects a dated native XPath law by name: `xpath-2.0-2010-12-14` "
+"(XPath and XQuery Functions and Operators 2.0, Second Edition) or "
+"`xpath-3.1-2017-03-21` (Functions and Operators 3.1). Both admit "
+"backreferences; only 3.1 admits non-capturing groups and the `q` flag."
+msgstr ""
+"字符串分面（facet）中的 `PATTERN` 运行在兼容正则表达式之上，除非调用方按名称"
+"选择一种带日期的原生 XPath 法则：`xpath-2.0-2010-12-14`（XPath and XQuery "
+"Functions and Operators 2.0，第二版）或 `xpath-3.1-2017-03-21`（Functions "
+"and Operators 3.1）。两者都接受反向引用；只有 3.1 接受非捕获组和 `q` 标志。"
+
+#: src/validation/shex.md:74
+msgid ""
+"`validate_with_xpath` and `validate_shape_map_with_xpath`, with `Profile` "
+"and `Limits` from `purrdf_core::xsd_regex::xpath`; an "
+"`XPathValidator::new(&schema)` serves repeated validations of a fixed map"
+msgstr ""
+"`validate_with_xpath` 与 `validate_shape_map_with_xpath`，其中 `Profile` 与 "
+"`Limits` 来自 `purrdf_core::xsd_regex::xpath`；"
+"`XPathValidator::new(&schema)` 用于对同一固定映射的重复验证"
+
+#: src/validation/shex.md:75
+msgid "`--xpath-regex <NAME>` on `shex`"
+msgstr "`shex` 上的 `--xpath-regex <NAME>`"
+
+#: src/validation/shex.md:76
+msgid "`xpath_regex=` on `shex.validate`"
+msgstr "`shex.validate` 上的 `xpath_regex=`"
+
+#: src/validation/shex.md:84
+msgid ""
+"Names match exactly, so `xpath-3.1` is refused with a list of the accepted "
+"names. With no selection, `validate`, `validate_with` and "
+"`validate_shape_map` keep the compatibility behaviour exactly. ShExJ hands "
+"the pattern and flag text over as written. ShExC keeps its own concrete-"
+"syntax escape grammar, which has no `\\1`, so a backreference is written in "
+"ShExJ."
+msgstr ""
+"名称须精确匹配，因此 `xpath-3.1` 会被拒绝，并附上可接受名称的列表。未作选择"
+"时，`validate`、`validate_with` 与 `validate_shape_map` 完全保持兼容行为。"
+"ShExJ 按原样传递模式与标志文本。ShExC 保留其自身的具体语法转义文法，其中没有 "
+"`\\1`，因此反向引用要用 ShExJ 书写。"
+
+#: src/validation/shex.md:90
+msgid ""
+"A pattern or flag the selected law does not define fails its facet, as any "
+"invalid pattern does. A selected law also runs under finite resource bounds, "
+"64 KiB of pattern source among them. Exceeding one aborts the whole shape "
+"map with the resource's [`xpath-*` code](../project/diagnostic-"
+"codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core). "
+"Negation, alternatives and previously decided entries cannot turn that "
+"refusal into a nonconformant entry or a partial result map."
+msgstr ""
+"所选法则未定义的模式或标志会使其分面失败，与任何无效模式一样。所选法则还在有"
+"限的资源上限下运行，其中包括 64 KiB 的模式源文本。超出任一上限会以该资源的 "
+"[`xpath-*` 代码](../project/diagnostic-codes.md#xpath-带日期的原生-xpath-正则"
+"表达式purrdf-core)中止整个形状映射。否定、备选分支以及先前已判定的条目都无法"
+"把该拒绝变成不符合的条目或部分结果映射。"
+
+#: src/validation/shex.md:100
+msgid ""
 "The engine is gated against the vendored official [shexTest](https://"
 "github.com/shexSpec/shexTest) suite, pinned at tag `v2.1.0` (`vectors/"
 "shexTest/`): the full `validation/` manifest, the `schemas/` ShExC/ShExJ "
@@ -18066,7 +18429,7 @@ msgstr ""
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/"
 "CONFORMANCE.md)。"
 
-#: src/validation/shex.md:76
+#: src/validation/shex.md:110
 msgid ""
 "Reported conformance is logic-level (pass/fail parity), per suite "
 "convention; result-structure conformance is upstream-experimental."
@@ -18074,11 +18437,11 @@ msgstr ""
 "按套件惯例，所报告的一致性是逻辑层面的（通过/失败对等）；结果结构的一致性在上"
 "游仍属实验性。"
 
-#: src/validation/shex.md:79
+#: src/validation/shex.md:113
 msgid "SHACL or ShEx?"
 msgstr "SHACL 还是 ShEx？"
 
-#: src/validation/shex.md:81
+#: src/validation/shex.md:115
 msgid ""
 "PurRDF implements both natively over the same IR, so the choice is yours, "
 "not the toolkit's: SHACL suits constraint reporting (violations with "
@@ -22351,16 +22714,18 @@ msgstr ""
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:202
-#: src/project/diagnostic-codes.md:212 src/project/diagnostic-codes.md:222
+#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:250
+#: src/project/diagnostic-codes.md:263 src/project/diagnostic-codes.md:273
+#: src/project/diagnostic-codes.md:283
 msgid "Meaning"
 msgstr "含义"
 
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:202
-#: src/project/diagnostic-codes.md:212 src/project/diagnostic-codes.md:222
+#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:250
+#: src/project/diagnostic-codes.md:263 src/project/diagnostic-codes.md:273
+#: src/project/diagnostic-codes.md:283
 msgid "Remedy"
 msgstr "补救办法"
 
@@ -24109,16 +24474,274 @@ msgstr "预绑定字面量的语言标签不是该词法 profile 所接受的。
 msgid "Supply a well-formed language tag."
 msgstr "提供一个良构的语言标签。"
 
-#: src/project/diagnostic-codes.md:200
+#: src/project/diagnostic-codes.md:199
+msgid "`native-sparql-xpath-operational`"
+msgstr "`native-sparql-xpath-operational`"
+
+#: src/project/diagnostic-codes.md:199
+msgid ""
+"A selected dated XPath law failed operationally in a way that names no "
+"single `xpath-*` resource. The query is aborted and publishes no answer."
+msgstr ""
+"所选的带日期 XPath 法则发生了运行层面的失败，且未指明单一的 `xpath-*` 资源。"
+"查询被中止，不发布任何答案。"
+
+#: src/project/diagnostic-codes.md:199
+msgid "Report the failure with its query and input."
+msgstr "报告此失败时请附上查询和输入。"
+
+#: src/project/diagnostic-codes.md:201
+msgid "`xpath-*` — dated native XPath regular expressions (`purrdf-core`)"
+msgstr "`xpath-*`——带日期的原生 XPath 正则表达式（`purrdf-core`）"
+
+#: src/project/diagnostic-codes.md:203
+msgid ""
+"These codes arise only when a caller selects a dated XPath law "
+"(`xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`) for SPARQL `REGEX` and "
+"`REPLACE`, SHACL `sh:pattern` or ShEx pattern facets. Without a selection, "
+"the compatibility regular expressions run and none of these codes appears. "
+"`purrdf_core::xsd_regex::xpath::Resource::code` is their single owner. Each "
+"one names the `Resource` that a `Limits` bound withheld (`Error::Resource`, "
+"with the exact requirement and the bound), or whose storage the host refused "
+"to allocate (`Error::Allocation`). The production bound `Limits::new()` sets "
+"is given in each row, and zero withholds a resource completely."
+msgstr ""
+"这些代码仅在调用方为 SPARQL `REGEX` 与 `REPLACE`、SHACL `sh:pattern` 或 ShEx "
+"模式分面选择了带日期的 XPath 法则（`xpath-2.0-2010-12-14` 或 "
+"`xpath-3.1-2017-03-21`）时出现。未作选择时，运行的是兼容正则表达式，这些代码"
+"都不会出现。`purrdf_core::xsd_regex::xpath::Resource::code` 是它们唯一的所有"
+"者。每个代码都指明一个 `Resource`：要么是 `Limits` 的某个上限扣留了它"
+"（`Error::Resource`，附带确切的需求量与上限），要么是宿主拒绝为它分配存储"
+"（`Error::Allocation`）。每一行都给出了 `Limits::new()` 设定的生产上限；上限"
+"为零即完全扣留该资源。"
+
+#: src/project/diagnostic-codes.md:213
+msgid ""
+"Every `xpath-*` code is **operational**. It is never a syntax verdict and "
+"never a non-match: an invalid pattern or flag (FORX0001), an empty-matching "
+"replacement pattern (FORX0003) or invalid replacement text (FORX0004) is the "
+"host's ordinary invalid-pattern outcome instead, which is a SPARQL "
+"expression error, a SHACL finding or a failed ShEx facet. A refusal fails "
+"the whole operation. A query publishes no answer, an update changes nothing, "
+"and a validation writes no report; the refusal never becomes an unbound "
+"value, a `false` filter or a conforming graph. The C ABI reports it as "
+"`PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13)."
+msgstr ""
+"每个 `xpath-*` 代码都是**运行层面的**。它绝不是语法裁决，也绝不是不匹配：无效"
+"的模式或标志（FORX0001）、匹配空字符串的替换模式（FORX0003）或无效的替换文本"
+"（FORX0004）则是宿主普通的无效模式结果，即 SPARQL 表达式错误、SHACL 结果或失"
+"败的 ShEx 分面。拒绝会使整个操作失败。查询不发布任何答案，更新不改变任何内"
+"容，验证不写出任何报告；拒绝绝不会变成未绑定的值、`false` 的过滤结果或符合约"
+"束的图。C ABI 以 `PURRDF_STATUS_REGEX_RESOURCE_ERROR`（13）报告它。"
+
+#: src/project/diagnostic-codes.md:222
+msgid ""
+"The bounds apply to every pattern. For a fixed pattern without a "
+"backreference, matching is linear in input length, but its cost can depend "
+"on repetition counts. The following measured searches cost 1 to 3.2 matcher "
+"steps per input byte at the production bounds:"
+msgstr ""
+"这些上限适用于每个模式。对于不含反向引用的固定模式，匹配时间随输入长度线性增"
+"长，但其代价可能取决于重复次数。在生产上限下，以下经过测量的搜索每个输入字节"
+"花费 1 到 3.2 个匹配器步数："
+
+#: src/project/diagnostic-codes.md:226
+msgid "literal and single-character runs;"
+msgstr "字面量与单字符连续段；"
+
+#: src/project/diagnostic-codes.md:227
+msgid "counted repetitions such as `(ab){1,1000}c` or `(\\w+\\s){3,5}zzz`;"
+msgstr "计数重复，例如 `(ab){1,1000}c` 或 `(\\w+\\s){3,5}zzz`；"
+
+#: src/project/diagnostic-codes.md:228
+msgid "whole-input group matches such as `^([a-z]+ ?)+$`;"
+msgstr "匹配整个输入的组，例如 `^([a-z]+ ?)+$`；"
+
+#: src/project/diagnostic-codes.md:229
+msgid "searches with several unbounded runs, such as `node.*graph.*zzz`."
+msgstr "含多个无界连续段的搜索，例如 `node.*graph.*zzz`。"
+
+#: src/project/diagnostic-codes.md:231
+msgid ""
+"A step cost about 3.5 to 11 ns on the measured host. The low-cost measured "
+"searches reached about 74 to 83 MiB before step refusal; this is not a "
+"universal input threshold or timing guarantee. Large finite or nested "
+"repetitions can reach step or storage bounds on much shorter input, "
+"including yes-or-no tests. Locating the match itself (SPARQL `REPLACE`, for "
+"example) also costs more in these measured examples:"
+msgstr ""
+"在被测主机上，一步约花费 3.5 到 11 ns。经过测量的低代价搜索在达到约 74 到 83 "
+"MiB 后触发步数拒绝；这并非通用的输入阈值或耗时保证。较大的有限重复或嵌套重复"
+"可能在短得多的输入上达到步数或存储上限，是非判断也不例外。在以下经过测量的示"
+"例中，定位匹配本身（例如 SPARQL `REPLACE`）还会增加代价："
+
+#: src/project/diagnostic-codes.md:237
+msgid ""
+"`(a|aa){1,100000}b` costs about 98 steps per byte, so it is refused past "
+"about 2.5 MiB of match;"
+msgstr ""
+"`(a|aa){1,100000}b` 约为每字节 98 步，因此匹配超过约 2.5 MiB 时被拒绝；"
+
+#: src/project/diagnostic-codes.md:239
+msgid ""
+"`(|a){18446744073709551616}b`, an empty-preferring body below a minimum "
+"beyond 64 bits, costs about 250, so it is refused past about 1 MiB."
+msgstr ""
+"`(|a){18446744073709551616}b` 是低于超出 64 位的最小次数、优先匹配空串的主"
+"体，约为每字节 250 步，因此超过约 1 MiB 时被拒绝。"
+
+#: src/project/diagnostic-codes.md:242
+msgid ""
+"A counted repetition nested in another, both with bodies that can repeat "
+"empty, keeps one entry per count value. Storage depends on the combination of "
+"counts: `((a?){100000}){100000}` is one measured storage refusal, not a minimum "
+"count threshold. Searching for the match of `((a?){1000}){1000}b` over 100 KB "
+"reaches the step bound. A backreference keeps the backtracking matcher, whose exponential "
+"exploration (`^(a|aa)*c\\1$` over forty `a`) the step bound refuses after "
+"about 3 s of work."
+msgstr ""
+"嵌套在另一个计数重复中、且两者的主体都能重复空串的计数重复，会为每个计数值保"
+"留一项。存储量取决于计数的组合：`((a?){100000}){100000}` 是经过测量的存储"
+"拒绝示例，并非最小计数阈值。在 100 KB 上搜索 `((a?){1000}){1000}b` 的匹配会"
+"达到步数上限。含"
+"反向引用的模式保留回溯匹配器，其指数级探索（在四十个 `a` 上的 `^(a|"
+"aa)*c\\1$`）会在约 3 秒的工作后被步数上限拒绝。"
+
+#: src/project/diagnostic-codes.md:252
+msgid "`xpath-pattern-bytes`"
+msgstr "`xpath-pattern-bytes`"
+
+#: src/project/diagnostic-codes.md:252
+msgid ""
+"`Resource::PatternBytes`: the pattern source has more UTF-8 bytes than the "
+"bound (64 KiB). The source is refused before parsing, whether or not its "
+"syntax is valid."
+msgstr ""
+"`Resource::PatternBytes`：模式源文本的 UTF-8 字节数超过上限（64 KiB）。无论其"
+"语法是否有效，源文本都会在解析之前被拒绝。"
+
+#: src/project/diagnostic-codes.md:252
+msgid "Shorten the pattern."
+msgstr "缩短该模式。"
+
+#: src/project/diagnostic-codes.md:253
+msgid "`xpath-compile-steps`"
+msgstr "`xpath-compile-steps`"
+
+#: src/project/diagnostic-codes.md:253
+msgid ""
+"`Resource::CompileSteps`: compiling the pattern needs more compiler "
+"operations, scanned characters and set operations included, than the bound "
+"(4,000,000)."
+msgstr ""
+"`Resource::CompileSteps`：编译该模式所需的编译器操作（包括扫描的字符与集合运"
+"算）超过上限（4,000,000）。"
+
+#: src/project/diagnostic-codes.md:253
+msgid "Simplify the pattern, for example its character-class arithmetic."
+msgstr "简化该模式，例如其字符类运算。"
+
+#: src/project/diagnostic-codes.md:254
+msgid "`xpath-program-nodes`"
+msgstr "`xpath-program-nodes`"
+
+#: src/project/diagnostic-codes.md:254
+msgid ""
+"`Resource::ProgramNodes`: the compiled program needs more nodes than the "
+"bound (262,144)."
+msgstr ""
+"`Resource::ProgramNodes`：编译后的程序所需的节点数超过上限（262,144）。"
+
+#: src/project/diagnostic-codes.md:254 src/project/diagnostic-codes.md:255
+msgid "Simplify the pattern or reduce its counted repetitions."
+msgstr "简化该模式，或减少其计数重复。"
+
+#: src/project/diagnostic-codes.md:255
+msgid "`xpath-compile-slots`"
+msgstr "`xpath-compile-slots`"
+
+#: src/project/diagnostic-codes.md:255
+msgid ""
+"`Resource::CompileSlots`: building the program needs more construction cells "
+"than the bound (2,097,152)."
+msgstr ""
+"`Resource::CompileSlots`：构建程序所需的构造单元数超过上限（2,097,152）。"
+
+#: src/project/diagnostic-codes.md:256
+msgid "`xpath-match-steps`"
+msgstr "`xpath-match-steps`"
+
+#: src/project/diagnostic-codes.md:256
+msgid ""
+"`Resource::MatchSteps`: matching needs more matcher operations, search "
+"advances and compared code points included, than the bound (250,000,000). "
+"Refusal depends on the pattern and input, including backtracking, large "
+"finite repetitions and the measured searches described above."
+msgstr ""
+"`Resource::MatchSteps`：匹配所需的匹配器操作（包括搜索推进与比较的码位）超过"
+"上限（250,000,000）。是否拒绝取决于模式和输入，包括回溯、较大的有限重复，以及"
+"上文所述经过测量的搜索。"
+
+#: src/project/diagnostic-codes.md:256
+msgid "Remove the backreference, simplify repetition, or match shorter input."
+msgstr "去掉反向引用，简化重复，或匹配更短的输入。"
+
+#: src/project/diagnostic-codes.md:257
+msgid "`xpath-match-states`"
+msgstr "`xpath-match-states`"
+
+#: src/project/diagnostic-codes.md:257
+msgid ""
+"`Resource::MatchStates`: matching needs more simultaneously pending "
+"alternative states than the bound (65,536)."
+msgstr ""
+"`Resource::MatchStates`：匹配所需的同时待定的备选状态数超过上限（65,536）。"
+
+#: src/project/diagnostic-codes.md:257
+msgid "Reduce the pattern's alternation and repetition."
+msgstr "减少该模式的选择分支与重复。"
+
+#: src/project/diagnostic-codes.md:258
+msgid "`xpath-match-slots`"
+msgstr "`xpath-match-slots`"
+
+#: src/project/diagnostic-codes.md:258
+msgid ""
+"`Resource::MatchSlots`: the live states, captures and continuations need "
+"more cells than the bound (1,048,576). The measured low-cost patterns hold a "
+"few hundred cells independently of input length; nested empty-capable "
+"repetitions can reach the bound depending on their combination of counts."
+msgstr ""
+"`Resource::MatchSlots`：活动状态、捕获与续延所需的单元超过上限（1,048,576）。"
+"经过测量的低代价模式占用几百个单元，且不随输入长度变化；主体能匹配空串的嵌套"
+"重复是否达到该上限取决于其计数的组合。"
+
+#: src/project/diagnostic-codes.md:258
+msgid "Reduce the pattern's captures and repetition, or match shorter input."
+msgstr "减少该模式的捕获与重复，或匹配更短的输入。"
+
+#: src/project/diagnostic-codes.md:259
+msgid "`xpath-output-bytes`"
+msgstr "`xpath-output-bytes`"
+
+#: src/project/diagnostic-codes.md:259
+msgid "`Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB)."
+msgstr "`Resource::OutputBytes`：`REPLACE` 的输出超过上限（64 MiB）。"
+
+#: src/project/diagnostic-codes.md:259
+msgid "Replace over shorter input or with shorter replacement text."
+msgstr "在更短的输入上替换，或使用更短的替换文本。"
+
+#: src/project/diagnostic-codes.md:261
 msgid "`reasoning-*` — SPARQL under an entailment regime (`purrdf`)"
 msgstr ""
 "`reasoning-*`——在蕴涵机制（entailment regime）下执行的 SPARQL（`purrdf`）"
 
-#: src/project/diagnostic-codes.md:204
+#: src/project/diagnostic-codes.md:265
 msgid "`reasoning-closure-relation-witness`"
 msgstr "`reasoning-closure-relation-witness`"
 
-#: src/project/diagnostic-codes.md:204
+#: src/project/diagnostic-codes.md:265
 msgid ""
 "Property-function relations derived from the closure cannot be combined with "
 "an OWL Direct-Semantics run whose restricted chase minted existential "
@@ -24129,7 +24752,7 @@ msgstr ""
 "Direct-Semantics 运行组合使用：遍历闭包的关系可能返回一个生成的空节点，而该机"
 "制的作用域图并不包含它。"
 
-#: src/project/diagnostic-codes.md:204
+#: src/project/diagnostic-codes.md:265
 msgid ""
 "Query under a regime that mints no witnesses (`rdf`, `rdfs`, `owl-rl`, `d`, "
 "`rif`, `simple`), or drop the dataset-derived relations from the call."
@@ -24137,98 +24760,98 @@ msgstr ""
 "在不生成见证的机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或"
 "从该调用中去掉由数据集派生的关系。"
 
-#: src/project/diagnostic-codes.md:205
+#: src/project/diagnostic-codes.md:266
 msgid "`reasoning-closure-relation-rebuild`"
 msgstr "`reasoning-closure-relation-rebuild`"
 
-#: src/project/diagnostic-codes.md:205
+#: src/project/diagnostic-codes.md:266
 msgid "Rebuilding the property-function relations over the closure failed."
 msgstr "在推理闭包上重建属性函数关系失败。"
 
-#: src/project/diagnostic-codes.md:205
+#: src/project/diagnostic-codes.md:266
 msgid "The relation builder's own error is in the message."
 msgstr "关系构建器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:207
+#: src/project/diagnostic-codes.md:268
 msgid "`statements-*` — statement-metadata ingestion (`purrdf-rdf`)"
 msgstr "`statements-*`——陈述元数据的摄入（`purrdf-rdf`）"
 
-#: src/project/diagnostic-codes.md:209
+#: src/project/diagnostic-codes.md:270
 msgid ""
 "These arise when a document's `rdf:reifies` and `owl:Axiom` statements are "
 "read into the statement layer."
 msgstr ""
 "当把文档的 `rdf:reifies` 与 `owl:Axiom` 陈述读入陈述层时，会出现这些代码。"
 
-#: src/project/diagnostic-codes.md:214
+#: src/project/diagnostic-codes.md:275
 msgid "`statements-turtle-parse`"
 msgstr "`statements-turtle-parse`"
 
-#: src/project/diagnostic-codes.md:214
+#: src/project/diagnostic-codes.md:275
 msgid "The statement-metadata Turtle failed to parse."
 msgstr "陈述元数据 Turtle 解析失败。"
 
-#: src/project/diagnostic-codes.md:214
+#: src/project/diagnostic-codes.md:275
 msgid "Fix the Turtle."
 msgstr "修正该 Turtle。"
 
-#: src/project/diagnostic-codes.md:215
+#: src/project/diagnostic-codes.md:276
 msgid "`statements-non-iri`"
 msgstr "`statements-non-iri`"
 
-#: src/project/diagnostic-codes.md:215
+#: src/project/diagnostic-codes.md:276
 msgid "A term that must be an IRI in this context is not one."
 msgstr "在此上下文中必须是 IRI 的某个项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:215
+#: src/project/diagnostic-codes.md:276
 msgid "Use an IRI."
 msgstr "使用 IRI。"
 
-#: src/project/diagnostic-codes.md:216
+#: src/project/diagnostic-codes.md:277
 msgid "`statements-reifies-non-triple`"
 msgstr "`statements-reifies-non-triple`"
 
-#: src/project/diagnostic-codes.md:216
+#: src/project/diagnostic-codes.md:277
 msgid "The object of `rdf:reifies` is not a triple term."
 msgstr "`rdf:reifies` 的宾语不是三元组项。"
 
-#: src/project/diagnostic-codes.md:216
+#: src/project/diagnostic-codes.md:277
 msgid "Reify a triple term."
 msgstr "对一个三元组项进行具体化。"
 
-#: src/project/diagnostic-codes.md:217
+#: src/project/diagnostic-codes.md:278
 msgid "`statements-malformed-axiom`"
 msgstr "`statements-malformed-axiom`"
 
-#: src/project/diagnostic-codes.md:217
+#: src/project/diagnostic-codes.md:278
 msgid "An `owl:Axiom` lacks its source, property or target."
 msgstr "某个 `owl:Axiom` 缺少其源、属性或目标。"
 
-#: src/project/diagnostic-codes.md:217
+#: src/project/diagnostic-codes.md:278
 msgid "Complete the axiom."
 msgstr "补全该公理。"
 
-#: src/project/diagnostic-codes.md:218
+#: src/project/diagnostic-codes.md:279
 msgid "`statements-conflicting-structural`"
 msgstr "`statements-conflicting-structural`"
 
-#: src/project/diagnostic-codes.md:218
+#: src/project/diagnostic-codes.md:279
 msgid "One subject carries two different values for a structural field."
 msgstr "同一个主语在某个结构字段上带有两个不同的值。"
 
-#: src/project/diagnostic-codes.md:218
+#: src/project/diagnostic-codes.md:279
 msgid "Keep one value."
 msgstr "只保留一个值。"
 
-#: src/project/diagnostic-codes.md:220
+#: src/project/diagnostic-codes.md:281
 msgid "Other single-code families"
 msgstr "其他单代码族"
 
-#: src/project/diagnostic-codes.md:224
+#: src/project/diagnostic-codes.md:285
 msgid "`sssom-tsv-parse`"
 msgstr "`sssom-tsv-parse`"
 
-#: src/project/diagnostic-codes.md:224
+#: src/project/diagnostic-codes.md:285
 msgid ""
 "An SSSOM TSV document is malformed: a missing or unreadable header row, a "
 "malformed `curie_map` entry or set comment, a malformed row, or a non-"
@@ -24237,15 +24860,15 @@ msgstr ""
 "某个 SSSOM TSV 文档格式错误：缺少表头行或表头行不可读、`curie_map` 条目或集合"
 "注释格式错误、某行格式错误，或置信度不是数值；位置信息指明所在行。"
 
-#: src/project/diagnostic-codes.md:224
+#: src/project/diagnostic-codes.md:285
 msgid "Fix the TSV at the reported line."
 msgstr "在所报告的行修正该 TSV。"
 
-#: src/project/diagnostic-codes.md:225
+#: src/project/diagnostic-codes.md:286
 msgid "`content-id-scheme`"
 msgstr "`content-id-scheme`"
 
-#: src/project/diagnostic-codes.md:225
+#: src/project/diagnostic-codes.md:286
 msgid ""
 "A content-id scheme prefix is invalid: empty, non-ASCII, or ending in a "
 "hexadecimal digit (which would make it ambiguous with the 64-hex-character "
@@ -24254,17 +24877,17 @@ msgstr ""
 "某个内容 id 的 scheme 前缀无效：为空、含非 ASCII 字符，或以十六进制数字结尾"
 "（这会使它与 64 个十六进制字符的尾部产生歧义）。"
 
-#: src/project/diagnostic-codes.md:225
+#: src/project/diagnostic-codes.md:286
 msgid ""
 "Choose a prefix that is non-empty ASCII and does not end in `0-9`, `a-f` or "
 "`A-F`."
 msgstr "选择一个非空、纯 ASCII 且不以 `0-9`、`a-f` 或 `A-F` 结尾的前缀。"
 
-#: src/project/diagnostic-codes.md:227
+#: src/project/diagnostic-codes.md:288
 msgid "Where the code reaches you"
 msgstr "代码在何处呈现给调用方"
 
-#: src/project/diagnostic-codes.md:229
+#: src/project/diagnostic-codes.md:290
 msgid ""
 "**Rust** — `RdfDiagnostic::code` on the returned error; its `Display` form "
 "is `<severity> <code>: <message>`."
@@ -24272,7 +24895,7 @@ msgstr ""
 "**Rust**——返回错误上的 `RdfDiagnostic::code`；其 `Display` 形式为 "
 "`<severity> <code>: <message>`。"
 
-#: src/project/diagnostic-codes.md:231
+#: src/project/diagnostic-codes.md:292
 msgid ""
 "**Python** — the `ValueError` message is that `Display` form (for example "
 "`error native-codec-parse: …`); an IRI failure is rendered as `<code>: "
@@ -24282,7 +24905,7 @@ msgstr ""
 "parse: …`）；IRI 失败则输出为 `<code>: <message>`（例如 `iri-relative-no-"
 "base: …`）。"
 
-#: src/project/diagnostic-codes.md:234
+#: src/project/diagnostic-codes.md:295
 msgid ""
 "**JavaScript** — the thrown `Error` message carries the same text, and its "
 "`code` property carries the code itself. The wasm package's own refusals "
@@ -24302,12 +24925,12 @@ msgstr ""
 "environment`（无法构建聚合注册表）、`purrdf-wasm-shacl` 与 `purrdf-wasm-"
 "shacl-product-refusal`（某个 SHACL 接口失败，或拒绝了一个预备好的产物）。"
 
-#: src/project/diagnostic-codes.md:243
+#: src/project/diagnostic-codes.md:304
 msgid ""
 "**C** — the error string returned through the C ABI carries the same text."
 msgstr "**C**——经由 C ABI 返回的错误字符串携带相同的文本。"
 
-#: src/project/diagnostic-codes.md:244
+#: src/project/diagnostic-codes.md:305
 msgid ""
 "**SARIF** — the `ruleId` of each result is the code, with a "
 "`reportingDescriptor` in the run's rule table ([`purrdf-validate`](https://"

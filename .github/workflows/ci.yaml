@@ -228,7 +228,7 @@ jobs:
         run: python3 scripts/check-doc-claims.py
 
       - name: Check the zh-Hans translation against its glossary
-        run: python3 scripts/check-i18n-glossary.py
+        run: cargo run -q --locked -p helper-census -- --glossary-gate
 
       - name: Check cross-registry release coherence
         run: python3 scripts/check-versions.py

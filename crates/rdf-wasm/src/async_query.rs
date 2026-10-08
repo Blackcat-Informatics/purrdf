@@ -2497,7 +2497,7 @@ impl JobInner {
             }
             JobOutcome::Refused(refusal) => {
                 *self.error.borrow_mut() = Some(JobError::message(
-                    SHACL_REFUSAL_CODE,
+                    refusal.code(SHACL_REFUSAL_CODE),
                     refusal.to_js_string(),
                 ));
                 *self.refusal.borrow_mut() = Some(refusal);
@@ -4628,7 +4628,6 @@ mod tests {
     use crate::query::{UPDATE_REFUSES_MAX_ANSWERS, sparql_request};
     use crate::shacl::requests;
     use crate::shacl::tests::{TOOLS_DATA, TOOLS_SHAPES};
-    use purrdf_validate::ShapesError;
 
     const SEED_NT: &str = concat!(
         "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
@@ -7424,7 +7423,10 @@ mod tests {
     }
 
     /// `shaclValidateToSarif` itself, as its request's body answers it.
-    fn validate_sync(shapes: &str, data: &str) -> Result<String, ShapesError> {
+    fn validate_sync(
+        shapes: &str,
+        data: &str,
+    ) -> Result<String, purrdf_validate::XPathValidationError> {
         requests::validate_to_sarif(
             shapes.to_owned(),
             data.to_owned(),
@@ -7759,7 +7761,11 @@ mod tests {
              owl:imports <http://example.org/imported> .\n{}",
             core_shapes()
         );
-        let refused = validate_sync(&shapes, PEOPLE_NT).expect_err("the closure is not in hand");
+        let purrdf_validate::XPathValidationError::Shapes(refused) =
+            validate_sync(&shapes, PEOPLE_NT).expect_err("the closure is not in hand")
+        else {
+            panic!("the closure's refusal is a shapes error");
+        };
         let expected = ShaclImportError::from(refused.as_imports().expect("an import refusal"));
         let (job, status) = run_shacl(validate(&shapes, PEOPLE_NT), options());
         assert_eq!(status, RunStatus::Error);
@@ -8089,6 +8095,173 @@ mod tests {
                 job.finish();
             }
         }
+    }
+
+    /// Every SHACL twin that evaluates patterns fails its job under the resource's own code
+    /// when the selected law refuses an oversized pattern — `errorCode` is the code a
+    /// SPARQL job's refusal carries, never the generic SHACL one — and a product twin's
+    /// refusal class carries it as `code` beside its absent dimension. The pattern exactly
+    /// at the bound answers on every twin.
+    #[test]
+    fn a_shacl_resource_refusal_fails_the_job_with_the_resource_code() {
+        let pattern_shapes = |bytes: usize| {
+            format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix ex: <http://example.org/> .\n\
+                 ex:S a sh:NodeShape ; sh:targetNode ex:n ;\n  \
+                 sh:property [ sh:path ex:v ; sh:pattern \"{}\" ] .\n",
+                "a".repeat(bytes)
+            )
+        };
+        let rule_shapes = |bytes: usize| {
+            format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix ex: <http://example.org/> .\n\
+                 ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:v ;\n  \
+                 sh:rule [ a sh:SPARQLRule ; sh:construct \"CONSTRUCT {{ $this ex:hit ?v }} \
+                 WHERE {{ $this ex:v ?v FILTER(REGEX(?v, \\\"{}\\\")) }}\" ] .\n",
+                "a".repeat(bytes)
+            )
+        };
+        let expression_shapes = |bytes: usize| {
+            format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .\n\
+                 _:e shnex:filterShape [ sh:pattern \"{}\" ] ; \
+                 shnex:nodes [ shnex:var \"focusNode\" ] .\n",
+                "a".repeat(bytes)
+            )
+        };
+        let data = "<http://example.org/n> <http://example.org/v> \"aa\" .\n";
+        let requests = |bytes: usize| {
+            [
+                ShaclJobRequest::validate_to_sarif(
+                    pattern_shapes(bytes),
+                    data.to_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                ShaclJobRequest::validate_changes_to_sarif(
+                    pattern_shapes(bytes),
+                    String::new(),
+                    Some(data.to_owned()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                ShaclJobRequest::entail(
+                    rule_shapes(bytes),
+                    data.to_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                ShaclJobRequest::apply_rules(
+                    data.to_owned(),
+                    Some(rule_shapes(bytes)),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                ShaclJobRequest::eval_node_expr(
+                    expression_shapes(bytes),
+                    data.to_owned(),
+                    Some("_:e".to_owned()),
+                    "\"aa\"".to_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            ]
+        };
+        for law in [XPATH_20, XPATH_31] {
+            let opts = options().text("xpathRegex", law);
+            for (entry, request) in requests(64 * 1024 + 1).into_iter().enumerate() {
+                let (job, status) = run_shacl(request.into_request(), &opts);
+                assert_eq!(status, RunStatus::Error, "{law} #{entry}");
+                assert_eq!(job.error_kind().as_deref(), Some("error"), "{law} #{entry}");
+                assert_eq!(
+                    job.error_code().as_deref(),
+                    Some("xpath-pattern-bytes"),
+                    "{law} #{entry}: {:?}",
+                    job.error_message()
+                );
+                assert!(job.take_shacl_refusal().is_none(), "{law} #{entry}");
+                job.finish();
+            }
+            for (entry, request) in requests(64 * 1024).into_iter().enumerate() {
+                let (job, status) = run_shacl(request.into_request(), &opts);
+                assert_eq!(status, RunStatus::Outcome, "{law} #{entry}");
+                job.finish();
+            }
+            let product = |bytes: usize| {
+                crate::shacl::pack_product_impl(&pattern_shapes(bytes), None, &[], &[], None)
+                    .expect("packs")
+            };
+            let (job, status) = run_shacl(
+                ShaclJobRequest::product_validate_to_sarif(product(64 * 1024 + 1), data.to_owned())
+                    .into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Error, "{law} product");
+            assert_eq!(
+                job.error_code().as_deref(),
+                Some("xpath-pattern-bytes"),
+                "{law} product"
+            );
+            let refusal = job.take_shacl_refusal().expect("the product refusal class");
+            assert_eq!(refusal.dimension(), None, "{law} product");
+            assert_eq!(
+                refusal.code().as_deref(),
+                Some("xpath-pattern-bytes"),
+                "{law} product"
+            );
+            job.finish();
+            let (job, status) = run_shacl(
+                ShaclJobRequest::product_validate_to_sarif(product(64 * 1024), data.to_owned())
+                    .into_request(),
+                &opts,
+            );
+            assert_eq!(status, RunStatus::Outcome, "{law} product at the bound");
+            job.finish();
+        }
+        // A product refusal that is about the product keeps the product-refusal code.
+        let (job, status) = run_shacl(
+            ShaclJobRequest::product_validate_to_sarif(vec![0; 8], data.to_owned()).into_request(),
+            options().text("xpathRegex", XPATH_31),
+        );
+        assert_eq!(status, RunStatus::Error);
+        assert_eq!(
+            job.error_code().as_deref(),
+            Some(SHACL_REFUSAL_CODE),
+            "{:?}",
+            job.error_message()
+        );
+        let refusal = job.take_shacl_refusal().expect("the product refusal class");
+        assert!(refusal.dimension().is_some());
+        assert_eq!(refusal.code(), None);
+        job.finish();
     }
 
     /// A SHACL twin takes the law in its options object, so its host options keep

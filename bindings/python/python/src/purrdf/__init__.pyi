@@ -41,6 +41,11 @@ def canonicalize_turtle(
 # selects that law (under finite production bounds), any other value raises
 # ValueError listing these, and None (the default) keeps the compatibility pattern
 # behaviour. Names match exactly: no case folding, abbreviation or undated alias.
+# A native resource refusal under a selected law raises ValueError identified by the
+# resource's code (`xpath-pattern-bytes`, `xpath-match-steps`, …) on every door alike —
+# SPARQL, SHACL (validation, rules, entailment, node expressions) and ShEx: the code is
+# the exception's `message_id`, and its `presentation` is
+# {"message_id": code, "parameters": {}, "detail": None}.
 XPATH_REGEX_PROFILES: tuple[str, ...]
 
 # ── Deterministic graph/tabular/research-object projection carriers ────────────

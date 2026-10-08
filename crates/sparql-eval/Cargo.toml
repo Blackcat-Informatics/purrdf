@@ -315,3 +315,13 @@ harness = false
 # Public generic query publication includes post-node and visitor reads.
 name = "query_completion"
 harness = false
+
+[[bench]]
+# Fixed production calls, retired instructions and exact PMU coverage; no elapsed sampler.
+name = "governor_instructions"
+harness = false
+
+[[bench]]
+# The same guarded production calls in separate whole-process allocation windows.
+name = "governor_allocations"
+harness = false

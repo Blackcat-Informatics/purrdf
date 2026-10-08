@@ -378,7 +378,7 @@ fn validate(
     shapes: &str,
     data: &str,
     law: Option<&str>,
-) -> Result<String, purrdf_validate::ShapesError> {
+) -> Result<String, purrdf_validate::XPathValidationError> {
     requests::validate_to_sarif(
         shapes.to_owned(),
         data.to_owned(),
@@ -396,7 +396,7 @@ fn validate_changes(
     shapes: &str,
     added: &str,
     law: Option<&str>,
-) -> Result<crate::shacl::ShaclChangeValidation, purrdf_validate::ShapesError> {
+) -> Result<crate::shacl::ShaclChangeValidation, purrdf_validate::XPathValidationError> {
     requests::validate_changes_to_sarif(
         shapes.to_owned(),
         String::new(),
@@ -527,27 +527,49 @@ fn a_selected_shacl_validation_is_otherwise_the_compatibility_one() {
     }
 }
 
-/// An oversized `sh:pattern` is the validation's error under either law, with the
-/// resource's code and no report; the pattern exactly at the bound validates.
+/// An oversized `sh:pattern` is the validation's error under either law, with no report,
+/// identified by the resource's own code exactly as a SPARQL entry's refusal is: the
+/// code the synchronous entry's `Error` carries as `code`, and a product refusal's
+/// `code` beside its absent dimension. The pattern exactly at the bound validates.
 #[test]
 fn a_shacl_resource_refusal_is_the_validation_s_error() {
+    use crate::shacl::{selected_error_message, selected_refusal_code};
     let oversized = shapes(&"a".repeat(64 * 1024 + 1));
     let bounded = shapes(&"a".repeat(64 * 1024));
     let data = value("aa");
     for law in [XPATH_20, XPATH_31] {
-        let message = crate::shacl::shapes_error_message(
-            &validate(&oversized, &data, Some(law)).expect_err("refused"),
+        let refused = validate(&oversized, &data, Some(law)).expect_err("refused");
+        assert_eq!(
+            selected_refusal_code(&refused),
+            Some("xpath-pattern-bytes"),
+            "{law}"
         );
-        assert!(message.contains("xpath-pattern-bytes"), "{law}: {message}");
-        let message = crate::shacl::shapes_error_message(
-            &validate_changes(&oversized, &data, Some(law))
-                .map(|change| change.sarif())
-                .expect_err("refused"),
+        let message = selected_error_message(&refused);
+        assert!(
+            message.starts_with("xpath-pattern-bytes"),
+            "{law}: {message}"
         );
-        assert!(message.contains("xpath-pattern-bytes"), "{law}: {message}");
+        let refused = validate_changes(&oversized, &data, Some(law))
+            .map(|change| change.sarif())
+            .expect_err("refused");
+        assert_eq!(
+            selected_refusal_code(&refused),
+            Some("xpath-pattern-bytes"),
+            "{law}"
+        );
+        let message = selected_error_message(&refused);
+        assert!(
+            message.starts_with("xpath-pattern-bytes"),
+            "{law}: {message}"
+        );
         for refusal in product_validations(&oversized, &data, Some(law)) {
             let refusal = refusal.expect_err("refused");
             assert_eq!(refusal.dimension(), None, "{law}");
+            assert_eq!(
+                refusal.code().as_deref(),
+                Some("xpath-pattern-bytes"),
+                "{law}"
+            );
             assert!(refusal.message().contains("xpath-pattern-bytes"), "{law}");
         }
         assert!(!conforms(&validate(&bounded, &data, Some(law)).expect(law)));
@@ -562,6 +584,42 @@ fn a_shacl_resource_refusal_is_the_validation_s_error() {
     }
 }
 
+/// A SHACL-SPARQL constraint whose `REGEX` pattern is past the source bound is refused
+/// by the query it runs; that diagnostic is identified by the resource's own code too.
+#[test]
+fn a_shacl_sparql_resource_refusal_carries_the_resource_code() {
+    let sparql = |bytes: usize| {
+        format!(
+            r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:SparqlShape a sh:NodeShape ;
+  sh:targetNode ex:n ;
+  sh:sparql [ sh:select """SELECT $this WHERE {{ FILTER(REGEX("aa", "{}")) }}""" ] .
+"#,
+            "a".repeat(bytes)
+        )
+    };
+    let data = value("x");
+    for law in [XPATH_20, XPATH_31] {
+        let refused = validate(&sparql(64 * 1024 + 1), &data, Some(law)).expect_err("refused");
+        assert_eq!(
+            crate::shacl::selected_refusal_code(&refused),
+            Some("xpath-pattern-bytes"),
+            "{law}: {refused}"
+        );
+        for refusal in product_validations(&sparql(64 * 1024 + 1), &data, Some(law)) {
+            assert_eq!(
+                refusal.expect_err("refused").code().as_deref(),
+                Some("xpath-pattern-bytes"),
+                "{law}"
+            );
+        }
+        assert!(conforms(
+            &validate(&sparql(64 * 1024), &data, Some(law)).expect(law)
+        ));
+    }
+}
+
 /// A name that selects no law is refused by every SHACL entry before anything is
 /// validated, in the words every surface uses; the exact name beside it is accepted.
 #[test]
@@ -571,13 +629,13 @@ fn every_shacl_entry_refuses_a_name_that_selects_no_law() {
     for name in REFUSED {
         let expected = parse(Some(name)).expect_err(name);
         assert_eq!(
-            crate::shacl::shapes_error_message(
+            crate::shacl::selected_error_message(
                 &validate(&shapes, &data, Some(name)).expect_err(name)
             ),
             expected
         );
         assert_eq!(
-            crate::shacl::shapes_error_message(
+            crate::shacl::selected_error_message(
                 &validate_changes(&shapes, &data, Some(name))
                     .map(|change| change.sarif())
                     .expect_err(name)
@@ -587,6 +645,7 @@ fn every_shacl_entry_refuses_a_name_that_selects_no_law() {
         for refusal in product_validations(&shapes, &data, Some(name)) {
             let refusal = refusal.expect_err(name);
             assert_eq!(refusal.dimension(), None, "{name:?}");
+            assert_eq!(refusal.code(), None, "{name:?}");
             assert_eq!(refusal.message(), expected);
         }
     }
@@ -629,11 +688,19 @@ fn expression_shapes(pattern: &str) -> String {
 }
 
 /// `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr` over `pattern`, each read as
-/// "did the pattern match `value`?", or the entry's error message.
-fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [Result<bool, String>; 3] {
+/// "did the pattern match `value`?", or the entry's error: the resource code it is
+/// identified by, if any, and its message.
+type ToolVerdict = Result<bool, (Option<&'static str>, String)>;
+
+fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [ToolVerdict; 3] {
     let data = format!("<http://example.org/s> <http://example.org/p> \"{value}\" .\n");
     let rules = rule_shapes(pattern);
-    let message = |error: purrdf_validate::ShapesError| crate::shacl::shapes_error_message(&error);
+    let message = |error: purrdf_validate::XPathValidationError| {
+        (
+            crate::shacl::selected_refusal_code(&error),
+            crate::shacl::selected_error_message(&error),
+        )
+    };
     let hit = "<http://example.org/hit>";
     [
         requests::entail(
@@ -703,7 +770,8 @@ fn every_shapes_graph_tool_evaluates_under_the_selected_law() {
     }
     for law in [XPATH_20, XPATH_31] {
         for verdict in tool_verdicts(&"a".repeat(64 * 1024 + 1), "a", Some(law)) {
-            let message = verdict.expect_err("refused");
+            let (code, message) = verdict.expect_err("refused");
+            assert_eq!(code, Some("xpath-pattern-bytes"), "{law}: {message}");
             assert!(message.contains("xpath-pattern-bytes"), "{law}: {message}");
         }
         for verdict in tool_verdicts(&"a".repeat(64 * 1024), "a", Some(law)) {
@@ -713,10 +781,141 @@ fn every_shapes_graph_tool_evaluates_under_the_selected_law() {
     for name in REFUSED {
         let expected = parse(Some(name)).expect_err(name);
         for verdict in tool_verdicts("a", "a", Some(name)) {
-            assert_eq!(verdict, Err(expected.clone()), "{name:?}");
+            assert_eq!(verdict, Err((None, expected.clone())), "{name:?}");
         }
     }
     for verdict in tool_verdicts("a", "a", Some(XPATH_31)) {
         assert_eq!(verdict, Ok(true));
+    }
+}
+
+/// Counted repetitions the native matcher refused at these sizes, through the
+/// query entry, under each dated law and beside the compatibility answer: a counted
+/// group repeated from every start kept one thread per distinct count.
+#[test]
+fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_engine() {
+    use std::fmt::Write as _;
+    let pairs = "ab".repeat(1 << 19);
+    let mixed = "abbaab".repeat((4 << 20) / 6);
+    let prose = purrdf_testkit::text::word_prose(8 << 20);
+    let plain = [
+        ("pairs_128k", &pairs[..128 << 10], "c"),
+        ("pairs", pairs.as_str(), "c"),
+        ("quads", &"abcd".repeat(1 << 18), "e"),
+        ("mixed_400k", &mixed[..400 << 10], "c"),
+        ("mixed_800k", &mixed[..800 << 10], "c"),
+        ("mixed", mixed.as_str(), "c"),
+        (
+            "prose_4m",
+            &prose[..prose[..4 << 20].rfind(' ').unwrap()],
+            " zzz",
+        ),
+        ("prose", prose.as_str(), " zzz"),
+        ("run", &"a".repeat(1 << 20), "b"),
+    ];
+    let mut nt = String::from("<http://example.org/empty> <http://example.org/v> \"\" .\n");
+    for (subject, value, suffix) in &plain {
+        write!(
+            nt,
+            "<http://example.org/{subject}> <http://example.org/v> \"{value}\" .\n\
+             <http://example.org/{subject}_completed> <http://example.org/v> \"{value}{suffix}\" .\n"
+        )
+        .unwrap();
+    }
+    // A mebibyte of short runs, after a long one, that one replacement
+    // rewrites thousands of times.
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    writeln!(
+        nt,
+        "<http://example.org/runs> <http://example.org/v> \"{runs}\" ."
+    )
+    .unwrap();
+    let dataset = Dataset::parse(&nt, "ntriples", None).expect("the fixture parses");
+    // A count the compatibility regex refuses to build is compared through the pattern
+    // with the same matches.
+    let cases = [
+        ("(ab){1,1000}c", "(ab){1,1000}c", "pairs_128k"),
+        ("(ab){2,50}c", "(ab){2,50}c", "pairs"),
+        ("(ab){1,100}c", "(ab){1,100}c", "pairs"),
+        ("(ab|cd){1,20}e", "(ab|cd){1,20}e", "quads"),
+        ("((a|b){3}){5,9}c", "((a|b){3}){5,9}c", "mixed_400k"),
+        ("((a|b){2}){2,5}c", "((a|b){2}){2,5}c", "mixed_800k"),
+        ("(a|b){1,30}c", "(a|b){1,30}c", "mixed"),
+        ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
+        (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
+        ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
+        ("(ab){1,100000}c", "abc", "pairs_128k"),
+        ("^(a?){18446744073709551616}$", "^a*$", "empty"),
+    ];
+    let engine = QueryEngine::new();
+    // Each pattern decides its plain and completed subjects (the empty string and a
+    // pair run for the nullable whole), in one answer.
+    let answers = |law: Option<&str>, native: bool| -> Vec<String> {
+        let mut rows = String::new();
+        for (index, (pattern, compatible, subject)) in cases.iter().enumerate() {
+            let pattern =
+                purrdf_testkit::text::sparql_string(if native { pattern } else { compatible });
+            let focuses = if *subject == "empty" {
+                ["empty".to_owned(), "pairs".to_owned()]
+            } else {
+                [(*subject).to_owned(), format!("{subject}_completed")]
+            };
+            for focus in focuses {
+                write!(rows, " ({index} <http://example.org/{focus}> {pattern})").unwrap();
+            }
+        }
+        let query = format!(
+            "SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{{rows} }} \
+             ?s <http://example.org/v> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i ?s"
+        );
+        let srj = engine
+            .query_raw(&dataset, &query, None, None, None, None, owned(law))
+            .unwrap_or_else(|_| panic!("{law:?}: the query answers"));
+        let document = purrdf_lex::json::read(&srj).expect("SRJ parses");
+        (0..)
+            .map_while(|index| document.pointer(&format!("/results/bindings/{index}/r/value")))
+            .map(|value| value.as_str().expect("a lexical form").to_owned())
+            .collect()
+    };
+    let expected: Vec<String> = cases
+        .iter()
+        .flat_map(|&(_, _, subject)| {
+            if subject == "empty" {
+                ["true", "false"]
+            } else {
+                ["false", "true"]
+            }
+        })
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(answers(None, false), expected, "compatibility");
+    for law in [XPATH_20, XPATH_31] {
+        assert_eq!(answers(Some(law), true), expected, "{law}");
+    }
+    // Every match of an ambiguous counted body over the mebibyte of runs,
+    // replaced with its last iteration's capture.
+    for pattern in ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"] {
+        let query = format!(
+            "SELECT ?r WHERE {{ <http://example.org/runs> <http://example.org/v> ?v \
+             BIND(REPLACE(?v, {}, \"[$1]\") AS ?r) }}",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
+        let replaced = |law: Option<&str>| {
+            engine
+                .query_raw(&dataset, &query, None, None, None, None, owned(law))
+                .unwrap_or_else(|_| panic!("{law:?}: the replacement answers"))
+        };
+        let expected = replaced(None);
+        assert!(expected.contains("[a]"), "{pattern}");
+        for law in [XPATH_20, XPATH_31] {
+            assert_eq!(replaced(Some(law)), expected, "{law} {pattern}");
+        }
     }
 }

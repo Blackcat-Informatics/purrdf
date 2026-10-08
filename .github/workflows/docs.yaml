@@ -21,6 +21,7 @@ on:
       - "crates/rdf-wasm/**"
       # The zh-Hans gate renders the book and runs these over the rendering.
       - "crates/sparql-algebra/**"
+      - "crates/helper-census/**"
       - "scripts/check-i18n-*.py"
       - "scripts/po_catalog.py"
       - "scripts/check-brand-casing.py"

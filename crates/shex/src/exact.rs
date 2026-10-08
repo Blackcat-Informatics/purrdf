@@ -492,33 +492,6 @@ pub fn validate_exact(
     crate::validate::validate_with_bounds(&schema.schema, data, map, options, Some(&bounds))
 }
 
-/// [`crate::validate_with_xpath`] over an [`ExactSchema`]: the native XPath law decides
-/// every pattern facet, and every numeric facet compares the node's value against the
-/// bound exactly as written, as [`validate_exact`].
-///
-/// # Errors
-///
-/// As [`crate::validate_with_xpath`].
-pub fn validate_exact_with_xpath(
-    schema: &ExactSchema,
-    data: &RdfDataset,
-    map: &[(TermValue, ShapeSelector)],
-    options: &ValidationOptions<'_>,
-    profile: purrdf_core::xsd_regex::xpath::Profile,
-    limits: purrdf_core::xsd_regex::xpath::Limits,
-) -> core::result::Result<ResultShapeMap, purrdf_core::xsd_regex::xpath::Error> {
-    let bounds = schema.bounds_by_constraint();
-    crate::validate::validate_with_xpath_bounds(
-        &schema.schema,
-        data,
-        map,
-        options,
-        profile,
-        limits,
-        Some(&bounds),
-    )
-}
-
 /// [`crate::validate_shape_map`] over an [`ExactSchema`], as [`validate_exact`].
 ///
 /// # Errors
@@ -542,9 +515,27 @@ pub fn validate_shape_map_exact(
     )
 }
 
-/// [`crate::validate_shape_map_with_xpath`] over an [`ExactSchema`]: the native XPath
-/// law decides every pattern facet, and every numeric facet compares the node's value
-/// against the bound exactly as written, as [`validate_shape_map_exact`].
+/// [`validate_exact`] under an explicit native XPath law and finite limits: every
+/// numeric facet compares exactly, as [`validate_exact`] does, and every `PATTERN`
+/// facet matches under `profile`, as [`crate::validate_with_xpath`] does.
+///
+/// # Errors
+///
+/// As [`crate::validate_with_xpath`]: a typed operational refusal; pattern-language
+/// errors remain findings.
+pub fn validate_exact_with_xpath(
+    schema: &ExactSchema,
+    data: &RdfDataset,
+    map: &[(TermValue, ShapeSelector)],
+    options: &ValidationOptions<'_>,
+    profile: purrdf_core::xsd_regex::xpath::Profile,
+    limits: purrdf_core::xsd_regex::xpath::Limits,
+) -> core::result::Result<ResultShapeMap, purrdf_core::xsd_regex::xpath::Error> {
+    crate::validate::XPathValidator::exact(schema).validate(data, map, options, profile, limits)
+}
+
+/// [`validate_shape_map_exact`] under an explicit native XPath law and finite limits,
+/// as [`crate::validate_shape_map_with_xpath`].
 ///
 /// # Errors
 ///
@@ -558,15 +549,13 @@ pub fn validate_shape_map_exact_with_xpath(
     profile: purrdf_core::xsd_regex::xpath::Profile,
     limits: purrdf_core::xsd_regex::xpath::Limits,
 ) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
-    let bounds = schema.bounds_by_constraint();
-    crate::shapemap::validate_shape_map_with_xpath_bounds(
-        &schema.schema,
+    crate::shapemap::validate_shape_map_with_validator(
+        &mut crate::validate::XPathValidator::exact(schema),
         data,
         map_src,
         base,
         options,
         profile,
         limits,
-        Some(&bounds),
     )
 }

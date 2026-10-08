@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # zh-Hans glossary — a gate input, not a page
 
-This file is read by `scripts/check-i18n-glossary.py` (part of `make check`
+This file is read by `helper-census --glossary-gate` (part of `make check`
 and CI). It settles one rendering per load-bearing term and, per term, the
 renderings that are wrong **for that term**; the gate refuses a `msgstr` that
 uses one of them **when its `msgid` carries the term**. A wrong or
@@ -35,6 +35,12 @@ its PurRDF page):
    once.
 5. Typography: full-width CJK punctuation (。，：；「」), a half-width space
    between a Latin run and a CJK run, code and identifiers in backticks.
+   The English parenthetical gloss of the proper name **Research Object** may
+   use the specific form `研究对象 (Research Object)`: keep the preceding
+   half-width space. `研究对象（Research Object）` and
+   `研究对象（Research Object，RO）` remain accepted. This exception permits
+   that English gloss only; it does not permit bare `研究对象` to replace
+   the name or general half-width punctuation in Chinese prose.
 
 **Basis** legend — **E**: established mainland rendering; **H**: fixed by the
 house page; **C**: no established rendering, PurRDF coins one; **K**: keep
@@ -64,12 +70,13 @@ How the gate reads the table:
   checked against the global rows only; the catalogue is where the table is
   fully enforced.
 * **Rejected** — entries separated by `、`; a plain entry is a substring; an
-  entry written `/…/` is a Python regular expression, used where a wrong
+  entry written `/…/` is a Python-compatible regular expression evaluated by the native bounded matcher, used where a wrong
   rendering would otherwise match across a word boundary (账本 inside
   台账本身) or inside a right one (知识图 inside 知识图谱). Code spans and
   fenced blocks in a `msgstr` are never matched (a page may write
   「不要写 `蕴含`」).
 * **K rows** — every Anchor token is an invariant: if the `msgid` carries it
+  literally (a slash-delimited regex is invalid on a K row),
   as a whole token (case-sensitively, not inside another word — `RDF` in
   `RDFLib` does not count), the `msgstr` must carry the same whole token
   (`RDF` inside `PurRDF` does not satisfy it).
@@ -84,6 +91,51 @@ every K token, a translation that drops it (refused) and one that keeps it
 (passes). A rejection without an ordinary-prose neighbour in the script is a
 self-test failure, so the table cannot grow a refusal that is proven only one
 way.
+
+The native host-tool entry point is
+`helper-census --glossary-gate [--root DIR] [--po FILE] [--glossary FILE]`;
+`--self-test` runs the rule controls without scanning, and `--inventory FILE`
+records an actual catalogue sweep with Chinese contexts and real-paragraph
+poison controls. Every normal invocation first runs the same rule controls.
+The selected glossary supplies their rules; the root's
+`docs/book/po/zh-Hans.po` always supplies the required real `standardized`
+spelling specimens, including when `--po` selects an external scan input.
+
+Its pattern adapter preserves the glossary's Python-style Unicode word
+(`Letter`, `Number`, underscore), decimal-digit, whitespace, LF-only dot
+and ignorecase semantics through the existing bounded ECMA matcher. Unicode
+properties and simple folds use `purrdf_lex::unicode::UNICODE_VERSION`, rather
+than whichever Unicode tables the installed Python interpreter carries.
+The four additional ignorecase letters İ, ı, ſ and K and Python whitespace
+U+001C–U+001F/U+0085 are explicit; U+FEFF is not whitespace.
+Word membership is not widened by ignorecase (U+0345 is not a word
+character). `\B` excludes empty input, retaining Python 3.13 behavior rather
+than Python 3.14's changed empty-input result. The ordinary
+anchor's left boundary and both K boundaries are explicitly ASCII
+`[A-Za-z0-9]`; K spelling is case-sensitive. Current table expressions use
+literal characters, classes, quantifiers, alternation, noncapturing groups
+and lookarounds. Unsupported escapes/modifier groups, malformed expressions,
+non-fixed-width or grouped lookbehinds, and exhausted matcher budgets fail
+with a rule diagnostic.
+
+Anchors and K survival use one visible Markdown surface: inline link/image
+labels, reference-link labels, autolinks and code identifiers remain visible;
+balanced destinations and titles and reference-definition lines are masked.
+Inline labels, destinations, titles and exact code spans may span soft line
+breaks within a paragraph. Blank paragraphs, fenced blocks and definition lines
+end that span; an unclosed link cannot hide real prose in a later paragraph.
+Already hidden destinations/titles are skipped during inline interpretation.
+Definitions are recognized even when their use is in another catalogue unit.
+Rejection prose additionally masks exact backtick spans and fenced blocks,
+with fence state retained across an entire document. An unmatched inline
+backtick remains prose; a fenced block continues until its matching marker
+and width closes it. Removed spans retain byte offsets/newlines and contain
+separators, so removing a destination cannot invent a new joined token.
+This is a bounded glossary surface, not a full CommonMark renderer: it
+recognizes balanced inline syntax and single-line reference definitions;
+it does not resolve arbitrary HTML or multiline reference definitions. Diagnostics
+identify the rule and source unit/line; the boolean matcher does not claim
+an exact matched substring span.
 
 | # | Term | Anchor | Rendering | Basis | Rejected | Note |
 |---:|---|---|---|---|---|---|

@@ -294,15 +294,7 @@ pub fn validate_with(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
 ) -> ResultShapeMap {
-    validate_using(
-        schema,
-        data,
-        map,
-        options,
-        None,
-        &mut pattern::PatternCache::default(),
-    )
-    .expect("compatibility validation cannot produce a native XPath refusal")
+    validate_with_bounds(schema, data, map, options, None)
 }
 
 /// The exact numeric facet bounds of an [`crate::ExactSchema`], by node-constraint
@@ -324,8 +316,8 @@ pub(crate) fn validate_with_bounds(
         data,
         map,
         options,
-        bounds,
         &mut pattern::PatternCache::default(),
+        bounds,
     )
     .expect("compatibility validation cannot produce a native XPath refusal")
 }
@@ -339,6 +331,9 @@ pub(crate) fn validate_with_bounds(
 pub struct XPathValidator<'a> {
     schema: &'a Schema,
     patterns: pattern::PatternCache,
+    /// The exact numeric facet bounds of an [`crate::ExactSchema`], when the
+    /// validator was built over one ([`XPathValidator::exact`]).
+    bounds: Option<ExactBoundsMap>,
 }
 
 impl<'a> XPathValidator<'a> {
@@ -348,7 +343,25 @@ impl<'a> XPathValidator<'a> {
         Self {
             schema,
             patterns: pattern::PatternCache::default(),
+            bounds: None,
         }
+    }
+
+    /// Prepare native pattern reuse for an immutable [`crate::ExactSchema`]: every
+    /// numeric facet compares the node's value against the bound exactly as written,
+    /// as [`crate::validate_exact`] does.
+    #[must_use]
+    pub fn exact(schema: &'a crate::ExactSchema) -> Self {
+        Self {
+            schema: schema.schema(),
+            patterns: pattern::PatternCache::default(),
+            bounds: Some(schema.bounds_by_constraint()),
+        }
+    }
+
+    /// The schema this validator checks against.
+    pub(crate) const fn schema(&self) -> &'a Schema {
+        self.schema
     }
 
     /// Validate a fixed map under the explicitly selected native XPath law.
@@ -368,7 +381,14 @@ impl<'a> XPathValidator<'a> {
         limits: xpath::Limits,
     ) -> Result<ResultShapeMap, xpath::Error> {
         self.patterns.select(profile, limits);
-        validate_using(self.schema, data, map, options, None, &mut self.patterns)
+        validate_using(
+            self.schema,
+            data,
+            map,
+            options,
+            &mut self.patterns,
+            self.bounds.as_ref(),
+        )
     }
 }
 
@@ -390,29 +410,13 @@ pub fn validate_with_xpath(
     XPathValidator::new(schema).validate(data, map, options, profile, limits)
 }
 
-/// [`validate_with_xpath`], comparing numeric facets against `bounds` where a node
-/// constraint has an entry, as [`validate_with_bounds`] does.
-pub(crate) fn validate_with_xpath_bounds(
-    schema: &Schema,
-    data: &RdfDataset,
-    map: &[(TermValue, ShapeSelector)],
-    options: &ValidationOptions<'_>,
-    profile: xpath::Profile,
-    limits: xpath::Limits,
-    bounds: Option<&ExactBoundsMap>,
-) -> Result<ResultShapeMap, xpath::Error> {
-    let mut patterns = pattern::PatternCache::default();
-    patterns.select(profile, limits);
-    validate_using(schema, data, map, options, bounds, &mut patterns)
-}
-
 fn validate_using(
     schema: &Schema,
     data: &RdfDataset,
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
-    bounds: Option<&ExactBoundsMap>,
     patterns: &mut pattern::PatternCache,
+    bounds: Option<&ExactBoundsMap>,
 ) -> Result<ResultShapeMap, xpath::Error> {
     // Resolve whole-declaration EXTERNALs up front so the resolved
     // expressions outlive the engine borrowing them.

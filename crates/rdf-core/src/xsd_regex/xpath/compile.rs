@@ -73,6 +73,51 @@ impl Count {
     }
 }
 
+/// `max - min` for decimal quantities without leading zeros where `max` is at
+/// least `min`, saturated at `u64::MAX`. The digits were already charged when
+/// the two quantities were compared; only the lowest twenty digits of the
+/// difference are kept, any higher nonzero digit saturates.
+fn span(min: &str, max: &str) -> u64 {
+    let (min, max) = (min.as_bytes(), max.as_bytes());
+    let mut low = [0_u8; 20];
+    let mut high = false;
+    let mut borrow = 0;
+    for index in 0..max.len() {
+        let top = max[max.len() - 1 - index] - b'0';
+        let bottom = min
+            .len()
+            .checked_sub(1 + index)
+            .map_or(0, |at| min[at] - b'0')
+            + borrow;
+        let (digit, next) = if top >= bottom {
+            (top - bottom, 0)
+        } else {
+            (top + 10 - bottom, 1)
+        };
+        if let Some(slot) = low.get_mut(index) {
+            *slot = digit;
+        } else {
+            high |= digit != 0;
+        }
+        borrow = next;
+    }
+    debug_assert_eq!(borrow, 0, "the maximum is at least the minimum");
+    if high {
+        return u64::MAX;
+    }
+    let mut value: u64 = 0;
+    for &digit in low.iter().rev() {
+        let Some(next) = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u64::from(digit)))
+        else {
+            return u64::MAX;
+        };
+        value = next;
+    }
+    value
+}
+
 #[derive(Debug)]
 pub(super) enum Node {
     Empty,
@@ -139,6 +184,38 @@ pub(super) struct Leads {
     pub scalars: Vec<(char, char)>,
 }
 
+/// Compound character sets that are unions of literal ranges (with their case
+/// variants under i), as sorted, disjoint scalar ranges.
+///
+/// A matched character is then one comparison against sorted ranges instead of
+/// a walk over the set's union tree. Sets of any other form keep that walk.
+#[derive(Debug, Default)]
+pub(super) struct FlatSets {
+    /// For each set id, the span of its ranges in `ranges`, if flattened.
+    spans: Vec<Option<(u32, u32)>>,
+    ranges: Vec<(char, char)>,
+}
+
+impl FlatSets {
+    /// The flattened ranges of `set`, if it has them.
+    #[inline]
+    pub(super) fn get(&self, set: usize) -> Option<&[(char, char)]> {
+        let (start, end) = (*self.spans.get(set)?)?;
+        Some(&self.ranges[start as usize..end as usize])
+    }
+
+    fn storage_bytes(&self) -> usize {
+        self.spans
+            .capacity()
+            .saturating_mul(size_of::<Option<(u32, u32)>>())
+            .saturating_add(
+                self.ranges
+                    .capacity()
+                    .saturating_mul(size_of::<(char, char)>()),
+            )
+    }
+}
+
 /// A folded range wider than this is evaluated through its set instead of
 /// being expanded into its case variants.
 const FOLDED_SPAN: u32 = 256;
@@ -177,7 +254,14 @@ pub struct CompiledPattern {
     pub(super) root: usize,
     /// Which start positions a search can skip without running the program.
     pub(super) lead: Leads,
+    /// Compound character sets that are unions of literal ranges, flattened.
+    pub(super) flat: FlatSets,
     pub(super) captures: usize,
+    /// The exact windows of repetitions whose minimum and maximum both exceed
+    /// `u64`, by node, ascending.
+    windows: Vec<(usize, u64)>,
+    /// The parent table and nesting facts the matchers walk the arena with.
+    pub(super) links: super::pike::Links,
     admission: Admission,
 }
 
@@ -224,12 +308,42 @@ impl CompiledPattern {
             .saturating_add(self.flags.capacity())
             .saturating_add(self.nodes.capacity().saturating_mul(size_of::<Node>()))
             .saturating_add(self.sets.capacity().saturating_mul(size_of::<Set>()))
+            .saturating_add(self.flat.storage_bytes())
             .saturating_add(
                 self.lead
                     .scalars
                     .capacity()
                     .saturating_mul(size_of::<(char, char)>()),
             )
+            .saturating_add(
+                self.links
+                    .nodes
+                    .capacity()
+                    .saturating_mul(size_of::<super::pike::Link>()),
+            )
+            .saturating_add(
+                self.windows
+                    .capacity()
+                    .saturating_mul(size_of::<(usize, u64)>()),
+            )
+    }
+
+    /// The exact difference between the maximum and the minimum of the
+    /// repetition `repeat`, or `u64::MAX` when it has no maximum or the
+    /// difference exceeds `u64`: no execution completes that many iterations
+    /// beyond its minimum.
+    pub(super) fn window(&self, repeat: usize) -> u64 {
+        let Node::Repeat { min, max, .. } = self.nodes[repeat] else {
+            unreachable!("only a repetition has a window");
+        };
+        match (min, max) {
+            (Count::Finite(min), Some(Count::Finite(max))) => max - min,
+            (Count::AboveU64, Some(Count::AboveU64)) => self
+                .windows
+                .binary_search_by_key(&repeat, |&(node, _)| node)
+                .map_or(u64::MAX, |index| self.windows[index].1),
+            _ => u64::MAX,
+        }
     }
 
     /// Admit a reused artifact without treating it as newly executed work.
@@ -296,6 +410,7 @@ pub fn compile(
         sets: Vec::new(),
         frames: Vec::new(),
         captures: 0,
+        windows: Vec::new(),
     };
     let root = if modes.quoted {
         parser.quoted()?
@@ -303,10 +418,7 @@ pub fn compile(
         parser.expression()?
     };
     let lead = parser.lead(root)?;
-    let admission = Admission {
-        nodes: parser.budget.used(Resource::ProgramNodes),
-        slots: parser.budget.peak_compile_slots,
-    };
+    let flat = parser.flat_sets()?;
     // No token cursor or construction-only frame survives in the artifact.
     let Parser {
         scanner,
@@ -314,10 +426,16 @@ pub fn compile(
         nodes,
         sets,
         captures,
+        windows,
         ..
     } = parser;
     drop(scanner);
     budget.release_compile_slots(scanner_slots);
+    let links = super::pike::analyze(&nodes, root, &mut budget)?;
+    let admission = Admission {
+        nodes: budget.used(Resource::ProgramNodes),
+        slots: budget.peak_compile_slots,
+    };
     Ok(CompiledPattern {
         profile,
         source,
@@ -327,7 +445,10 @@ pub fn compile(
         sets,
         root,
         lead,
+        flat,
         captures,
+        windows,
+        links,
         admission,
     })
 }
@@ -457,6 +578,9 @@ struct Parser<'a> {
     sets: Vec<Set>,
     frames: Vec<Frame>,
     captures: usize,
+    /// The exact windows of repetitions whose minimum and maximum both exceed
+    /// `u64`, by node, ascending.
+    windows: Vec<(usize, u64)>,
 }
 
 impl<'a> Parser<'a> {
@@ -658,6 +782,49 @@ impl<'a> Parser<'a> {
     ///
     /// A folded range contributes each member's direct case variants, the
     /// same relation the matcher applies to it, so membership is unchanged.
+    /// Flatten every compound set a character atom matches with, when it is a
+    /// union of literal ranges.
+    fn flat_sets(&mut self) -> Result<FlatSets, Error> {
+        let mut flat = FlatSets::default();
+        for node in 0..self.nodes.len() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            let Node::Character(set) = self.nodes[node] else {
+                continue;
+            };
+            if !matches!(self.sets[set], Set::Union(..)) || flat.get(set).is_some() {
+                continue;
+            }
+            let ranges = self.scalars(set)?;
+            let held = ranges.capacity() as u64 * 2;
+            if !ranges.is_empty() {
+                if flat.spans.is_empty() {
+                    let missing = self.sets.len();
+                    self.budget
+                        .charge_wide(Resource::CompileSlots, missing as u128 * 2)?;
+                    self.budget
+                        .charge_wide(Resource::CompileSteps, missing as u128)?;
+                    flat.spans
+                        .try_reserve_exact(missing)
+                        .map_err(|_| Error::Allocation {
+                            resource: Resource::CompileSlots,
+                            units: missing as u64 * 2,
+                        })?;
+                    flat.spans.resize(missing, None);
+                }
+                let start = flat.ranges.len();
+                for range in ranges.iter().copied() {
+                    grow(&mut self.budget, &mut flat.ranges, 2)?;
+                    flat.ranges.push(range);
+                }
+                let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
+                flat.spans[set] = Some((span(start), span(flat.ranges.len())));
+            }
+            drop(ranges);
+            self.budget.release_compile_slots(held);
+        }
+        Ok(flat)
+    }
+
     fn scalars(&mut self, root: usize) -> Result<Vec<(char, char)>, Error> {
         let mut work: Vec<usize> = Vec::new();
         let mut ranges: Vec<(char, char)> = Vec::new();
@@ -828,10 +995,10 @@ impl<'a> Parser<'a> {
         let Some(body) = frame.atom.take() else {
             return Err(syntax(offset, "quantifier has no preceding atom"));
         };
-        let (min, max) = match quantifier {
-            '?' => (Count::Finite(0), Some(Count::Finite(1))),
-            '*' => (Count::Finite(0), None),
-            '+' => (Count::Finite(1), None),
+        let (min, max, span) = match quantifier {
+            '?' => (Count::Finite(0), Some(Count::Finite(1)), 1),
+            '*' => (Count::Finite(0), None, u64::MAX),
+            '+' => (Count::Finite(1), None, u64::MAX),
             '{' => self.quantity(offset)?,
             _ => unreachable!("caller selects the closed quantifier grammar"),
         };
@@ -851,6 +1018,11 @@ impl<'a> Parser<'a> {
             greedy,
             follow: None,
         })?;
+        if min == Count::AboveU64 && max == Some(Count::AboveU64) {
+            // Only this window cannot be read from the quantities' lowering.
+            grow(&mut self.budget, &mut self.windows, 2)?;
+            self.windows.push((node, span));
+        }
         let frame = self.frames.last_mut().expect("frame retained");
         frame.atom = Some(node);
         frame.quantified = true;
@@ -879,20 +1051,22 @@ impl<'a> Parser<'a> {
         Ok(if text.is_empty() { "0" } else { text })
     }
 
-    fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>), Error> {
+    fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>, u64), Error> {
         let min = self.decimal(offset)?;
         let Some(next) = self.take()? else {
             return Err(syntax(offset, "unclosed quantity"));
         };
         match next.token {
-            Token::Literal('}') => Ok((Count::from_decimal(min), Some(Count::from_decimal(min)))),
+            Token::Literal('}') => {
+                Ok((Count::from_decimal(min), Some(Count::from_decimal(min)), 0))
+            }
             Token::Literal(',') => {
                 if self
                     .peek()?
                     .is_some_and(|spanned| spanned.token == Token::Literal('}'))
                 {
                     self.take()?;
-                    return Ok((Count::from_decimal(min), None));
+                    return Ok((Count::from_decimal(min), None, u64::MAX));
                 }
                 let max = self.decimal(offset)?;
                 self.budget.charge_wide(
@@ -908,7 +1082,11 @@ impl<'a> Parser<'a> {
                 {
                     return Err(syntax(offset, "a quantity must end with its closing brace"));
                 }
-                Ok((Count::from_decimal(min), Some(Count::from_decimal(max))))
+                Ok((
+                    Count::from_decimal(min),
+                    Some(Count::from_decimal(max)),
+                    span(min, max),
+                ))
             }
             _ => Err(syntax(offset, "quantity must be n, n, or n,m")),
         }
@@ -1448,6 +1626,42 @@ mod tests {
                     "{profile:?} [\\i] {ch:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn repetition_windows_are_exact_above_u64_and_saturate_beyond_it() {
+        for (min, max, window) in [
+            ("5", "5", 0),
+            ("0", "18446744073709551615", u64::MAX),
+            ("1", "18446744073709551615", u64::MAX - 1),
+            ("1", "18446744073709551617", u64::MAX),
+            ("18446744073709551616", "18446744073709551617", 1),
+            (
+                "99999999999999999999999999999",
+                "100000000000000000000000000002",
+                3,
+            ),
+            ("18446744073709551616", "36893488147419103231", u64::MAX),
+            ("18446744073709551616", "36893488147419103232", u64::MAX),
+        ] {
+            assert_eq!(span(min, max), window, "{{{min},{max}}}");
+            let program = accepted(Profile::Xpath31, &format!("a{{{min},{max}}}"), "");
+            let repeat = program.nodes.len() - 1;
+            let exact = span(min, max);
+            // A finite pair is read from its quantities; a pair above `u64`
+            // from the kept window.
+            assert_eq!(program.window(repeat), exact, "{{{min},{max}}}");
+        }
+        for (source, window) in [
+            ("a?", 1),
+            ("a*", u64::MAX),
+            ("a+", u64::MAX),
+            ("a{7,}", u64::MAX),
+            ("a{7}", 0),
+        ] {
+            let program = accepted(Profile::Xpath31, source, "");
+            assert_eq!(program.window(program.nodes.len() - 1), window, "{source}");
         }
     }
 

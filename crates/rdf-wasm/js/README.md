@@ -239,7 +239,10 @@ ownership, and all limits. Complete examples are in
   grammar refuses is an ordinary expression error (a SHACL finding under `sh:pattern`); a
   resource refusal under the law's finite production bounds throws, or rejects, with the
   resource's own code (`xpath-pattern-bytes`, `xpath-match-steps`, …) — never an unbound,
-  `false`, partial or conforming answer.
+  `false`, partial or conforming answer. That code is the refusal's identity on every
+  entry: the thrown `Error`'s `code` on a SPARQL or shapes-graph entry (a SHACL-SPARQL
+  query's refusal included), on either lane, and the `code` of the `ShaclProductRefusal`
+  a product entry throws (its `dimension` is `undefined`).
 - `QueryEngine.divisionPolicy` — the precision of every `xsd:integer`/`xsd:decimal`
   quotient (`/` and `AVG`) the engine forms: `"exact"`, `"N"` (`N` fractional digits
   truncated toward zero) or `"N:ROUNDING"`, with `ROUNDING` one of `toward-zero`,

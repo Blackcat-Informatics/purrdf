@@ -23,7 +23,9 @@ the selected law has:
 A refusal is pinned from both sides: the three near-miss names are refused and
 the exact name beside them is accepted; a pattern one byte over the native
 source bound raises ``ValueError`` carrying ``xpath-pattern-bytes``, and the
-pattern exactly at the bound is admitted.
+pattern exactly at the bound is admitted. Every door identifies that refusal the
+same way: ``xpath-pattern-bytes`` is the exception's ``message_id`` and its
+``presentation``'s, as a SPARQL parse failure's condition is.
 """
 
 from __future__ import annotations
@@ -47,6 +49,18 @@ BACKREFERENCE = "^(a)\\1$"
 #: The native source bound of ``Limits::new``: 64 KiB of pattern UTF-8.
 PATTERN_BYTES = 64 * 1024
 REFUSED_NAMES = ("xpath-3.1", "XPATH-3.1-2017-03-21", "")
+
+
+def assert_refusal_identity(refusal: pytest.ExceptionInfo[ValueError]) -> None:
+    """The refusal is identified by its resource's code, not only named in its words."""
+    error = refusal.value
+    assert "xpath-pattern-bytes" in str(error)
+    assert getattr(error, "message_id") == "xpath-pattern-bytes"
+    assert getattr(error, "presentation") == {
+        "message_id": "xpath-pattern-bytes",
+        "parameters": {},
+        "detail": None,
+    }
 
 
 def sparql_string(text: str) -> str:
@@ -226,11 +240,22 @@ def oversized(pattern_bytes: int) -> str:
 
 
 @pytest.mark.parametrize("law", LAWS)
-@pytest.mark.parametrize("door", ["query", "query_governed", "prepare", "mutable_dataset_query"])
+@pytest.mark.parametrize(
+    "door",
+    [
+        "query",
+        "query_governed",
+        "query_entailment_governed",
+        "prepare",
+        "mutable_dataset_query",
+        "compat_graph_query",
+    ],
+)
 def test_query_resource_refusal_raises(door: str, law: str) -> None:
     store = loaded_store()
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         QUERY_DOORS[door](store, oversized(PATTERN_BYTES + 1), law)
+    assert_refusal_identity(refusal)
     # The neighbour exactly at the bound is admitted and answers.
     assert QUERY_DOORS[door](store, oversized(PATTERN_BYTES), law) == []
     assert QUERY_DOORS[door](store, regex_select("a" * 1), law) == ["a", "aa", "ab"]
@@ -239,10 +264,12 @@ def test_query_resource_refusal_raises(door: str, law: str) -> None:
 @pytest.mark.parametrize("law", LAWS)
 def test_update_resource_refusal_raises_and_applies_nothing(law: str) -> None:
     store = loaded_store()
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         store.update(regex_insert("a" * (PATTERN_BYTES + 1)), xpath_regex=law)
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    assert_refusal_identity(refusal)
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         store.update_governed(regex_insert("a" * (PATTERN_BYTES + 1)), xpath_regex=law)
+    assert_refusal_identity(refusal)
     assert len(store) == 3
     store.update(regex_insert("a" * PATTERN_BYTES), xpath_regex=law)
     assert len(store) == 3
@@ -370,11 +397,42 @@ def test_shacl_sparql_constraint_regex_follows_the_selected_law() -> None:
     assert mismatch["conforms"] is False
 
 
+def sparql_constraint_shapes(pattern: str) -> str:
+    return (
+        f"@prefix sh: <{SH}> .\n"
+        f"<{EX}S> a sh:NodeShape ; sh:targetNode <{EX}s> ;\n"
+        "  sh:sparql [ sh:select "
+        + json.dumps(
+            f"SELECT $this WHERE {{ $this {P} ?o "
+            f"FILTER(REGEX(?o, {sparql_string(pattern)})) }}"
+        )
+        + " ] .\n"
+    )
+
+
+@pytest.mark.parametrize("law", LAWS)
+def test_shacl_sparql_constraint_resource_refusal_carries_the_code(law: str) -> None:
+    # The constraint's own query refuses the pattern: the SPARQL engine's diagnostic
+    # is identified by the same code the sh:pattern matcher's refusal is.
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
+        shapes.validate(
+            sparql_constraint_shapes("a" * (PATTERN_BYTES + 1)), data_nt("b"), xpath_regex=law
+        )
+    assert_refusal_identity(refusal)
+    # The neighbour exactly at the bound is admitted: "b" does not match, so the
+    # constraint selects nothing and the data conforms.
+    report = shapes.validate(
+        sparql_constraint_shapes("a" * PATTERN_BYTES), data_nt("b"), xpath_regex=law
+    )
+    assert report["conforms"] is True
+
+
 @pytest.mark.parametrize("law", LAWS)
 @pytest.mark.parametrize("door", sorted(SHACL_DOORS))
 def test_shacl_resource_refusal_raises(door: str, law: str) -> None:
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         SHACL_DOORS[door]("a" * (PATTERN_BYTES + 1), "a", law)
+    assert_refusal_identity(refusal)
     # The neighbour exactly at the bound is admitted and reports the mismatch.
     assert SHACL_DOORS[door]("a" * PATTERN_BYTES, "a", law) == (False, [PATTERN_COMPONENT])
 
@@ -419,10 +477,34 @@ def test_shex_pattern_follows_the_selected_law(
     assert shex_conformant(pattern, value, law) is conformant
 
 
+@pytest.mark.parametrize(
+    ("value", "law", "conformant"),
+    [
+        ("100000000000000000001", XPATH31, True),
+        ("100000000000000000000", XPATH31, False),
+        ("100000000000000000001", XPATH20, False),
+    ],
+)
+def test_shex_numeric_bounds_stay_exact_under_a_selected_law(
+    value: str, law: str, conformant: bool
+) -> None:
+    # One below a bound past i64 shares the bound's double; the exact schema still
+    # refuses it while the 3.1-only pattern on the same constraint runs under `law`.
+    results = shex.validate(
+        f"PREFIX ex: <{EX}> ex:S {{ ex:p MININCLUSIVE 100000000000000000001 /^(?:1)/ }}",
+        f"<{EX}s> <{EX}p> {value} .",
+        [(f"{EX}s", f"{EX}S")],
+        xpath_regex=law,
+    )
+    assert len(results) == 1
+    assert results[0]["conformant"] is conformant
+
+
 @pytest.mark.parametrize("law", LAWS)
 def test_shex_resource_refusal_raises(law: str) -> None:
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         shex_conformant("a" * (PATTERN_BYTES + 1), "a", law)
+    assert_refusal_identity(refusal)
     assert shex_conformant("a" * PATTERN_BYTES, "a", law) is False
 
 
@@ -513,8 +595,9 @@ def test_shacl_tool_follows_the_selected_law(
 @pytest.mark.parametrize("law", LAWS)
 @pytest.mark.parametrize("door", sorted(TOOL_DOORS))
 def test_shacl_tool_resource_refusal_raises(door: str, law: str) -> None:
-    with pytest.raises(ValueError, match="xpath-pattern-bytes"):
+    with pytest.raises(ValueError, match="xpath-pattern-bytes") as refusal:
         TOOL_DOORS[door]("a" * (PATTERN_BYTES + 1), "a", law)
+    assert_refusal_identity(refusal)
     # The neighbour exactly at the bound is admitted and matches nothing.
     assert TOOL_DOORS[door]("a" * PATTERN_BYTES, "a", law) is False
 
@@ -582,3 +665,148 @@ def test_exact_profile_name_beside_the_refused_ones_is_accepted(door: str) -> No
     REFUSING_DOORS[door](XPATH31)
     REFUSING_DOORS[door](XPATH20)
     REFUSING_DOORS[door](None)
+
+
+# ── Counted repetitions answer at the production defaults ─────────────────────
+
+PROSE_WORDS = (
+    "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+)
+
+
+@pytest.fixture(scope="module")
+def counted_values() -> dict[str, str]:
+    """The inputs each counted shape was refused over, by name, and their completions.
+
+    Deterministic lowercase prose joins words by single spaces; ``mixed`` is a run of
+    ``a`` and ``b`` that is not a repetition of ``ab``.
+    """
+    words: list[str] = []
+    length = 0
+    while length < 8 << 20:
+        index = len(words)
+        words.append(PROSE_WORDS[(index * 7 + index // 3) % len(PROSE_WORDS)])
+        length += len(words[-1]) + 1
+    prose = " ".join(words)
+    pairs = "ab" * (1 << 19)
+    mixed = "abbaab" * ((4 << 20) // 6)
+    plain = {
+        "pairs_128k": (pairs[: 128 << 10], "c"),
+        "pairs": (pairs, "c"),
+        "quads": ("abcd" * (1 << 18), "e"),
+        "mixed_400k": (mixed[: 400 << 10], "c"),
+        "mixed_800k": (mixed[: 800 << 10], "c"),
+        "mixed": (mixed, "c"),
+        "prose_4m": (prose[: prose[: 4 << 20].rfind(" ")], " zzz"),
+        "prose": (prose, " zzz"),
+        "run": ("a" * (1 << 20), "b"),
+    }
+    values = {"empty": ""}
+    for name, (value, suffix) in plain.items():
+        values[name] = value
+        values[f"{name}_completed"] = value + suffix
+    return values
+
+
+#: (native pattern, compatibility pattern with the same matches, plain subject).
+#: Each was refused by the native matcher at its subject's size: a counted group
+#: repeated from every start kept one thread per distinct count. A count the
+#: compatibility law refuses to build is compared through its equivalent.
+COUNTED = (
+    ("(ab){1,1000}c", "(ab){1,1000}c", "pairs_128k"),
+    ("(ab){2,50}c", "(ab){2,50}c", "pairs"),
+    ("(ab){1,100}c", "(ab){1,100}c", "pairs"),
+    ("(ab|cd){1,20}e", "(ab|cd){1,20}e", "quads"),
+    ("((a|b){3}){5,9}c", "((a|b){3}){5,9}c", "mixed_400k"),
+    ("((a|b){2}){2,5}c", "((a|b){2}){2,5}c", "mixed_800k"),
+    ("(a|b){1,30}c", "(a|b){1,30}c", "mixed"),
+    ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
+    ("(\\w+\\s){3,5}zzz", "(\\w+\\s){3,5}zzz", "prose_4m"),
+    ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+    ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
+    ("(ab){1,100000}c", "abc", "pairs_128k"),
+)
+
+
+def counted_answers(values: dict[str, str], law: str | None) -> list[str]:
+    """Each counted pattern decided on its plain and completed subjects, in one query."""
+    store = purrdf.Store()
+    store.load(
+        "".join(
+            f"<{EX}{name}> {P} {json.dumps(value)} .\n" for name, value in values.items()
+        ).encode(),
+        purrdf.RdfFormat.N_TRIPLES,
+    )
+    rows = []
+    for index, (pattern, compatible, subject) in enumerate(COUNTED):
+        literal = sparql_string(pattern if law else compatible)
+        rows += [f"({index} <{EX}{subject}{tail}> {literal})" for tail in ("", "_completed")]
+    nullable = "^(a?){18446744073709551616}$" if law else "^a*$"
+    rows += [f"({len(COUNTED)} <{EX}{name}> {sparql_string(nullable)})" for name in ("empty", "pairs")]
+    text = (
+        f"SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{ {' '.join(rows)} }} "
+        f"?s {P} ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i ?s"
+    )
+    result = store.query(text, xpath_regex=law)
+    assert isinstance(result, purrdf.QuerySolutions)
+    return [lexical(row["r"]) for row in result]
+
+
+@pytest.mark.parametrize("law", LAWS)
+def test_counted_repetitions_answer_like_the_compatibility_law(
+    counted_values: dict[str, str], law: str
+) -> None:
+    # Plain subjects fail, completed ones match, and the empty string meets a
+    # nullable whole required more than u64 times.
+    expected = ["false", "true"] * len(COUNTED) + ["true", "false"]
+    assert counted_answers(counted_values, None) == expected
+    assert counted_answers(counted_values, law) == expected
+
+
+@pytest.mark.parametrize("law", LAWS)
+@pytest.mark.parametrize(
+    ("pattern", "compatible", "subject"),
+    [COUNTED[0], COUNTED[4], COUNTED[6], COUNTED[8], COUNTED[10], COUNTED[11]],
+)
+def test_counted_repetitions_validate_like_the_compatibility_law(
+    counted_values: dict[str, str], law: str, pattern: str, compatible: str, subject: str
+) -> None:
+    for name, conforms in ((subject, False), (f"{subject}_completed", True)):
+        value = counted_values[name]
+        assert shacl_validate(compatible, value, None)[0] is conforms
+        assert shacl_validate(pattern, value, law)[0] is conforms, name
+        assert shex_conformant(compatible, value, None) is conforms
+        assert shex_conformant(pattern, value, law) is conforms, name
+
+
+@pytest.mark.parametrize("law", LAWS)
+@pytest.mark.parametrize("pattern", ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"])
+def test_counted_ambiguous_replacement_over_a_mebibyte_like_the_compatibility_law(
+    law: str, pattern: str
+) -> None:
+    # Short runs closed by `b` or `c`, after a long run no `b` closes within a
+    # thousand iterations: one replacement rewrites thousands of matches.
+    runs = ["a" * 100_000]
+    length, index = 100_000, 0
+    while length < 1 << 20:
+        run = "a" * (1 + (index * 7 + index // 5) % 13) + ("c" if index % 3 == 0 else "b")
+        runs.append(run)
+        length += len(run)
+        index += 1
+    store = purrdf.Store()
+    store.load(
+        f"<{EX}s> {P} {json.dumps(''.join(runs))} .\n".encode(), purrdf.RdfFormat.N_TRIPLES
+    )
+    text = (
+        f"SELECT ?r WHERE {{ <{EX}s> {P} ?v "
+        f'BIND(REPLACE(?v, {sparql_string(pattern)}, "[$1]") AS ?r) }}'
+    )
+
+    def replaced(selected: str | None) -> str:
+        result = store.query(text, xpath_regex=selected)
+        assert isinstance(result, purrdf.QuerySolutions)
+        return lexical(next(iter(result))["r"])
+
+    expected = replaced(None)
+    assert "[a]" in expected
+    assert replaced(law) == expected

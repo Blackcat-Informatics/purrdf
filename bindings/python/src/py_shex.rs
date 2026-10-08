@@ -199,7 +199,14 @@ fn validate(
                 profile,
                 limits,
             )
-            .map_err(|error| PyValueError::new_err(error.to_string())),
+            .map_err(|error| {
+                match purrdf_validate::xpath_regex::refusal_code(&error) {
+                    Some(code) => {
+                        crate::py_store::presentation::refusal_value_error(error.to_string(), code)
+                    }
+                    None => PyValueError::new_err(error.to_string()),
+                }
+            }),
         }
     })?;
 

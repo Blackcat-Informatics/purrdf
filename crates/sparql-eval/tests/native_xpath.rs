@@ -567,3 +567,286 @@ fn explain_evaluates_under_the_requests_dated_law() {
             .unwrap();
     }
 }
+
+/// `ex:{subject} ex:v "{text}"` for each named text.
+fn texts(values: &[(&str, &str)]) -> Arc<purrdf_core::RdfDataset> {
+    let mut builder = purrdf_core::RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/v");
+    for &(subject, text) in values {
+        let subject = builder.intern_iri(&format!("http://example.org/{subject}"));
+        let value = builder.intern_literal(purrdf_core::RdfLiteral::simple(text));
+        builder.push_quad(subject, predicate, value, None);
+    }
+    builder.freeze().unwrap()
+}
+
+/// The single cell of `SELECT ?r WHERE { ex:{subject} ex:v ?t BIND({call} AS ?r) }`.
+fn bound(
+    engine: &NativeSparqlEngine,
+    data: &Arc<purrdf_core::RdfDataset>,
+    subject: &str,
+    call: &str,
+) -> Result<String, RdfDiagnostic> {
+    let query = format!(
+        "SELECT ?r WHERE {{ <http://example.org/{subject}> <http://example.org/v> ?t \
+         BIND({call} AS ?r) }}"
+    );
+    let (_, rows) = solutions(engine.query(
+        data,
+        SparqlRequest {
+            query: &query,
+            base_iri: None,
+            substitutions: &[],
+        },
+    )?);
+    assert_eq!(rows.len(), 1, "{query}");
+    Ok(render_cell(rows[0][0].as_ref()))
+}
+
+#[test]
+fn adversary_shapes_answer_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at a fraction of these sizes:
+    // multiple unbounded runs at 8 KB, group repetition from 44 KB, a word
+    // repetition at 159 KB, and the nested nullable repetition at 41 bytes.
+    let text = purrdf_testkit::text::word_prose(1 << 20);
+    let pairs = "ab".repeat(1 << 19);
+    let forty = "a".repeat(40);
+    let [zzz, bang, spaced, pairs_c, pairs_a, forty_b, forty_c] = [
+        format!("{text} zzz"),
+        format!("{text}!"),
+        format!("{text} "),
+        format!("{pairs}c"),
+        format!("{pairs}a"),
+        format!("{forty}b"),
+        format!("{forty}c"),
+    ];
+    let data = texts(&[
+        ("prose", &text),
+        ("zzz", &zzz),
+        ("bang", &bang),
+        ("spaced", &spaced),
+        ("pairs", &pairs),
+        ("pairs_c", &pairs_c),
+        ("pairs_a", &pairs_a),
+        ("forty_b", &forty_b),
+        ("forty_c", &forty_c),
+    ]);
+    let compatibility = NativeSparqlEngine::new();
+    let laws = [Profile::Xpath20, Profile::Xpath31]
+        .map(|profile| NativeSparqlEngine::new().with_xpath_regex(profile, Limits::new()));
+    for (pattern, subject, expected) in [
+        ("node.*graph.*zzz", "prose", "false"),
+        ("node.*graph.*zzz", "zzz", "true"),
+        ("alpha.*zzz", "prose", "false"),
+        ("alpha.*zzz", "zzz", "true"),
+        ("^([a-z]+ ?)+$", "prose", "true"),
+        ("^([a-z]+ ?)+$", "bang", "false"),
+        (r"^(\w+\s)*\w+$", "prose", "true"),
+        (r"^(\w+\s)*\w+$", "spaced", "false"),
+        ("^(a|b)*$", "pairs", "true"),
+        ("^(a|b)*$", "pairs_c", "false"),
+        ("^(ab)*$", "pairs", "true"),
+        ("^(ab)*$", "pairs_a", "false"),
+        ("^(?:ab)*$", "pairs", "true"),
+        ("^(?:ab)*$", "pairs_a", "false"),
+        ("^(a|aa)*$|^(a*)*b$", "forty_b", "true"),
+        ("^(a|aa)*$|^(a*)*b$", "forty_c", "false"),
+    ] {
+        let call = format!(
+            "REGEX(?t, {})",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
+        assert_eq!(
+            bound(&compatibility, &data, subject, &call).unwrap(),
+            expected,
+            "compatibility {pattern} on {subject}"
+        );
+        for (engine, profile) in laws.iter().zip([Profile::Xpath20, Profile::Xpath31]) {
+            if profile == Profile::Xpath20 && pattern.contains("(?:") {
+                continue;
+            }
+            assert_eq!(
+                bound(engine, &data, subject, &call)
+                    .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {}", error.code)),
+                expected,
+                "{profile:?} {pattern} on {subject}"
+            );
+        }
+    }
+    // A replacement keeps the last iteration's capture over the whole input.
+    for engine in std::iter::once(&compatibility).chain(&laws) {
+        assert_eq!(
+            bound(engine, &data, "pairs", r#"REPLACE(?t, "^(a|b)+$", "[$1]")"#).unwrap(),
+            "[b]"
+        );
+    }
+}
+
+#[test]
+fn backreference_blowups_still_refuse_beside_an_answered_neighbour() {
+    let forty = "a".repeat(40);
+    let neighbour = format!("{forty}ca");
+    let data = texts(&[("refused", &forty), ("neighbour", &neighbour)]);
+    let call = format!(
+        "REGEX(?t, {})",
+        purrdf_testkit::text::sparql_string(r"^(a|aa)*c\1$")
+    );
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let engine = NativeSparqlEngine::new().with_xpath_regex(profile, Limits::new());
+        let refusal = bound(&engine, &data, "refused", &call).unwrap_err();
+        assert!(
+            [
+                Resource::MatchSteps,
+                Resource::MatchStates,
+                Resource::MatchSlots
+            ]
+            .iter()
+            .any(|resource| refusal.code == resource.code()),
+            "{profile:?}: {}",
+            refusal.code
+        );
+        assert_eq!(
+            bound(&engine, &data, "neighbour", &call).unwrap(),
+            "true",
+            "{profile:?}"
+        );
+    }
+}
+
+#[test]
+fn counted_repetition_shapes_answer_at_the_production_defaults_like_the_compatibility_engine() {
+    // Each shape was refused by the native matcher at these sizes: a counted
+    // group repeated from every start kept one thread per distinct count.
+    let pairs = "ab".repeat(1 << 19);
+    let mixed = "abbaab".repeat((4 << 20) / 6);
+    let prose = purrdf_testkit::text::word_prose(8 << 20);
+    let values = [
+        ("pairs_128k", pairs[..128 << 10].to_owned()),
+        ("pairs", pairs.clone()),
+        ("quads", "abcd".repeat(1 << 18)),
+        ("mixed_400k", mixed[..400 << 10].to_owned()),
+        ("mixed_800k", mixed[..800 << 10].to_owned()),
+        ("mixed", mixed.clone()),
+        (
+            "prose_4m",
+            prose[..prose[..4 << 20].rfind(' ').unwrap()].to_owned(),
+        ),
+        ("prose", prose.clone()),
+    ];
+    let mut named: Vec<(String, String)> = Vec::new();
+    for (subject, value) in &values {
+        named.push(((*subject).to_owned(), value.clone()));
+        for suffix in ["c", "e", " zzz"] {
+            named.push((
+                format!("{subject}_{}", suffix.trim()),
+                format!("{value}{suffix}"),
+            ));
+        }
+    }
+    named.push(("empty".to_owned(), String::new()));
+    // A long run that an ambiguous counted body matches only at its end, and a
+    // mebibyte of short runs that one replacement rewrites thousands of times.
+    let run = "a".repeat(1 << 20);
+    named.push(("run".to_owned(), run.clone()));
+    named.push(("run_b".to_owned(), format!("{run}b")));
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    named.push(("runs".to_owned(), runs));
+    let data = texts(
+        &named
+            .iter()
+            .map(|(subject, value)| (subject.as_str(), value.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    let compatibility = NativeSparqlEngine::new();
+    let laws = [Profile::Xpath20, Profile::Xpath31]
+        .map(|profile| NativeSparqlEngine::new().with_xpath_regex(profile, Limits::new()));
+    for (pattern, subject, expected) in [
+        ("(ab){1,1000}c", "pairs_128k", "false"),
+        ("(ab){1,1000}c", "pairs_128k_c", "true"),
+        ("(ab){2,50}c", "pairs", "false"),
+        ("(ab){2,50}c", "pairs_c", "true"),
+        ("(ab){1,100}c", "pairs", "false"),
+        ("(ab){1,100}c", "pairs_c", "true"),
+        ("(ab|cd){1,20}e", "quads", "false"),
+        ("(ab|cd){1,20}e", "quads_e", "true"),
+        ("((a|b){3}){5,9}c", "mixed_400k", "false"),
+        ("((a|b){3}){5,9}c", "mixed_400k_c", "true"),
+        ("((a|b){2}){2,5}c", "mixed_800k", "false"),
+        ("((a|b){2}){2,5}c", "mixed_800k_c", "true"),
+        ("(a|b){1,30}c", "mixed", "false"),
+        ("(a|b){1,30}c", "mixed_c", "true"),
+        ("(a|b){3,9}c", "mixed", "false"),
+        ("(a|b){3,9}c", "mixed_c", "true"),
+        (r"(\w+\s){3,5}zzz", "prose_4m", "false"),
+        (r"(\w+\s){3,5}zzz", "prose_4m_zzz", "true"),
+        ("node.*graph.*zzz", "prose", "false"),
+        ("node.*graph.*zzz", "prose_zzz", "true"),
+        ("(a|aa){1,1000}b", "run", "false"),
+        ("(a|aa){1,1000}b", "run_b", "true"),
+        // The compatibility engine refuses to build these repetition counts.
+        ("(ab){1,100000}c", "pairs_128k", "false"),
+        ("(ab){1,100000}c", "pairs_128k_c", "true"),
+        ("(a?){18446744073709551616}", "empty", "true"),
+        ("^(a?){18446744073709551616}$", "pairs_128k", "false"),
+    ] {
+        let call = format!(
+            "REGEX(?t, {})",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
+        if !pattern.contains("{1,100000}") && !pattern.contains("18446744073709551616") {
+            assert_eq!(
+                bound(&compatibility, &data, subject, &call).unwrap(),
+                expected,
+                "compatibility {pattern} on {subject}"
+            );
+        }
+        for (engine, profile) in laws.iter().zip(Profile::ALL) {
+            assert_eq!(
+                bound(engine, &data, subject, &call)
+                    .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {}", error.code)),
+                expected,
+                "{profile:?} {pattern} on {subject}"
+            );
+        }
+    }
+    // Replacement reads the last iteration's capture of the leftmost match.
+    for (pattern, subject) in [
+        ("(ab){1,1000}c", "pairs_128k_c"),
+        ("(ab|cd){1,20}e", "quads_e"),
+        ("((a|b){3}){5,9}c", "mixed_400k_c"),
+        ("(a|b){1,30}c", "mixed_c"),
+        (r"(\w+\s){3,5}zzz", "prose_4m_zzz"),
+        ("(a|aa){1,1000}b", "run_b"),
+        ("(a|aa){1,1000}b", "runs"),
+        ("(a|aa){2,5}b", "runs"),
+        ("((a|aa){1,4})(b|c)", "runs"),
+    ] {
+        let call = format!(
+            "STRLEN(REPLACE(?t, {}, \"[$1]\"))",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
+        let expected = bound(&compatibility, &data, subject, &call).unwrap();
+        for (engine, profile) in laws.iter().zip(Profile::ALL) {
+            assert_eq!(
+                bound(engine, &data, subject, &call)
+                    .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {}", error.code)),
+                expected,
+                "{profile:?} {pattern} on {subject}"
+            );
+        }
+        let call = format!(
+            "REPLACE(?t, {}, \"[$1]\")",
+            purrdf_testkit::text::sparql_string(pattern)
+        );
+        let expected = bound(&compatibility, &data, subject, &call).unwrap();
+        for engine in &laws {
+            assert_eq!(bound(engine, &data, subject, &call).unwrap(), expected);
+        }
+    }
+}

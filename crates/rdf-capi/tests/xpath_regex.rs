@@ -138,16 +138,11 @@ fn profile_arg(regex: Option<&str>) -> (Option<CString>, *const std::os::raw::c_
     (owned, ptr)
 }
 
-/// A SPARQL string literal spelling `pattern`.
-fn sparql_literal(pattern: &str) -> String {
-    format!("\"{}\"", pattern.replace('\\', "\\\\"))
-}
-
 /// The objects whose `REGEX` against `pattern` holds.
 fn filter_query(pattern: &str) -> String {
     format!(
         "SELECT ?o WHERE {{ ?s <http://example.org/p> ?o FILTER(REGEX(?o, {})) }} ORDER BY ?o",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     )
 }
 
@@ -402,7 +397,7 @@ fn each_selected_law_decides_sparql_regex_on_every_select_entry_point() {
 fn each_selected_law_decides_sparql_replace() {
     let query = format!(
         "SELECT ?r WHERE {{ BIND(REPLACE(\"aa\", {}, \"x\") AS ?r) }}",
-        sparql_literal(BACK_REFERENCE)
+        purrdf_testkit::text::sparql_string(BACK_REFERENCE)
     );
     for law in [XPATH_20, XPATH_31] {
         assert_eq!(rows(Select::Plain, Some(law), &query), ["x"], "{law}");
@@ -410,7 +405,7 @@ fn each_selected_law_decides_sparql_replace() {
     assert_eq!(rows(Select::Plain, None, &query), ["UNBOUND"]);
     let query = format!(
         "SELECT ?r WHERE {{ BIND(REPLACE(\"ab\", {}, \"x\") AS ?r) }}",
-        sparql_literal(NON_CAPTURING)
+        purrdf_testkit::text::sparql_string(NON_CAPTURING)
     );
     assert_eq!(rows(Select::Plain, Some(XPATH_31), &query), ["x"]);
     assert_eq!(rows(Select::Plain, Some(XPATH_20), &query), ["UNBOUND"]);
@@ -487,7 +482,7 @@ fn update_marks(regex: Option<&str>, pattern: &str) -> Result<Vec<String>, Failu
     let request = CString::new(format!(
         "INSERT {{ ?s <http://example.org/matched> true }} WHERE {{ \
          ?s <http://example.org/p> ?o FILTER(REGEX(?o, {})) }}",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     ))
     .expect("request");
     let (_owned, regex) = profile_arg(regex);
@@ -1067,7 +1062,7 @@ fn rule_shapes(pattern: &str) -> String {
     let construct = format!(
         "CONSTRUCT {{ $this <http://example.org/hit> ?v }} \
          WHERE {{ $this <http://example.org/p> ?v FILTER(REGEX(?v, {})) }}",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     );
     format!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
@@ -1083,7 +1078,7 @@ fn rule_set(pattern: &str) -> String {
     format!(
         "PREFIX : <http://example.org/>\n\
          RULE {{ ?s :hit ?v }} WHERE {{ ?s :p ?v FILTER(REGEX(?v, {})) }}\n",
-        sparql_literal(pattern)
+        purrdf_testkit::text::sparql_string(pattern)
     )
 }
 
@@ -1389,4 +1384,163 @@ fn a_native_resource_refusal_is_an_error_status_never_an_empty_tool_answer() {
             );
         }
     }
+}
+
+#[test]
+fn counted_repetitions_answer_at_the_production_defaults_like_the_compatibility_engine() {
+    use std::fmt::Write as _;
+    // Each shape was refused by the native matcher at these sizes: a counted group
+    // repeated from every start kept one thread per distinct count.
+    let pairs = "ab".repeat(1 << 19);
+    let mixed = "abbaab".repeat((4 << 20) / 6);
+    let prose = purrdf_testkit::text::word_prose(8 << 20);
+    let plain = [
+        ("pairs_128k", &pairs[..128 << 10], "c"),
+        ("pairs", pairs.as_str(), "c"),
+        ("quads", &"abcd".repeat(1 << 18), "e"),
+        ("mixed_400k", &mixed[..400 << 10], "c"),
+        ("mixed_800k", &mixed[..800 << 10], "c"),
+        ("mixed", mixed.as_str(), "c"),
+        (
+            "prose_4m",
+            &prose[..prose[..4 << 20].rfind(' ').unwrap()],
+            " zzz",
+        ),
+        ("prose", prose.as_str(), " zzz"),
+        ("run", &"a".repeat(1 << 20), "b"),
+    ];
+    let mut nt = String::from("<http://example.org/empty> <http://example.org/p> \"\" .\n");
+    for (subject, value, suffix) in &plain {
+        write!(
+            nt,
+            "<http://example.org/{subject}> <http://example.org/p> \"{value}\" .\n\
+             <http://example.org/{subject}_completed> <http://example.org/p> \"{value}{suffix}\" .\n"
+        )
+        .unwrap();
+    }
+    // A mebibyte of short runs, after a long one, that one replacement
+    // rewrites thousands of times.
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    writeln!(
+        nt,
+        "<http://example.org/runs> <http://example.org/p> \"{runs}\" ."
+    )
+    .unwrap();
+    let data = dataset(&nt);
+    // A count the compatibility engine refuses to build is compared through the
+    // pattern with the same matches.
+    let cases = [
+        ("(ab){1,1000}c", "(ab){1,1000}c", "pairs_128k"),
+        ("(ab){2,50}c", "(ab){2,50}c", "pairs"),
+        ("(ab){1,100}c", "(ab){1,100}c", "pairs"),
+        ("(ab|cd){1,20}e", "(ab|cd){1,20}e", "quads"),
+        ("((a|b){3}){5,9}c", "((a|b){3}){5,9}c", "mixed_400k"),
+        ("((a|b){2}){2,5}c", "((a|b){2}){2,5}c", "mixed_800k"),
+        ("(a|b){1,30}c", "(a|b){1,30}c", "mixed"),
+        ("(a|b){3,9}c", "(a|b){3,9}c", "mixed"),
+        (r"(\w+\s){3,5}zzz", r"(\w+\s){3,5}zzz", "prose_4m"),
+        ("node.*graph.*zzz", "node.*graph.*zzz", "prose"),
+        ("(a|aa){1,1000}b", "(a|aa){1,1000}b", "run"),
+        ("(ab){1,100000}c", "abc", "pairs_128k"),
+    ];
+    // Each pattern decides its plain and completed subjects, in one SRJ answer.
+    let answers = |regex: Option<&str>, native: bool| -> Vec<String> {
+        let mut rows = String::new();
+        for (index, (pattern, compatible, subject)) in cases.iter().enumerate() {
+            let pattern =
+                purrdf_testkit::text::sparql_string(if native { pattern } else { compatible });
+            for focus in [(*subject).to_owned(), format!("{subject}_completed")] {
+                write!(rows, " ({index} <http://example.org/{focus}> {pattern})").unwrap();
+            }
+        }
+        write!(
+            rows,
+            " ({} <http://example.org/empty> {})",
+            cases.len(),
+            purrdf_testkit::text::sparql_string(if native {
+                "^(a?){18446744073709551616}$"
+            } else {
+                "^a*$"
+            })
+        )
+        .unwrap();
+        let query = CString::new(format!(
+            "SELECT ?r WHERE {{ VALUES (?i ?s ?p) {{{rows} }} \
+             ?s <http://example.org/p> ?v BIND(REGEX(?v, ?p) AS ?r) }} ORDER BY ?i ?s"
+        ))
+        .expect("query");
+        let (_owned, regex) = profile_arg(regex);
+        let mut buffer = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_json_xpath_regex(
+                data,
+                query.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                regex,
+                &raw mut buffer,
+                &raw mut error,
+            )
+        };
+        assert!(status == PurrdfStatus::Ok as i32, "{:?}", unsafe {
+            take_failure(status, error)
+        });
+        json_first_column(&unsafe { take_buffer(buffer) })
+    };
+    // Plain subjects fail, completed subjects match, and the empty string meets a
+    // nullable whole required more than u64 times.
+    let expected: Vec<String> = (0..cases.len())
+        .flat_map(|_| ["false", "true"])
+        .chain(["true"])
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(answers(None, false), expected, "compatibility");
+    for law in [XPATH_20, XPATH_31] {
+        assert_eq!(answers(Some(law), true), expected, "{law}");
+    }
+    // Every match of an ambiguous counted body over the mebibyte of runs,
+    // replaced with its last iteration's capture.
+    let replaced = |regex: Option<&str>, pattern: &str| -> Vec<String> {
+        let query = CString::new(format!(
+            "SELECT ?r WHERE {{ <http://example.org/runs> <http://example.org/p> ?v \
+             BIND(REPLACE(?v, {}, \"[$1]\") AS ?r) }}",
+            purrdf_testkit::text::sparql_string(pattern)
+        ))
+        .expect("query");
+        let (_owned, regex) = profile_arg(regex);
+        let mut buffer = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_json_xpath_regex(
+                data,
+                query.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                regex,
+                &raw mut buffer,
+                &raw mut error,
+            )
+        };
+        assert!(status == PurrdfStatus::Ok as i32, "{:?}", unsafe {
+            take_failure(status, error)
+        });
+        json_first_column(&unsafe { take_buffer(buffer) })
+    };
+    for pattern in ["(a|aa){1,1000}b", "((a|aa){1,4})(b|c)"] {
+        let expected = replaced(None, pattern);
+        assert!(expected[0].contains("[a]"), "{pattern}");
+        for law in [XPATH_20, XPATH_31] {
+            assert_eq!(replaced(Some(law), pattern), expected, "{law} {pattern}");
+        }
+    }
+    unsafe { purrdf_dataset_free(data) };
 }

@@ -3,23 +3,36 @@
 
 //! Ordered native matching, with one request's work fuel and live storage.
 //!
-//! Alternatives retain complete captures and continuations. Storage admission
-//! accounts for those cells across all pending states, rather than admitting
-//! only the small state header. Nullable repetitions stop after an empty
-//! iteration once the minimum is satisfied; required empty iterations still
-//! spend fuel. No operational refusal is converted to a failed branch.
+//! A program without backreferences first runs the backtracking machine below
+//! under an allowance linear in the input it examines. Past that allowance,
+//! the capture-free set machine in [`super::sets`] decides whether a match
+//! exists, and marks where matches start, keeping each counted repetition's
+//! live counts as one set; the thread machine in [`super::pike`] then walks
+//! the leftmost start as one thread, guided by the set machine's reverse
+//! states, for the priority match and its captures. A program with a
+//! backreference runs on the backtracking machine alone, whose continuations
+//! depend on captured text and so cannot be merged.
+//!
+//! Both machines visit alternatives in the same priority order, retain the
+//! same captures, and apply the same progress rule: a nullable repetition
+//! stops after an empty iteration once the minimum is satisfied; required
+//! empty iterations still spend fuel. Backtracking alternatives retain
+//! complete captures and continuations, and storage admission accounts for
+//! those cells across all pending states, rather than admitting only the
+//! small state header. No operational refusal is converted to a failed branch.
 
 use std::ops::Range;
 
 use purrdf_lex::walk::WorkList;
 
 use super::compile::{CompiledPattern, Count, Lead, Node, Set, case_variants};
-use super::{Budget, Error, Limits, Profile, Resource, unicode_tables};
+use super::pike::Pike;
+use super::{Budget, Error, Limits, Profile, Refusal, Resource, unicode_tables};
 
 /// UTF-8 byte spans captured by one ordered successful match.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Captures {
-    spans: Vec<Option<Range<usize>>>,
+    pub(super) spans: Vec<Option<Range<usize>>>,
 }
 
 impl Captures {
@@ -51,8 +64,12 @@ impl CompiledPattern {
     ///
     /// Current artifact admission, matcher work and live-state/storage failures
     /// are typed operational errors, never negative matches.
+    // Out of line: a host evaluator that dispatches to the matcher must not
+    // absorb the matcher's frames into its own, which every nesting level pays.
+    #[inline(never)]
     pub fn is_match(&self, input: &str, limits: Limits) -> Result<bool, Error> {
-        Ok(self.find(input, limits)?.is_some())
+        self.admit(limits)?;
+        Vm::new(self, input, limits).is_match_from(0)
     }
 
     /// The first ordered match and its capturing-group spans.
@@ -64,53 +81,284 @@ impl CompiledPattern {
     ///
     /// Admission or execution may refuse its finite resource bound. No partial
     /// match is returned after an operational failure.
+    // Out of line: a host evaluator that dispatches to the matcher must not
+    // absorb the matcher's frames into its own, which every nesting level pays.
+    #[inline(never)]
     pub fn find(&self, input: &str, limits: Limits) -> Result<Option<Captures>, Error> {
         self.admit(limits)?;
         Vm::new(self, input, limits).find_from(0)
     }
 }
 
+/// Work a backtracking attempt may spend per search start it has passed, when
+/// the thread machine can take over the program.
+const ATTEMPT_START_STEPS: u64 = 16;
+
+/// Work such an attempt may spend per input byte it has examined: one
+/// greedy single-character run's own cost. A longer attempt costs more than
+/// the linear-time machines' reverse scan and walk.
+const ATTEMPT_BYTE_STEPS: u64 = 2;
+
+/// Work such an attempt may spend per program node, wherever it is: on a
+/// short input the attempt is cheaper than setting up the linear-time
+/// machines.
+const ATTEMPT_NODE_STEPS: u64 = 64;
+
+/// The progress of a backtracking attempt the thread machine can take over.
+///
+/// An attempt that spends more than its allowance for the starts it has
+/// passed and the input it has examined is not running in linear time, and is
+/// abandoned before its cost grows further.
 #[derive(Debug, Clone, Copy)]
-enum Action {
-    Node(usize),
-    CaptureEnd {
-        number: usize,
-        start: usize,
-    },
-    Repeat {
-        node: usize,
-        count: u64,
-        stalled: bool,
-    },
-    RepeatEnd {
-        node: usize,
-        count: u64,
-        start: usize,
-    },
+struct Attempt {
+    /// The first start of the search.
+    origin: usize,
+    /// The steps the execution had spent before this search.
+    before: u64,
+    /// The furthest input position any state of the attempt has reached.
+    furthest: usize,
+    /// The allowance for the program, independent of the input.
+    program: u64,
+    /// The steps this attempt may spend before its allowance is recomputed.
+    ///
+    /// The allowance only grows with the start and the furthest position, so
+    /// spending within the last computed value needs no new arithmetic.
+    allowed: u64,
 }
 
-/// The remaining stops of a greedy single-character run.
-#[derive(Debug, Clone, Copy)]
-struct Run {
-    /// The shortest admissible stop.
-    floor: usize,
-    /// The set the character after a viable stop must belong to.
-    follow: Option<usize>,
+impl Attempt {
+    /// Whether `spent`, at search start `start`, exceeds the allowance.
+    #[inline]
+    fn exceeded(&mut self, start: usize, position: usize, spent: u64) -> Option<Refusal> {
+        self.furthest = self.furthest.max(position);
+        if spent - self.before <= self.allowed {
+            return None;
+        }
+        self.recompute(start, spent)
+    }
+
+    #[cold]
+    fn recompute(&mut self, start: usize, spent: u64) -> Option<Refusal> {
+        let allowance = u128::from(ATTEMPT_START_STEPS) * (start - self.origin + 1) as u128
+            + u128::from(ATTEMPT_BYTE_STEPS) * (self.furthest - self.origin) as u128
+            + u128::from(self.program);
+        let spent = u128::from(spent - self.before);
+        self.allowed = u64::try_from(allowance).unwrap_or(u64::MAX);
+        (spent > allowance).then(|| Refusal {
+            resource: Resource::MatchSteps,
+            required: spent,
+            limit: u64::try_from(allowance).unwrap_or(u64::MAX),
+        })
+    }
 }
 
-struct State {
-    start: usize,
-    position: usize,
-    /// A pending greedy single-character run: its position is the next stop
-    /// to consider, and resuming it first leaves the next shorter stop pending.
-    run: Option<Run>,
-    actions: WorkList<Action, 8>,
-    captures: Vec<Option<Range<usize>>>,
+/// The matcher a program runs on.
+///
+/// A program with a backreference runs on the backtracking machine alone. Any
+/// other program first runs the backtracking machine, whose single-character
+/// runs and skipped search starts make ordinary searches cost about one step
+/// per character, under a work allowance linear in the search starts it has
+/// passed, the input it has examined and the program. An attempt that exceeds
+/// that allowance or any live-storage bound is abandoned, its pending states
+/// are released, and the linear-time machines run the same search, and every
+/// later one, on the remaining fuel: the set machine answers whether a match
+/// exists, or marks every match start in one reverse scan, and the thread
+/// machine walks the first marked start for the match and its captures. The
+/// attempt's work stays charged. Every machine reports the same match, so the
+/// attempt changes only the cost.
+pub(super) struct Vm<'a> {
+    machine: Machine<'a>,
 }
 
-impl State {
-    fn slots(&self) -> u128 {
-        2 + (self.captures.len() as u128) * 2 + (self.actions.len() as u128) * 3
+// One machine lives on the stack for one execution; boxing the backtracking
+// machine's inline work lists would add an allocation to every match.
+#[allow(clippy::large_enum_variant)]
+enum Machine<'a> {
+    Backtrack {
+        machine: Backtrack<'a>,
+        /// Whether the linear-time machines may take over an abandoned
+        /// attempt.
+        fallback: bool,
+    },
+    /// The thread machine alone, from every start.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    Pike(Pike<'a>),
+    /// The set machine finds where a match starts; the thread machine walks
+    /// that one start for the priority match and its captures.
+    Linear(Pike<'a>),
+    /// Only while the machines are exchanged.
+    Exchanging,
+}
+
+impl<'a> Vm<'a> {
+    pub(super) fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        Self {
+            machine: Machine::Backtrack {
+                machine: Backtrack::new(program, input, limits),
+                fallback: !program.links.backreferences,
+            },
+        }
+    }
+
+    /// The backtracking machine alone, which every program can run on.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn backtracking(
+        program: &'a CompiledPattern,
+        input: &'a str,
+        limits: Limits,
+    ) -> Self {
+        Self {
+            machine: Machine::Backtrack {
+                machine: Backtrack::new(program, input, limits),
+                fallback: false,
+            },
+        }
+    }
+
+    /// The thread machine alone, for a backreference-free program.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn threads(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        assert!(!program.links.backreferences);
+        Self {
+            machine: Machine::Pike(Pike::new(Ctx::new(program, input, limits))),
+        }
+    }
+
+    /// The set and thread machines without a backtracking attempt, for a
+    /// backreference-free program.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn linear(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        assert!(!program.links.backreferences);
+        Self {
+            machine: Machine::Linear(Pike::new(Ctx::new(program, input, limits))),
+        }
+    }
+
+    /// [`Self::linear`] with a reverse state kept every few bytes and covered
+    /// ranges split after a few cells, so every search crosses kept states
+    /// and splits.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn tight(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        assert!(!program.links.backreferences);
+        let mut pike = Pike::new(Ctx::new(program, input, limits));
+        pike.sets = super::sets::Sets::tight(3, 40);
+        Self {
+            machine: Machine::Linear(pike),
+        }
+    }
+
+    /// Whether the linear-time machines have taken over this execution.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) const fn is_threaded(&self) -> bool {
+        matches!(self.machine, Machine::Pike(_) | Machine::Linear(_))
+    }
+
+    /// This execution's work and storage accounting.
+    pub(super) fn budget(&mut self) -> &mut Budget {
+        match &mut self.machine {
+            Machine::Backtrack { machine, .. } => &mut machine.ctx.budget,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            Machine::Pike(machine) => &mut machine.ctx.budget,
+            Machine::Linear(pike) => &mut pike.ctx.budget,
+            Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+        }
+    }
+
+    /// Whether a match starts at or after the UTF-8 offset `start`.
+    pub(super) fn is_match_from(&mut self, start: usize) -> Result<bool, Error> {
+        match &mut self.machine {
+            Machine::Backtrack {
+                machine,
+                fallback: false,
+            } => Ok(machine.find_from(start)?.is_some()),
+            Machine::Backtrack {
+                machine,
+                fallback: true,
+            } => match Self::attempt(machine, start) {
+                Err(Error::Resource(_)) => {
+                    self.hand_over();
+                    self.is_match_from(start)
+                }
+                decided => Ok(decided?.is_some()),
+            },
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            Machine::Pike(machine) => Ok(machine.find_from(start)?.is_some()),
+            Machine::Linear(pike) => Self::linear_is_match(pike, start),
+            Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+        }
+    }
+
+    /// A backtracking search from `start` under the allowance of an attempt
+    /// the linear-time machines can take over.
+    fn attempt(machine: &mut Backtrack<'a>, start: usize) -> Result<Option<Captures>, Error> {
+        let program = machine.ctx.program;
+        machine.attempt = Some(Attempt {
+            origin: start,
+            before: machine.ctx.budget.used(Resource::MatchSteps),
+            furthest: start,
+            program: ATTEMPT_NODE_STEPS
+                .saturating_mul((program.nodes.len() + program.sets.len()) as u64),
+            allowed: 0,
+        });
+        let attempt = machine.find_from(start);
+        machine.attempt = None;
+        attempt
+    }
+
+    /// Abandon the backtracking machine for the linear-time machines, which
+    /// inherit its accounting. Kept out of line, as are the linear-time
+    /// machines' searches, so that an execution the backtracking machine
+    /// decides runs only its own code.
+    #[cold]
+    #[inline(never)]
+    fn hand_over(&mut self) {
+        let Machine::Backtrack { machine, .. } =
+            std::mem::replace(&mut self.machine, Machine::Exchanging)
+        else {
+            unreachable!("only the backtracking machine hands over");
+        };
+        self.machine = Machine::Linear(Pike::new(machine.abandon()));
+    }
+
+    /// Whether the linear-time machines find a match from `start`.
+    #[cold]
+    #[inline(never)]
+    fn linear_is_match(pike: &mut Pike<'a>, start: usize) -> Result<bool, Error> {
+        pike.sets.is_match(&mut pike.ctx, start)
+    }
+
+    /// The linear-time machines' first match from `start`.
+    #[cold]
+    #[inline(never)]
+    fn linear_find(pike: &mut Pike<'a>, start: usize) -> Result<Option<Captures>, Error> {
+        match pike.sets.first_start(&mut pike.ctx, start)? {
+            Some(first) => pike.walk(first),
+            None => Ok(None),
+        }
+    }
+
+    /// The first ordered match starting at or after the UTF-8 offset `start`.
+    pub(super) fn find_from(&mut self, start: usize) -> Result<Option<Captures>, Error> {
+        match &mut self.machine {
+            Machine::Backtrack {
+                machine,
+                fallback: false,
+            } => machine.find_from(start),
+            Machine::Backtrack {
+                machine,
+                fallback: true,
+            } => match Self::attempt(machine, start) {
+                Err(Error::Resource(_)) => {
+                    self.hand_over();
+                    self.find_from(start)
+                }
+                decided => decided,
+            },
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            Machine::Pike(machine) => machine.find_from(start),
+            Machine::Linear(pike) => Self::linear_find(pike, start),
+            Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+        }
     }
 }
 
@@ -122,22 +370,22 @@ enum SetAction {
     Difference,
 }
 
-pub(super) struct Vm<'a> {
-    program: &'a CompiledPattern,
-    input: &'a str,
+/// What both matchers share: the program, the input, the request's fuel, the
+/// live-storage count, and the character-set, anchor and search-start tests.
+pub(super) struct Ctx<'a> {
+    pub(super) program: &'a CompiledPattern,
+    pub(super) input: &'a str,
     pub(super) budget: Budget,
-    live_slots: u128,
-    pending: WorkList<State, 4>,
+    pub(super) live_slots: u128,
 }
 
-impl<'a> Vm<'a> {
+impl<'a> Ctx<'a> {
     pub(super) fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
         Self {
             program,
             input,
             budget: Budget::new(limits),
             live_slots: 0,
-            pending: WorkList::new(),
         }
     }
 
@@ -157,104 +405,65 @@ impl<'a> Vm<'a> {
         Ok(())
     }
 
-    fn action(&mut self, state: &mut State, action: Action) -> Result<(), Error> {
-        self.push(&mut state.actions, action, 3)
+    /// Whether `position` satisfies `^` under the program's modes.
+    pub(super) fn at_start(&self, position: usize) -> bool {
+        position == 0
+            || (self.program.modes.multiline
+                && position < self.input.len()
+                && self.input[..position].ends_with('\n'))
     }
 
-    fn initial(&mut self, start: usize) -> Result<State, Error> {
-        let count = self.program.captures + 1;
-        let slots = 2 + (count as u128) * 2;
-        self.budget
-            .limits()
-            .admit(Resource::MatchSlots, self.live_slots + slots)?;
-        self.budget
-            .charge_wide(Resource::MatchSteps, count as u128)?;
-        let mut captures = Vec::new();
-        captures
-            .try_reserve_exact(count)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: count as u64,
-            })?;
-        captures.resize_with(count, || None);
-        self.live_slots += slots;
-        let mut state = State {
-            start,
-            position: start,
-            run: None,
-            actions: WorkList::new(),
-            captures,
-        };
-        self.action(&mut state, Action::Node(self.program.root))?;
-        Ok(state)
-    }
-
-    fn fork(&mut self, state: &State) -> Result<State, Error> {
-        self.budget
-            .limits()
-            .admit(Resource::MatchStates, self.pending.len() as u128 + 1)?;
-        let slots = state.slots();
-        self.budget
-            .limits()
-            .admit(Resource::MatchSlots, self.live_slots + slots)?;
-        self.budget.charge_wide(
-            Resource::MatchSteps,
-            state.captures.len() as u128 + state.actions.len() as u128,
-        )?;
-        let mut captures = Vec::new();
-        captures
-            .try_reserve_exact(state.captures.len())
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: state.captures.len() as u64,
-            })?;
-        captures.extend(state.captures.iter().cloned());
-        let mut actions = WorkList::new();
-        for &action in state.actions.iter() {
-            actions.try_push(action).map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: state.actions.len() as u64,
-            })?;
+    /// Whether `position` satisfies `$` under the program's modes.
+    pub(super) fn at_end(&self, position: usize) -> bool {
+        if self.program.modes.multiline {
+            self.input[position..].starts_with('\n')
+                || (position == self.input.len() && !self.input.ends_with('\n'))
+        } else {
+            position == self.input.len()
         }
-        self.live_slots += slots;
-        Ok(State {
-            start: state.start,
-            position: state.position,
-            run: None,
-            actions,
-            captures,
-        })
     }
 
-    fn enqueue(&mut self, state: State) -> Result<(), Error> {
-        self.budget
-            .limits()
-            .admit(Resource::MatchStates, self.pending.len() as u128 + 1)?;
-        self.pending.try_push(state).map_err(|_| Error::Allocation {
-            resource: Resource::MatchStates,
-            units: self.pending.len() as u64 + 1,
-        })
+    /// Whether `ch` belongs to the search's leading set, in one comparison
+    /// against the sorted ranges when they exist.
+    #[inline]
+    fn leads_with(&mut self, first: usize, ch: char) -> Result<bool, Error> {
+        let scalars = &self.program.lead.scalars;
+        if scalars.is_empty() {
+            self.set_matches(first, ch)
+        } else {
+            self.budget.charge(Resource::MatchSteps, 1)?;
+            let index = scalars.partition_point(|&(_, hi)| hi < ch);
+            Ok(scalars.get(index).is_some_and(|&(lo, _)| lo <= ch))
+        }
+    }
+
+    /// Whether a match can begin at `start`, spending the comparison that
+    /// decides it.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn may_start(&mut self, start: usize) -> Result<bool, Error> {
+        match self.program.lead.first {
+            Lead::Any => Ok(true),
+            Lead::Set(first) => match self.input[start..].chars().next() {
+                Some(ch) => self.leads_with(first, ch),
+                None => Ok(false),
+            },
+            Lead::Start => {
+                self.budget.charge(Resource::MatchSteps, 1)?;
+                Ok(self.at_start(start))
+            }
+        }
     }
 
     /// The first start position at or after `start` that can begin a match.
     ///
     /// Each skipped position spends the comparison that rejects it, so a
     /// literal search costs about one step per scanned character.
-    fn candidate(&mut self, mut start: usize) -> Result<Option<usize>, Error> {
+    pub(super) fn candidate(&mut self, mut start: usize) -> Result<Option<usize>, Error> {
         match self.program.lead.first {
             Lead::Any => Ok(Some(start)),
             Lead::Set(first) => {
-                let scalars = &self.program.lead.scalars;
                 while let Some(ch) = self.input[start..].chars().next() {
-                    let member = if scalars.is_empty() {
-                        self.set_matches(first, ch)?
-                    } else {
-                        // One comparison against the sorted ranges.
-                        self.budget.charge(Resource::MatchSteps, 1)?;
-                        let index = scalars.partition_point(|&(_, hi)| hi < ch);
-                        scalars.get(index).is_some_and(|&(lo, _)| lo <= ch)
-                    };
-                    if member {
+                    if self.leads_with(first, ch)? {
                         return Ok(Some(start));
                     }
                     start += ch.len_utf8();
@@ -287,370 +496,30 @@ impl<'a> Vm<'a> {
         }
     }
 
-    /// The first start after a failed `start` that a leading unbounded run
-    /// does not already cover, or the next character without such a run.
-    fn after_failure(&mut self, start: usize) -> Result<Option<usize>, Error> {
-        let mut next = start;
-        if let Some(run) = self.program.lead.run {
-            while let Some(ch) = self.input[next..].chars().next() {
-                if !self.set_matches(run, ch)? {
-                    break;
-                }
-                next += ch.len_utf8();
-            }
-        }
-        if next == self.input.len() {
-            return Ok(None);
-        }
-        self.budget.charge(Resource::MatchSteps, 1)?;
-        next += self.input[next..]
-            .chars()
-            .next()
-            .expect("next precedes the end")
-            .len_utf8();
-        Ok(Some(next))
-    }
-
-    /// Resume a pending state, first leaving its next shorter greedy stop.
-    ///
-    /// A run with no viable stop left is discarded, and None is returned.
-    fn resume(&mut self, mut state: State) -> Result<Option<State>, Error> {
-        if let Some(run) = state.run.take() {
-            let Some(stop) = self.stop(state.position, run)? else {
-                self.live_slots -= state.slots();
-                return Ok(None);
-            };
-            self.stop_at(&mut state, stop, run)?;
-        }
-        Ok(Some(state))
-    }
-
-    /// The longest stop at or below `position` whose next character can
-    /// continue, spending one comparison per stop it passes over.
-    fn stop(&mut self, mut position: usize, run: Run) -> Result<Option<usize>, Error> {
-        let Some(follow) = run.follow else {
-            return Ok(Some(position));
-        };
-        loop {
-            if let Some(ch) = self.input[position..].chars().next()
-                && self.set_matches(follow, ch)?
-            {
-                return Ok(Some(position));
-            }
-            if position == run.floor {
-                return Ok(None);
-            }
+    pub(super) fn set_matches(&mut self, root: usize, ch: char) -> Result<bool, Error> {
+        if let Some(ranges) = self.program.flat.get(root) {
+            // One comparison against the flattened union: one held cell and
+            // one step, as for an atomic set.
+            self.budget
+                .limits()
+                .admit(Resource::MatchSlots, self.live_slots + 1)?;
             self.budget.charge(Resource::MatchSteps, 1)?;
-            position = self.previous(position);
+            let index = ranges.partition_point(|&(_, hi)| hi < ch);
+            return Ok(ranges.get(index).is_some_and(|&(lo, _)| lo <= ch));
         }
-    }
-
-    /// Continue at `stop`, leaving every shorter stop as one pending state.
-    fn stop_at(&mut self, state: &mut State, stop: usize, run: Run) -> Result<(), Error> {
-        state.position = stop;
-        if stop > run.floor {
-            let mut shorter = self.fork(state)?;
-            shorter.position = self.previous(stop);
-            shorter.run = Some(run);
-            self.enqueue(shorter)?;
-        }
-        Ok(())
-    }
-
-    fn previous(&self, position: usize) -> usize {
-        position
-            - self.input[..position]
-                .chars()
-                .next_back()
-                .expect("a run above its floor consumed a character")
-                .len_utf8()
-    }
-
-    pub(super) fn find_from(&mut self, start: usize) -> Result<Option<Captures>, Error> {
-        let Some(mut start) = self.candidate(start)? else {
-            return Ok(None);
-        };
-        loop {
-            let mut state = self.initial(start)?;
-            loop {
-                self.budget.charge(Resource::MatchSteps, 1)?;
-                if let Some(action) = state.actions.pop() {
-                    self.live_slots -= 3;
-                    if self.execute(&mut state, action)? {
-                        continue;
-                    }
-                } else {
-                    state.captures[0] = Some(state.start..state.position);
-                    // A later replacement search cannot inherit continuations
-                    // from this successful match. Returned captures are expanded
-                    // and dropped before that caller starts its next search.
-                    self.live_slots -= state.slots();
-                    while let Some(stale) = self.pending.pop() {
-                        self.live_slots -= stale.slots();
-                    }
-                    debug_assert_eq!(self.live_slots, 0);
-                    return Ok(Some(Captures {
-                        spans: state.captures,
-                    }));
-                }
-                self.live_slots -= state.slots();
-                drop(state);
-                let mut resumed = None;
-                while let Some(next) = self.pending.pop() {
-                    resumed = self.resume(next)?;
-                    if resumed.is_some() {
-                        break;
-                    }
-                }
-                if let Some(next) = resumed {
-                    state = next;
-                } else {
-                    break;
-                }
-            }
-            let Some(next) = self.after_failure(start)? else {
-                return Ok(None);
-            };
-            let Some(next) = self.candidate(next)? else {
-                return Ok(None);
-            };
-            start = next;
-        }
-    }
-
-    fn execute(&mut self, state: &mut State, action: Action) -> Result<bool, Error> {
-        match action {
-            Action::Node(node) => self.node(state, node),
-            Action::CaptureEnd { number, start } => {
-                state.captures[number] = Some(start..state.position);
-                Ok(true)
-            }
-            Action::Repeat {
-                node,
-                count,
-                stalled,
-            } => self.repeat(state, node, count, stalled),
-            Action::RepeatEnd { node, count, start } => {
-                // This spend precedes every count increment, even an empty one.
-                self.budget.charge(Resource::MatchSteps, 1)?;
-                let count = count
-                    .checked_add(1)
-                    .expect("finite fuel refuses before a repetition count can overflow");
-                self.action(
-                    state,
-                    Action::Repeat {
-                        node,
-                        count,
-                        stalled: state.position == start,
-                    },
-                )?;
-                Ok(true)
-            }
-        }
-    }
-
-    fn node(&mut self, state: &mut State, node: usize) -> Result<bool, Error> {
-        match self.program.nodes[node] {
-            Node::Empty => Ok(true),
-            Node::Start => Ok(state.position == 0
-                || (self.program.modes.multiline
-                    && state.position < self.input.len()
-                    && self.input[..state.position].ends_with('\n'))),
-            Node::End => Ok(if self.program.modes.multiline {
-                self.input[state.position..].starts_with('\n')
-                    || (state.position == self.input.len() && !self.input.ends_with('\n'))
-            } else {
-                state.position == self.input.len()
-            }),
-            Node::Character(set) => {
-                let Some(ch) = self.input[state.position..].chars().next() else {
-                    return Ok(false);
-                };
-                if !self.set_matches(set, ch)? {
-                    return Ok(false);
-                }
-                state.position += ch.len_utf8();
-                Ok(true)
-            }
-            Node::Backreference(number) => self.backreference(state, number),
-            Node::Sequence(left, right) => {
-                self.action(state, Action::Node(right))?;
-                self.action(state, Action::Node(left))?;
-                Ok(true)
-            }
-            Node::Choice(left, right) => {
-                let mut alternative = self.fork(state)?;
-                self.action(&mut alternative, Action::Node(right))?;
-                self.enqueue(alternative)?;
-                self.action(state, Action::Node(left))?;
-                Ok(true)
-            }
-            Node::Capture { number, body } => {
-                self.action(
-                    state,
-                    Action::CaptureEnd {
-                        number,
-                        start: state.position,
-                    },
-                )?;
-                self.action(state, Action::Node(body))?;
-                Ok(true)
-            }
-            Node::Repeat { .. } => {
-                self.action(
-                    state,
-                    Action::Repeat {
-                        node,
-                        count: 0,
-                        stalled: false,
-                    },
-                )?;
-                Ok(true)
-            }
-        }
-    }
-
-    fn repeat(
-        &mut self,
-        state: &mut State,
-        node: usize,
-        count: u64,
-        stalled: bool,
-    ) -> Result<bool, Error> {
-        let Node::Repeat {
-            body,
-            min,
-            max,
-            greedy,
-            ..
-        } = self.program.nodes[node]
-        else {
-            unreachable!("a repetition continuation names its immutable repeat node");
-        };
-        if greedy
-            && count == 0
-            && let Node::Character(set) = self.program.nodes[body]
-        {
-            let Node::Repeat { follow, .. } = self.program.nodes[node] else {
-                unreachable!("the repetition was matched above");
-            };
-            return self.greedy_run(state, set, min, max, follow);
-        }
-        let can_stop = matches!(min, Count::Finite(min) if count >= min);
-        let can_repeat =
-            !(matches!(max, Some(Count::Finite(max)) if count >= max) || stalled && can_stop);
-        if !can_repeat {
-            return Ok(can_stop);
-        }
-        if can_stop {
-            let mut alternative = self.fork(state)?;
-            if greedy {
-                self.enqueue(alternative)?;
-            } else {
-                self.iteration(&mut alternative, node, body, count)?;
-                self.enqueue(alternative)?;
-                return Ok(true);
-            }
-        }
-        self.iteration(state, node, body, count)?;
-        Ok(true)
-    }
-
-    /// A greedy repetition of one character set, without a pending state per
-    /// iteration.
-    ///
-    /// Every iteration consumes exactly one character and has no capture, so
-    /// the alternatives differ only in where the run stops. The run is scanned
-    /// once; a single pending state then stands for every shorter admissible
-    /// stop, longest first, which is the order the general repetition visits.
-    fn greedy_run(
-        &mut self,
-        state: &mut State,
-        set: usize,
-        min: Count,
-        max: Option<Count>,
-        follow: Option<usize>,
-    ) -> Result<bool, Error> {
-        let min = match min {
-            Count::Finite(min) => Some(min),
-            Count::AboveU64 => None,
-        };
-        let max = match max {
-            Some(Count::Finite(max)) => max,
-            None | Some(Count::AboveU64) => u64::MAX,
-        };
-        let mut floor = (min == Some(0)).then_some(state.position);
-        let mut count = 0_u64;
-        while count < max {
-            // The same spend that precedes every general repetition count.
+        let set = self.program.sets[root];
+        if !matches!(
+            set,
+            Set::Complement(_) | Set::Union(..) | Set::Difference(..)
+        ) {
+            // The work list below would hold one cell at a time and spend one
+            // step before the atomic test: the same admission and spend.
+            self.budget
+                .limits()
+                .admit(Resource::MatchSlots, self.live_slots + 1)?;
             self.budget.charge(Resource::MatchSteps, 1)?;
-            let Some(ch) = self.input[state.position..].chars().next() else {
-                break;
-            };
-            if !self.set_matches(set, ch)? {
-                break;
-            }
-            state.position += ch.len_utf8();
-            count += 1;
-            if Some(count) == min {
-                floor = Some(state.position);
-            }
+            return self.atomic_set(set, ch);
         }
-        let Some(floor) = floor else {
-            return Ok(false);
-        };
-        let run = Run { floor, follow };
-        let Some(stop) = self.stop(state.position, run)? else {
-            return Ok(false);
-        };
-        self.stop_at(state, stop, run)?;
-        Ok(true)
-    }
-
-    fn iteration(
-        &mut self,
-        state: &mut State,
-        node: usize,
-        body: usize,
-        count: u64,
-    ) -> Result<(), Error> {
-        self.action(
-            state,
-            Action::RepeatEnd {
-                node,
-                count,
-                start: state.position,
-            },
-        )?;
-        self.action(state, Action::Node(body))
-    }
-
-    fn backreference(&mut self, state: &mut State, number: usize) -> Result<bool, Error> {
-        let Some(span) = state.captures[number].clone() else {
-            return Ok(true);
-        };
-        for expected in self.input[span].chars() {
-            self.budget.charge(Resource::MatchSteps, 1)?;
-            let Some(actual) = self.input[state.position..].chars().next() else {
-                return Ok(false);
-            };
-            if actual != expected {
-                if !self.program.modes.insensitive {
-                    return Ok(false);
-                }
-                let variants = case_variants(expected);
-                self.budget
-                    .charge_wide(Resource::MatchSteps, variants.len() as u128)?;
-                if !variants.contains(&(actual as u32)) {
-                    return Ok(false);
-                }
-            }
-            state.position += actual.len_utf8();
-        }
-        Ok(true)
-    }
-
-    fn set_matches(&mut self, root: usize, ch: char) -> Result<bool, Error> {
         let mut work = WorkList::<SetAction, 16>::new();
         let mut values = WorkList::<bool, 16>::new();
         self.push(&mut work, SetAction::Visit(root), 1)?;
@@ -739,6 +608,558 @@ impl<'a> Vm<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum Action {
+    Node(usize),
+    CaptureEnd {
+        number: usize,
+        start: usize,
+    },
+    Repeat {
+        node: usize,
+        count: u64,
+        stalled: bool,
+    },
+    RepeatEnd {
+        node: usize,
+        count: u64,
+        start: usize,
+    },
+}
+
+/// The remaining stops of a greedy single-character run.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    /// The shortest admissible stop.
+    floor: usize,
+    /// The set the character after a viable stop must belong to.
+    follow: Option<usize>,
+}
+
+struct State {
+    start: usize,
+    position: usize,
+    /// A pending greedy single-character run: its position is the next stop
+    /// to consider, and resuming it first leaves the next shorter stop pending.
+    run: Option<Run>,
+    actions: WorkList<Action, 8>,
+    captures: Vec<Option<Range<usize>>>,
+}
+
+impl State {
+    fn slots(&self) -> u128 {
+        2 + (self.captures.len() as u128) * 2 + (self.actions.len() as u128) * 3
+    }
+}
+
+/// The backtracking machine for programs whose continuations read captures.
+pub(super) struct Backtrack<'a> {
+    ctx: Ctx<'a>,
+    pending: WorkList<State, 4>,
+    /// The allowance of an attempt the thread machine can take over.
+    attempt: Option<Attempt>,
+}
+
+impl<'a> Backtrack<'a> {
+    fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        Self {
+            ctx: Ctx::new(program, input, limits),
+            pending: WorkList::new(),
+            attempt: None,
+        }
+    }
+
+    /// Release every pending state and hand over the request's accounting.
+    fn abandon(self) -> Ctx<'a> {
+        let Self {
+            mut ctx, pending, ..
+        } = self;
+        drop(pending);
+        // A refused attempt may hold its current state and its set-evaluation
+        // cells too; all of them are dropped with the machine.
+        ctx.live_slots = 0;
+        ctx
+    }
+
+    fn action(&mut self, state: &mut State, action: Action) -> Result<(), Error> {
+        self.ctx.push(&mut state.actions, action, 3)
+    }
+
+    fn initial(&mut self, start: usize) -> Result<State, Error> {
+        let count = self.ctx.program.captures + 1;
+        let slots = 2 + (count as u128) * 2;
+        self.ctx
+            .budget
+            .limits()
+            .admit(Resource::MatchSlots, self.ctx.live_slots + slots)?;
+        self.ctx
+            .budget
+            .charge_wide(Resource::MatchSteps, count as u128)?;
+        let mut captures = Vec::new();
+        captures
+            .try_reserve_exact(count)
+            .map_err(|_| Error::Allocation {
+                resource: Resource::MatchSlots,
+                units: count as u64,
+            })?;
+        captures.resize_with(count, || None);
+        self.ctx.live_slots += slots;
+        let mut state = State {
+            start,
+            position: start,
+            run: None,
+            actions: WorkList::new(),
+            captures,
+        };
+        self.action(&mut state, Action::Node(self.ctx.program.root))?;
+        Ok(state)
+    }
+
+    fn fork(&mut self, state: &State) -> Result<State, Error> {
+        self.ctx
+            .budget
+            .limits()
+            .admit(Resource::MatchStates, self.pending.len() as u128 + 1)?;
+        let slots = state.slots();
+        self.ctx
+            .budget
+            .limits()
+            .admit(Resource::MatchSlots, self.ctx.live_slots + slots)?;
+        self.ctx.budget.charge_wide(
+            Resource::MatchSteps,
+            state.captures.len() as u128 + state.actions.len() as u128,
+        )?;
+        let mut captures = Vec::new();
+        captures
+            .try_reserve_exact(state.captures.len())
+            .map_err(|_| Error::Allocation {
+                resource: Resource::MatchSlots,
+                units: state.captures.len() as u64,
+            })?;
+        captures.extend(state.captures.iter().cloned());
+        let mut actions = WorkList::new();
+        for &action in state.actions.iter() {
+            actions.try_push(action).map_err(|_| Error::Allocation {
+                resource: Resource::MatchSlots,
+                units: state.actions.len() as u64,
+            })?;
+        }
+        self.ctx.live_slots += slots;
+        Ok(State {
+            start: state.start,
+            position: state.position,
+            run: None,
+            actions,
+            captures,
+        })
+    }
+
+    fn enqueue(&mut self, state: State) -> Result<(), Error> {
+        self.ctx
+            .budget
+            .limits()
+            .admit(Resource::MatchStates, self.pending.len() as u128 + 1)?;
+        self.pending.try_push(state).map_err(|_| Error::Allocation {
+            resource: Resource::MatchStates,
+            units: self.pending.len() as u64 + 1,
+        })
+    }
+
+    /// The first start after a failed `start` that a leading unbounded run
+    /// does not already cover, or the next character without such a run.
+    fn after_failure(&mut self, start: usize) -> Result<Option<usize>, Error> {
+        let input = self.ctx.input;
+        let mut next = start;
+        if let Some(run) = self.ctx.program.lead.run {
+            while let Some(ch) = input[next..].chars().next() {
+                if !self.ctx.set_matches(run, ch)? {
+                    break;
+                }
+                next += ch.len_utf8();
+            }
+        }
+        if next == input.len() {
+            return Ok(None);
+        }
+        self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+        next += input[next..]
+            .chars()
+            .next()
+            .expect("next precedes the end")
+            .len_utf8();
+        Ok(Some(next))
+    }
+
+    /// Resume a pending state, first leaving its next shorter greedy stop.
+    ///
+    /// A run with no viable stop left is discarded, and None is returned.
+    fn resume(&mut self, mut state: State) -> Result<Option<State>, Error> {
+        if let Some(run) = state.run.take() {
+            let Some(stop) = self.stop(state.start, state.position, run)? else {
+                self.ctx.live_slots -= state.slots();
+                return Ok(None);
+            };
+            self.stop_at(&mut state, stop, run)?;
+        }
+        Ok(Some(state))
+    }
+
+    /// The longest stop at or below `position` whose next character can
+    /// continue, spending one comparison per stop it passes over.
+    ///
+    /// An attempt the linear-time machines can take over is checked against
+    /// its allowance at every stop it passes, so a run scanned back over the
+    /// whole input is abandoned as soon as it is not linear.
+    fn stop(
+        &mut self,
+        start: usize,
+        mut position: usize,
+        run: Run,
+    ) -> Result<Option<usize>, Error> {
+        let Some(follow) = run.follow else {
+            return Ok(Some(position));
+        };
+        let input = self.ctx.input;
+        loop {
+            if let Some(ch) = input[position..].chars().next()
+                && self.ctx.set_matches(follow, ch)?
+            {
+                return Ok(Some(position));
+            }
+            if position == run.floor {
+                return Ok(None);
+            }
+            self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+            if let Some(attempt) = &mut self.attempt
+                && let Some(refusal) =
+                    attempt.exceeded(start, position, self.ctx.budget.used(Resource::MatchSteps))
+            {
+                return Err(refusal.into());
+            }
+            position = self.previous(position);
+        }
+    }
+
+    /// Continue at `stop`, leaving every shorter stop as one pending state.
+    fn stop_at(&mut self, state: &mut State, stop: usize, run: Run) -> Result<(), Error> {
+        state.position = stop;
+        if stop > run.floor {
+            let mut shorter = self.fork(state)?;
+            shorter.position = self.previous(stop);
+            shorter.run = Some(run);
+            self.enqueue(shorter)?;
+        }
+        Ok(())
+    }
+
+    fn previous(&self, position: usize) -> usize {
+        position
+            - self.ctx.input[..position]
+                .chars()
+                .next_back()
+                .expect("a run above its floor consumed a character")
+                .len_utf8()
+    }
+
+    fn find_from(&mut self, start: usize) -> Result<Option<Captures>, Error> {
+        let Some(mut start) = self.ctx.candidate(start)? else {
+            return Ok(None);
+        };
+        loop {
+            let mut state = self.initial(start)?;
+            loop {
+                self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+                if let Some(attempt) = &mut self.attempt
+                    && let Some(refusal) = attempt.exceeded(
+                        start,
+                        state.position,
+                        self.ctx.budget.used(Resource::MatchSteps),
+                    )
+                {
+                    return Err(refusal.into());
+                }
+                if let Some(action) = state.actions.pop() {
+                    self.ctx.live_slots -= 3;
+                    if self.execute(&mut state, action)? {
+                        continue;
+                    }
+                } else {
+                    state.captures[0] = Some(state.start..state.position);
+                    // A later replacement search cannot inherit continuations
+                    // from this successful match. Returned captures are expanded
+                    // and dropped before that caller starts its next search.
+                    self.ctx.live_slots -= state.slots();
+                    while let Some(stale) = self.pending.pop() {
+                        self.ctx.live_slots -= stale.slots();
+                    }
+                    debug_assert_eq!(self.ctx.live_slots, 0);
+                    return Ok(Some(Captures {
+                        spans: state.captures,
+                    }));
+                }
+                self.ctx.live_slots -= state.slots();
+                drop(state);
+                let mut resumed = None;
+                while let Some(next) = self.pending.pop() {
+                    resumed = self.resume(next)?;
+                    if resumed.is_some() {
+                        break;
+                    }
+                }
+                if let Some(next) = resumed {
+                    state = next;
+                } else {
+                    break;
+                }
+            }
+            let Some(next) = self.after_failure(start)? else {
+                return Ok(None);
+            };
+            let Some(next) = self.ctx.candidate(next)? else {
+                return Ok(None);
+            };
+            start = next;
+        }
+    }
+
+    fn execute(&mut self, state: &mut State, action: Action) -> Result<bool, Error> {
+        match action {
+            Action::Node(node) => self.node(state, node),
+            Action::CaptureEnd { number, start } => {
+                state.captures[number] = Some(start..state.position);
+                Ok(true)
+            }
+            Action::Repeat {
+                node,
+                count,
+                stalled,
+            } => self.repeat(state, node, count, stalled),
+            Action::RepeatEnd { node, count, start } => {
+                // This spend precedes every count increment, even an empty one.
+                self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+                let count = count
+                    .checked_add(1)
+                    .expect("finite fuel refuses before a repetition count can overflow");
+                self.action(
+                    state,
+                    Action::Repeat {
+                        node,
+                        count,
+                        stalled: state.position == start,
+                    },
+                )?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn node(&mut self, state: &mut State, node: usize) -> Result<bool, Error> {
+        match self.ctx.program.nodes[node] {
+            Node::Empty => Ok(true),
+            Node::Start => Ok(self.ctx.at_start(state.position)),
+            Node::End => Ok(self.ctx.at_end(state.position)),
+            Node::Character(set) => {
+                let Some(ch) = self.ctx.input[state.position..].chars().next() else {
+                    return Ok(false);
+                };
+                if !self.ctx.set_matches(set, ch)? {
+                    return Ok(false);
+                }
+                state.position += ch.len_utf8();
+                Ok(true)
+            }
+            Node::Backreference(number) => self.backreference(state, number),
+            Node::Sequence(left, right) => {
+                self.action(state, Action::Node(right))?;
+                self.action(state, Action::Node(left))?;
+                Ok(true)
+            }
+            Node::Choice(left, right) => {
+                let mut alternative = self.fork(state)?;
+                self.action(&mut alternative, Action::Node(right))?;
+                self.enqueue(alternative)?;
+                self.action(state, Action::Node(left))?;
+                Ok(true)
+            }
+            Node::Capture { number, body } => {
+                self.action(
+                    state,
+                    Action::CaptureEnd {
+                        number,
+                        start: state.position,
+                    },
+                )?;
+                self.action(state, Action::Node(body))?;
+                Ok(true)
+            }
+            Node::Repeat { .. } => {
+                self.action(
+                    state,
+                    Action::Repeat {
+                        node,
+                        count: 0,
+                        stalled: false,
+                    },
+                )?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn repeat(
+        &mut self,
+        state: &mut State,
+        node: usize,
+        count: u64,
+        stalled: bool,
+    ) -> Result<bool, Error> {
+        let Node::Repeat {
+            body,
+            min,
+            max,
+            greedy,
+            ..
+        } = self.ctx.program.nodes[node]
+        else {
+            unreachable!("a repetition continuation names its immutable repeat node");
+        };
+        if greedy
+            && count == 0
+            && let Node::Character(set) = self.ctx.program.nodes[body]
+        {
+            let Node::Repeat { follow, .. } = self.ctx.program.nodes[node] else {
+                unreachable!("the repetition was matched above");
+            };
+            return self.greedy_run(state, set, min, max, follow);
+        }
+        let (can_stop, can_repeat) = decide(min, max, count, stalled);
+        if !can_repeat {
+            return Ok(can_stop);
+        }
+        if can_stop {
+            let mut alternative = self.fork(state)?;
+            if greedy {
+                self.enqueue(alternative)?;
+            } else {
+                self.iteration(&mut alternative, node, body, count)?;
+                self.enqueue(alternative)?;
+                return Ok(true);
+            }
+        }
+        self.iteration(state, node, body, count)?;
+        Ok(true)
+    }
+
+    /// A greedy repetition of one character set, without a pending state per
+    /// iteration.
+    ///
+    /// Every iteration consumes exactly one character and has no capture, so
+    /// the alternatives differ only in where the run stops. The run is scanned
+    /// once; a single pending state then stands for every shorter admissible
+    /// stop, longest first, which is the order the general repetition visits.
+    fn greedy_run(
+        &mut self,
+        state: &mut State,
+        set: usize,
+        min: Count,
+        max: Option<Count>,
+        follow: Option<usize>,
+    ) -> Result<bool, Error> {
+        let min = match min {
+            Count::Finite(min) => Some(min),
+            Count::AboveU64 => None,
+        };
+        let max = match max {
+            Some(Count::Finite(max)) => max,
+            None | Some(Count::AboveU64) => u64::MAX,
+        };
+        let input = self.ctx.input;
+        let mut floor = (min == Some(0)).then_some(state.position);
+        let mut count = 0_u64;
+        while count < max {
+            // The same spend that precedes every general repetition count.
+            self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+            let Some(ch) = input[state.position..].chars().next() else {
+                break;
+            };
+            if !self.ctx.set_matches(set, ch)? {
+                break;
+            }
+            state.position += ch.len_utf8();
+            count += 1;
+            if Some(count) == min {
+                floor = Some(state.position);
+            }
+        }
+        let Some(floor) = floor else {
+            return Ok(false);
+        };
+        let run = Run { floor, follow };
+        let Some(stop) = self.stop(state.start, state.position, run)? else {
+            return Ok(false);
+        };
+        self.stop_at(state, stop, run)?;
+        Ok(true)
+    }
+
+    fn iteration(
+        &mut self,
+        state: &mut State,
+        node: usize,
+        body: usize,
+        count: u64,
+    ) -> Result<(), Error> {
+        self.action(
+            state,
+            Action::RepeatEnd {
+                node,
+                count,
+                start: state.position,
+            },
+        )?;
+        self.action(state, Action::Node(body))
+    }
+
+    fn backreference(&mut self, state: &mut State, number: usize) -> Result<bool, Error> {
+        let Some(span) = state.captures[number].clone() else {
+            return Ok(true);
+        };
+        let input = self.ctx.input;
+        for expected in input[span].chars() {
+            self.ctx.budget.charge(Resource::MatchSteps, 1)?;
+            let Some(actual) = input[state.position..].chars().next() else {
+                return Ok(false);
+            };
+            if actual != expected {
+                if !self.ctx.program.modes.insensitive {
+                    return Ok(false);
+                }
+                let variants = case_variants(expected);
+                self.ctx
+                    .budget
+                    .charge_wide(Resource::MatchSteps, variants.len() as u128)?;
+                if !variants.contains(&(actual as u32)) {
+                    return Ok(false);
+                }
+            }
+            state.position += actual.len_utf8();
+        }
+        Ok(true)
+    }
+}
+
+/// Whether a repetition that has completed `count` iterations may stop, and
+/// whether it may iterate again.
+///
+/// An iteration that consumed nothing (`stalled`) once the minimum is met
+/// stops the repetition: a further empty iteration could only repeat it.
+pub(super) fn decide(min: Count, max: Option<Count>, count: u64, stalled: bool) -> (bool, bool) {
+    let can_stop = matches!(min, Count::Finite(min) if count >= min);
+    let can_repeat =
+        !(matches!(max, Some(Count::Finite(max)) if count >= max) || stalled && can_stop);
+    (can_stop, can_repeat)
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -822,16 +1243,272 @@ mod tests {
                         first,
                         "search {profile:?} {source:?} {input:?}"
                     );
-                    if let Some(captures) = actual {
+                    if let Some(captures) = &actual {
                         let span = captures.get(0).unwrap();
                         let text = &input[span];
                         assert!(language.iter().any(|word| word == text));
+                    }
+                    // The linear-time machines decide the same languages and
+                    // report the same first match.
+                    if !search.links.backreferences {
+                        assert_eq!(
+                            Vm::linear(&whole, input, Limits::new())
+                                .is_match_from(0)
+                                .unwrap(),
+                            language.contains(input),
+                            "linear whole {profile:?} {source:?} {input:?}"
+                        );
+                        assert_eq!(
+                            Vm::linear(&search, input, Limits::new())
+                                .find_from(0)
+                                .unwrap(),
+                            actual,
+                            "linear search {profile:?} {source:?} {input:?}"
+                        );
                     }
                     comparisons += 1;
                 }
             }
         }
         assert_eq!(comparisons, 38_220);
+    }
+
+    /// Backreference-free shapes every linear-time machine is proven on.
+    const DIFFERENTIAL: &[&str] = &[
+        "a",
+        "(a|b)",
+        "(ab|a)",
+        "(a|b){0,3}",
+        "a{1,3}",
+        "(ab){1,2}",
+        "(|a)b?",
+        "(a|b)*",
+        "(a?)*",
+        "(a*)*",
+        "(a*)+",
+        "(a|)*",
+        "(|a)*",
+        "(a?){2}",
+        "(a?){0,2}",
+        "(a?){2,}",
+        "(a??)*",
+        "(a*?)*",
+        "((a)|b)+",
+        "((a)|(b))*",
+        "(a|ab)(b|bab)?",
+        "^(a|aa)*$",
+        "(a|aa)*b",
+        "^(a*)*b$",
+        "((a+)+)+b",
+        "(a|b)*?b",
+        "a*?",
+        "(a+?)(a*)",
+        "(?:a|b)+?",
+        "((a?)(b?))*",
+        "(a(b)?)+",
+        "(a|b|)+",
+        "(()|a)+",
+        "(a*|b)*",
+        "(a{0,2}){2}",
+        "((a|b){2})*",
+        "^(?:a|b)*$",
+        "$",
+        "^",
+        "^$",
+        "(^a|b$)+",
+        "(a$|b)*",
+        "(^|a)+",
+        "(\\n|^)a",
+        "a.b",
+        ".*",
+        "(.)*?a",
+        "[ab]{2,}",
+        "(é|b)+",
+        "(a|é){1,3}?",
+        "((a|é)?){3}",
+        "(a{2})*",
+        "(a{0}b)*",
+        "x{0}",
+        "((a*)(b*))*",
+        "(a|(b))+?a",
+        "((a)*|b)*",
+        "(?:(a)|b|)*",
+        "((?:a|)*)*",
+        "(a?)+?b",
+        "((a?)*?)*",
+        "^(a?){1,2}$",
+        "(a|b){1,2}?b",
+        "(b*a*)*$",
+        "(?:^a|$|b)+",
+        "((ab)|a(b?))*",
+        "((a|b){2,3}){1,2}",
+        "(a{1,2}?){2,}",
+        "((a?){2}b?){0,2}",
+        "(?:(a)|(b)){2,}?",
+        "(a{2,})*",
+        "(a+|b+){3,}",
+    ];
+
+    /// Counted repetitions: nested counts, alternation, reluctance, captures
+    /// and empty iterations inside counts, and anchors around them.
+    const COUNTED: &[&str] = &[
+        "(ab){1,3}c",
+        "(ab){2,3}",
+        "(a|b){1,3}b",
+        "(a|b){2}",
+        "(a|b){3}?",
+        "((a|b){2}){1,2}",
+        "((a|b){2}){2,3}b",
+        "((a|b){2}){1,2}?a",
+        "(a|ab){1,3}",
+        "(ab|a){2,4}?",
+        "(a|aa){2,3}b",
+        "(a{1,2}){2}",
+        "(a{2}|b){1,3}",
+        "((a)|b){2,3}",
+        "((a)|(b)){1,2}?",
+        "(a(b)?){2,3}",
+        "((a?)b){1,3}",
+        "(a?){3}",
+        "(a?){3}b",
+        "(a?){3}?a",
+        "(a*){2,3}",
+        "(a*?){2,3}b",
+        "(a|){3}",
+        "(|a){3}",
+        "(|a){2,3}b",
+        "(a??){3}",
+        "(a??){2,3}b",
+        "(a?){2,}",
+        "(a?b?){3,}",
+        "(a?b?){3,}?b",
+        "((a?)(b?)){3}",
+        "(^a|b){2}",
+        "(a$|b){1,2}",
+        "(^|a){3}",
+        "(^|a){2,3}b",
+        "(a|$){2,3}",
+        "(a|^){3}$",
+        "((a?){2}){2}",
+        "((a?){2,3}b){1,2}",
+        "((a?){2}|b){2}",
+        "(a{0,2}?){2}",
+        "((ab){1,2}|a){2}",
+        "(a|b){0,2}?a",
+        "(?:a|b){2,3}?b",
+        "((?:a|b){2}){1,2}?",
+        "(a{3}){2}",
+        "(a{3}|b){1,2}",
+        "(é|a){2,3}",
+        "(é|a){1,4}é",
+        "(.){2}",
+        "(.{2}){1,2}",
+        "(\\n|a){2}",
+        ".{1,3}b",
+        "[ab]{2,3}",
+        "(a{1,3}){1,3}",
+        "(a{1,2}?){2,3}b",
+        "(a{2}){0,2}b",
+        "((a{1,2}){2}){1,2}",
+        "((a|b){1,2}b){2}",
+        "(a{2,}|b){2}",
+        "(b*a{2}){1,2}",
+        "((a|é){2})+",
+        "((a|b){2})*?b",
+        "(a|b){2}(a|b){1,2}",
+        "^(a|b){1,3}$",
+        "^(a|b){2,3}?$",
+        "(a{1,2}|b{1,2}){2}",
+        "((^|a){2}){2,3}",
+        "((a|$){2}){1,3}",
+        "((a?){3}|b){2,4}",
+        "((a?){2,3}){2}?b",
+        "((^a?){2}){2}",
+        "((|a){2}){2,3}b",
+        "((a??){2}b?){2}",
+        "((a{0,2}){2}){1,2}a",
+        "(((a|b){2}){2}){1,2}",
+        "((a|b){1,2}(a|b){2}){1,2}?",
+    ];
+
+    /// Every whole match and capture of the thread machine, from every start,
+    /// against the backtracking machine on the same backreference-free program.
+    #[test]
+    fn thread_machine_reports_the_backtracking_machines_matches_and_captures() {
+        let inputs = words(&['a', 'b', 'é', '\n'], 4);
+        let mut comparisons = 0;
+        for flags in ["", "m", "s", "i"] {
+            for source in DIFFERENTIAL.iter().chain(COUNTED) {
+                let program = pattern(Profile::Xpath31, source, flags);
+                assert!(!program.links.backreferences, "{source}");
+                for input in &inputs {
+                    for (start, _) in input.char_indices().chain([(input.len(), ' ')]) {
+                        let thread = Vm::threads(&program, input, Limits::new())
+                            .find_from(start)
+                            .unwrap();
+                        let backtrack = Vm::backtracking(&program, input, Limits::new())
+                            .find_from(start)
+                            .unwrap();
+                        assert_eq!(thread, backtrack, "{source:?} {flags:?} {input:?} {start}");
+                        comparisons += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(comparisons, 4 * (DIFFERENTIAL.len() + COUNTED.len()) * 1593);
+    }
+
+    /// Every match start, whole match and capture of the set machine and the
+    /// one-start thread machine, from every start and over successive
+    /// searches of one execution, against the backtracking machine.
+    #[test]
+    fn linear_machines_report_the_backtracking_machines_matches_and_captures() {
+        let inputs = words(&['a', 'b', 'é', '\n'], 4);
+        let mut comparisons = 0;
+        for flags in ["", "m", "s", "i"] {
+            for source in DIFFERENTIAL.iter().chain(COUNTED) {
+                let program = pattern(Profile::Xpath31, source, flags);
+                for input in &inputs {
+                    let mut successive = Vm::linear(&program, input, Limits::new());
+                    let mut previous = 0;
+                    for (start, _) in input.char_indices().chain([(input.len(), ' ')]) {
+                        let backtrack = Vm::backtracking(&program, input, Limits::new())
+                            .find_from(start)
+                            .unwrap();
+                        let linear = Vm::linear(&program, input, Limits::new())
+                            .find_from(start)
+                            .unwrap();
+                        assert_eq!(linear, backtrack, "{source:?} {flags:?} {input:?} {start}");
+                        let tight = Vm::tight(&program, input, Limits::new())
+                            .find_from(start)
+                            .unwrap();
+                        assert_eq!(
+                            tight, backtrack,
+                            "tight {source:?} {flags:?} {input:?} {start}"
+                        );
+                        let matched = Vm::linear(&program, input, Limits::new())
+                            .is_match_from(start)
+                            .unwrap();
+                        assert_eq!(
+                            matched,
+                            backtrack.is_some(),
+                            "{source:?} {flags:?} {input:?} {start}"
+                        );
+                        // A later search of the same execution reads the
+                        // starts an earlier one marked.
+                        if start >= previous {
+                            let found = successive.find_from(start).unwrap();
+                            assert_eq!(found, backtrack, "{source:?} {flags:?} {input:?} {start}");
+                            if let Some(span) = found.and_then(|captures| captures.get(0)) {
+                                previous = span.end;
+                            }
+                        }
+                        comparisons += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(comparisons, 4 * (DIFFERENTIAL.len() + COUNTED.len()) * 1593);
     }
 
     #[test]
@@ -911,6 +1588,36 @@ mod tests {
         assert!(pattern(Profile::Xpath31, ".*b", "").lead.run.is_some());
         assert!(pattern(Profile::Xpath31, "(.*)b", "").lead.run.is_none());
         assert!(pattern(Profile::Xpath31, ".{0,9}b", "").lead.run.is_none());
+    }
+
+    #[test]
+    fn flattened_class_unions_match_like_their_alternatives() {
+        // A class union is flattened into sorted ranges; the same members
+        // written as an alternative of atoms keep per-atom evaluation.
+        for (class, alternative, flags) in [
+            ("^[a-z0-9]$", "^(?:[a-z]|[0-9])$", ""),
+            ("^[a-cK_]$", "^(?:[a-c]|K|_)$", "i"),
+            ("^[\u{3b8}x-z-]$", "^(?:\u{3b8}|[x-z]|-)$", "i"),
+            ("^[\n\t ]$", "^(?:\n|\t| )$", ""),
+        ] {
+            let flat = pattern(Profile::Xpath31, class, flags);
+            assert!(
+                (0..flat.sets.len()).any(|set| flat.flat.get(set).is_some()),
+                "{class}"
+            );
+            let atoms = pattern(Profile::Xpath31, alternative, flags);
+            for point in (0..0x2200).chain(0x1_0000..0x1_0010) {
+                let Some(ch) = char::from_u32(point) else {
+                    continue;
+                };
+                let text = ch.to_string();
+                assert_eq!(
+                    flat.is_match(&text, Limits::new()).unwrap(),
+                    atoms.is_match(&text, Limits::new()).unwrap(),
+                    "{class} {flags} U+{point:04X}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1010,25 +1717,648 @@ mod tests {
         ));
     }
 
+    /// Deterministic prose of at least `bytes` bytes: lowercase words joined
+    /// by single spaces, with no leading or trailing space.
+    fn prose(bytes: usize) -> String {
+        const WORDS: [&str; 10] = [
+            "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+        ];
+        let mut text = String::with_capacity(bytes + 16);
+        let mut index = 0_usize;
+        while text.len() < bytes {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+            index += 1;
+        }
+        text
+    }
+
+    /// Every capture span of a first match, or no match.
+    type Spans = Option<Vec<Option<Range<usize>>>>;
+
+    /// Every capture span of the compatibility engine's first match.
+    fn compatibility(source: &str, input: &str) -> Spans {
+        let compiled = crate::xsd_regex::compile(source, "").unwrap();
+        let regex = compiled.as_regex();
+        regex.captures(input).map(|found| {
+            (0..regex.captures_len())
+                .map(|group| found.get(group).map(|span| span.range()))
+                .collect()
+        })
+    }
+
+    /// The native match at the production defaults under every law that
+    /// accepts `source`, and whether the thread machine took over.
+    fn native(source: &str, input: &str) -> (Spans, bool) {
+        let mut answer = None;
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            let Ok(program) = compile(profile, source, "", Limits::new()) else {
+                assert!(source.contains("(?:"), "{source}");
+                continue;
+            };
+            let mut vm = Vm::new(&program, input, Limits::new());
+            let found = vm
+                .find_from(0)
+                .unwrap_or_else(|error| panic!("{profile:?} {source}: {error}"))
+                .map(|captures| captures.spans);
+            if let Some((earlier, _)) = &answer {
+                assert_eq!(earlier, &found, "{source}: the laws agree");
+            }
+            answer = Some((found, vm.is_threaded()));
+        }
+        answer.expect("a law accepts every fixture")
+    }
+
     #[test]
-    fn adversarial_backtracking_still_refuses_at_the_production_defaults() {
+    fn adversary_shapes_answer_like_the_compatibility_engine_at_the_production_defaults() {
+        // Each shape was refused by the backtracking machine alone at a size
+        // well below these: multiple unbounded runs at 8 and 55 KB of
+        // non-matching prose, group repetition at 44 to 131 KB, and a word
+        // repetition at 159 KB.
+        let text = prose(1 << 20);
+        let ab = "ab".repeat(1 << 19);
+        let end = |text: &str| text.len();
+        let last_word = text.rfind(' ').unwrap() + 1;
+        let second_last = text[..last_word - 1].rfind(' ').unwrap() + 1;
+        let first_node = text.find("node").unwrap();
+        let first_alpha = text.find("alpha").unwrap();
+        let zzz = format!("{text} zzz");
+        let cases: [(&str, String, Spans); 14] = [
+            ("node.*graph.*zzz", text.clone(), None),
+            (
+                "node.*graph.*zzz",
+                zzz.clone(),
+                Some(vec![Some(first_node..end(&zzz))]),
+            ),
+            ("alpha.*zzz", text.clone(), None),
+            (
+                "alpha.*zzz",
+                zzz.clone(),
+                Some(vec![Some(first_alpha..end(&zzz))]),
+            ),
+            (
+                "^([a-z]+ ?)+$",
+                text.clone(),
+                Some(vec![Some(0..end(&text)), Some(last_word..end(&text))]),
+            ),
+            ("^([a-z]+ ?)+$", format!("{text}!"), None),
+            (
+                r"^(\w+\s)*\w+$",
+                text.clone(),
+                Some(vec![Some(0..end(&text)), Some(second_last..last_word)]),
+            ),
+            (r"^(\w+\s)*\w+$", format!("{text} "), None),
+            (
+                "^(a|b)*$",
+                ab.clone(),
+                Some(vec![Some(0..end(&ab)), Some(end(&ab) - 1..end(&ab))]),
+            ),
+            ("^(a|b)*$", format!("{ab}c"), None),
+            (
+                "^(ab)*$",
+                ab.clone(),
+                Some(vec![Some(0..end(&ab)), Some(end(&ab) - 2..end(&ab))]),
+            ),
+            ("^(ab)*$", format!("{ab}a"), None),
+            ("^(?:ab)*$", ab.clone(), Some(vec![Some(0..end(&ab))])),
+            ("^(?:ab)*$", format!("{ab}a"), None),
+        ];
+        for (source, input, expected) in &cases {
+            let (found, threaded) = native(source, input);
+            assert_eq!(&found, expected, "{source} over {} bytes", input.len());
+            assert_eq!(
+                found,
+                compatibility(source, input),
+                "{source}: compatibility"
+            );
+            // A match after unbounded runs is found by the backtracking
+            // attempt; every other case was refused by that machine alone.
+            if expected.is_none() || !source.contains(".*") {
+                assert!(threaded, "{source}: the thread machine took over");
+            }
+        }
+        // Group repetition and nested nullable repetition at the adversary's
+        // whole-pattern shape, where only the whole match is compared: the
+        // compatibility engine reports a different empty last iteration.
+        for (input, expected) in [
+            (format!("{}b", "a".repeat(40)), Some(0..41)),
+            ("a".repeat(40), Some(0..40)),
+            (format!("{}c", "a".repeat(40)), None),
+            (format!("{}b", "a".repeat(100_000)), Some(0..100_001)),
+        ] {
+            let source = "^(a|aa)*$|^(a*)*b$";
+            let (found, _) = native(source, &input);
+            let whole = found.map(|spans| spans[0].clone().unwrap());
+            assert_eq!(whole, expected, "{source} over {}", input.len());
+            assert_eq!(
+                whole,
+                compatibility(source, &input).map(|spans| spans[0].clone().unwrap()),
+                "{source} over {}",
+                input.len()
+            );
+        }
+        let (found, threaded) = native("^(a|aa)*$|^(a*)*b$", &format!("{}b", "a".repeat(40)));
+        // The empty second iteration of (a*)* is its last, by the progress rule.
+        assert_eq!(found, Some(vec![Some(0..41), None, Some(40..40)]));
+        assert!(threaded);
+    }
+
+    /// Longer seeded inputs than the exhaustive universe, over every shape and
+    /// flag, against the backtracking machine where it answers within the
+    /// production bounds and the thread machine from every start otherwise.
+    #[test]
+    fn linear_machines_agree_with_both_machines_on_longer_seeded_inputs() {
+        let alphabet = ['a', 'b', 'a', 'b', 'é', '\n', 'c'];
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x0047_2600_BE4C_0006);
+        // An exponential backtracking search gives way to the thread machine soon.
+        let backtrack = Limits::new().with(Resource::MatchSteps, 1 << 21);
+        let mut comparisons = 0;
+        for flags in ["", "m", "s", "i"] {
+            for source in DIFFERENTIAL.iter().chain(COUNTED) {
+                let program = pattern(Profile::Xpath31, source, flags);
+                for _ in 0..6 {
+                    let length = 8 + rng.below_usize(56);
+                    let input: String = (0..length)
+                        .map(|_| alphabet[rng.below_usize(alphabet.len())])
+                        .collect();
+                    let expected = Vm::backtracking(&program, &input, backtrack)
+                        .find_from(0)
+                        .or_else(|_| Vm::threads(&program, &input, Limits::new()).find_from(0))
+                        .unwrap();
+                    // Kept states every few bytes and small covered ranges
+                    // split, across successive searches.
+                    let linear = Vm::tight(&program, &input, Limits::new());
+                    assert_eq!(
+                        Vm::linear(&program, &input, Limits::new())
+                            .is_match_from(0)
+                            .unwrap(),
+                        expected.is_some(),
+                        "{source:?} {flags:?} {input:?}"
+                    );
+                    let mut successive = linear;
+                    let mut position = 0;
+                    let mut found = successive.find_from(position).unwrap();
+                    assert_eq!(found, expected, "{source:?} {flags:?} {input:?}");
+                    // Every later match of one execution, as a replacement visits them.
+                    while let Some(span) = found.as_ref().and_then(|captures| captures.get(0)) {
+                        position = if span.is_empty() {
+                            match input[span.end..].chars().next() {
+                                Some(ch) => span.end + ch.len_utf8(),
+                                None => break,
+                            }
+                        } else {
+                            span.end
+                        };
+                        found = successive.find_from(position).unwrap();
+                        let oracle = Vm::backtracking(&program, &input, backtrack)
+                            .find_from(position)
+                            .or_else(|_| {
+                                Vm::threads(&program, &input, Limits::new()).find_from(position)
+                            })
+                            .unwrap();
+                        assert_eq!(found, oracle, "{source:?} {flags:?} {input:?} {position}");
+                    }
+                    comparisons += 1;
+                }
+            }
+        }
+        assert_eq!(comparisons, 4 * 6 * (DIFFERENTIAL.len() + COUNTED.len()));
+    }
+
+    /// Repetitions whose minimum far exceeds the input, written with `N` and
+    /// `W` for the minimum and the maximum. Each body can match the empty
+    /// string everywhere, so the minimum is met by empty iterations wherever
+    /// the consuming ones end, and the first match is the same for every
+    /// minimum beyond the input's length: the backtracking machine answers
+    /// the small counts, and only the linear-time machines answer the huge
+    /// ones.
+    const HUGE: &[&str] = &[
+        "(|a){N}",
+        "(|a){N}b",
+        "(a??){N}",
+        "(a??){N}b",
+        "(a*?){N}b",
+        "(|a|b){N}c",
+        "((|a)b?){N}",
+        "(|a){N,}b",
+        "(|a){N,W}b",
+        "(|a){N,W}",
+        "(a??){2,N}b",
+        "x(|a){N}y",
+        "(|a){N}(|b){N}",
+        "((|a){N}){2}",
+        "((|a){2}){N}b",
+        "(a?|b){N}",
+        "(a?|b){N}c",
+        "(b|a??){N}c",
+        "(a?){N}",
+        "(a?){N}b",
+        "(a*|b){N,W}",
+        "^(|a){N}$",
+        "(|a){N}$",
+        "(|(a)|(b)){N}",
+        "((a)|){N}b",
+    ];
+
+    #[test]
+    fn minimums_beyond_the_input_answer_like_lesser_minimums() {
+        let inputs = words(&['a', 'b', 'c', 'x', 'y'], 4);
+        // Every small minimum beyond these inputs gives the same answer, for
+        // the same window above it.
+        let small = |shape: &str, minimum: u64, window: u64| {
+            shape
+                .replace('N', &minimum.to_string())
+                .replace('W', &(minimum + window).to_string())
+        };
+        let mut comparisons = 0;
+        for flags in ["", "m", "i"] {
+            for shape in HUGE {
+                for (huge, top, window) in [
+                    ("18446744073709551616", "18446744073709551617", 1),
+                    (
+                        "99999999999999999999999999999",
+                        "100000000000000000000000000002",
+                        3,
+                    ),
+                    ("18446744073709551615", "18446744073709551615", 0),
+                    ("1000000000", "1000000001", 1),
+                ] {
+                    let oracles = [7, 9].map(|minimum| {
+                        pattern(Profile::Xpath31, &small(shape, minimum, window), flags)
+                    });
+                    let source = shape.replace('N', huge).replace('W', top);
+                    let program = pattern(Profile::Xpath31, &source, flags);
+                    for input in &inputs {
+                        for (start, _) in input.char_indices().chain([(input.len(), ' ')]) {
+                            let expected = Vm::backtracking(&oracles[0], input, Limits::new())
+                                .find_from(start)
+                                .unwrap();
+                            let other = Vm::backtracking(&oracles[1], input, Limits::new())
+                                .find_from(start)
+                                .unwrap();
+                            assert_eq!(
+                                expected, other,
+                                "{shape} invariance {flags:?} {input:?} {start}"
+                            );
+                            assert_eq!(
+                                Vm::linear(&program, input, Limits::new())
+                                    .find_from(start)
+                                    .unwrap(),
+                                expected,
+                                "{source} {flags:?} {input:?} {start}"
+                            );
+                            assert_eq!(
+                                Vm::tight(&program, input, Limits::new())
+                                    .find_from(start)
+                                    .unwrap(),
+                                expected,
+                                "tight {source} {flags:?} {input:?} {start}"
+                            );
+                            assert_eq!(
+                                Vm::linear(&program, input, Limits::new())
+                                    .is_match_from(start)
+                                    .unwrap(),
+                                expected.is_some(),
+                                "{source} {flags:?} {input:?} {start}"
+                            );
+                            comparisons += 1;
+                        }
+                        // The public entries, whatever machine answers.
+                        assert_eq!(
+                            program.find(input, Limits::new()).unwrap(),
+                            Vm::backtracking(&oracles[0], input, Limits::new())
+                                .find_from(0)
+                                .unwrap(),
+                            "{source} {flags:?} {input:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(comparisons, 3 * HUGE.len() * 4 * 3711);
+    }
+
+    /// A count set that changes at every position until it saturates makes a
+    /// new state at every position, so the bounded state cache is cleared and
+    /// refilled many times; the answers stay exact.
+    #[test]
+    fn cleared_state_caches_keep_exact_answers() {
         let limits = Limits::new();
-        let input = "a".repeat(40);
+        let input = random_ab(400_000, 11);
+        let program = pattern(Profile::Xpath31, "(a|b){100000}c", "");
+        for (text, start) in [
+            (format!("{input}c"), Some(300_000)),
+            (format!("{}c", &input[..99_999]), None),
+            (format!("{}c", &input[..100_000]), Some(0)),
+        ] {
+            assert_eq!(
+                program.is_match(&text, limits).unwrap(),
+                start.is_some(),
+                "{}",
+                text.len()
+            );
+            let found = program.find(&text, limits).unwrap();
+            assert_eq!(
+                found.as_ref().and_then(|captures| captures.get(0)),
+                start.map(|start| start..text.len()),
+                "{}",
+                text.len()
+            );
+            if let Some(captures) = found {
+                assert_eq!(captures.get(1), Some(text.len() - 2..text.len() - 1));
+            }
+        }
+    }
+
+    /// Deterministic `a` and `b` characters, about half each.
+    fn random_ab(bytes: usize, seed: u64) -> String {
+        purrdf_testkit::rng::splitmix64_bytes(bytes, seed)
+            .iter()
+            .map(|byte| if byte & 1 == 0 { 'a' } else { 'b' })
+            .collect()
+    }
+
+    /// Counted repetitions the thread machine refused at the production
+    /// defaults, at the sizes it refused them and twice beyond: one thread per
+    /// distinct count from every live start exhausted the work bound, while
+    /// the set machine keeps each repetition's counts as one set. Each is
+    /// compared with the compatibility engine, without a match and with the
+    /// suffix that completes one, all capture spans included.
+    #[test]
+    fn counted_repetitions_answer_like_the_compatibility_engine_at_the_production_defaults() {
+        let limits = Limits::new();
+        for scale in [1, 2] {
+            let pairs = |bytes: usize| "ab".repeat(bytes * scale / 2);
+            let cases: [(&str, String, &str); 11] = [
+                ("(ab){1,1000}c", pairs(128 << 10), "c"),
+                ("(ab){2,50}c", pairs(1 << 20), "c"),
+                ("(ab){1,100}c", pairs(1 << 20), "c"),
+                ("(ab|cd){1,20}e", "abcd".repeat((1 << 18) * scale), "e"),
+                ("((a|b){3}){5,9}c", random_ab((400 << 10) * scale, 3), "c"),
+                ("((a|b){2}){2,5}c", random_ab((800 << 10) * scale, 4), "c"),
+                ("(a|b){1,30}c", random_ab((4 << 20) * scale, 5), "c"),
+                ("(a|b){3,9}c", random_ab((4 << 20) * scale, 6), "c"),
+                (r"(\w+\s){3,5}zzz", prose((4 << 20) * scale), " zzz"),
+                ("node.*graph.*zzz", prose((8 << 20) * scale), " zzz"),
+                // An ambiguous body: one start keeps many counts until the end.
+                ("(a|aa){1,1000}b", "a".repeat((1 << 20) * scale), "b"),
+            ];
+            for (source, input, suffix) in &cases {
+                let program = pattern(Profile::Xpath31, source, "");
+                let completed = format!("{input}{suffix}");
+                for (text, matched) in [(input, false), (&completed, true)] {
+                    assert_eq!(
+                        program.is_match(text, limits).unwrap(),
+                        matched,
+                        "{source} over {}",
+                        text.len()
+                    );
+                    let (found, threaded) = native(source, text);
+                    assert_eq!(found.is_some(), matched, "{source} over {}", text.len());
+                    assert_eq!(
+                        found,
+                        compatibility(source, text),
+                        "{source} over {}: compatibility",
+                        text.len()
+                    );
+                    if !matched {
+                        assert!(threaded, "{source}: the linear-time machines took over");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adversary_shapes_scale_linearly_well_beyond_the_adversarys_sizes() {
+        // Sixty-four mebibytes at the production defaults: an abandoned
+        // backtracking attempt spends at most two steps per byte, the reverse
+        // scan one, and a match's walk about one more over its covered states,
+        // so every shape answers within the step bound.
+        let text = prose(64 << 20);
+        let ab = "ab".repeat(32 << 20);
+        let a = "a".repeat(64 << 20);
+        for (source, input, matched) in [
+            ("node.*graph.*zzz", text.as_str(), false),
+            ("alpha.*zzz", text.as_str(), false),
+            ("^([a-z]+ ?)+$", text.as_str(), true),
+            (r"^(\w+\s)*\w+$", text.as_str(), true),
+            ("^(a|b)*$", ab.as_str(), true),
+            ("^(ab)*$", ab.as_str(), true),
+            ("^(?:ab)*$", ab.as_str(), true),
+            ("^(a|aa)*$", a.as_str(), true),
+            ("(a|aa)*b", a.as_str(), false),
+        ] {
+            let (found, threaded) = native(source, input);
+            assert_eq!(
+                found.map(|spans| spans[0].clone()),
+                matched.then_some(Some(0..input.len())),
+                "{source} over {}",
+                input.len()
+            );
+            assert!(threaded, "{source}");
+            assert_eq!(
+                pattern(Profile::Xpath31, source, "")
+                    .is_match(input, Limits::new())
+                    .unwrap(),
+                matched,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn formerly_exponential_shapes_answer_and_backreference_blowups_still_refuse() {
+        let limits = Limits::new();
+        let forty = "a".repeat(40);
         for source in ["(a|a)*b", "(a|aa)*b", "(a*)*b", "((a+)+)+b"] {
+            // Refused by the backtracking machine alone, answered by the
+            // thread machine as the compatibility engine answers.
             let program = pattern(Profile::Xpath31, source, "");
             assert!(
                 matches!(
-                    program.is_match(&input, limits),
+                    Vm::backtracking(&program, &forty, limits).find_from(0),
+                    Err(Error::Resource(_))
+                ),
+                "{source}"
+            );
+            for (input, expected) in [
+                (forty.clone(), false),
+                (format!("{forty}b"), true),
+                ("a".repeat(100_000), false),
+                (format!("{}b", "a".repeat(100_000)), true),
+            ] {
+                assert_eq!(
+                    program.is_match(&input, limits).unwrap(),
+                    expected,
+                    "{source} over {}",
+                    input.len()
+                );
+                assert_eq!(
+                    crate::xsd_regex::compile(source, "")
+                        .unwrap()
+                        .is_match(&input),
+                    expected
+                );
+            }
+        }
+        // A backreference reads captured text, so its program keeps the
+        // backtracking machine, and exponential exploration is still refused.
+        for (source, refused, neighbour) in [
+            (r"^(a|a)*\1b", forty.clone(), format!("{forty}b")),
+            (r"^(a|aa)*c\1$", forty.clone(), format!("{forty}ca")),
+            (r"(a*)*\1b", forty.clone(), format!("{forty}b")),
+        ] {
+            let program = pattern(Profile::Xpath31, source, "");
+            assert!(program.links.backreferences);
+            assert!(
+                matches!(
+                    program.is_match(&refused, limits),
                     Err(Error::Resource(Refusal {
-                        resource: Resource::MatchSteps | Resource::MatchStates,
+                        resource: Resource::MatchSteps
+                            | Resource::MatchStates
+                            | Resource::MatchSlots,
                         ..
                     }))
                 ),
                 "{source}"
             );
-            // The valid neighbour that can match still succeeds.
-            assert!(
-                program.is_match(&format!("{input}b"), limits).unwrap(),
+            assert!(program.is_match(&neighbour, limits).unwrap(), "{source}");
+        }
+    }
+
+    /// The least bound of `resource` under which `run` succeeds, by bisection.
+    fn requirement(
+        run: &dyn Fn(Limits) -> Result<Option<Captures>, Error>,
+        resource: Resource,
+    ) -> u64 {
+        let at = |limit| Limits::new().with(resource, limit);
+        let (mut refused, mut admitted) = (0, Limits::new().limit(resource));
+        assert!(run(at(admitted)).is_ok(), "{resource:?}");
+        assert!(run(at(0)).is_err(), "{resource:?}");
+        while admitted - refused > 1 {
+            let middle = refused + (admitted - refused) / 2;
+            if run(at(middle)).is_ok() {
+                admitted = middle;
+            } else {
+                refused = middle;
+            }
+        }
+        admitted
+    }
+
+    #[test]
+    fn thread_machine_resources_admit_the_exact_requirement_and_refuse_one_less() {
+        let words = prose(3000);
+        let pairs = "ab".repeat(1500);
+        let forty = "a".repeat(40);
+        for (source, input) in [
+            ("^([a-z]+ ?)+$", words.as_str()),
+            ("node.*graph.*zzz", words.as_str()),
+            ("^(a|b)*$", pairs.as_str()),
+            ("(a|aa)*b", forty.as_str()),
+            // Stored counts select the hashed control-state table.
+            ("^(a?){3,5}(b{2,4}){2}$", "aabbbbbb"),
+        ] {
+            let program = pattern(Profile::Xpath31, source, "");
+            let expected = Vm::threads(&program, input, Limits::new())
+                .find_from(0)
+                .unwrap();
+            let threads = |limits| Vm::threads(&program, input, limits).find_from(0);
+            let public = |limits| program.find(input, limits);
+            for resource in [
+                Resource::MatchSteps,
+                Resource::MatchStates,
+                Resource::MatchSlots,
+            ] {
+                for run in [&threads as &dyn Fn(_) -> _, &public] {
+                    let required = requirement(run, resource);
+                    let admitted = run(Limits::new().with(resource, required)).unwrap();
+                    assert_eq!(admitted, expected, "{source} {resource:?}");
+                    let refusal = run(Limits::new().with(resource, required - 1)).unwrap_err();
+                    assert!(
+                        matches!(
+                            refusal,
+                            Error::Resource(Refusal { resource: refused, limit, .. })
+                                if refused == resource && limit == required - 1
+                        ),
+                        "{source} {resource:?}: {refusal}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn huge_counted_repetitions_spend_finite_work_beside_admitted_neighbours() {
+        let limits = Limits::new();
+        // A nullable body repeated more than u64 times: one empty iteration
+        // below the minimum stands for every further one, so the minimum is
+        // met in finite work, with the empty last iteration's captures.
+        let nullable = pattern(Profile::Xpath31, "(a?){18446744073709551616}", "");
+        let thousand = pattern(Profile::Xpath31, "(a?){1000}", "");
+        for (input, whole, last) in [("", 0..0, 0..0), ("a", 0..1, 1..1), ("aab", 0..2, 2..2)] {
+            for program in [&nullable, &thousand] {
+                assert!(program.is_match(input, limits).unwrap(), "{input:?}");
+                let captures = program.find(input, limits).unwrap().unwrap();
+                assert_eq!(
+                    (captures.get(0), captures.get(1)),
+                    (Some(whole.clone()), Some(last.clone())),
+                    "{} {input:?}",
+                    program.source()
+                );
+            }
+        }
+        // Not nullable, the same count can never be met.
+        let required = pattern(Profile::Xpath31, "(a){18446744073709551616}", "");
+        assert!(!required.is_match(&"a".repeat(1000), limits).unwrap());
+        assert!(required.find(&"a".repeat(1000), limits).unwrap().is_none());
+        // A large counted group repeated from every start keeps one set of
+        // counts, not one thread per distinct count: the search over every
+        // start answers, without and with the character that completes it.
+        let input = "ab".repeat(1 << 16);
+        let unanchored = pattern(Profile::Xpath31, "(ab){1,100000}c", "");
+        assert!(!unanchored.is_match(&input, limits).unwrap());
+        assert!(unanchored.find(&input, limits).unwrap().is_none());
+        let completed = format!("{input}c");
+        assert!(unanchored.is_match(&completed, limits).unwrap());
+        let captures = unanchored.find(&completed, limits).unwrap().unwrap();
+        assert_eq!(captures.get(0), Some(0..completed.len()));
+        assert_eq!(captures.get(1), Some(input.len() - 2..input.len()));
+        // Below the pairs the input holds, the leftmost match starts late.
+        let bounded = pattern(Profile::Xpath31, "(ab){1,1000}c", "");
+        let captures = bounded.find(&completed, limits).unwrap().unwrap();
+        assert_eq!(captures.get(0), Some(input.len() - 2000..completed.len()));
+        let anchored = pattern(Profile::Xpath31, "^(ab){1,100000}$", "");
+        let captures = anchored.find(&input, limits).unwrap().unwrap();
+        assert_eq!(captures.get(0), Some(0..input.len()));
+        assert_eq!(captures.get(1), Some(input.len() - 2..input.len()));
+        assert!(
+            !pattern(Profile::Xpath31, "^(ab){1,65535}$", "")
+                .is_match(&input, limits)
+                .unwrap()
+        );
+        assert!(
+            pattern(Profile::Xpath31, "^(ab){65536}$", "")
+                .is_match(&input, limits)
+                .unwrap()
+        );
+        // A counted single-character run keeps its bound exactly.
+        let letters = "a".repeat(100_001);
+        for (source, expected) in [
+            ("^a{100000}$", false),
+            ("^a{100001}$", true),
+            ("^a{1,100000}$", false),
+            ("^(?:a|b){100001}$", true),
+            ("^(?:a|b){100002,}$", false),
+        ] {
+            assert_eq!(
+                pattern(Profile::Xpath31, source, "")
+                    .is_match(&letters, limits)
+                    .unwrap(),
+                expected,
                 "{source}"
             );
         }
@@ -1167,14 +2497,48 @@ mod tests {
         assert_eq!(matched("(a?)*", "", "").get(1), Some(0..0));
         let nonnullable = pattern(Profile::Xpath31, "a{18446744073709551616}", "");
         assert!(!nonnullable.is_match("", Limits::new()).unwrap());
-        let nullable = pattern(Profile::Xpath31, "(a?){18446744073709551616}", "");
-        assert!(matches!(
-            nullable.is_match("", Limits::new().with(Resource::MatchSteps, 200)),
-            Err(Error::Resource(Refusal {
-                resource: Resource::MatchSteps,
-                ..
-            }))
-        ));
+        // The work an empty iteration's count jump needs is independent of
+        // the count: a required minimum beyond u64 needs exactly the steps a
+        // minimum of a thousand needs, and one step less is still refused.
+        for input in ["", "a", "aab"] {
+            let mut required = Vec::new();
+            for source in [
+                "(a?){18446744073709551616}",
+                "(a?){18446744073709551615}",
+                "(a?){1000}",
+            ] {
+                let program = pattern(Profile::Xpath31, source, "");
+                let expected = Vm::backtracking(
+                    &pattern(Profile::Xpath31, "(a?){4}", ""),
+                    input,
+                    Limits::new(),
+                )
+                .find_from(0)
+                .unwrap();
+                let run = |limits| Vm::linear(&program, input, limits).find_from(0);
+                let steps = requirement(&run, Resource::MatchSteps);
+                assert_eq!(
+                    run(Limits::new().with(Resource::MatchSteps, steps)).unwrap(),
+                    expected,
+                    "{source} {input:?}"
+                );
+                assert!(
+                    matches!(
+                        run(Limits::new().with(Resource::MatchSteps, steps - 1)),
+                        Err(Error::Resource(Refusal {
+                            resource: Resource::MatchSteps,
+                            ..
+                        }))
+                    ),
+                    "{source} {input:?}"
+                );
+                required.push(steps);
+            }
+            assert!(
+                required.iter().all(|&steps| steps == required[0]),
+                "{input:?}: {required:?}"
+            );
+        }
     }
 
     #[test]
@@ -1239,7 +2603,7 @@ mod tests {
         let input = "bbbbbbba";
         let mut vm = Vm::new(&program, input, Limits::new());
         assert_eq!(vm.find_from(0).unwrap().unwrap().get(0), Some(7..8));
-        let steps = vm.budget.used(Resource::MatchSteps);
+        let steps = vm.budget().used(Resource::MatchSteps);
         let exact = Limits::new().with(Resource::MatchSteps, steps);
         assert!(program.is_match(input, exact).unwrap());
         assert!(program.is_match(input, exact).unwrap());

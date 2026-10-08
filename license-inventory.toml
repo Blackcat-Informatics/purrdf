@@ -43,6 +43,24 @@ notices = ["crates/lex/data/html/LICENSE-WHATWG"]
 provenance = ["crates/lex/data/html/PROVENANCE.md", "LICENSING.md"]
 
 [[material]]
+id = "w3c-xml10-2e"
+license = "LicenseRef-W3C-Document"
+source = "https://www.w3.org/TR/2000/REC-xml-20001006"
+scope = "source-only generator input: the verbatim XML 1.0 Second Edition Recommendation the dated XPath name tables are generated from; original notices remain authoritative"
+paths = ["vectors/w3c-recs/REC-xml-20001006.html", "vectors/w3c-recs/LICENSE-W3C-document-19990405.html"]
+notices = ["vectors/w3c-recs/LICENSE-W3C-document-19990405.html"]
+provenance = ["vectors/w3c-recs/PROVENANCE.md", "LICENSING.md"]
+
+[[material]]
+id = "w3c-xmlschema2-2e"
+license = "LicenseRef-W3C-Document"
+source = "https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/"
+scope = "source-only generator input: the verbatim XML Schema Part 2 Second Edition Recommendation the dated XPath name and block tables are generated from; original notices remain authoritative"
+paths = ["vectors/w3c-recs/REC-xmlschema-2-20041028.html"]
+notices = ["LICENSES/W3C-document-license.html"]
+provenance = ["vectors/w3c-recs/PROVENANCE.md", "LICENSING.md"]
+
+[[material]]
 id = "libyaml-emitter"
 license = "MIT"
 source = "https://github.com/dtolnay/unsafe-libyaml/tree/0.2.11"

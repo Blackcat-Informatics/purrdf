@@ -248,8 +248,12 @@ unsafe fn run_query(
         // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
         // no store round-trip — on the engine's ungoverned entry, exactly as its
         // `SparqlEngine::query` runs it (the plan, then its evaluation with no governor
-        // state), with the handle's division policy and the selected regex law in force.
-        let options = QueryOptions::new().with_division(PurrdfDataset::division(dataset));
+        // state), with the handle's division policy and the caller's dated XPath law in
+        // force.
+        let options = query_options(
+            QueryOptions::new().with_division(PurrdfDataset::division(dataset)),
+            regex,
+        );
         let engine = sparql_engine(regex);
         engine
             .prepare_query_with_options(query, base_iri, options)

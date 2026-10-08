@@ -15,7 +15,9 @@ mod compile;
 mod dated_blocks;
 mod dated_names;
 mod r#match;
+mod pike;
 mod replace;
+mod sets;
 mod unicode_tables;
 
 pub use cache::PatternCache;
@@ -75,11 +77,17 @@ pub enum Resource {
     ProgramNodes,
     /// Cells retained during construction of the program.
     CompileSlots,
-    /// Matcher operations, including search advances and compared code points.
+    /// Matcher operations, including search advances, compared code points
+    /// and program transitions.
     MatchSteps,
-    /// Simultaneously pending alternative states.
+    /// Simultaneously pending alternative states: the backtracking machine's
+    /// pending alternatives, the thread machine's distinct control states at
+    /// one input position, or the set machine's entries at one input position.
     MatchStates,
-    /// Cells in all live states, captures and continuations.
+    /// Cells in all live states, captures and continuations, including the
+    /// thread machine's thread lists, control-state table, work list and
+    /// step cache, and the set machine's count sets, work list, state cache,
+    /// kept reverse states and covered range.
     MatchSlots,
     /// UTF-8 bytes of replacement output.
     OutputBytes,
@@ -132,16 +140,66 @@ impl Limits {
     ///
     /// Compilation is linear in the source, so the program and construction
     /// bounds admit every source the 64 KiB source bound admits: the largest
-    /// measured requirement is about 3 nodes and 20 construction cells per
-    /// source byte, for a literal under the x flag. An oversized pattern is
-    /// refused by its source bytes, before any parsing.
+    /// measured requirement is about 3 nodes and 28 construction cells per
+    /// source byte, for a literal under the x flag, including the parent table
+    /// the matchers walk the program with. An oversized pattern is refused by
+    /// its source bytes, before any parsing.
     ///
-    /// A literal or first-character search spends about one step per scanned
-    /// character, and ordinary patterns without such a lead about 5 to 25, so
-    /// the step bound admits searches over tens of megabytes. A greedy
-    /// single-character run of any admitted length keeps one pending state.
-    /// Matching costs roughly 1 to 30 nanoseconds per step, so exponential
-    /// backtracking is refused within a few seconds of work.
+    /// Matching first runs the backtracking machine. A program without a
+    /// backreference whose attempt spends more than 16 steps per search start
+    /// it has passed, 2 per input byte it has examined (one greedy
+    /// single-character run's own cost) and 64 per program node, or exceeds a
+    /// live-storage bound, continues on the linear-time machines; a program
+    /// with a backreference stays on the backtracking machine. Measured with
+    /// the `native_xpath_large` bench group
+    /// (`crates/rdf-core/benches/xsd_regex.rs`, release build, one pinned
+    /// core), per input byte at these bounds:
+    ///
+    /// * the backtracking machine spends 1.4 steps on a literal search
+    ///   through 1 MiB of filler and 2.0 on a greedy single-character run;
+    /// * the set machine spends 1.00 to 1.02 steps deciding every counted
+    ///   repetition the thread machine alone refused (`(ab){1,1000}c`,
+    ///   `(ab){2,50}c`, `(ab|cd){1,20}e`, `((a|b){3}){5,9}c`,
+    ///   `((a|b){2}){2,5}c`, `(a|b){1,30}c`, `(a|b){3,9}c`,
+    ///   `(\w+\s){3,5}zzz` over 128 KiB to 4 MiB) and searches with several
+    ///   unbounded runs in these measured fixtures, where each position's
+    ///   state was seen before; a position whose state is new
+    ///   costs its closure, about 95 steps for `(a|b){100000}c`;
+    /// * a search for the match itself adds one reverse step per byte from the
+    ///   end of the input, and one more for every stretch the walk reaches;
+    ///   the walk spends about one step per byte of a match whose steps
+    ///   repeat, so `^([a-z]+ ?)+$`, `^(\w+\s)*\w+$`, `^(a|b)*$`,
+    ///   `^(ab)*$` and `^(a|aa)*$` matched whole cost 3.1 to 3.2 steps per
+    ///   byte in all, over 1 MiB and over 64 MiB, and `(a|aa){1,1000}b`
+    ///   closing a run of `a` 4.9;
+    /// * an abandoned attempt has spent at most about 2: `node.*graph.*zzz`
+    ///   without a match costs 3.0 steps per byte in all, over 1 MiB and over
+    ///   64 MiB.
+    ///
+    /// Reverse states that never repeat cost a closure at every position, and
+    /// the stretches the walk reaches are recomputed: `(a|aa){1,100000}b`
+    /// over 1 MiB, whose reverse states hold the least number of further
+    /// iterations a position needs, costs about 98 steps per byte, and an
+    /// empty-preferring body below a minimum beyond `u64`,
+    /// `(|a){18446744073709551616}b`, about 250 per byte of its match. The
+    /// measured patterns keep a few states and a few hundred cells independent
+    /// of the input length, beside a reverse state every 16 KiB. These figures
+    /// do not establish admission for every finite repetition: large or nested
+    /// counts can reach the step or storage bounds on much shorter input. A
+    /// count of a counted repetition nested in another that both can repeat
+    /// empty iterations is kept one entry per value. Its storage depends on
+    /// the combination of counts; `((a?){100000}){100000}` is one measured
+    /// storage refusal, not a minimum count threshold.
+    ///
+    /// A step costs 3.5 to 11 ns: 6.8 ns in the set machine at a cached
+    /// position (one hash probe) and 3.5 ns at a new one, 3.7 to 10.5 ns in the
+    /// reverse scan and walk of a search for a match, and 6.8 to 10.9 ns in the
+    /// backtracking machine on the measured host. The measured low-cost
+    /// searches admitted more than 64 MiB of input in under three seconds;
+    /// this is neither a universal input threshold nor a timing guarantee.
+    /// The step bound also refuses the exponential exploration that only a
+    /// backreference can still reach, `^(a|aa)*c\1$` over forty `a`, after
+    /// 2.7 s of work.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -150,7 +208,7 @@ impl Limits {
                 4_000_000,
                 256 * 1024,
                 2 * 1024 * 1024,
-                100_000_000,
+                250_000_000,
                 64 * 1024,
                 1024 * 1024,
                 64 * 1024 * 1024,
@@ -248,7 +306,17 @@ impl Budget {
     ///
     /// A typed [`Refusal`] when the exact accumulated requirement exceeds the
     /// bound. Even `u64::MAX + 1` remains a refusal with its exact requirement.
+    #[inline]
     pub fn charge(&mut self, resource: Resource, amount: u64) -> Result<(), Refusal> {
+        let index = resource.index();
+        // The common admitted case, without the wide arithmetic of a refusal.
+        if resource != Resource::CompileSlots
+            && let Some(sum) = self.used[index].checked_add(amount)
+            && sum <= self.limits.bounds[index]
+        {
+            self.used[index] = sum;
+            return Ok(());
+        }
         self.charge_wide(resource, u128::from(amount))
     }
 

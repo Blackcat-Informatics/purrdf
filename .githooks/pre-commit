@@ -82,7 +82,7 @@ gates=(
     check-layers
     check-corpus-frozen
     check-brand-casing
-    check-i18n-glossary
+    glossary-gate
     check-publish-order
     check-wasm-js-exports
     check-entailment-surface
@@ -92,7 +92,12 @@ gates=(
 )
 pids=()
 for gate in "${gates[@]}"; do
-    python3 "$snapshot/scripts/$gate.py" >"$logs/$gate" 2>&1 &
+    if [ "$gate" = glossary-gate ]; then
+        cargo run -q --locked -p helper-census -- --glossary-gate \
+            --root "$snapshot" >"$logs/$gate" 2>&1 &
+    else
+        python3 "$snapshot/scripts/$gate.py" >"$logs/$gate" 2>&1 &
+    fi
     pids+=("$!")
 done
 for i in "${!gates[@]}"; do

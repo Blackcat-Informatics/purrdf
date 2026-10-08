@@ -302,33 +302,32 @@ pub fn validate_shape_map_with_xpath(
     profile: purrdf_core::xsd_regex::xpath::Profile,
     limits: purrdf_core::xsd_regex::xpath::Limits,
 ) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
-    validate_shape_map_with_xpath_bounds(
-        schema, data, map_src, base, options, profile, limits, None,
+    validate_shape_map_with_validator(
+        &mut crate::validate::XPathValidator::new(schema),
+        data,
+        map_src,
+        base,
+        options,
+        profile,
+        limits,
     )
 }
 
-/// [`validate_shape_map_with_xpath`], comparing numeric facets against an
-/// [`crate::ExactSchema`]'s exact bounds where given.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the shape-map door's arguments, the native law's two and the exact bounds"
-)]
-pub(crate) fn validate_shape_map_with_xpath_bounds(
-    schema: &Schema,
+/// [`validate_shape_map_with_xpath`] through `validator`, which carries the schema and,
+/// for an [`crate::ExactSchema`], its exact numeric facet bounds.
+pub(crate) fn validate_shape_map_with_validator(
+    validator: &mut crate::validate::XPathValidator<'_>,
     data: &RdfDataset,
     map_src: &str,
     base: Option<&str>,
     options: &ValidationOptions<'_>,
     profile: purrdf_core::xsd_regex::xpath::Profile,
     limits: purrdf_core::xsd_regex::xpath::Limits,
-    bounds: Option<&crate::validate::ExactBoundsMap>,
 ) -> core::result::Result<ResultShapeMap, crate::error::XPathValidationError> {
     let map = parse_shape_map(map_src, base)?;
-    refuse_undeclared_shapes(schema, &map)?;
+    refuse_undeclared_shapes(validator.schema(), &map)?;
     let resolved = resolve_shape_map(&map, data);
-    Ok(crate::validate::validate_with_xpath_bounds(
-        schema, data, &resolved, options, profile, limits, bounds,
-    )?)
+    Ok(validator.validate(data, &resolved, options, profile, limits)?)
 }
 
 /// Refuse a shape map naming a shape `schema` does not declare.
