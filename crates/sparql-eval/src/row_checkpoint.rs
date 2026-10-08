@@ -695,6 +695,10 @@ struct Committing {
 }
 
 impl Committing {
+    // Keep the stopped-chunk selection inside the ordered commit's caller,
+    // without retaining a second post-join frame beside that caller.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn of(chunks: impl IntoIterator<Item = WorkerLedger>) -> Self {
         let mut kept = Vec::new();
         let mut stopped = false;
@@ -742,6 +746,10 @@ impl Committing {
 /// # Errors
 ///
 /// An error `admit_row` raises, or a read of the dataset an intern needs.
+// Ordered replay belongs in its existing post-join caller; an additional live
+// helper frame must not replace the caller's former inlined replay.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn commit_items<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
     point: Option<ChargePoint>,
@@ -840,15 +848,6 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                             .saturating_add(explicit)
                             .saturating_add(transient),
                     ));
-            let mut count_to = |ctx: &mut EvalCtx<'_, D>, upto: usize| {
-                while interned < upto {
-                    let Some((hash, value)) = values.next() else {
-                        break;
-                    };
-                    interned += 1;
-                    ctx.scratch.count_worker_mint(hash, value);
-                }
-            };
             if whole {
                 if fuel {
                     for charge in span {
@@ -870,7 +869,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                     _ => None,
                 });
                 if let Some(upto) = grown {
-                    count_to(ctx, upto);
+                    count_worker_mints_to(ctx, &mut values, &mut interned, upto);
                 }
                 let refused = (work > 0 && charge_fuel(work))
                     || (scratch
@@ -883,7 +882,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                                     .admit_transient(ResourceDimension::ScratchBytes, transient)
                                     .is_err())));
                 if scratch {
-                    count_to(ctx, item.values_end);
+                    count_worker_mints_to(ctx, &mut values, &mut interned, item.values_end);
                 }
                 // Refused only when another evaluation shares the ceilings and charged in
                 // between.
@@ -896,7 +895,12 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                         Deferred::Fuel { point, units, mark } => {
                             let refused = charge_fuel(units);
                             if refused && let Some(mark) = mark {
-                                count_to(ctx, mark.count());
+                                count_worker_mints_to(
+                                    ctx,
+                                    &mut values,
+                                    &mut interned,
+                                    mark.count(),
+                                );
                             } else if !refused
                                 && fuel
                                 && let Some(point) = point
@@ -911,12 +915,17 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                                     .charge_if_engaged(ResourceDimension::ScratchBytes, bytes)
                                     .is_err();
                             if refused && let Some(mark) = mark {
-                                count_to(ctx, mark.count());
+                                count_worker_mints_to(
+                                    ctx,
+                                    &mut values,
+                                    &mut interned,
+                                    mark.count(),
+                                );
                             }
                             refused
                         }
                         Deferred::Growth(upto) => {
-                            count_to(ctx, upto);
+                            count_worker_mints_to(ctx, &mut values, &mut interned, upto);
                             scratch && ctx.charge_scratch_growth().is_err()
                         }
                         Deferred::Transient(bytes) => {
@@ -934,7 +943,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
                 // loop's holds when the next item, or the operator's own output, charges
                 // it.
                 if scratch {
-                    count_to(ctx, item.values_end);
+                    count_worker_mints_to(ctx, &mut values, &mut interned, item.values_end);
                 }
             }
             for row in rows.by_ref().take(item.rows) {
@@ -948,9 +957,32 @@ fn commit_items<D: DatasetView + Sync, R, S>(
     Ok((out, None))
 }
 
+// Keep ordered mint-prefix replay in the commit caller, without a closure call
+// and live value frame at each growth/refusal checkpoint. This is the sole loop.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn count_worker_mints_to<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    values: &mut std::vec::IntoIter<(u64, TermValue)>,
+    interned: &mut usize,
+    upto: usize,
+) {
+    while *interned < upto {
+        let Some((hash, value)) = values.next() else {
+            break;
+        };
+        *interned += 1;
+        ctx.scratch.count_worker_mint(hash, value);
+    }
+}
+
 /// Admit an uncharged output in source order using the same fallible output-capacity
 /// home as ordered replay. Worker errors have already returned before this mapping;
 /// an error the admission callback discovers returns at its own source row.
+// Preserve the caller's inlined output conversion and buffer reuse, including
+// the ungoverned path, without introducing another post-join live frame.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn admit_rows<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
     rows: Vec<R>,
@@ -1217,6 +1249,10 @@ impl RowCheckpoint {
     /// # Errors
     ///
     /// An allocation failure while admitting the replayed output.
+    // Preserve the ordinary post-worker commit in its caller: an additional
+    // live helper frame was observed in the contextual-sharing emission.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn commit_rows<D: DatasetView + Sync, R>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
@@ -1238,6 +1274,10 @@ impl RowCheckpoint {
     ///
     /// An output capacity or conversion error. A caller with a governor must use
     /// [`Self::commit`] and retain the input needed for possible continuation.
+    // Preserve the ordinary post-worker commit in its caller: an additional
+    // live helper frame was observed in the contextual-sharing emission.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,
@@ -1261,6 +1301,10 @@ impl RowCheckpoint {
     /// # Errors
     ///
     /// An error `admit_row` raises.
+    // Preserve the ordinary post-worker commit in its caller: an additional
+    // live helper frame was observed in the contextual-sharing emission.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,
         ctx: &mut EvalCtx<'_, D>,

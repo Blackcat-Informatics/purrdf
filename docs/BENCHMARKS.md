@@ -49,7 +49,7 @@ The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
 They live under `crates/*/benches/`. The workspace registers 111 `[[bench]]`
-targets in total; this section and the inventory table below document 34 of
+targets in total; this section and the inventory table below document 35 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -148,6 +148,9 @@ simply not narrated here:
   length is additionally an asserted constant in
   `crates/shapes/tests/product_determinism.rs`, so that byte-count fact does not
   live only in a bench log.
+- `crates/shapes/benches/shared_views.rs` — native/shared and projected SHACL
+  view costs, plus matched cold binding and warm Core/SELECT reports with
+  compatibility or complete source evidence.
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling
   (`materialize(ds, Regime::Rdfs)` end to end, so the declared clause program and
   `purrdf-datalog`'s semi-naive fixpoint are both inside the timed loop).
@@ -334,7 +337,7 @@ and allocation observations do not establish latency.
 
 ### Native benchmark inventory
 
-This table documents 34 of the 111 `[[bench]]` targets registered across the
+This table documents 35 of the 111 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -368,6 +371,7 @@ here.
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |
 | `crates/shapes/benches/shacl_product_reuse.rs` | Prepared-shapes product phases reported separately: cold parse-and-prepare, producer encode, structural open, memo admit, memo-free rebuild, the reusable class-catalog derivation, per-dataset binding, and evaluation. Report-only; no ratio or threshold is asserted. |
 | `crates/shapes/benches/shacl_product_alloc.rs` | Allocation calls, requested bytes, retained-byte deltas, and live-byte high-water deltas for those same prepared-shapes-product phases, plus the encoded artifact's byte length. |
+| `crates/shapes/benches/shared_views.rs` | Native/shared view validation and named-graph view construction; matched compatibility/complete Core and SELECT cold binding and warm reporting over 128 focus nodes, with product restoration outside cold-bind timing. |
 | `crates/entail/benches/chase.rs` | RDFS materialization scaling on subclass chains, measured through the whole `materialize` path: clause-program lowering plus `purrdf-datalog`'s semi-naive fixpoint. |
 | `crates/entail/benches/classify.rs` | OWL-Direct classification latency over a synthetic `EL` terminology at three signature sizes; classification cost is superlinear in the signature rather than the axiom count. |
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
@@ -491,6 +495,19 @@ make regressions visible; they do not impose latency, throughput, recall, or
 memory thresholds.
 
 ### SHACL validation hot paths
+
+The `shared_views` target also measures `shacl_complete_reports`: eight matched
+cases for compatibility and complete reports, each with Core and SELECT
+fixtures. The input has 128 target nodes in a named graph with RDF 1.2 statement
+annotations. Both warmed bindings assert 128 results before timing. Cold binding
+starts from an admitted prepared product; product restoration is untimed setup, and the
+complete bind includes reconstruction of its source-occurrence metadata. Warm
+report cases reuse their bound views and context. These rows measure the cost of
+requested provenance, with no asserted speedup or timing threshold:
+
+```sh
+cargo bench --locked -p purrdf-shapes --bench shared_views -- shacl_complete_reports
+```
 
 The `validate` benchmark contains these deterministic SHACL workloads:
 

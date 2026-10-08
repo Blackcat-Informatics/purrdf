@@ -36,6 +36,7 @@
 //! the workspace's `publish = false` conformance crate, so their corpora never
 //! enter a published `.crate`.
 
+pub mod community;
 pub mod compare;
 pub mod ledger;
 pub mod manifest;

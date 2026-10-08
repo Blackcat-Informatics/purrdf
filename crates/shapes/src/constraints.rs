@@ -23,7 +23,7 @@ use crate::path;
 use crate::plan::{
     DatasetBinding, PairPath, PlannedConstraint, PropertyPlan, RangeBound, ShapePlan,
 };
-use crate::report::{ConformanceDisallows, Severity, ValidationResult};
+use crate::report::{ConformanceDisallows, ResultRecord, Severity, ValidationResult};
 use crate::shapes::{
     AnnotatedConstraint, ComponentValidator, ConstraintAnnotation, NodeKindValue, Path,
     PropertyShape, Shape, annotation_for,
@@ -302,9 +302,18 @@ struct ConstraintSource<'a> {
     pinned_severity: bool,
     /// As `pinned_severity`, for `messages`.
     pinned_messages: bool,
+    occurrence: Option<usize>,
+    property: bool,
 }
 
 impl<'a> ConstraintSource<'a> {
+    fn site(&self) -> crate::report::ConstraintSite<'a> {
+        crate::report::ConstraintSite {
+            shape: self.id,
+            property: self.property,
+            index: self.occurrence,
+        }
+    }
     /// The source of a constraint of the shape `id`, whose own severity and
     /// message are `severity` and `message`, under the constraint's reifier
     /// `annotation` if it has one.
@@ -321,7 +330,14 @@ impl<'a> ConstraintSource<'a> {
         severity: &'a Severity,
         messages: &'a [Literal],
         annotation: Option<&'a ConstraintAnnotation>,
+        profile: crate::profile::ShaclProfile,
     ) -> Self {
+        // Constraint-statement reifiers are a draft report law. The REC report
+        // uses the shape's declared severity/messages; Legacy retains its
+        // established draft-compatible precedence.
+        let annotation = (profile != crate::profile::ShaclProfile::REC_20170720)
+            .then_some(annotation)
+            .flatten();
         let pinned_severity = annotation.and_then(|a| a.severity.as_ref());
         let pinned_messages = annotation
             .map(|a| a.messages.as_slice())
@@ -332,13 +348,15 @@ impl<'a> ConstraintSource<'a> {
             messages: pinned_messages.unwrap_or(messages),
             pinned_severity: pinned_severity.is_some(),
             pinned_messages: pinned_messages.is_some(),
+            occurrence: None,
+            property: false,
         }
     }
 
     /// The `index`-th node-level constraint of `shape`.
     #[inline]
-    fn of_shape(shape: &'a Shape, index: usize) -> Self {
-        Self::annotated(
+    fn of_shape(shape: &'a Shape, index: usize, profile: crate::profile::ShaclProfile) -> Self {
+        let mut source = Self::annotated(
             &shape.id,
             &shape.severity,
             &shape.messages,
@@ -346,18 +364,32 @@ impl<'a> ConstraintSource<'a> {
                 &shape.constraint_annotations,
                 AnnotatedConstraint::Constraint(index),
             ),
-        )
+            profile,
+        );
+        source.occurrence = Some(index);
+        source
     }
 
     /// The `which` constraint of the property shape `ps`.
     #[inline]
-    fn of_property(ps: &'a PropertyShape, which: AnnotatedConstraint) -> Self {
-        Self::annotated(
+    fn of_property(
+        ps: &'a PropertyShape,
+        which: AnnotatedConstraint,
+        profile: crate::profile::ShaclProfile,
+    ) -> Self {
+        let mut source = Self::annotated(
             &ps.id,
             &ps.severity,
             &ps.messages,
             annotation_for(&ps.constraint_annotations, which),
-        )
+            profile,
+        );
+        source.occurrence = match which {
+            AnnotatedConstraint::Constraint(index) => Some(index),
+            AnnotatedConstraint::Reifier => None,
+        };
+        source.property = true;
+        source
     }
 
     /// The severity of a result whose constraint node declares `own`: a pinned
@@ -396,9 +428,56 @@ struct ValidationContext<'a, 'memo> {
     depth: u32,
     /// The `(value node, shape)` conformance answers this run already computed.
     memo: &'memo ConformanceMemo<'a>,
+    capture: Option<&'a crate::report::ReportCapture<'a>>,
+    report_run: Option<&'memo ReportRun<'memo>>,
+}
+
+/// One serial focus traversal inside the parallel focus fan-out. Its root
+/// identity and query ordinal identify executions without a global counter.
+struct ReportRun<'a> {
+    shape: &'a Term,
+    focus: &'a FocusNode,
+    store: &'a ShaclData,
+    queries: std::cell::Cell<u64>,
+}
+
+impl ReportRun<'_> {
+    fn mint_prefix(&self) -> Result<String, String> {
+        let next = self
+            .queries
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| "complete report query execution count overflow".to_owned())?;
+        self.queries.set(next);
+        let mut prefix = String::from("v");
+        purrdf_core::ir::skolem::escape_label_bytes_into(
+            self.shape.to_string().as_bytes(),
+            &mut prefix,
+        );
+        // Neither marker can occur in the byte encoding: '-' there is followed
+        // by exactly two hexadecimal digits, while s/x are not hexadecimal.
+        prefix.push_str("-s");
+        purrdf_core::ir::skolem::escape_label_bytes_into(
+            self.focus
+                .to_term(self.store.core_view())
+                .to_string()
+                .as_bytes(),
+            &mut prefix,
+        );
+        use std::fmt::Write;
+        write!(prefix, "-x{next}_").expect("String writes cannot fail");
+        Ok(prefix)
+    }
 }
 
 impl<'a> ValidationContext<'a, '_> {
+    fn report_profile(self) -> crate::profile::ShaclProfile {
+        self.capture
+            .map_or(crate::profile::ShaclProfile::LEGACY, |capture| {
+                capture.profile
+            })
+    }
+
     /// This context re-aimed at a shape reached through a constraint.
     ///
     /// The box-role vocabulary is deliberately dropped. A recursive conformance
@@ -471,6 +550,9 @@ trait ResultSink {
     /// compiled into that traversal.
     const RECORDS_RESULTS: bool;
 
+    /// Whether recursive report details retain constraint-occurrence evidence.
+    const RECORDS_EVIDENCE: bool;
+
     /// Record one violation of `severity`.
     ///
     /// `build` produces the result this violation would be REPORTED as, and the
@@ -479,7 +561,7 @@ trait ResultSink {
     /// inside it. The severity travels beside the builder rather than inside it
     /// because a conformance probe judges it without building anything: whether a
     /// result blocks conformance is decided by the run's conformance-disallow set.
-    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow;
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow;
 }
 
 /// The reporting sink: every result is kept, and the traversal always runs to
@@ -491,15 +573,53 @@ struct Collect {
 
 impl ResultSink for Collect {
     const RECORDS_RESULTS: bool = true;
+    const RECORDS_EVIDENCE: bool = false;
 
     #[inline]
-    fn violation(
-        &mut self,
-        _severity: &Severity,
-        build: impl FnOnce() -> ValidationResult,
-    ) -> Flow {
+    fn violation(&mut self, _severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
+        self.results.push(build().value);
+        Flow::Continue
+    }
+}
+
+/// The same traversal with source evidence retained at every emitted occurrence.
+#[derive(Default)]
+struct CollectEvidence {
+    results: Vec<ResultRecord>,
+}
+
+impl ResultSink for CollectEvidence {
+    const RECORDS_RESULTS: bool = true;
+    const RECORDS_EVIDENCE: bool = true;
+
+    fn violation(&mut self, _severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
         self.results.push(build());
         Flow::Continue
+    }
+}
+
+/// Recursive detail values and their evidence in the same traversal order.
+#[derive(Default)]
+struct DetailResults {
+    values: Vec<ValidationResult>,
+    evidence: Vec<crate::report::ResultEvidence>,
+}
+
+impl DetailResults {
+    fn extend(&mut self, other: Self) {
+        self.values.extend(other.values);
+        self.evidence.extend(other.evidence);
+    }
+
+    fn record(self, mut value: ValidationResult) -> ResultRecord {
+        value.details = self.values;
+        ResultRecord {
+            value,
+            evidence: crate::report::ResultEvidence {
+                details: self.evidence,
+                ..Default::default()
+            },
+        }
     }
 }
 
@@ -538,13 +658,10 @@ impl<'d> AnyViolation<'d> {
 
 impl ResultSink for AnyViolation<'_> {
     const RECORDS_RESULTS: bool = false;
+    const RECORDS_EVIDENCE: bool = false;
 
     #[inline]
-    fn violation(
-        &mut self,
-        severity: &Severity,
-        _build: impl FnOnce() -> ValidationResult,
-    ) -> Flow {
+    fn violation(&mut self, severity: &Severity, _build: impl FnOnce() -> ResultRecord) -> Flow {
         if self.disallows.contains(severity) {
             self.seen = true;
             Flow::Stop
@@ -568,14 +685,15 @@ struct NodeRoles<'a, S> {
 
 impl<S: ResultSink> ResultSink for NodeRoles<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
+    const RECORDS_EVIDENCE: bool = S::RECORDS_EVIDENCE;
 
     #[inline]
-    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
         let roles = self.roles;
         self.inner.violation(severity, move || {
             let mut result = build();
             if !roles.is_empty() {
-                result.apply_box_roles(roles, &[]);
+                result.value.apply_box_roles(roles, &[]);
             }
             result
         })
@@ -663,13 +781,14 @@ struct Stamped<'a, S> {
 
 impl<S: ResultSink> ResultSink for Stamped<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
+    const RECORDS_EVIDENCE: bool = S::RECORDS_EVIDENCE;
 
     #[inline]
-    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ResultRecord) -> Flow {
         let stamp = self.stamp;
         self.inner.violation(severity, move || {
             let mut result = build();
-            stamp.apply(&mut result);
+            stamp.apply(&mut result.value);
             result
         })
     }
@@ -969,6 +1088,8 @@ fn validate_shape_with_depth(
         plan,
         depth,
         memo: &memo,
+        capture: None,
+        report_run: None,
     };
     collect_shape(context, focus)
 }
@@ -982,6 +1103,89 @@ fn collect_shape(
     let mut sink = Collect::default();
     walk_shape(context, focus, &mut sink)?;
     Ok(sink.results)
+}
+
+/// Evidence-bearing entry into the existing shape walker.
+pub(crate) fn validate_shape_with_evidence_at<'a>(
+    store: &'a ShaclData,
+    focus: &FocusNode,
+    box_role_vocab: Option<&'a BoxRoleVocab>,
+    plan: ShapePlan<'a>,
+    capture: &'a crate::report::ReportCapture<'a>,
+) -> Result<Vec<ResultRecord>, String> {
+    let local_capture = crate::report::ReportCapture::with_sources(
+        capture.shapes,
+        capture.profile,
+        capture.sources,
+    );
+    let query_scope = crate::query_law::enter(capture.profile, capture.sources);
+    let memo = ConformanceMemo::default();
+    let run = ReportRun {
+        shape: &plan.shape().id,
+        focus,
+        store,
+        queries: std::cell::Cell::new(0),
+    };
+    let context = ValidationContext {
+        store,
+        box_role_vocab,
+        plan,
+        depth: 0,
+        memo: &memo,
+        capture: Some(&local_capture),
+        report_run: Some(&run),
+    };
+    let mut sink = CollectEvidence::default();
+    let mut outcome = walk_shape(context, focus, &mut sink);
+    // Existential conformance may suppress a candidate's semantic failure,
+    // but it cannot admit an invocation the selected query law refused.
+    if let Some(refusal) = query_scope
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.take_failure())
+    {
+        local_capture.refuse(refusal);
+    }
+    if outcome.is_ok()
+        && let Some(refusal) = local_capture.take_policy_failure()
+    {
+        // The first candidate's semantic cause was suppressed by conformance.
+        // Replace only that successful traversal's cause with its hard refusal.
+        local_capture.take_failure();
+        outcome = Err(local_capture.refuse(refusal));
+    }
+    if outcome.is_err() {
+        capture.record_focus_failure(store.core_view(), focus, local_capture.take_failure());
+    }
+    outcome?;
+    Ok(sink.results)
+}
+
+/// Collect evaluated details in the enclosing sink's reporting mode. Filtering
+/// occurs while values and evidence are still paired, before their split.
+fn collect_details<S: ResultSink>(
+    context: ValidationContext<'_, '_>,
+    focus: &FocusNode,
+    retain: impl Fn(&ValidationResult) -> bool,
+) -> Result<DetailResults, String> {
+    if S::RECORDS_EVIDENCE {
+        let mut sink = CollectEvidence::default();
+        walk_shape(context, focus, &mut sink)?;
+        let (values, evidence) = sink
+            .results
+            .into_iter()
+            .filter(|record| retain(&record.value))
+            .map(|record| (record.value, record.evidence))
+            .unzip();
+        Ok(DetailResults { values, evidence })
+    } else {
+        let mut values = collect_shape(context, focus)?;
+        values.retain(retain);
+        Ok(DetailResults {
+            values,
+            evidence: Vec::new(),
+        })
+    }
 }
 
 /// **The one traversal.**
@@ -1030,7 +1234,7 @@ fn walk_shape<S: ResultSink>(
                 &node_value_nodes,
                 plan.planned(constraint, lowered)?,
                 None,
-                ConstraintSource::of_shape(shape, index),
+                ConstraintSource::of_shape(shape, index, context.report_profile()),
                 &mut node_sink,
             )?
             .stopped()
@@ -1062,7 +1266,7 @@ fn walk_shape<S: ResultSink>(
                 context,
                 focus,
                 shape,
-                ConstraintSource::of_shape(shape, index),
+                ConstraintSource::of_shape(shape, index, context.report_profile()),
                 permitted,
                 by_types,
                 sink,
@@ -1172,7 +1376,7 @@ fn eval_closed<S: ResultSink>(
                 annotations: vec![],
             };
             result.apply_box_roles(&shape.box_roles, &path_roles);
-            result
+            ResultRecord::plain(result)
         });
         if flow.stopped() {
             return Flow::Stop;
@@ -1270,6 +1474,8 @@ pub(crate) fn conforms_with_id_depth(
         plan,
         depth,
         memo: &memo,
+        capture: None,
+        report_run: None,
     };
     let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
     walk_shape(context, focus, &mut probe)?;
@@ -1345,7 +1551,11 @@ fn eval_property_shape<'a, S: ResultSink>(
             &value_nodes,
             context.plan.planned(constraint, lowered)?,
             Some(&ps.path),
-            ConstraintSource::of_property(ps, AnnotatedConstraint::Constraint(index)),
+            ConstraintSource::of_property(
+                ps,
+                AnnotatedConstraint::Constraint(index),
+                context.report_profile(),
+            ),
             &mut stamped,
         )?
         .stopped()
@@ -1635,7 +1845,8 @@ fn eval_reifier_shapes<S: ResultSink>(
     let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
     // The reifier-shape constraint's severity and message: its reifier
     // annotation's when it has one, else the property shape's.
-    let source = ConstraintSource::of_property(ps, AnnotatedConstraint::Reifier);
+    let source =
+        ConstraintSource::of_property(ps, AnnotatedConstraint::Reifier, context.report_profile());
     let disallows = context.plan.binding().conformance_disallows();
     // The reifier identities of ONE value node's statement, in canonical term
     // order. Inline for the sizes a statement layer actually carries — a handful
@@ -1706,7 +1917,7 @@ fn eval_reifier_shapes<S: ResultSink>(
                     annotations: vec![],
                 };
                 result.apply_box_roles(&source_roles, path_roles);
-                result
+                ResultRecord::plain(result)
             });
             if flow.stopped() {
                 return Ok(Flow::Stop);
@@ -1740,7 +1951,15 @@ fn eval_reifier_shapes<S: ResultSink>(
                         } else {
                             first_messages(&[&reifier_shape.messages, &ps.messages])
                         };
-                        reifier_result(&ctx, value, &source_roles, &source, messages, &[], vec![])
+                        ResultRecord::plain(reifier_result(
+                            &ctx,
+                            value,
+                            &source_roles,
+                            &source,
+                            messages,
+                            &[],
+                            vec![],
+                        ))
                     });
                     if flow.stopped() {
                         return Ok(Flow::Stop);
@@ -1753,9 +1972,10 @@ fn eval_reifier_shapes<S: ResultSink>(
                 // arm cannot disagree. A non-conforming reifier is ONE result
                 // however many inner results made it so: "For each reifier t that
                 // does not conform to $reifierShape, there is a validation result".
-                let mut inner = collect_shape(reifier_context, &reifier_focus)?;
-                inner.retain(|inner| disallows.contains(&inner.severity));
-                if inner.is_empty() {
+                let inner = collect_details::<S>(reifier_context, &reifier_focus, |inner| {
+                    disallows.contains(&inner.severity)
+                })?;
+                if inner.values.is_empty() {
                     continue;
                 }
                 let flow = sink.violation(source.severity, || {
@@ -1763,26 +1983,27 @@ fn eval_reifier_shapes<S: ResultSink>(
                         source.messages.to_vec()
                     } else {
                         let mut candidates: Vec<&Vec<Literal>> =
-                            inner.iter().map(|inner| &inner.messages).collect();
+                            inner.values.iter().map(|inner| &inner.messages).collect();
                         candidates.push(&reifier_shape.messages);
                         candidates.push(&ps.messages);
                         first_messages(&candidates)
                     };
-                    let inner_roles = inner.iter().fold(Vec::new(), |roles, inner| {
+                    let inner_roles = inner.values.iter().fold(Vec::new(), |roles, inner| {
                         merge_box_roles(&roles, &inner.source_box_roles)
                     });
                     // The reifier's own results — each with the reifier as its
                     // focus node — are the result's `sh:detail`, so the reifier
                     // and why it fails are carried beside the value node.
-                    reifier_result(
+                    let value = reifier_result(
                         &ctx,
                         value,
                         &source_roles,
                         &source,
                         messages,
                         &inner_roles,
-                        inner,
-                    )
+                        vec![],
+                    );
+                    inner.record(value)
                 });
                 if flow.stopped() {
                     return Ok(Flow::Stop);
@@ -2056,12 +2277,18 @@ fn eval_constraint<'a, S: ResultSink>(
     // `if` above each of these — is shared, and only the reporting is skipped.
     macro_rules! emit {
         ($result:expr) => {
-            if sink.violation(severity, || $result).stopped() {
+            if sink
+                .violation(severity, || ResultRecord::plain($result))
+                .stopped()
+            {
                 return Ok(Flow::Stop);
             }
         };
         (severity = $severity:expr; $result:expr) => {
-            if sink.violation($severity, || $result).stopped() {
+            if sink
+                .violation($severity, || ResultRecord::plain($result))
+                .stopped()
+            {
                 return Ok(Flow::Stop);
             }
         };
@@ -2281,7 +2508,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 // details are each failing member's own results against the member
                 // shape, in list order and once per distinct member, collected
                 // only by a sink that records results.
-                let mut details: Vec<ValidationResult> = Vec::new();
+                let mut details = DetailResults::default();
                 if S::RECORDS_RESULTS {
                     let mut reported: Vec<TermId> = Vec::new();
                     for member in list.members(ds) {
@@ -2289,20 +2516,25 @@ fn eval_constraint<'a, S: ResultSink>(
                             continue;
                         }
                         reported.push(member);
-                        details.extend(collect_shape(
+                        details.extend(collect_details::<S>(
                             context.inner(member_shape),
                             &FocusNode::Interned(member),
+                            |_| true,
                         )?);
                     }
                 }
-                emit!({
-                    let mut outer = result!(
-                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
-                        Some(value.to_term(ds))
-                    );
-                    outer.details = details;
-                    outer
-                });
+                if sink
+                    .violation(severity, || {
+                        let outer = result!(
+                            sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                            Some(value.to_term(ds))
+                        );
+                        details.record(outer)
+                    })
+                    .stopped()
+                {
+                    return Ok(Flow::Stop);
+                }
             }
             Flow::Continue
         }
@@ -3098,8 +3330,16 @@ fn eval_constraint<'a, S: ResultSink>(
             severity: csev,
             annotations,
         } => {
+            let source_constraint = context
+                .capture
+                .map(|capture| capture.source_constraint(source.site(), &constraint))
+                .transpose()?;
             let sev = source.severity_over(csev.as_ref());
-            let msg = source.messages_over(cmsg);
+            let msg = match context.capture.map(|capture| capture.profile) {
+                Some(crate::profile::ShaclProfile::REC_20170720) => cmsg,
+                Some(crate::profile::ShaclProfile::WD_20260918) if !cmsg.is_empty() => cmsg,
+                _ => source.messages_over(cmsg),
+            };
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
@@ -3116,6 +3356,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 .sparql_view_shares_core_ids()
                 .then(|| focus_node.id())
                 .flatten();
+            let mint_prefix = context.report_run.map(ReportRun::mint_prefix).transpose()?;
             let produced = crate::sparql::eval_sparql_constraint_view(
                 store.sparql_view(),
                 &focus_term,
@@ -3128,13 +3369,31 @@ fn eval_constraint<'a, S: ResultSink>(
                 annotations,
                 shapes_graph_iri,
                 Some(source_shape),
+                context
+                    .capture
+                    .map(|capture| crate::sparql::SparqlReportContext {
+                        capture,
+                        source_constraint,
+                        bnode_mint_prefix: mint_prefix.as_deref(),
+                    }),
             )
             .map_err(|e| format!("sh:sparql constraint on shape {source_shape}: {e}"))?;
             // A SHACL-SPARQL validator answers in RESULTS rather than in a
             // per-value-node verdict, so the query runs whatever the sink is;
             // what the sink decides is only whether they are kept.
             for produced_result in produced {
-                emit!(severity = &sev; produced_result);
+                if sink
+                    .violation(&sev, || ResultRecord {
+                        value: produced_result,
+                        evidence: crate::report::ResultEvidence {
+                            source_constraint: source_constraint.cloned(),
+                            ..Default::default()
+                        },
+                    })
+                    .stopped()
+                {
+                    return Ok(Flow::Stop);
+                }
             }
             Flow::Continue
         }
@@ -3361,7 +3620,24 @@ fn eval_constraint<'a, S: ResultSink>(
             annotations,
         } => {
             let sev = source.severity_over(csev.as_ref());
-            let msg = source.messages_over(cmsg);
+            let occurrence = context
+                .capture
+                .map(|capture| capture.component_occurrence(source.site(), &constraint))
+                .transpose()?;
+            let msg = if context
+                .capture
+                .is_some_and(|capture| capture.profile != crate::profile::ShaclProfile::LEGACY)
+            {
+                context
+                    .capture
+                    .expect("dated report capture")
+                    .component_messages(
+                        occurrence.expect("rich component occurrence admitted"),
+                        source.messages,
+                    )
+            } else {
+                source.messages_over(cmsg)
+            };
             let dataset = store.sparql_view();
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
@@ -3375,6 +3651,19 @@ fn eval_constraint<'a, S: ResultSink>(
                 .sparql_view_shares_core_ids()
                 .then(|| focus_node.id())
                 .flatten();
+            let mint_prefix = context.report_run.map(ReportRun::mint_prefix).transpose()?;
+            let purpose = match validator {
+                ComponentValidator::Ask { .. } => crate::profile::QueryPurpose::AskValidator,
+                ComponentValidator::Select { .. } => crate::profile::QueryPurpose::SelectValidator,
+            };
+            let query_law = crate::query_law::current();
+            let invocation = if let Some(occurrence) = occurrence {
+                crate::query_law::Invocation::with_declarations(purpose, &occurrence.parameters)
+            } else if let Some(law) = &query_law {
+                law.component_invocation(source.site(), &constraint, purpose)?
+            } else {
+                crate::query_law::Invocation::with_bindings(purpose, bindings)
+            };
             let produced = match validator {
                 ComponentValidator::Ask { .. } => crate::components::eval_ask_validator(
                     dataset,
@@ -3391,6 +3680,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     annotations,
                     shapes_graph_iri,
                     Some(source_shape),
+                    invocation,
                 ),
                 ComponentValidator::Select { .. } => crate::components::eval_select_validator(
                     dataset,
@@ -3406,6 +3696,14 @@ fn eval_constraint<'a, S: ResultSink>(
                     annotations,
                     shapes_graph_iri,
                     Some(source_shape),
+                    invocation,
+                    context
+                        .capture
+                        .map(|capture| crate::sparql::SparqlReportContext {
+                            capture,
+                            source_constraint: None,
+                            bnode_mint_prefix: mint_prefix.as_deref(),
+                        }),
                 ),
             }
             .map_err(|e| format!("component validator on shape {source_shape}: {e}"))?;

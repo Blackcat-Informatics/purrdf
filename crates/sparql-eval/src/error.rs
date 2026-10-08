@@ -258,6 +258,10 @@ pub enum EvalError {
     /// offered as the complete one.
     Function(String),
 
+    /// A selected invocation law refused a SPARQL-bodied function. This is a
+    /// hard query failure, with the caller's exact cause retained through workers.
+    FunctionAdmission(crate::user_fn::UserFunctionRefusal),
+
     /// An invoked function or relation failed operationally: an opaque host error,
     /// a caught panic, a resource ceiling, or an invalid host protocol response.
     /// Distinct from [`Self::Function`]'s request refusal so consumers cannot
@@ -518,6 +522,7 @@ impl EvalError {
             | Self::ServiceHostFault { .. }
             | Self::Data(_)
             | Self::Function(_)
+            | Self::FunctionAdmission(_)
             | Self::ExistsScopeCollision { .. }
             | Self::Config(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
@@ -714,6 +719,7 @@ impl core::fmt::Display for EvalError {
             Self::Function(msg) | Self::FunctionOperational(msg) => {
                 write!(f, "host function error: {msg}")
             }
+            Self::FunctionAdmission(error) => write!(f, "host function error: {error}"),
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
             Self::CompositeBound(msg) => write!(
                 f,
@@ -763,6 +769,7 @@ impl std::error::Error for EvalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::XPathRegex(error) => Some(error),
+            Self::FunctionAdmission(error) => Some(error.cause()),
             _ => None,
         }
     }

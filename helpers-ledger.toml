@@ -2800,3 +2800,13 @@ kind = "shim"
 criterion = "b"
 anchor = "purrdf_core::ir::pack::side::SideTables::encode"
 reason = "Resident conveniences for two separate persisted grammars: statement-layer side tables and ordinary quad permutations. Each forwards to its own single fallible encoder; their shared Result::expect shape does not duplicate either encoding job."
+
+[[distinct]]
+members = [
+    "purrdf_shapes::query_law::replace",
+    "purrdf_shapes::xpath::replace",
+]
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_shapes::sparql::AmbientContext"
+reason = "Two independently owned typed SHACL request/cause slots: dated query admission retains exact source occurrences and invocation refusals, while native XPath execution retains its profile, finite limits, pattern cache and selected cause. AmbientContext swaps both private CURRENT slots to preserve each owner's admission and exact failure through suspension and nested restoration. Each wrapper forwards to std::RefCell::replace on its own slot; no second admission, regex, executor, cache or context-swap implementation is sanctioned."

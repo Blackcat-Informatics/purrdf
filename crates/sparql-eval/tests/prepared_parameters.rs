@@ -216,6 +216,105 @@ fn the_declaration_is_what_admits_a_call_whose_argument_the_text_leaves_free() {
     );
 }
 
+/// Read-only request admission and execution share the parameterized cache entry
+/// on every lane; the neighboring free request remains infeasible.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity() {
+    use purrdf_sparql_eval::{InternedRequest, Prebinding};
+
+    let (registry, relation) = registry();
+    let engine = NativeSparqlEngine::new();
+    let env = environment(&registry);
+    let ordinary = QueryOptions::new().with_env(&env);
+    let shacl = ordinary.with_prebinding(ShaclPrebinding::Applied);
+    let text =
+        format!("SELECT ?object WHERE {{ OPTIONAL {{ ( ?subject ) <{RELATED}> ( ?object ) }} }}");
+    let substitutions = [Prebinding {
+        variable: "subject",
+        value: iri("input"),
+    }];
+    let request = || InternedRequest {
+        query: &text,
+        base_iri: None,
+        substitutions: &substitutions,
+    };
+    let audit = engine.prepare_interned_request(request(), shacl).unwrap();
+    let original = audit.query().clone();
+    let repeated = engine.prepare_interned_request(request(), shacl).unwrap();
+    assert!(Arc::ptr_eq(&audit, &repeated));
+    assert_eq!(
+        relation.bound_invocations(),
+        0,
+        "inspection never executes the relation"
+    );
+    let before = engine.plan_cache_stats();
+    let data = empty_dataset();
+    let rows = engine
+        .query_interned_view(&*data, request(), shacl, |outcome| {
+            let InternedOutcome::Solutions(solutions) = outcome else {
+                panic!("a SELECT must produce solution rows")
+            };
+            let column = solutions.column("object").unwrap();
+            solutions
+                .rows()
+                .iter()
+                .map(|row| solutions.cell(row, column).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        [TermValue::iri("https://example.org/d/input/related")]
+    );
+    assert_eq!(relation.bound_invocations(), 1);
+    let after = engine.plan_cache_stats();
+    assert_eq!(after.misses, before.misses);
+    assert_eq!(
+        after.hits,
+        before.hits + 1,
+        "raw execution uses the inspected cache entry"
+    );
+    let after_execution = engine.prepare_interned_request(request(), shacl).unwrap();
+    assert!(Arc::ptr_eq(&audit, &after_execution));
+    assert_eq!(
+        after_execution.query(),
+        &original,
+        "bound values never rewrite the inspected source algebra"
+    );
+
+    // Every lane takes the one pre-binding rewrite, so the ordinary lane admits the
+    // bound request on the same cache entry.
+    let ordinary_audit = engine
+        .prepare_interned_request(request(), ordinary)
+        .unwrap();
+    assert!(Arc::ptr_eq(&audit, &ordinary_audit));
+
+    for options in [shacl, ordinary] {
+        let free = InternedRequest {
+            query: &text,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let diagnostic = engine.prepare_interned_request(free, options).unwrap_err();
+        assert_eq!(diagnostic.code, "native-sparql-property-function");
+        let free = InternedRequest {
+            query: &text,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let diagnostic = engine
+            .query_interned_view(&*data, free, options, |_| ())
+            .unwrap_err();
+        assert_eq!(diagnostic.code, "native-sparql-property-function");
+    }
+    assert_eq!(
+        relation.bound_invocations(),
+        1,
+        "both refusals precede invocation"
+    );
+}
+
 /// **Declared and bound runs; declared and unbound is refused by name.**
 ///
 /// The two directions of the promise, over ONE execution, so nothing but the binding

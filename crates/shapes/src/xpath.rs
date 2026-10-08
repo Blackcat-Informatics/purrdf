@@ -32,6 +32,8 @@ use crate::term::Term;
 pub enum XPathValidationError {
     /// Existing shape, projection, source or target admission failed.
     Shapes(ShapesError),
+    /// A selected dated SHACL bundle refused source or query admission.
+    Complete(Box<crate::report::CompleteValidationError>),
     /// The native pattern compiler or matcher refused the request.
     Pattern(xpath::Error),
     /// A SHACL-driven SPARQL query returned its actual diagnostic.
@@ -53,6 +55,7 @@ impl fmt::Display for XPathValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Shapes(error) => error.fmt(f),
+            Self::Complete(error) => error.fmt(f),
             Self::Pattern(error) => error.fmt(f),
             Self::Query(error) => error.fmt(f),
             Self::Execution(error) => f.write_str(error),
@@ -66,6 +69,7 @@ impl std::error::Error for XPathValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Shapes(error) => Some(error),
+            Self::Complete(error) => Some(error.as_ref()),
             Self::Pattern(error) => Some(error),
             Self::Query(error) => Some(error),
             Self::Preparation(error) => Some(error),
@@ -220,7 +224,7 @@ pub(crate) enum Cause {
 purrdf_lex::variant_from!(Cause { Preparation(crate::product::ShapesProductError) });
 
 impl Cause {
-    fn into_public(self) -> XPathValidationError {
+    pub(crate) fn into_public(self) -> XPathValidationError {
         match self {
             Self::Pattern(error) => XPathValidationError::Pattern(error),
             Self::Query(error) => XPathValidationError::Query(error),
@@ -254,6 +258,16 @@ impl<E> RunError<E> {
             (Some(cause), _) => cause.into_public(),
             (None, Some(error)) => map(error),
             (None, None) => unreachable!("a refused run retains at least one actual error"),
+        }
+    }
+}
+
+impl RunError<crate::report::CompleteValidationError> {
+    fn into_selected(self, profile: crate::profile::ShaclProfile) -> XPathValidationError {
+        if profile == crate::profile::ShaclProfile::LEGACY {
+            self.into_public(crate::report::CompleteValidationError::into_xpath)
+        } else {
+            crate::report::CompleteValidationError::from_native_run(self).into_xpath()
         }
     }
 }
@@ -508,12 +522,17 @@ impl XPathPreparedShapes {
 
     fn bound(
         &self,
-        operation: impl FnOnce(&PreparedShapes) -> Result<PreparedValidator, ShapesError>,
+        operation: impl FnOnce(
+            &PreparedShapes,
+        )
+            -> Result<PreparedValidator, crate::report::CompleteValidationError>,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
         let validator = self
             .configuration
             .run(|| operation(&self.prepared))
-            .map_err(|error| error.into_public(XPathValidationError::Shapes))?;
+            .map_err(|error| {
+                error.into_selected(self.prepared.shapes().validation_options.shacl_profile)
+            })?;
         Ok(XPathPreparedValidator {
             validator,
             configuration: self.configuration.clone(),
@@ -524,7 +543,7 @@ impl XPathPreparedShapes {
     /// # Errors
     /// Returns typed source, target or native operational failures.
     pub fn bind(&self, data: ShaclData) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind(data))
+        self.bound(|prepared| prepared.bind_request(data))
     }
 
     /// Project and bind a dataset under this selection.
@@ -534,7 +553,7 @@ impl XPathPreparedShapes {
         &self,
         data: &RdfDataset,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_dataset(data))
+        self.bound(|prepared| prepared.bind_dataset_request(data))
     }
 
     /// Bind a shared native dataset without an owned projection.
@@ -544,7 +563,7 @@ impl XPathPreparedShapes {
         &self,
         data: Arc<RdfDataset>,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_shared_dataset(data))
+        self.bound(|prepared| prepared.bind_shared_dataset_request(data))
     }
 
     /// Bind an immutable SHACL view under this selection.
@@ -554,7 +573,7 @@ impl XPathPreparedShapes {
         &self,
         data: Arc<crate::data_view::ShaclDatasetView>,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_view(data))
+        self.bound(|prepared| prepared.bind_view_request(data))
     }
 
     /// Bind a shared source with its shapes graph exposed to SPARQL.
@@ -566,7 +585,9 @@ impl XPathPreparedShapes {
         iri: Option<&str>,
         limits: purrdf_rdf::ir::ViewLimits,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_shared_dataset_with_shapes_graph(data, iri, limits))
+        self.bound(|prepared| {
+            prepared.bind_shared_dataset_with_shapes_graph_request(data, iri, limits)
+        })
     }
 
     /// Bind an immutable mutation snapshot with its shapes graph.
@@ -578,7 +599,7 @@ impl XPathPreparedShapes {
         iri: Option<&str>,
         limits: purrdf_rdf::ir::ViewLimits,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_delta_with_shapes_graph(data, iri, limits))
+        self.bound(|prepared| prepared.bind_delta_with_shapes_graph_request(data, iri, limits))
     }
 
     /// Bind an already-projected dataset under this selection.
@@ -588,7 +609,7 @@ impl XPathPreparedShapes {
         &self,
         data: Arc<RdfDataset>,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_projected_dataset(data))
+        self.bound(|prepared| prepared.bind_projected_dataset_request(data))
     }
 
     /// Bind an already-projected dataset with its shapes graph.
@@ -599,7 +620,7 @@ impl XPathPreparedShapes {
         data: Arc<RdfDataset>,
         iri: Option<&str>,
     ) -> Result<XPathPreparedValidator, XPathValidationError> {
-        self.bound(|prepared| prepared.bind_projected_dataset_with_shapes_graph(data, iri))
+        self.bound(|prepared| prepared.bind_projected_dataset_with_shapes_graph_request(data, iri))
     }
 }
 
@@ -634,8 +655,11 @@ impl XPathPreparedValidator {
     /// Returns typed operational failures, with no partial report.
     pub fn validate(&self) -> Result<ValidationReport, XPathValidationError> {
         self.configuration
-            .run(|| self.validator.validate())
-            .map_err(|error| error.into_public(XPathValidationError::Execution))
+            .run(|| {
+                self.validator
+                    .validate_request(None::<fn(&crate::shapes::Shape, &Term) -> bool>)
+            })
+            .map_err(|error| error.into_selected(self.validator.profile()))
     }
 
     /// Validate this binding under one SPARQL budget and current pattern limits.
@@ -660,8 +684,11 @@ impl XPathPreparedValidator {
         nodes: &[Term],
     ) -> Result<ValidationReport, XPathValidationError> {
         self.configuration
-            .run(|| self.validator.validate_focus_nodes(nodes))
-            .map_err(|error| error.into_public(XPathValidationError::Shapes))
+            .run(|| {
+                self.validator
+                    .validate_bounded_request(&self.validator.normalize_focus_nodes(nodes))
+            })
+            .map_err(|error| error.into_selected(self.validator.profile()))
     }
 
     /// Validate ids minted by this exact binding.
@@ -672,8 +699,11 @@ impl XPathPreparedValidator {
         nodes: &[FocusId],
     ) -> Result<ValidationReport, XPathValidationError> {
         self.configuration
-            .run(|| self.validator.validate_focus_node_ids(nodes))
-            .map_err(|error| error.into_public(XPathValidationError::Shapes))
+            .run(|| {
+                let focus = self.validator.normalize_focus_node_ids(nodes)?;
+                self.validator.validate_bounded_request(&focus)
+            })
+            .map_err(|error| error.into_selected(self.validator.profile()))
     }
 
     /// Mint an id from this exact immutable data binding.
@@ -690,8 +720,8 @@ impl XPathPreparedValidator {
         delta: &purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, XPathValidationError> {
         self.configuration
-            .run(|| self.validator.affected_focus_node_ids(delta))
-            .map_err(|error| error.into_public(XPathValidationError::Execution))
+            .run(|| self.validator.affected_focus_request(delta))
+            .map_err(|error| error.into_selected(self.validator.profile()))
     }
 
     /// Expand the binding's immutable change and validate exactly the focus nodes it

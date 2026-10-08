@@ -82,7 +82,11 @@ fn sort_focus_nodes(dataset: &impl ShaclRead, nodes: &mut [FocusNode]) {
 /// renderings have compared EQUAL, which for two distinct dataset terms takes a
 /// literal whose datatype is one of the two the rendering suppresses. That makes
 /// the order strict and total, which is what lets the sort be unstable.
-fn focus_cmp(dataset: &impl ShaclRead, left: &FocusNode, right: &FocusNode) -> std::cmp::Ordering {
+pub(crate) fn focus_cmp(
+    dataset: &impl ShaclRead,
+    left: &FocusNode,
+    right: &FocusNode,
+) -> std::cmp::Ordering {
     match (left, right) {
         (FocusNode::Interned(left), FocusNode::Interned(right)) => {
             canonical_cmp_ids(dataset, *left, *right).then_with(|| left.index().cmp(&right.index()))
@@ -407,7 +411,7 @@ impl PreparedTargets {
         classes: &ClassCatalog,
     ) -> Result<Self, String> {
         let mut prepared = Self::default();
-        for target in &shape.targets {
+        for (index, target) in shape.targets.iter().enumerate() {
             match target {
                 Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
                     // `None` = the data graph names no such class, so the target
@@ -427,14 +431,8 @@ impl PreparedTargets {
                     }
                 }
                 Target::Node(term) => prepared.insert_explicit(data.core_view(), term.clone()),
-                Target::Sparql {
-                    select,
-                    ask,
-                    substitutions,
-                } => {
-                    let candidates =
-                        crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
-                            .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))?;
+                Target::Sparql { select, ask, .. } => {
+                    let candidates = source_sparql_target(data, &shape.id, index, target)?;
                     match ask {
                         // SHACL-AF §3.1: the SELECT's results are what a whole validation
                         // enumerates; a candidate is a target node when the ASK says so,
@@ -695,6 +693,38 @@ fn target_ask(data: &ShaclData, ask: &str, focus: &FocusNode) -> Result<bool, St
     let term = focus.to_term(data.core_view());
     crate::sparql::eval_target_ask_view(data.sparql_view(), ask, &term)
         .map_err(|error| format!("sh:target SPARQLTarget sh:ask failed: {error}"))
+}
+
+/// The source occurrence, rather than supplied substitutions, distinguishes a
+/// plain target from a target type and preserves absent optional declarations.
+fn source_sparql_target(
+    data: &ShaclData,
+    shape: &Term,
+    index: usize,
+    target: &Target,
+) -> Result<Vec<Term>, String> {
+    let Target::Sparql {
+        select,
+        substitutions,
+        ..
+    } = target
+    else {
+        unreachable!("only a SPARQL target reaches its query executor")
+    };
+    let query_law = crate::query_law::current();
+    let invocation = match &query_law {
+        Some(law) => law.target_invocation(shape, index, target)?,
+        None => crate::query_law::Invocation::without_parameters(
+            crate::profile::QueryPurpose::SelectTarget,
+        ),
+    };
+    crate::sparql::eval_target_with_invocation_view(
+        data.sparql_view(),
+        select,
+        substitutions,
+        invocation,
+    )
+    .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))
 }
 
 /// The DUAL of [`PreparedTargets`]: which shapes claim a node, rather than which
@@ -1142,7 +1172,7 @@ pub(crate) fn resolve_focus_nodes(
     let mut seen_foreign: FastSet<Term> = FastSet::default();
     let mut nodes: Vec<FocusNode> = Vec::new();
 
-    for target in targets {
+    for (index, target) in targets.iter().enumerate() {
         let ids = match target {
             Target::Class(class_iri) => {
                 Some(instances_of_class(data, class_iri, binding, classes)?)
@@ -1176,12 +1206,7 @@ pub(crate) fn resolve_focus_nodes(
             Target::Node(term) => vec![term.clone()],
             // SELECT-form is enforced at shape-load; residual evaluation failures
             // remain hard validation errors.
-            Target::Sparql {
-                select,
-                substitutions,
-                ..
-            } => crate::sparql::eval_target_view(data.sparql_view(), select, substitutions)
-                .map_err(|e| format!("sh:target SPARQLTarget failed: {e}"))?,
+            Target::Sparql { .. } => source_sparql_target(data, shape, index, target)?,
             Target::NodeExpression(expr) => crate::target_eval::node_expression_targets(
                 data,
                 shape,
@@ -1216,13 +1241,69 @@ pub(crate) fn resolve_focus_nodes(
     Ok(nodes)
 }
 
-fn evaluate_shape_focus_nodes(
+/// Collection mode only; both modes execute the existing constraint walker.
+trait ShapeReporting: Copy + Sync {
+    type Result: Send;
+    fn validate(
+        self,
+        data: &ShaclData,
+        focus: &FocusNode,
+        shapes: &Shapes,
+        plan: ShapePlan<'_>,
+    ) -> Result<Vec<Self::Result>, String>;
+}
+
+#[derive(Clone, Copy)]
+struct LegacyReporting;
+
+impl ShapeReporting for LegacyReporting {
+    type Result = crate::report::ValidationResult;
+    fn validate(
+        self,
+        data: &ShaclData,
+        focus: &FocusNode,
+        shapes: &Shapes,
+        plan: ShapePlan<'_>,
+    ) -> Result<Vec<Self::Result>, String> {
+        crate::constraints::validate_shape_with_plan_at(
+            data,
+            focus,
+            shapes.box_role_vocab.as_ref(),
+            plan,
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EvidenceReporting<'a>(&'a crate::report::ReportCapture<'a>);
+
+impl ShapeReporting for EvidenceReporting<'_> {
+    type Result = crate::report::ResultRecord;
+    fn validate(
+        self,
+        data: &ShaclData,
+        focus: &FocusNode,
+        shapes: &Shapes,
+        plan: ShapePlan<'_>,
+    ) -> Result<Vec<Self::Result>, String> {
+        crate::constraints::validate_shape_with_evidence_at(
+            data,
+            focus,
+            shapes.box_role_vocab.as_ref(),
+            plan,
+            self.0,
+        )
+    }
+}
+
+fn evaluate_shape_focus_nodes_using<R: ShapeReporting>(
+    reporting: R,
     data: &ShaclData,
     shapes: &Shapes,
     plan: ShapePlan<'_>,
     focus_nodes: &[FocusNode],
     include_focus: impl Fn(&FocusNode) -> bool + Sync,
-) -> Result<Vec<crate::report::ValidationResult>, String> {
+) -> Result<Vec<R::Result>, String> {
     // The function bodies, bound against the extension environment in force. Bound
     // ONCE, here, above both the serial and the chunked branch, and installed by
     // `Arc` clone afterwards — never re-bound per branch or per chunk. Two reasons,
@@ -1269,13 +1350,8 @@ fn evaluate_shape_focus_nodes(
             crate::sparql::poll_between_evaluations(Some(&governors))?;
             if include_focus(focus) {
                 out.extend(
-                    crate::xpath::root_result(crate::constraints::validate_shape_with_plan_at(
-                        data,
-                        focus,
-                        shapes.box_role_vocab.as_ref(),
-                        plan,
-                    ))
-                    .map_err(crate::xpath::restore_root_error)?,
+                    crate::xpath::root_result(reporting.validate(data, focus, shapes, plan))
+                        .map_err(crate::xpath::restore_root_error)?,
                 );
             }
         }
@@ -1323,12 +1399,7 @@ fn evaluate_shape_focus_nodes(
         |_scopes, out, focus| {
             if include_focus(focus) {
                 out.extend(crate::xpath::root_result(
-                    crate::constraints::validate_shape_with_plan_at(
-                        data,
-                        focus,
-                        shapes.box_role_vocab.as_ref(),
-                        plan,
-                    ),
+                    reporting.validate(data, focus, shapes, plan),
                 )?);
             }
             Ok::<(), crate::xpath::RootError>(())
@@ -1350,22 +1421,7 @@ fn finish_report(
     // iteration order and thus not guaranteed stable across hasher paths or
     // targets. Sorting on the full serialized identity closes that leak so report
     // bytes are invariant under data-insertion order and platform.
-    let sort_key = |result: &crate::report::ValidationResult| {
-        (
-            result.focus_node.to_string(),
-            result.source_constraint_component.to_string(),
-            result.source_shape.to_string(),
-            result
-                .result_path
-                .as_ref()
-                .map_or_default(ToString::to_string),
-            result.value.as_ref().map_or_default(ToString::to_string),
-            crate::report::messages_sort_key(&result.messages),
-            result.severity.clone(),
-            crate::report::annotations_sort_key(&result.annotations),
-        )
-    };
-    results.sort_by_cached_key(sort_key);
+    results.sort_by_cached_key(crate::report::result_sort_key);
     // Every shapes graph a validation runs over met every syntax rule the loader
     // enforces; an empty `sh:in` / `sh:xone` list is a mandatory lint diagnostic, not an
     // ill-formedness (see `ValidationReport::shapes_graph_well_formed`).
@@ -1381,8 +1437,28 @@ fn validate_with_plan_and_focus_filter<F>(
     data: &ShaclData,
     shapes: &Shapes,
     bound: &BoundShapes,
-    mut include_focus: F,
+    include_focus: F,
 ) -> Result<ValidationReport, String>
+where
+    F: FnMut(&Shape, &Term) -> bool,
+{
+    let results = validate_results_with_plan_and_focus_filter(
+        LegacyReporting,
+        data,
+        shapes,
+        bound,
+        include_focus,
+    )?;
+    Ok(finish_report(results, shapes))
+}
+
+fn validate_results_with_plan_and_focus_filter<R: ShapeReporting, F>(
+    reporting: R,
+    data: &ShaclData,
+    shapes: &Shapes,
+    bound: &BoundShapes,
+    mut include_focus: F,
+) -> Result<Vec<R::Result>, String>
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
@@ -1411,7 +1487,8 @@ where
         // over an owned term, so this route — and only this route — materializes
         // one per focus node; the change path, which has no filter, does not.
         focus_nodes.retain(|focus| include_focus(shape, &focus.to_term(data.core_view())));
-        all_results.extend(evaluate_shape_focus_nodes(
+        all_results.extend(evaluate_shape_focus_nodes_using(
+            reporting,
             data,
             shapes,
             bound.plan(shape, position)?,
@@ -1419,7 +1496,194 @@ where
             |_| true,
         )?);
     }
-    Ok(finish_report(all_results, shapes))
+    Ok(all_results)
+}
+
+/// A prepared validation binding with admitted immutable source correspondence.
+/// Repeated reports reuse its views and shape analysis.
+pub struct CompletePreparedValidator {
+    validator: PreparedValidator,
+    context: Arc<crate::report::ReportSourceContext>,
+}
+
+purrdf_hash::debug_non_exhaustive!(CompletePreparedValidator { context });
+
+impl CompletePreparedValidator {
+    /// The exact source context this binding retained.
+    #[must_use]
+    pub const fn source_context(&self) -> &Arc<crate::report::ReportSourceContext> {
+        &self.context
+    }
+
+    /// The existing preparation bound to the admitted source view.
+    #[must_use]
+    pub const fn legacy_binding(&self) -> &PreparedValidator {
+        &self.validator
+    }
+
+    /// Evaluate every target and retain complete result evidence.
+    ///
+    /// # Errors
+    /// Refuses stale source occurrences and failed execution without producing a
+    /// conformance verdict.
+    pub fn validate(
+        &self,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        self.collect_report(self.validator.profile(), |capture| {
+            self.validator
+                .validate_results_using(
+                    EvidenceReporting(capture),
+                    None::<fn(&Shape, &Term) -> bool>,
+                )
+                .map_err(crate::report::CompleteValidationError::Execution)
+        })
+    }
+
+    /// Evaluate a caller-selected focus set through the same complete report path.
+    ///
+    /// # Errors
+    /// The same source-evidence and execution refusals as [`Self::validate`].
+    pub fn validate_with_focus_filter<F>(
+        &self,
+        include_focus: F,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    where
+        F: FnMut(&Shape, &Term) -> bool,
+    {
+        self.validate_report_with_focus_filter(self.validator.profile(), include_focus)
+    }
+
+    /// Apply a report mapping law to already-admitted evaluation. Full dated
+    /// request admission and XPath selection belong to the request boundary.
+    pub(crate) fn validate_report_with_focus_filter<F>(
+        &self,
+        profile: crate::profile::ShaclProfile,
+        include_focus: F,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    where
+        F: FnMut(&Shape, &Term) -> bool,
+    {
+        self.collect_report(profile, |capture| {
+            self.validator
+                .validate_results_using(EvidenceReporting(capture), Some(include_focus))
+                .map_err(crate::report::CompleteValidationError::Execution)
+        })
+    }
+
+    fn collect_report(
+        &self,
+        profile: crate::profile::ShaclProfile,
+        evaluate: impl FnOnce(
+            &crate::report::ReportCapture<'_>,
+        ) -> Result<
+            Vec<crate::report::ResultRecord>,
+            crate::report::CompleteValidationError,
+        >,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        self.validator.run_request(|| {
+            let records = self.validator.collect_records(profile, evaluate)?;
+            self.context.admit_result_sources(&records)?;
+            Ok(crate::report::CompleteValidationReport::from_records(
+                records,
+                &self.validator.shapes,
+                Arc::clone(&self.context),
+                profile,
+            ))
+        })
+    }
+
+    /// Validate supplied candidates against the prepared targets, preserving
+    /// the same complete occurrence evidence as [`Self::validate`].
+    ///
+    /// # Errors
+    /// Returns source, target or execution refusals without a partial verdict.
+    pub fn validate_focus_nodes(
+        &self,
+        focus_nodes: &[Term],
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        let focus_nodes = self.validator.normalize_focus_nodes(focus_nodes);
+        self.validate_bounded(&focus_nodes)
+    }
+
+    /// Id-native complete validation. Every id must have been minted by
+    /// [`Self::legacy_binding`], which retains the exact admitted data view.
+    ///
+    /// # Errors
+    /// Refuses foreign or invalid ids, and the same failures as [`Self::validate`].
+    pub fn validate_focus_node_ids(
+        &self,
+        focus_node_ids: &[FocusId],
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        let focus_nodes = self
+            .validator
+            .normalize_focus_node_ids(focus_node_ids)
+            .map_err(crate::report::CompleteValidationError::Shapes)?;
+        self.validate_bounded(&focus_nodes)
+    }
+
+    fn validate_bounded(
+        &self,
+        focus_nodes: &FocusSet,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        self.collect_report(self.validator.profile(), |capture| {
+            self.validator
+                .validate_bounded_results(EvidenceReporting(capture), focus_nodes)
+                .map_err(crate::report::CompleteValidationError::Shapes)
+        })
+    }
+
+    /// Evaluate under one fresh budget shared by every SPARQL query in this
+    /// validation. Core lookups do not consume evaluator fuel.
+    ///
+    /// # Errors
+    /// A tripped budget returns its typed governor evidence and takes precedence
+    /// over semantic or execution failure. No partial report is returned.
+    pub fn validate_with_governors(
+        &self,
+        governors: &QueryGovernors,
+    ) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError>
+    {
+        let state = Arc::new(GovernorState::new(governors));
+        let _scope = crate::sparql::enter_governor_scope(state);
+        self.validate()
+    }
+}
+
+/// Validate immutable data with complete source and constraint correspondence.
+/// This additive door consumes the shapes' current request law and its required
+/// XPath bundle.
+///
+/// # Errors
+/// Source evidence, admission and execution failures are distinct from reports.
+pub fn validate_complete_dataset(
+    data: Arc<RdfDataset>,
+    shapes: Arc<Shapes>,
+) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError> {
+    PreparedShapes::new(shapes)
+        .bind_complete_shared_dataset(data)?
+        .validate()
+}
+
+/// Complete validation under one fresh governor, including targets and rules.
+/// # Errors
+/// The actual trip and consumption are returned before any partial report.
+pub fn validate_complete_dataset_with_governors(
+    data: Arc<RdfDataset>,
+    shapes: Arc<Shapes>,
+    governors: &QueryGovernors,
+) -> Result<crate::report::CompleteValidationReport, crate::report::CompleteValidationError> {
+    let state = Arc::new(GovernorState::new(governors));
+    let _scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
+    let result = validate_complete_dataset(data, shapes);
+    match crate::report::CompleteValidationError::resource(&state) {
+        Some(error) => Err(error),
+        None => result,
+    }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -1435,6 +1699,15 @@ where
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ValidationOptions {
+    /// The exact SHACL law requested by this operation. Legacy is the default;
+    /// dated selections also require their native XPath bundle.
+    pub shacl_profile: crate::profile::ShaclProfile,
+    /// An explicit native XPath law and finite limits. A dated selection refuses
+    /// an incompatible law rather than substituting it or falling back.
+    pub xpath_regex: Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )>,
     /// The set of disallowed severity levels (SHACL 1.2 Core, "Conformance
     /// Checking"): a result whose severity is in the set makes the report — and
     /// every nested conformance check the run performs — non-conforming, and a
@@ -1465,6 +1738,25 @@ pub struct ValidationOptions {
 }
 
 impl ValidationOptions {
+    /// Select one exact SHACL law, retaining other request options.
+    #[must_use]
+    pub const fn with_profile(mut self, profile: crate::profile::ShaclProfile) -> Self {
+        self.shacl_profile = profile;
+        self
+    }
+
+    /// Select finite native regex limits. Dated execution checks compatibility
+    /// with the selected SHACL law before parsing or acquiring targets.
+    #[must_use]
+    pub const fn with_xpath_regex(
+        mut self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> Self {
+        self.xpath_regex = Some((profile, limits));
+        self
+    }
+
     /// These options with the conformance-disallow set replaced.
     #[must_use]
     pub fn with_conformance_disallows(mut self, disallows: ConformanceDisallows) -> Self {
@@ -1525,6 +1817,107 @@ pub struct PreparedShapes {
 }
 
 impl PreparedShapes {
+    /// Bind an immutable source for complete contextual reporting. Independent
+    /// source acquisitions are standardized apart by the kernel; supplying the
+    /// retained shapes source itself deliberately shares its blank identity.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use purrdf_rdf::RdfDatasetBuilder;
+    /// use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
+    ///
+    /// let shapes = Arc::new(parse_shapes(
+    ///     "@prefix sh: <http://www.w3.org/ns/shacl#> . \
+    ///      <http://example.org/S> a sh:NodeShape; \
+    ///      sh:targetNode <http://example.org/n>; sh:sparql <http://example.org/C> . \
+    ///      <http://example.org/C> sh:select 'SELECT $this WHERE {}' .",
+    ///     None,
+    /// )?);
+    /// let data = RdfDatasetBuilder::new().freeze()?;
+    /// let binding = PreparedShapes::new(shapes).bind_complete_shared_dataset(data)?;
+    /// let report = binding.validate()?;
+    /// assert_eq!(report.results().len(), 1);
+    /// assert_eq!(report.results().next().unwrap().source_constraint().unwrap().to_string(),
+    ///            "<http://example.org/C>");
+    /// let graph = report.to_graph();
+    /// assert!(matches!(graph.root(), purrdf_shapes::term::Term::BlankNode(_)));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Refuses invalid source evidence, retention limits or failed shape admission.
+    pub fn bind_complete_shared_dataset(
+        &self,
+        data: Arc<RdfDataset>,
+    ) -> Result<CompletePreparedValidator, crate::report::CompleteValidationError> {
+        self.bind_complete_source(data, true, None)
+    }
+
+    /// Bind an already-projected immutable acquisition with complete source
+    /// correspondence. No second statement or graph projection is made.
+    ///
+    /// # Errors
+    /// Refuses missing source occurrences, source context or failed targets.
+    pub fn bind_complete_projected_dataset(
+        &self,
+        data: Arc<RdfDataset>,
+    ) -> Result<CompletePreparedValidator, crate::report::CompleteValidationError> {
+        self.bind_complete_source(data, false, None)
+    }
+
+    /// Bind complete source correspondence and place the actual shapes
+    /// acquisition under the supplied graph IRI for SHACL-SPARQL.
+    ///
+    /// # Errors
+    /// Refuses invalid graph placement, source context or failed targets.
+    pub fn bind_complete_shared_dataset_with_shapes_graph(
+        &self,
+        data: Arc<RdfDataset>,
+        shapes_graph_iri: Option<&str>,
+    ) -> Result<CompletePreparedValidator, crate::report::CompleteValidationError> {
+        self.bind_complete_source(data, true, shapes_graph_iri)
+    }
+
+    fn bind_complete_source(
+        &self,
+        data: Arc<RdfDataset>,
+        project: bool,
+        shapes_graph_iri: Option<&str>,
+    ) -> Result<CompletePreparedValidator, crate::report::CompleteValidationError> {
+        self.shapes
+            .validation_options
+            .shacl_profile
+            .resolve_xpath(self.shapes.validation_options.xpath_regex)
+            .map_err(crate::report::CompleteValidationError::XPathProfile)?;
+        let mut roots = ::purrdf_rdf::FastSet::default();
+        for shape in &self.shapes.node_shapes {
+            if !roots.insert(&shape.id) {
+                return Err(crate::report::CompleteValidationError::SourceContext(
+                    format!(
+                        "duplicate root shape {} cannot identify a complete source traversal",
+                        shape.id
+                    ),
+                ));
+            }
+        }
+        let request = crate::profile::Request::admit(self)?;
+        if request
+            .as_ref()
+            .and_then(crate::profile::Request::sources)
+            .is_none()
+        {
+            self.shapes
+                .report_sources_with_profile(self.shapes.validation_options.shacl_profile)?;
+        }
+        let (data_view, context) = complete_data(data, &self.shapes, project, shapes_graph_iri)
+            .map_err(crate::report::CompleteValidationError::SourceContext)?;
+        let validator = self.bind_admitted(data_view, request)?;
+        Ok(CompletePreparedValidator {
+            validator,
+            context: Arc::new(context),
+        })
+    }
+
     /// Analyze the complete parsed shape tree once, without inspecting any data.
     ///
     /// The resulting preparation reports [`ValidatorProvenance::Parsed`]: these
@@ -1706,7 +2099,36 @@ impl PreparedShapes {
     /// # Errors
     /// Returns an error when an active target cannot be evaluated.
     pub fn bind(&self, data: ShaclData) -> Result<PreparedValidator, ShapesError> {
-        PreparedValidator::bind(data, self)
+        self.bind_request(data)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    /// The one typed bind beneath existing and complete public projections.
+    pub(crate) fn bind_request(
+        &self,
+        data: ShaclData,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
+        let request = crate::profile::Request::admit(self)?;
+        self.bind_admitted(data, request)
+    }
+
+    /// Consume the current admission once, retaining its exact source occurrence
+    /// acquisition through target binding and later validation.
+    fn bind_admitted(
+        &self,
+        data: ShaclData,
+        request: Option<crate::profile::Request>,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
+        let bind = || {
+            PreparedValidator::bind(data, self)
+                .map_err(crate::report::CompleteValidationError::Shapes)
+        };
+        let mut validator = match &request {
+            Some(request) => request.run(bind),
+            None => bind(),
+        }?;
+        validator.request = request;
+        Ok(validator)
     }
 
     /// Project a dataset and bind the shared shape analysis to that snapshot.
@@ -1714,7 +2136,17 @@ impl PreparedShapes {
     /// # Errors
     /// Returns an error when projection or target evaluation fails.
     pub fn bind_dataset(&self, data: &RdfDataset) -> Result<PreparedValidator, ShapesError> {
-        self.bind_projected_dataset(project_dataset(data)?)
+        self.bind_dataset_request(data)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_dataset_request(
+        &self,
+        data: &RdfDataset,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
+        self.bind_projected_dataset_request(
+            project_dataset(data).map_err(crate::report::CompleteValidationError::Execution)?,
+        )
     }
 
     /// Bind a shared native source through a borrowed SHACL projection.
@@ -1727,16 +2159,24 @@ impl PreparedShapes {
         &self,
         data: Arc<RdfDataset>,
     ) -> Result<PreparedValidator, ShapesError> {
+        self.bind_shared_dataset_request(data)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_shared_dataset_request(
+        &self,
+        data: Arc<RdfDataset>,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
         if self.shapes.shapes_graph.is_some() {
             // A shapes graph parsed under an IRI is exposed under it here too.
-            return self.bind_shared_dataset_with_shapes_graph(
+            return self.bind_shared_dataset_with_shapes_graph_request(
                 data,
                 None,
                 ::purrdf_rdf::ir::ViewLimits::default(),
             );
         }
         let view = Arc::new(ShaclDatasetView::project(data));
-        self.bind_view(view)
+        self.bind_view_request(view)
     }
 
     /// Bind a complete immutable SHACL carrier, retaining its exact identity.
@@ -1752,7 +2192,15 @@ impl PreparedShapes {
     /// # Errors
     /// Returns an error when a target cannot be evaluated.
     pub fn bind_view(&self, view: Arc<ShaclDatasetView>) -> Result<PreparedValidator, ShapesError> {
-        self.bind(ShaclData::from_views(Arc::clone(&view), view, None))
+        self.bind_view_request(view)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_view_request(
+        &self,
+        view: Arc<ShaclDatasetView>,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
+        self.bind_request(ShaclData::from_views(Arc::clone(&view), view, None))
     }
 
     /// Bind a shared native source and expose its shapes graph without copying
@@ -1766,6 +2214,16 @@ impl PreparedShapes {
         shapes_graph_iri: Option<&str>,
         limits: ::purrdf_rdf::ir::ViewLimits,
     ) -> Result<PreparedValidator, ShapesError> {
+        self.bind_shared_dataset_with_shapes_graph_request(data, shapes_graph_iri, limits)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_shared_dataset_with_shapes_graph_request(
+        &self,
+        data: Arc<RdfDataset>,
+        shapes_graph_iri: Option<&str>,
+        limits: ::purrdf_rdf::ir::ViewLimits,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
         let core = Arc::new(ShaclDatasetView::project(Arc::clone(&data)));
         let (sparql, graph) = build_sparql_view(
             ::purrdf_rdf::ir::CompositeSource::new(data),
@@ -1774,7 +2232,7 @@ impl PreparedShapes {
             shapes_graph_iri,
             limits,
         )?;
-        self.bind(ShaclData::from_views(core, sparql, graph))
+        self.bind_request(ShaclData::from_views(core, sparql, graph))
     }
 
     /// Bind an immutable mutation snapshot and its shapes graph through shared
@@ -1794,6 +2252,16 @@ impl PreparedShapes {
         shapes_graph_iri: Option<&str>,
         limits: ::purrdf_rdf::ir::ViewLimits,
     ) -> Result<PreparedValidator, ShapesError> {
+        self.bind_delta_with_shapes_graph_request(data, shapes_graph_iri, limits)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_delta_with_shapes_graph_request(
+        &self,
+        data: Arc<::purrdf_rdf::ir::DeltaDatasetView>,
+        shapes_graph_iri: Option<&str>,
+        limits: ::purrdf_rdf::ir::ViewLimits,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
         let core = Arc::new(ShaclDatasetView::delta(Arc::clone(&data), true, limits)?);
         let (sparql, graph) = build_sparql_view(
             ::purrdf_rdf::ir::CompositeSource::from_delta(data),
@@ -1802,7 +2270,7 @@ impl PreparedShapes {
             shapes_graph_iri,
             limits,
         )?;
-        self.bind(ShaclData::from_views(core, sparql, graph))
+        self.bind_request(ShaclData::from_views(core, sparql, graph))
     }
 
     /// Bind an already-projected snapshot; Core and SPARQL share its `Arc`.
@@ -1813,8 +2281,16 @@ impl PreparedShapes {
         &self,
         projected: Arc<RdfDataset>,
     ) -> Result<PreparedValidator, ShapesError> {
+        self.bind_projected_dataset_request(projected)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_projected_dataset_request(
+        &self,
+        projected: Arc<RdfDataset>,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
         // A shapes graph parsed under an IRI is exposed under it here too.
-        self.bind(projected_data(projected, &self.shapes)?)
+        self.bind_request(projected_data(projected, &self.shapes)?)
     }
 
     /// Bind a projected snapshot with the shapes graph exposed to SPARQL under
@@ -1827,7 +2303,16 @@ impl PreparedShapes {
         projected: Arc<RdfDataset>,
         shapes_graph_iri: Option<&str>,
     ) -> Result<PreparedValidator, ShapesError> {
-        self.bind(build_projected_data(
+        self.bind_projected_dataset_with_shapes_graph_request(projected, shapes_graph_iri)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn bind_projected_dataset_with_shapes_graph_request(
+        &self,
+        projected: Arc<RdfDataset>,
+        shapes_graph_iri: Option<&str>,
+    ) -> Result<PreparedValidator, crate::report::CompleteValidationError> {
+        self.bind_request(build_projected_data(
             projected,
             &self.shapes,
             shapes_graph_iri,
@@ -1909,6 +2394,8 @@ pub struct PreparedValidator {
     /// identity they named and every active target, resolved once here so no focus
     /// node resolves any of them again.
     bound: BoundShapes,
+    /// Current dated law and source admission used to acquire these targets.
+    request: Option<crate::profile::Request>,
 }
 
 impl PreparedValidator {
@@ -1950,6 +2437,7 @@ impl PreparedValidator {
             shapes,
             provenance: Arc::clone(&prepared.provenance),
             bound,
+            request: None,
         })
     }
 
@@ -2024,6 +2512,79 @@ impl PreparedValidator {
         Self::new(data, shapes)
     }
 
+    /// The exact law used to acquire this binding's targets and source evidence.
+    #[must_use]
+    pub fn profile(&self) -> crate::profile::ShaclProfile {
+        self.request
+            .as_ref()
+            .map_or(crate::profile::ShaclProfile::LEGACY, |request| {
+                request.profile
+            })
+    }
+
+    fn run_request<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, crate::report::CompleteValidationError>,
+    ) -> Result<T, crate::report::CompleteValidationError> {
+        match &self.request {
+            Some(request) => request.run(operation),
+            None => operation(),
+        }
+    }
+
+    /// One evidence/cause collector shared by complete reports and an existing
+    /// report projected from an explicit dated request.
+    fn collect_records(
+        &self,
+        profile: crate::profile::ShaclProfile,
+        evaluate: impl FnOnce(
+            &crate::report::ReportCapture<'_>,
+        ) -> Result<
+            Vec<crate::report::ResultRecord>,
+            crate::report::CompleteValidationError,
+        >,
+    ) -> Result<Vec<crate::report::ResultRecord>, crate::report::CompleteValidationError> {
+        let sources = match self
+            .request
+            .as_ref()
+            .filter(|request| request.profile == profile)
+            .and_then(crate::profile::Request::sources)
+        {
+            Some(sources) => Arc::clone(sources),
+            None => self.shapes.report_sources_with_profile(profile)?,
+        };
+        let capture =
+            crate::report::ReportCapture::with_sources(&self.shapes, profile, Some(&sources));
+        let query_scope = crate::query_law::enter(profile, Some(&sources));
+        let mut outcome = evaluate(&capture);
+        if let Some(state) = crate::sparql::current_governors()
+            && let Some(error) = crate::report::CompleteValidationError::resource(&state)
+        {
+            return Err(error);
+        }
+        if let Some(failure) = query_scope
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.take_failure())
+        {
+            capture.refuse(failure);
+        }
+        if outcome.is_ok()
+            && let Some(failure) = capture.take_policy_failure()
+        {
+            capture.take_failure();
+            outcome = Err(crate::report::CompleteValidationError::Execution(
+                capture.refuse(failure),
+            ));
+        }
+        let records = outcome.map_err(|error| {
+            capture
+                .take_failure()
+                .map_or(error, crate::report::ReportFailure::into_public)
+        })?;
+        Ok(records)
+    }
+
     /// Validate every target node using the prepared target plan.
     ///
     /// Core target sets are enumerated for this whole-bundle operation, but class
@@ -2033,14 +2594,50 @@ impl PreparedValidator {
     ///
     /// Returns an error when a constraint evaluation hard-fails.
     pub fn validate(&self) -> Result<ValidationReport, String> {
+        self.validate_request(None::<fn(&Shape, &Term) -> bool>)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn validate_request<F: FnMut(&Shape, &Term) -> bool>(
+        &self,
+        include_focus: Option<F>,
+    ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
+        self.run_request(|| {
+            let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
+                self.validate_results_using(LegacyReporting, include_focus)
+                    .map_err(crate::report::CompleteValidationError::Execution)?
+            } else {
+                self.collect_records(self.profile(), |capture| {
+                    self.validate_results_using(EvidenceReporting(capture), include_focus)
+                        .map_err(crate::report::CompleteValidationError::Execution)
+                })?
+                .into_iter()
+                .map(|record| record.value)
+                .collect()
+            };
+            Ok(finish_report(results, &self.shapes))
+        })
+    }
+
+    /// Both report collectors read the same prepared target plans. A requested
+    /// predicate is applied serially in canonical focus order, before workers.
+    fn validate_results_using<R: ShapeReporting, F: FnMut(&Shape, &Term) -> bool>(
+        &self,
+        reporting: R,
+        mut include_focus: Option<F>,
+    ) -> Result<Vec<R::Result>, String> {
         let mut all_results = Vec::new();
         for (position, shape) in self.shapes.node_shapes.iter().enumerate() {
             if shape.deactivated {
                 continue;
             }
             let plan = self.bound.plan(shape, position)?;
-            let focus_nodes = plan.targets().resolve_all(&self.data);
-            all_results.extend(evaluate_shape_focus_nodes(
+            let mut focus_nodes = plan.targets().resolve_all(&self.data);
+            if let Some(include) = &mut include_focus {
+                focus_nodes.retain(|focus| include(shape, &focus.to_term(self.data.core_view())));
+            }
+            all_results.extend(evaluate_shape_focus_nodes_using(
+                reporting,
                 &self.data,
                 &self.shapes,
                 plan,
@@ -2048,7 +2645,7 @@ impl PreparedValidator {
                 |_| true,
             )?);
         }
-        Ok(finish_report(all_results, &self.shapes))
+        Ok(all_results)
     }
 
     /// Validate only the supplied candidate focus nodes that match each shape's
@@ -2220,6 +2817,15 @@ impl PreparedValidator {
         &self,
         focus_node_ids: &[FocusId],
     ) -> Result<ValidationReport, ShapesError> {
+        let focus_nodes = self.normalize_focus_node_ids(focus_node_ids)?;
+        self.validate_bounded(&focus_nodes)
+    }
+
+    /// Normalize this binding's ids once for either report collector.
+    pub(crate) fn normalize_focus_node_ids(
+        &self,
+        focus_node_ids: &[FocusId],
+    ) -> Result<FocusSet, ShapesError> {
         // Read once, compared per id: the comparison is one `usize` against a
         // local, with no allocation and no lookup behind it.
         let dataset = self.data.identity();
@@ -2260,7 +2866,7 @@ impl PreparedValidator {
             }
         }
         focus_nodes.sort(&self.data);
-        self.validate_bounded(&focus_nodes)
+        Ok(focus_nodes)
     }
 
     /// The identity this binding gives `term`, or `None` when the dataset never
@@ -2341,6 +2947,24 @@ impl PreparedValidator {
     /// names a term this binding's own view does not map — which is a defect in
     /// this crate rather than in a caller's data.
     pub fn affected_focus_node_ids(
+        &self,
+        delta: &::purrdf_rdf::ir::DeltaDatasetView,
+    ) -> Result<FocusExpansion, String> {
+        self.affected_focus_request(delta)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn affected_focus_request(
+        &self,
+        delta: &::purrdf_rdf::ir::DeltaDatasetView,
+    ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
+        self.run_request(|| {
+            self.affected_focus_raw(delta)
+                .map_err(crate::report::CompleteValidationError::Execution)
+        })
+    }
+
+    fn affected_focus_raw(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, String> {
@@ -2530,7 +3154,7 @@ impl PreparedValidator {
     ///
     /// Both working sets are sized from the input, never from the graph, so this
     /// carries no term proportional to the data.
-    fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> FocusSet {
+    pub(crate) fn normalize_focus_nodes(&self, focus_nodes: &[Term]) -> FocusSet {
         // Both sets are INPUT-sized, from the same slice, for the same reason the
         // id-native route's is.
         let mut seen_ids: IdSet =
@@ -2574,9 +3198,41 @@ impl PreparedValidator {
     /// Returns an error when the focus set belongs to another binding, when a
     /// shape cannot be planned, or when a constraint evaluation hard-fails.
     fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, ShapesError> {
+        self.validate_bounded_request(focus_nodes)
+            .map_err(crate::report::CompleteValidationError::into_shapes)
+    }
+
+    pub(crate) fn validate_bounded_request(
+        &self,
+        focus_nodes: &FocusSet,
+    ) -> Result<ValidationReport, crate::report::CompleteValidationError> {
+        self.run_request(|| {
+            let results = if self.profile() == crate::profile::ShaclProfile::LEGACY {
+                self.validate_bounded_results(LegacyReporting, focus_nodes)
+                    .map_err(crate::report::CompleteValidationError::Shapes)?
+            } else {
+                self.collect_records(self.profile(), |capture| {
+                    self.validate_bounded_results(EvidenceReporting(capture), focus_nodes)
+                        .map_err(crate::report::CompleteValidationError::Shapes)
+                })?
+                .into_iter()
+                .map(|record| record.value)
+                .collect()
+            };
+            Ok(finish_report(results, &self.shapes))
+        })
+    }
+
+    /// The shared bounded traversal; report collection does not change target
+    /// admission, provenance checks or constraint evaluation.
+    fn validate_bounded_results<R: ShapeReporting>(
+        &self,
+        reporting: R,
+        focus_nodes: &FocusSet,
+    ) -> Result<Vec<R::Result>, ShapesError> {
         let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
-            return Ok(finish_report(Vec::new(), &self.shapes));
+            return Ok(Vec::new());
         }
         // The dual question, asked once for the whole focus set: not "shape, do
         // you contain this node?" once per (shape, focus node) pair, but "node,
@@ -2598,7 +3254,8 @@ impl PreparedValidator {
             let Some(claimed) = claims.get(position).filter(|claimed| !claimed.is_empty()) else {
                 continue;
             };
-            all_results.extend(evaluate_shape_focus_nodes(
+            all_results.extend(evaluate_shape_focus_nodes_using(
+                reporting,
                 &self.data,
                 &self.shapes,
                 plan,
@@ -2606,7 +3263,7 @@ impl PreparedValidator {
                 |focus| claimed.contains(focus),
             )?);
         }
-        Ok(finish_report(all_results, &self.shapes))
+        Ok(all_results)
     }
 }
 
@@ -2983,6 +3640,14 @@ pub fn validate_with_focus_filter<F>(
 where
     F: FnMut(&Shape, &Term) -> bool,
 {
+    if shapes.validation_options.shacl_profile != crate::profile::ShaclProfile::LEGACY
+        || shapes.validation_options.xpath_regex.is_some()
+    {
+        return PreparedShapes::new(Arc::new(shapes.clone()))
+            .bind_request(data.retained())
+            .and_then(|validator| validator.validate_request(Some(include_focus)))
+            .map_err(crate::report::CompleteValidationError::into_shapes);
+    }
     check_links(data, shapes)?;
     Ok(validate_linked_with_focus_filter(
         data,
@@ -3087,8 +3752,14 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
     if !shapes.rules.entailment {
         return Ok(None);
     }
-    let entailed = crate::rules::apply_rules(data, shapes)
-        .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
+    let entailed = crate::rules::infer_with(
+        data,
+        shapes,
+        &crate::rules::RuleOptions::default(),
+        crate::srl::eval::Reexecution::Incremental,
+    )
+    .map(|inference| Arc::clone(inference.dataset()))
+    .map_err(|e| format!("the sh:RulesEntailment regime could not execute the rules: {e}"))?;
     build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
 }
 
@@ -3417,6 +4088,126 @@ pub(crate) fn build_projected_data(
     Ok(ShaclData::from_views(core, sparql, graph))
 }
 
+/// Build only the rich door's source identity space. Rowless supplied shape
+/// blanks reserve their scopes without exposing shape rows as Core data.
+fn complete_data(
+    data: Arc<RdfDataset>,
+    shapes: &Shapes,
+    project: bool,
+    override_graph: Option<&str>,
+) -> Result<(ShaclData, crate::report::ReportSourceContext), String> {
+    use ::purrdf_rdf::ir::{
+        CompositeDatasetView, CompositeSource, GraphPlacement, ScopeBinding, ViewLimits,
+    };
+    use ::purrdf_rdf::{RdfDatasetBuilder, TermRef, TermValue};
+
+    let mut context =
+        crate::report::ReportSourceContext::new(Arc::clone(&data), Arc::clone(shapes.dataset()));
+    let mut reservations = RdfDatasetBuilder::new();
+    for index in 0..shapes.dataset().term_count() {
+        let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"));
+        if let TermRef::Blank { label, scope } = shapes.dataset().resolve_term(id) {
+            reservations.intern_blank(label, scope);
+            context.record_blank(scope.qualify_label(label).into_owned(), true, label, scope);
+        }
+    }
+    // No shapes blank can alias a data blank when the shapes acquisition has
+    // none. Keep the native dictionary in that case instead of routing every
+    // Core term read through a composite value adapter. Source acquisitions
+    // remain distinct, and data blanks retain their original scoped identities.
+    if context.sources_share_identity() || context.blanks.is_empty() {
+        if !context.sources_share_identity() {
+            for index in 0..data.term_count() {
+                let id =
+                    TermId::from_index(u32::try_from(index).expect("native term count fits u32"));
+                if let TermRef::Blank { label, scope } = data.resolve_term(id) {
+                    context.record_blank(
+                        scope.qualify_label(label).into_owned(),
+                        false,
+                        label,
+                        scope,
+                    );
+                }
+            }
+        }
+        let core = Arc::new(if project {
+            ShaclDatasetView::project(Arc::clone(&data))
+        } else {
+            ShaclDatasetView::native(Arc::clone(&data))
+        });
+        let (sparql, graph) = build_sparql_view(
+            CompositeSource::new(data),
+            Arc::clone(&core),
+            shapes,
+            override_graph,
+            ViewLimits::default(),
+        )?;
+        return Ok((ShaclData::from_views(core, sparql, graph), context));
+    }
+    let reservations = reservations.freeze().map_err(|error| error.to_string())?;
+    let sources = || {
+        vec![
+            CompositeSource::new(Arc::clone(&reservations))
+                .with_scope_binding(ScopeBinding::Shared),
+            CompositeSource::new(Arc::clone(&data)).with_scope_binding(ScopeBinding::Independent),
+        ]
+    };
+    let composite = Arc::new(
+        CompositeDatasetView::from_bound_sources(sources(), ViewLimits::default())
+            .map_err(|error| error.to_string())?,
+    );
+    for index in 0..data.term_count() {
+        let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"));
+        if let TermRef::Blank { label, scope } = data.resolve_term(id) {
+            let TermValue::Blank {
+                label: mapped,
+                scope: mapped_scope,
+            } = CompositeDatasetView::term_value(composite.as_ref(), composite.source_id(1, id))
+            else {
+                unreachable!("source blank resolves as a blank");
+            };
+            context.record_blank(
+                mapped_scope.qualify_label(&mapped).into_owned(),
+                false,
+                label,
+                scope,
+            );
+        }
+    }
+    let core = Arc::new(ShaclDatasetView::composite(
+        composite,
+        project,
+        ViewLimits::default(),
+    )?);
+    let Some(graph) = override_graph
+        .map(str::to_owned)
+        .or_else(|| shapes.shapes_graph.clone())
+    else {
+        return Ok((
+            ShaclData::from_views(Arc::clone(&core), core, None),
+            context,
+        ));
+    };
+    let mut sparql_sources = sources();
+    sparql_sources[1] = sparql_sources[1]
+        .clone()
+        .with_graph_placement(GraphPlacement::Default);
+    sparql_sources.push(
+        CompositeSource::new(Arc::clone(shapes.dataset()))
+            .with_scope_binding(ScopeBinding::Shared)
+            .with_graph_placement(GraphPlacement::Named(TermValue::iri(&graph))),
+    );
+    let composite = Arc::new(
+        CompositeDatasetView::from_bound_sources(sparql_sources, ViewLimits::default())
+            .map_err(|error| error.to_string())?,
+    );
+    let sparql = Arc::new(
+        ShaclDatasetView::composite(composite, false, ViewLimits::default())?
+            .with_statement_projection(),
+    );
+    Ok((ShaclData::from_views(core, sparql, Some(graph)), context))
+}
+
 fn build_sparql_view(
     source: ::purrdf_rdf::ir::CompositeSource,
     core: Arc<ShaclDatasetView>,
@@ -3632,11 +4423,41 @@ pub fn parse_shapes_with_graph(
     shapes_graph: Option<&str>,
     imports: &ShapesImports,
 ) -> Result<Shapes, ShapesError> {
+    parse_shapes_with_options(
+        shapes_ttl,
+        base,
+        box_role_vocab,
+        shapes_graph,
+        imports,
+        &ValidationOptions::default(),
+    )
+    .map_err(crate::report::CompleteValidationError::into_shapes)
+}
+
+/// Parse shapes under the requested dated law before declarations are admitted.
+/// Unknown dates are decoded separately by [`crate::profile::ShaclProfile::from_id`].
+///
+/// # Errors
+/// Returns exact dated admission, incompatible regex override, import or shape
+/// errors. No compatibility-law parse precedes a named dated parse.
+pub fn parse_shapes_with_options(
+    shapes_ttl: &str,
+    base: Option<&str>,
+    box_role_vocab: Option<crate::model::BoxRoleVocab>,
+    shapes_graph: Option<&str>,
+    imports: &ShapesImports,
+    options: &ValidationOptions,
+) -> Result<Shapes, crate::report::CompleteValidationError> {
+    options
+        .shacl_profile
+        .resolve_xpath(options.xpath_regex)
+        .map_err(crate::report::CompleteValidationError::XPathProfile)?;
     // Resolved before the document is read: a value that names no graph is the caller's
     // malformed request, not a fact about the shapes graph.
     let shapes_graph = shapes_graph
         .map(|raw| resolve_shapes_graph_iri(raw, base))
-        .transpose()?;
+        .transpose()
+        .map_err(crate::report::CompleteValidationError::Shapes)?;
     // Parse the shapes graph via the native purrdf codecs. The document's prefix map
     // comes back from the SAME parse — the codec's own record of its `@prefix` /
     // `PREFIX` directives, never a scan of the text — because SHACL-SPARQL queries
@@ -3646,8 +4467,9 @@ pub fn parse_shapes_with_graph(
         dataset: shapes_dataset,
         prefixes: doc_prefixes,
         base: document_base,
-    } = crate::text_ingest::parse_turtle_document(shapes_ttl, base)
-        .map_err(|errors| errors.join("\n"))?;
+    } = crate::text_ingest::parse_turtle_document(shapes_ttl, base).map_err(|errors| {
+        crate::report::CompleteValidationError::Shapes(ShapesError::Invalid(errors.join("\n")))
+    })?;
 
     // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
     // this is the only seam that ever sees them, and both decided what the source
@@ -3668,13 +4490,14 @@ pub fn parse_shapes_with_graph(
         }
         _ => imports,
     };
-    crate::shapes::from_dataset_with_base(
+    crate::shapes::from_dataset_with_options(
         &shapes_dataset,
         base,
         &doc_prefixes,
         box_role_vocab,
         shapes_graph,
         imports,
+        options,
     )
 }
 
@@ -3784,9 +4607,15 @@ pub(crate) fn parse_graphs_with_shapes_graph(
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
     let imports = linked_imports(data.as_ref(), imports)?;
-    let mut shapes =
-        parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &imports)?;
-    shapes.set_validation_options(options.clone());
+    let shapes = parse_shapes_with_options(
+        shapes_ttl,
+        shapes_base,
+        None,
+        shapes_graph,
+        &imports,
+        options,
+    )
+    .map_err(crate::report::CompleteValidationError::into_shapes)?;
     Ok((data, shapes))
 }
 
@@ -3905,6 +4734,9 @@ pub fn entail_graphs_with_shapes_graph(
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod complete_reports;
 
 #[cfg(test)]
 mod tests {

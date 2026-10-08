@@ -37,7 +37,7 @@ use crate::paths;
 /// could then not tell the two apart.
 pub(crate) const BASE_ROOT: &str = "http://purrdf.test/manifest/";
 
-const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
+const MF: &str = purrdf_iri::vocab::mf::NS;
 
 /// The SPARQL-1.1 update-test vocabulary (`ut:`). Update tests describe their
 /// pre-state (`ut:data`/`ut:graphData`), the update request (`ut:request`), and
@@ -1247,7 +1247,7 @@ fn classify(type_term: Option<&TermValue>) -> TestKind {
 /// an `rs:ResultSet` encodes SELECT rows or an ASK boolean, so it
 /// must be routed to [`ExpectedResult::ResultSetRdf`] rather than
 /// [`ExpectedResult::Graph`]. See [`crate::rs_resultset`].
-const RS_NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
+const RS_NS: &str = purrdf_iri::vocab::rs::NS;
 
 /// Classify a result file by extension; `.ttl` and `.rdf` are additionally content-
 /// sniffed for the `rs:ResultSet` encoding (a plain substring check — the real

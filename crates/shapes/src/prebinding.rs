@@ -1,52 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! SHACL-SPARQL **pre-binding restrictions** — SHACL 1.2 SPARQL Extensions,
-//! Appendix A *Pre-binding of Variables in SPARQL Queries*
-//! (<https://www.w3.org/TR/shacl12-sparql/>).
+//! The one iterative SHACL-SPARQL pre-binding audit.
 //!
-//! A query evaluated with pre-bound variables (`$this`, and `$value` for ASK
-//! validators) MUST NOT use constructs whose SPARQL semantics break under
-//! pre-binding. A SHACL-SPARQL processor is required to **reject** such a
-//! query as a hard failure (`mf:result sht:Failure` in the W3C suite):
+//! [REC20170720 Appendix A](https://www.w3.org/TR/2017/REC-shacl-20170720/#pre-binding)
+//! forbids MINUS, SERVICE, every VALUES, assignment to a potential pre-binding,
+//! and nested projections hiding required bindings. `shapesGraph`/`currentShape`
+//! remain potential bindings for assignment but are optional in projections.
+//! [WD20260918 Appendix A](https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/#pre-binding)
+//! restricts VALUES only when it mentions a potential pre-binding and removes
+//! the projection restriction. PurRDF retains a local deterministic SERVICE
+//! refusal, as the draft permits.
 //!
-//! - `MINUS`,
-//! - federated queries (`SERVICE`),
-//! - `VALUES`,
-//! - `AS ?var` (`BIND`, `SELECT ... (expr AS ?var)`, `GROUP BY ... AS`) where
-//!   `?var` is potentially pre-bound,
-//! - a subquery that does not project every potentially pre-bound variable
-//!   (a nested `SELECT *` whose in-scope variables do not include `$this`
-//!   does not project it — W3C `pre-binding-006`; an explicit
-//!   `SELECT $this` does — `pre-binding-007`).
-//!
-//! The checks run at SHAPE-LOAD time (`shapes.rs`), on the already-parsed
-//! algebra, so a restricted query never reaches the evaluation engine.
-//!
-//! # One divergence from the Working Draft, and why
-//!
-//! Appendix A narrows the `VALUES` rule: a query "MUST not contain a `VALUES`
-//! clause **that mentions any potentially pre-bound variable**". PurRDF rejects
-//! EVERY `VALUES` (see the `GraphPattern::Values` arm of `check_pattern`), which
-//! is the older, strictly stronger rule. That is deliberate, and it is the frozen
-//! conformance corpus — not an oversight — that decides it: the vendored W3C case
-//! `vectors/shacl/sparql/pre-binding/unsupported-sparql-002.ttl` ("Test of
-//! unsupported VALUES") writes `VALUES ?any { true }`, where `?any` is NOT a
-//! potentially pre-bound variable, and REQUIRES the query to be rejected. The
-//! Working Draft's narrowed wording would admit it. The two cannot both be
-//! satisfied; this repository treats the conformance corpora as the contract, so
-//! the corpus decides and the divergence is recorded here rather than hidden.
-//!
-//! The Working Draft itself marks this text as unsettled. Quoting Appendix A of
-//! <https://www.w3.org/TR/shacl12-sparql/> verbatim:
-//!
-//! > [(Feature at Risk) Issue 999]: Update pre-binding to align with SPARQL 1.2
-//!
-//! That bracketed marker is the W3C document's OWN at-risk annotation, reproduced
-//! above as a quotation of the specification. It is not a PurRDF tracker
-//! reference: the number in it belongs to the W3C Working Group's issue list.
+//! Legacy entrypoints retain their existing corpus-decided policy and diagnostic
+//! text: strict constraints/validators/rules, narrowed parameterized AF bodies,
+//! and SERVICE-only checks for unbound targets/functions. All policies use this
+//! same walker, including EXISTS inside aggregate operands and order expressions.
 
 use purrdf_sparql_algebra::{Expression, GraphPattern, OrderExpression, Query};
+
+use crate::profile::{AdmissionReason, AdmissionRefusal, QueryPurpose, ShaclProfile};
 
 /// Check a SHACL-SPARQL **SELECT** query (an `sh:select` constraint / validator
 /// body) against the pre-binding restrictions with the given pre-bound
@@ -64,7 +37,7 @@ pub(crate) fn check_select(query: &Query, prebound: &[&str]) -> Result<(), Strin
         // Non-SELECT forms are rejected elsewhere (shape-load SELECT-form check).
         return Ok(());
     };
-    check_query_body(pattern, prebound, Rules::Strict)
+    check_query_body(pattern, prebound, Rules::Strict).map_err(Violation::legacy_message)
 }
 
 /// Which reading of the pre-binding restrictions a check applies.
@@ -74,6 +47,8 @@ enum Rules {
     /// Appendix A's three MUSTs, plus `SERVICE`, EVERY `VALUES` (the corpus-decided
     /// divergence in the module docs) and the subquery-projection rule.
     Strict,
+    /// REC20170720 Appendix A, with optional shape-context projection exemptions.
+    Recommendation { required_projection: usize },
     /// Appendix A's three MUSTs, verbatim — no `MINUS`, no `VALUES` that mentions a
     /// potentially pre-bound variable, no `AS ?var` for one — and no `SERVICE`. The
     /// reading a `sh:SPARQLFunction` body and a `sh:SPARQLTargetType` query get (see
@@ -112,6 +87,7 @@ pub(crate) fn check_no_service(query: &Query) -> Result<(), String> {
         | Query::Describe { pattern, .. } => check_query_body(pattern, &[], Rules::ServiceOnly),
         Query::Ask { pattern, .. } => check_pattern(pattern, &[], Rules::ServiceOnly),
     }
+    .map_err(Violation::legacy_message)
 }
 
 /// Check a `sh:SPARQLTargetType`'s `sh:select` against the pre-binding restrictions,
@@ -132,7 +108,8 @@ pub(crate) fn check_target_type(query: &Query, parameters: &[&str]) -> Result<()
         return check_no_service(query);
     }
     match query {
-        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA),
+        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA)
+            .map_err(Violation::legacy_message),
         _ => check_no_service(query),
     }
 }
@@ -159,8 +136,11 @@ pub(crate) fn check_function_body(query: &Query, parameters: &[&str]) -> Result<
         return check_no_service(query);
     }
     match query {
-        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA),
-        Query::Ask { pattern, .. } => check_pattern(pattern, parameters, Rules::AppendixA),
+        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA)
+            .map_err(Violation::legacy_message),
+        Query::Ask { pattern, .. } => {
+            check_pattern(pattern, parameters, Rules::AppendixA).map_err(Violation::legacy_message)
+        }
         _ => Ok(()),
     }
 }
@@ -199,13 +179,164 @@ pub(crate) fn check_construct(query: &Query, prebound: &[&str]) -> Result<(), St
         // Non-CONSTRUCT forms are rejected elsewhere (rule-load CONSTRUCT check).
         return Ok(());
     };
-    check_query_body(pattern, prebound, Rules::Strict)
+    check_query_body(pattern, prebound, Rules::Strict).map_err(Violation::legacy_message)
+}
+
+/// Build the actual purpose's potential bindings, then apply one dated policy.
+pub(crate) fn admit<'a>(
+    profile: ShaclProfile,
+    purpose: QueryPurpose,
+    query: &Query,
+    parameters: impl ExactSizeIterator<Item = &'a str>,
+) -> Result<(), AdmissionRefusal> {
+    if !purpose.accepts(query) {
+        return Err(AdmissionRefusal::new(
+            profile,
+            purpose,
+            AdmissionReason::QueryForm,
+            None,
+        ));
+    }
+    let mut prebound = Vec::with_capacity(parameters.len() + 4);
+    if purpose.binds_this() {
+        prebound.push("this");
+    }
+    if purpose == QueryPurpose::AskValidator {
+        prebound.push("value");
+    }
+    prebound.extend(parameters);
+    let required_projection = prebound.len();
+    if profile == ShaclProfile::REC_20170720 && purpose.binds_shape_context() {
+        prebound.extend(["shapesGraph", "currentShape"]);
+    }
+
+    let rules = if profile == ShaclProfile::REC_20170720 {
+        Rules::Recommendation {
+            required_projection,
+        }
+    } else if prebound.is_empty() {
+        Rules::ServiceOnly
+    } else if profile == ShaclProfile::WD_20260918
+        || matches!(purpose, QueryPurpose::Function | QueryPurpose::TargetType)
+    {
+        Rules::AppendixA
+    } else {
+        Rules::Strict
+    };
+    match query {
+        Query::Select { pattern, .. } | Query::Construct { pattern, .. } => {
+            check_query_body(pattern, &prebound, rules)
+        }
+        Query::Ask { pattern, .. } => check_pattern(pattern, &prebound, rules),
+        Query::Describe { .. } => unreachable!("purpose form was checked before admission"),
+    }
+    .map_err(|violation| {
+        AdmissionRefusal::new(profile, purpose, violation.reason(), violation.variable)
+    })
+}
+
+/// A structural refusal retained independently of any diagnostic wording.
+struct Violation {
+    kind: ViolationKind,
+    variable: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum ViolationKind {
+    ContextualApplication,
+    Minus,
+    Service,
+    Values,
+    PreboundValues,
+    Assignment,
+    UnfoldAssignment,
+    AggregateAssignment,
+    SubqueryProjection,
+}
+
+impl Violation {
+    fn new(kind: ViolationKind) -> Self {
+        Self {
+            kind,
+            variable: None,
+        }
+    }
+
+    fn variable(kind: ViolationKind, name: &str) -> Self {
+        Self {
+            kind,
+            variable: Some(name.to_owned()),
+        }
+    }
+
+    fn reason(&self) -> AdmissionReason {
+        match self.kind {
+            ViolationKind::ContextualApplication => AdmissionReason::ContextualApplication,
+            ViolationKind::Minus => AdmissionReason::Minus,
+            ViolationKind::Service => AdmissionReason::Service,
+            ViolationKind::Values | ViolationKind::PreboundValues => AdmissionReason::Values,
+            ViolationKind::Assignment
+            | ViolationKind::UnfoldAssignment
+            | ViolationKind::AggregateAssignment => AdmissionReason::Assignment,
+            ViolationKind::SubqueryProjection => AdmissionReason::SubqueryProjection,
+        }
+    }
+
+    /// Preserve the exact existing String-based API's refusal text.
+    fn legacy_message(self) -> String {
+        let name = self.variable.as_deref().unwrap_or("");
+        match self.kind {
+            ViolationKind::ContextualApplication => "contextual application algebra requires its typed preparation route; it cannot be pre-bound as ordinary SHACL algebra".to_owned(),
+            ViolationKind::Minus => {
+                "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries)"
+                    .to_owned()
+            }
+            ViolationKind::Service => SERVICE_REFUSAL.to_owned(),
+            ViolationKind::Values => {
+                "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
+             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
+             refuses every VALUES, which is stricter than the Working Draft's \
+             mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
+             requires the stricter reading)"
+                    .to_owned()
+            }
+            ViolationKind::PreboundValues => format!(
+                "a VALUES clause that mentions the potentially pre-bound variable ?{name} is \
+                 not allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
+                 Variables in SPARQL Queries)"
+            ),
+            ViolationKind::Assignment => format!(
+                "assigning a potentially pre-bound variable (... AS ?{name}) is not allowed \
+                 (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in \
+                 SPARQL Queries)"
+            ),
+            ViolationKind::UnfoldAssignment => format!(
+                "assigning a potentially pre-bound variable (UNFOLD(... AS ?{name})) is not \
+                 allowed (SHACL-SPARQL §5.2.1)"
+            ),
+            ViolationKind::AggregateAssignment => format!(
+                "assigning a potentially pre-bound variable (aggregate AS ?{name}) is not \
+                 allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
+                 Variables in SPARQL Queries)"
+            ),
+            ViolationKind::SubqueryProjection => format!(
+                "a subquery must project every potentially pre-bound variable; \
+                 ?{name} is not in its projection (SHACL 1.2 SPARQL Extensions, \
+                 Appendix A: Pre-binding of Variables in SPARQL Queries)"
+            ),
+        }
+    }
 }
 
 /// Strip the outer solution modifiers down to the outermost `Project` and check
 /// its BODY — nested `Project`s inside the body are subqueries. Shared by
 /// [`check_select`] and [`check_construct`].
-fn check_query_body(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), String> {
+fn check_query_body(
+    pattern: &GraphPattern,
+    prebound: &[&str],
+    rules: Rules,
+) -> Result<(), Violation> {
     let mut node = pattern;
     loop {
         match node {
@@ -262,7 +393,9 @@ pub(crate) fn check_shape_context_unassigned(query: &Query) -> Result<(), String
 /// Returns `Err(String)` naming the offending construct.
 pub(crate) fn check_ask(query: &Query, prebound: &[&str]) -> Result<(), String> {
     match query {
-        Query::Ask { pattern, .. } => check_pattern(pattern, prebound, Rules::Strict),
+        Query::Ask { pattern, .. } => {
+            check_pattern(pattern, prebound, Rules::Strict).map_err(Violation::legacy_message)
+        }
         _ => Ok(()),
     }
 }
@@ -276,20 +409,20 @@ enum Pending<'a> {
 
 /// Walk a graph pattern, rejecting every construct the pre-binding
 /// restrictions forbid.
-fn check_pattern(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), String> {
+fn check_pattern(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), Violation> {
     check(Pending::Pattern(pattern), prebound, rules)
 }
 
 /// Walk an expression tree; `EXISTS { … }` bodies are graph patterns and are
 /// checked too.
-fn check_expression(expr: &Expression, prebound: &[&str], rules: Rules) -> Result<(), String> {
+fn check_expression(expr: &Expression, prebound: &[&str], rules: Rules) -> Result<(), Violation> {
     check(Pending::Expr(expr), prebound, rules)
 }
 
 /// Check `root` and everything under it the restrictions reach, depth first over a
 /// work list: each node's own restrictions before its operands', its operands in
 /// written order, so the first construct refused is the first one written.
-fn check(root: Pending<'_>, prebound: &[&str], rules: Rules) -> Result<(), String> {
+fn check(root: Pending<'_>, prebound: &[&str], rules: Rules) -> Result<(), Violation> {
     let mut pending = vec![root];
     while let Some(next) = pending.pop() {
         let first = pending.len();
@@ -311,10 +444,10 @@ fn check_pattern_node<'a>(
     prebound: &[&str],
     rules: Rules,
     pending: &mut Vec<Pending<'a>>,
-) -> Result<(), String> {
+) -> Result<(), Violation> {
     match pattern {
         GraphPattern::Apply { .. } => {
-            return Err("contextual application algebra requires its typed preparation route; it cannot be pre-bound as ordinary SHACL algebra".to_owned());
+            return Err(Violation::new(ViolationKind::ContextualApplication));
         }
         // A property-function call's argument vectors are term positions, exactly like
         // a BGP triple's or a property path's endpoints: a pre-bound variable there is
@@ -329,44 +462,23 @@ fn check_pattern_node<'a>(
             pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
         }
         GraphPattern::Minus { .. } => {
-            return Err(
-                "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
-             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries)"
-                    .to_owned(),
-            );
+            return Err(Violation::new(ViolationKind::Minus));
         }
-        GraphPattern::Service { .. } => return Err(SERVICE_REFUSAL.to_owned()),
+        GraphPattern::Service { .. } => return Err(Violation::new(ViolationKind::Service)),
         GraphPattern::Values { .. } if rules == Rules::ServiceOnly => {}
-        // The DIVERGENCE recorded in this module's docs lives here: the Working
-        // Draft forbids only a `VALUES` that mentions a potentially pre-bound
-        // variable, while this arm refuses every `VALUES`. The frozen W3C case
-        // `vectors/shacl/sparql/pre-binding/unsupported-sparql-002.ttl` requires
-        // the stricter rule, and the corpus is the contract. The refusal names the
-        // Appendix it diverges from, so an operator who hits it can find the exact
-        // text — including the specification's own at-risk marker, quoted in the
-        // module docs.
         GraphPattern::Values { variables, .. } if rules == Rules::AppendixA => {
             if let Some(variable) = variables
                 .iter()
                 .find(|variable| prebound.contains(&variable.as_str()))
             {
-                return Err(format!(
-                    "a VALUES clause that mentions the potentially pre-bound variable ?{} is \
-                     not allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
-                     Variables in SPARQL Queries)",
-                    variable.as_str()
+                return Err(Violation::variable(
+                    ViolationKind::PreboundValues,
+                    variable.as_str(),
                 ));
             }
         }
         GraphPattern::Values { .. } => {
-            return Err(
-                "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
-             Extensions, Appendix A: Pre-binding of Variables in SPARQL Queries; PurRDF \
-             refuses every VALUES, which is stricter than the Working Draft's \
-             mentions-a-pre-bound-variable rule, because the frozen W3C pre-binding corpus \
-             requires the stricter reading)"
-                    .to_owned(),
-            );
+            return Err(Violation::new(ViolationKind::Values));
         }
         GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
             pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
@@ -390,11 +502,9 @@ fn check_pattern_node<'a>(
             expression,
         } => {
             if prebound.contains(&variable.as_str()) {
-                return Err(format!(
-                    "assigning a potentially pre-bound variable (... AS ?{}) is not allowed \
-                     (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in \
-                     SPARQL Queries)",
-                    variable.as_str()
+                return Err(Violation::variable(
+                    ViolationKind::Assignment,
+                    variable.as_str(),
                 ));
             }
             pending.extend([Pending::Expr(expression), Pending::Pattern(inner)]);
@@ -410,10 +520,9 @@ fn check_pattern_node<'a>(
         } => {
             for variable in std::iter::once(element).chain(companion.as_ref()) {
                 if prebound.contains(&variable.as_str()) {
-                    return Err(format!(
-                        "assigning a potentially pre-bound variable (UNFOLD(... AS ?{})) is not \
-                         allowed (SHACL-SPARQL §5.2.1)",
-                        variable.as_str()
+                    return Err(Violation::variable(
+                        ViolationKind::UnfoldAssignment,
+                        variable.as_str(),
                     ));
                 }
             }
@@ -437,13 +546,15 @@ fn check_pattern_node<'a>(
             pending.push(Pending::Pattern(inner));
         }
         GraphPattern::Project { inner, variables } => {
-            for name in prebound {
+            let required = match rules {
+                Rules::Recommendation {
+                    required_projection,
+                } => &prebound[..required_projection],
+                _ => prebound,
+            };
+            for name in required {
                 if !variables.iter().any(|v| v.as_str() == *name) {
-                    return Err(format!(
-                        "a subquery must project every potentially pre-bound variable; \
-                         ?{name} is not in its projection (SHACL 1.2 SPARQL Extensions, \
-                         Appendix A: Pre-binding of Variables in SPARQL Queries)"
-                    ));
+                    return Err(Violation::variable(ViolationKind::SubqueryProjection, name));
                 }
             }
             pending.push(Pending::Pattern(inner));
@@ -456,14 +567,18 @@ fn check_pattern_node<'a>(
             variables: _,
             aggregates,
         } => {
-            for (variable, _) in aggregates {
+            for (variable, aggregate) in aggregates {
                 if prebound.contains(&variable.as_str()) {
-                    return Err(format!(
-                        "assigning a potentially pre-bound variable (aggregate AS ?{}) is not \
-                         allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
-                         Variables in SPARQL Queries)",
-                        variable.as_str()
+                    return Err(Violation::variable(
+                        ViolationKind::AggregateAssignment,
+                        variable.as_str(),
                     ));
+                }
+                pending.extend(aggregate.args().iter().map(Pending::Expr));
+                for order in aggregate.order_by() {
+                    let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) =
+                        order;
+                    pending.push(Pending::Expr(expression));
                 }
             }
             pending.push(Pending::Pattern(inner));
@@ -546,16 +661,43 @@ mod tests {
             inner: Child::new(GraphPattern::empty_bgp()),
             expr: Expression::Exists(Child::new(application.clone())),
         };
+        for profile in [ShaclProfile::REC_20170720, ShaclProfile::WD_20260918] {
+            for pattern in [&application, &nested] {
+                let mut query = parse("ASK {}");
+                let Query::Ask { pattern: root, .. } = &mut query else {
+                    unreachable!("ASK fixture")
+                };
+                *root = pattern.clone();
+                let refusal = profile
+                    .admit_query(QueryPurpose::AskValidator, &query, &[])
+                    .expect_err("contextual algebra is not a SHACL preparation route");
+                assert_eq!(refusal.profile(), profile);
+                assert_eq!(refusal.purpose(), QueryPurpose::AskValidator);
+                assert_eq!(refusal.reason(), AdmissionReason::ContextualApplication);
+                assert_eq!(refusal.variable(), None);
+                assert!(refusal.to_string().contains(
+                    "contextual application algebra requires its typed preparation route"
+                ));
+                assert_eq!(
+                    check_ask(&query, &["this"]).expect_err("legacy route refusal"),
+                    "contextual application algebra requires its typed preparation route; it cannot be pre-bound as ordinary SHACL algebra"
+                );
+            }
+            assert!(
+                profile
+                    .admit_query(QueryPurpose::AskValidator, &parse("ASK {}"), &[])
+                    .is_ok()
+            );
+        }
         for rules in [Rules::Strict, Rules::AppendixA, Rules::ServiceOnly] {
             for pattern in [&application, &nested] {
                 let error =
                     check_pattern(pattern, &["this"], rules).expect_err("typed route required");
-                assert!(
-                    error.contains(
-                        "contextual application algebra requires its typed preparation route"
-                    ),
-                    "{error}"
-                );
+                assert!(matches!(error.kind, ViolationKind::ContextualApplication));
+                assert_eq!(error.reason(), AdmissionReason::ContextualApplication);
+                assert!(error.legacy_message().contains(
+                    "contextual application algebra requires its typed preparation route"
+                ));
             }
             assert!(check_pattern(&GraphPattern::empty_bgp(), &["this"], rules).is_ok());
         }
@@ -730,6 +872,20 @@ mod tests {
             check("SELECT $this WHERE { SERVICE <http://example.org/sparql> { $this ?p ?o } }")
                 .expect_err("SERVICE must be rejected");
         assert!(err.contains("SERVICE"), "{err}");
+    }
+
+    #[test]
+    fn aggregate_exists_is_audited_with_a_local_graph_neighbor() {
+        let refused = "SELECT $this (SUM(IF(EXISTS {
+            SERVICE <http://example.org/sparql> { $this ?p ?o }
+        }, 1, 0)) AS ?count) WHERE { $this ?p ?o } GROUP BY $this";
+        let err = check(refused).expect_err("aggregate EXISTS must not hide SERVICE");
+        assert!(err.contains("SERVICE"), "{err}");
+
+        let admitted = "SELECT $this (SUM(IF(EXISTS {
+            GRAPH <http://example.org/graph> { $this ?p ?o }
+        }, 1, 0)) AS ?count) WHERE { $this ?p ?o } GROUP BY $this";
+        check(admitted).expect("the local GRAPH neighbor is admissible");
     }
 
     #[test]

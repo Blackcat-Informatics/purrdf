@@ -191,6 +191,33 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     Ok(SolutionSeq { schema, rows })
 }
 
+// One authored projection kernel with caller-local iterator identities: sharing
+// one generic closure made its outer bulk specialization a two-use outlined call.
+// Bind each input once, in argument order, while retaining the safe container homes.
+macro_rules! eval_project_sequence {
+    ($seq:expr, $out:expr) => {{
+        let seq = $seq;
+        let out = $out;
+        // For each projected column, the source column in the inner schema (if any).
+        let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
+        // Reserve the exact row count, then use Vec's bulk extension so row capacity
+        // and final length publication stay outside the per-row projection work.
+        let mut rows = Vec::with_capacity(seq.rows.len());
+        rows.extend(seq.rows.iter().map(|row| {
+            let row = row.as_slice();
+            // Use SmallVec's reserved-slot bulk loop without a FromIterator wrapper
+            // or repeated push capacity/tag/length work for each projected cell.
+            let mut projected = Solution::new();
+            projected.extend(
+                src.iter()
+                    .map(|source| source.and_then(|column| row[column])),
+            );
+            projected
+        }));
+        SolutionSeq { schema: out, rows }
+    }};
+}
+
 /// `SELECT`-list projection: restrict to `variables` in order. A projected variable
 /// absent from the inner solution yields an all-unbound column.
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
@@ -214,7 +241,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
         let schema = layout();
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
-    eval_project_sequence(&seq, layout(), lift)
+    let projected = eval_project_sequence!(&seq, layout());
+    Ok(lift.finish(projected))
 }
 
 // Erase the static delivery wrapper; the native operator retains its call boundary.
@@ -238,31 +266,15 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
                 } else {
                     VarSchema::interned(variables)
                 };
-                eval_project_sequence(&seq, out, Lift::at(node))
+                let lift = Lift::at(node);
+                let projected = eval_project_sequence!(&seq, out);
+                Ok(lift.finish(projected))
             },
             ctx,
         )
     } else {
         eval_project(node, inner, variables, ctx)
     }
-}
-
-// Share the sequence loop without a second call boundary or native result copy.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-fn eval_project_sequence<I: ViewTermId>(
-    seq: &SolutionSeq<I>,
-    out: Arc<VarSchema>,
-    lift: Lift<'_>,
-) -> Result<Evaluated<I>, EvalError> {
-    // For each projected column, the source column in the inner schema (if any).
-    let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
-    let rows = seq
-        .rows
-        .iter()
-        .map(|row| src.iter().map(|s| s.and_then(|c| row[c])).collect())
-        .collect();
-    Ok(lift.finish(SolutionSeq { schema: out, rows }))
 }
 
 /// `DISTINCT` and `REDUCED`: drop duplicate whole-solution rows, preserving first-seen

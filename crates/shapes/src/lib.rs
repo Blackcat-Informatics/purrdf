@@ -58,8 +58,10 @@ pub(crate) mod prebinding;
 pub mod product;
 #[doc(hidden)]
 pub mod product_fixture;
+pub mod profile;
 pub mod provenance;
 pub mod pydantic;
+mod query_law;
 pub mod report;
 pub(crate) mod result_annotations;
 pub mod rules;
@@ -106,6 +108,10 @@ pub use linkml::{
     LinkmlConfig, LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic,
     LinkmlSlotDisposition, LinkmlSlotReason, LinkmlSlotRename, SanitizePolicy, emit_linkml,
     import_linkml, import_linkml_package, parse_linkml, write_linkml,
+};
+pub use profile::{
+    AdmissionReason, AdmissionRefusal, QueryPurpose, ShaclProfile, UnsupportedProfile,
+    XPathProfileConflict,
 };
 pub use pydantic::{
     PYDANTIC_DIALECT, PydanticClassConfig, PydanticConfig, PydanticError, PydanticModuleConfig,

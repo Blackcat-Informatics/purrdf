@@ -89,9 +89,11 @@ versions using a token with the separate yank permission, retaining the records
 and publisher settings. The complete setup and historical bootstrap receipts
 are in the release process document linked above.
 
-Eleven workspace members are deliberately never published to crates.io:
+Twelve workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
-`purrdf-sparql-conformance` (the test harness), `purrdf-hash-conformance` (the
+`purrdf-sparql-conformance` (the test harness), `purrdf-conformance-kit` (the
+manifest, report and outcome grading the community corpus runner uses),
+`purrdf-hash-conformance` (the
 frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf`
 binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool),
 `purrdf-bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting
@@ -101,7 +103,7 @@ shared test support: goldens, temporary paths, frozen vectors and the
 `helper-census` (the structural census behind the shared-helpers gate), and
 `purrdf-python` (the extension crate, which ships to PyPI via maturin instead).
 
-`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven that
+`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the twelve that
 published crates depend on, and they reach them solely through
 `[dev-dependencies]`. Their root `[workspace.dependencies]` entries are
 therefore path-only, with no `version` key, which is what makes cargo drop them

@@ -135,6 +135,20 @@ pub struct ShaclData {
 }
 
 impl ShaclData {
+    /// Retain the exact two read views and their shared class analysis for a
+    /// cold request binding. The optional whole-node memo stays cold rather
+    /// than copying a warmed graph-sized buffer.
+    pub(crate) fn retained(&self) -> Self {
+        Self {
+            core: Arc::clone(&self.core),
+            sparql: Arc::clone(&self.sparql),
+            class_membership: self.class_membership.clone(),
+            sparql_view: self.sparql_view.clone(),
+            shapes_graph_iri: self.shapes_graph_iri.clone(),
+            graph_nodes: OnceLock::new(),
+        }
+    }
+
     /// Build a holder from the Core dataset, the SPARQL dataset, and the optional
     /// shapes-graph IRI.
     pub fn new(

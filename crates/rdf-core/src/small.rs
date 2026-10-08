@@ -969,6 +969,10 @@ impl<A: Array> DerefMut for SmallVec<A> {
 }
 
 impl<A: Array> Extend<A::Item> for SmallVec<A> {
+    // The reserved-slot bulk loop belongs in its caller: a separate per-row
+    // frame must not replace its SSA fill and single final length publication.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn extend<I: IntoIterator<Item = A::Item>>(&mut self, iterable: I) {
         let mut iter = iterable.into_iter();
         self.reserve(iter.size_hint().0);

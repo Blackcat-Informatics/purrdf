@@ -232,6 +232,20 @@ def _scrape(
     )
 
 
+def _passed_total(
+    name: str, source: str, package: str, test: str, marker: str,
+    detail: Callable[[int, int], str],
+) -> SuiteResult:
+    """One `<marker>: passed N total N` scoreboard, nothing ledgered: Fail is total - Pass."""
+    return _scrape(
+        name, source, package, test, f"`{marker}: passed N total N`",
+        rf"{marker}: passed (\d+) total (\d+)",
+        lambda passed, total: (
+            passed, 0, total - passed, detail(passed, total), passed == total,
+        ),
+    )
+
+
 def _suite_codec() -> SuiteResult:
     """Turtle/TriG/N-Triples/N-Quads/RDF-XML native-codec round-trip."""
     return _scrape(
@@ -318,14 +332,23 @@ def _suite_shapes_corpus() -> SuiteResult:
     """First-party SHACL corpus: scrape the harness's per-fixture scoreboard so
     the matrix reports a report-level Pass count, not the single test-function
     tally that ``_suite_cargo`` would yield."""
-    return _scrape(
+    return _passed_total(
         "SHACL (first-party corpus)", "first-party frozen reports", "purrdf-shapes",
-        "conformance", "`SHAPES-CORPUS: passed N total N`",
-        r"SHAPES-CORPUS: passed (\d+) total (\d+)",
-        lambda passed, total: (
-            passed, 0, total - passed, f"{passed}/{total} byte-frozen expected reports",
-            passed == total,
-        ),
+        "conformance", "SHAPES-CORPUS",
+        lambda passed, total: f"{passed}/{total} byte-frozen expected reports",
+    )
+
+
+def _suite_community_shacl() -> SuiteResult:
+    """Community SHACL corpus: every applicable dated execution through the fresh,
+    prepared and restored-product complete-report routes, graded by the
+    conformance kit. The harness counts unsupported profiles apart from failures
+    and asserts there are none; here an unsupported execution is not a pass."""
+    return _passed_total(
+        "Community SHACL dated profiles (REC 2017 / WD 2026)",
+        "community-proposed corpus, agent-reviewed", "purrdf-sparql-conformance",
+        "community_conformance", "COMMUNITY-SHACL",
+        lambda passed, total: f"{passed}/{total} applicable dated executions",
     )
 
 
@@ -389,14 +412,10 @@ def _suite_xsd_regex_corpus() -> SuiteResult:
     dialect translation ``sh:pattern``, SPARQL ``REGEX``/``REPLACE`` and ShEx
     ``PATTERN`` all route through -- so a dialect regression shows up here
     once rather than three times, or not at all."""
-    return _scrape(
-        "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6", "purrdf-core",
-        "xsd_regex_conformance", "`XSD-REGEX-CORPUS: passed N total N`",
-        r"XSD-REGEX-CORPUS: passed (\d+) total (\d+)",
-        lambda passed, total: (
-            passed, 0, total - passed, f"{passed}/{total} hand-derived XSD/XPath regExp cases",
-            passed == total,
-        ),
+    return _passed_total(
+        "XSD/XPath regExp (first-party corpus)", "first-party, XSD G + F&O 5.6",
+        "purrdf-core", "xsd_regex_conformance", "XSD-REGEX-CORPUS",
+        lambda passed, total: f"{passed}/{total} hand-derived XSD/XPath regExp cases",
     )
 
 
@@ -543,16 +562,10 @@ def _suite_construct_corpus() -> SuiteResult:
     is graded and there is no xfail ledger, so a non-zero fail cannot appear
     without the harness going red.
     """
-    cmd = [
-        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
-        "--test", "construct_corpus", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"CONSTRUCT-CORPUS: passed (\d+) total (\d+)", out)
-    if m:
-        passed, total = int(m.group(1)), int(m.group(2))
-        detail = (
+    return _passed_total(
+        "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
+        "purrdf-sparql-conformance", "construct_corpus", "CONSTRUCT-CORPUS",
+        lambda passed, total: (
             f"{passed}/{total} cases: triple-producing §16.2 + CONSTRUCT GRAPH quads, "
             "paired case for case, incl. the RDF 1.2 statement layer and its "
             "per-graph keying and BOTH terms a subject position refuses (a "
@@ -561,15 +574,7 @@ def _suite_construct_corpus() -> SuiteResult:
             "depth at which an unenforced term model emits a document the "
             "engine's own readers refuse); the quad-template grammar bounded "
             "from both sides by 1 positive and 7 negative syntax verdicts"
-        )
-        return SuiteResult(
-            "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
-            passed=passed, xskip=0, failed=(total - passed),
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
-        "SPARQL CONSTRUCT (first-party corpus)", "purrdf-construct (first-party)",
-        "`CONSTRUCT-CORPUS: passed N total N`", cmd, out,
+        ),
     )
 
 
@@ -580,18 +585,13 @@ def _suite_describe_corpus() -> SuiteResult:
     grades a DESCRIBE at all — this row is the only conformance measurement the
     form has, and it pins the engine's documented Symmetric CBD case by case.
     """
-    return _scrape(
+    return _passed_total(
         "SPARQL DESCRIBE (first-party corpus)", "purrdf-describe (first-party)",
-        "purrdf-sparql-conformance", "describe_corpus", "`DESCRIBE-CORPUS: passed N total N`",
-        r"DESCRIBE-CORPUS: passed (\d+) total (\d+)",
+        "purrdf-sparql-conformance", "describe_corpus", "DESCRIBE-CORPUS",
         lambda passed, total: (
-            passed, 0, total - passed,
-            (
-                f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
-                "statement layer on both sides of its subject-or-object disjunction and "
-                "its per-graph scope over TriG"
-            ),
-            passed == total,
+            f"{passed}/{total} cases pinning the symmetric CBD, incl. the RDF 1.2 "
+            "statement layer on both sides of its subject-or-object disjunction and "
+            "its per-graph scope over TriG"
         ),
     )
 
@@ -648,27 +648,17 @@ def _suite_governor_corpus() -> SuiteResult:
     test functions ``_suite_cargo`` would count. Every case is graded, so a
     non-zero fail is impossible to reach without the harness itself going red.
     """
-    cmd = [
-        "cargo", "test", "-p", "purrdf-sparql-conformance", "--locked",
-        "--test", "governor_corpus", "--", "--nocapture",
-    ]
-    rc, out = _run(cmd, _REPO_ROOT)
-    _, _, failed = _cargo_tally(out)
-    m = re.search(r"GOVERNOR-CORPUS: passed (\d+) total (\d+) bands (\d+)", out)
-    if m:
-        passed, total, bands = (int(m.group(i)) for i in (1, 2, 3))
-        detail = (
-            f"{passed}/{total} pinned cases; {bands} zero/boundary/over-bound bands, "
-            "frozen and content-addressed"
-        )
-        return SuiteResult(
-            "SPARQL execution governors", "purrdf-sparql-governors (first-party)",
-            passed=passed, xskip=0, failed=(total - passed),
-            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
-        )
-    return _no_scoreboard(
+    return _scrape(
         "SPARQL execution governors", "purrdf-sparql-governors (first-party)",
-        "`GOVERNOR-CORPUS: passed N total N bands N`", cmd, out,
+        "purrdf-sparql-conformance", "governor_corpus",
+        "`GOVERNOR-CORPUS: passed N total N bands N`",
+        r"GOVERNOR-CORPUS: passed (\d+) total (\d+) bands (\d+)",
+        lambda passed, total, bands: (
+            passed, 0, total - passed,
+            f"{passed}/{total} pinned cases; {bands} zero/boundary/over-bound bands, "
+            "frozen and content-addressed",
+            passed == total,
+        ),
     )
 
 
@@ -1217,6 +1207,7 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
         ("shapes", _suite_shacl12_w3c),
         ("shapes", _suite_shacl12_unlisted),
         ("shapes", _suite_shapes_corpus),
+        ("shapes", _suite_community_shacl),
         ("shapes", _suite_product_equivalence),
         ("core", _suite_xsd_regex_corpus),
         ("shapes", _suite_shacl_rules),
@@ -1766,6 +1757,15 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("first-party SHACL corpus:"),
             _board("SHAPES-CORPUS: passed 9 total 9"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        "Community SHACL dated profiles (REC 2017 / WD 2026)",
+        _suite_community_shacl,
+        (
+            _noise("COMMUNITY SHACL TOTAL: cases 64 executions 115 passed 115 failed 0"),
+            _board("COMMUNITY-SHACL: passed 115 total 115"),
             _noise(_CARGO_OK),
         ),
     ),

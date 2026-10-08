@@ -168,9 +168,77 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `RdfTerm::Triple` are unchanged. `RdfTerm` itself has no `Drop`, so moving
   values out of its variants is unchanged too. Code that took deep chains
   apart by hand to avoid the old recursive drop can simply drop them.
+- **SPARQL evaluator errors:** this change and the next alter behaviour
+  without changing a signature, so a semver check cannot see them;
+  `EvalError` is `#[non_exhaustive]`, so existing matches still compile.
+  When a native host function returns its own `Err`, a native function or a property function's `open`/`next` panics, a
+  function hits a resource ceiling, or a host sends an invalid protocol
+  response, the query now fails with the new `EvalError::FunctionOperational`
+  instead of `EvalError::Function`. `EvalError::Function` now means only that
+  the request was refused: an arity, type or access-mode mismatch. Code that
+  matches `EvalError::Function` to catch host failures must also match
+  `FunctionOperational`. `EvalError` also gains `FunctionAdmission`, for a
+  SPARQL-bodied function a dated invocation law refuses, and `XPathRegex`, for
+  a refused native XPath compile, match or replacement.
+- **SPARQL diagnostic codes:** `EvalError::diagnostic_code()` and
+  `EvalError::code()` now return a code for `Internal`
+  (`native-sparql-internal`), `CompositeBound` (`native-sparql-composite-bound`)
+  and `FloatEnvironment` (`native-sparql-float-environment`), where they used
+  to return `None`. They also return one for `FunctionOperational`
+  (`native-sparql-function-operational`) and `XPathRegex` (the exhausted
+  resource's code, otherwise `native-sparql-xpath-operational`). The
+  native engine used to report these failures as `native-sparql-query-eval`,
+  so `RdfDiagnostic::code`, and the error codes the CLI, C ABI, Python and
+  WebAssembly surfaces report, change to the specific codes.
 
 ### Added
 
+- **Dated SHACL profiles:** `purrdf_shapes::ShaclProfile` selects the law a
+  validation follows: `ShaclProfile::LEGACY` (the default, unchanged),
+  `ShaclProfile::REC_20170720` (the SHACL Recommendation of 20 July 2017) and
+  `ShaclProfile::WD_20260918` (SHACL 1.2 Core of 17 September 2026 with the
+  SPARQL Extensions of 18 September 2026). Each dated profile names its exact
+  Core, SPARQL and XPath specifications, and `ShaclProfile::from_id` refuses
+  any other identifier with `UnsupportedProfile` rather than picking a nearby
+  date. `ValidationOptions::with_profile` selects one. Pre-binding admission
+  follows the selected law. Both refuse `MINUS`, `SERVICE` and assignment to a
+  potentially pre-bound variable. The draft's potentially pre-bound variables
+  are `this`, `value` and the parameters alone, so under it `$shapesGraph`
+  and `$currentShape` are never pre-bound: they are the query's own
+  variables, whether or not the validation has a value for them. The Recommendation also refuses every
+  `VALUES` and a subquery that does not project a potentially pre-bound
+  variable; the draft refuses a `VALUES` only when it names one, and has no
+  subquery rule. A refusal is a typed `AdmissionRefusal` with its reason,
+  query role and variable.
+- **Complete SHACL reports:** `CompleteValidationReport` sits beside the
+  unchanged `ValidationReport`. Each result carries its `sh:sourceConstraint`
+  (the actual `sh:sparql` value), recursive `sh:detail` results with their own
+  evidence, and messages chosen in the dated order: a bound `?message`, then
+  the constraint's or validator's messages, then the component's. Its graph
+  (`to_graph`) keeps a report root and records, for every emitted blank node,
+  the data or shapes blank node it stands for, so independently parsed
+  documents never share blank identity. `CompleteValidationError` keeps
+  admission, semantic, resource, source and native XPath refusals apart from a
+  verdict.
+- **Complete reports at the shared boundary:** `purrdf_validate` adds
+  `validate_complete_sources`, `validate_complete_documents`,
+  `validate_complete_product`, `complete_report_payload`,
+  `complete_report_to_json`, `complete_report_to_sarif_string`,
+  `complete_profile` and `complete_validation_status` with
+  `CompleteValidationStatus`. Existing functions, JSON payloads and SARIF
+  output are unchanged under the default profile.
+- **Community SHACL corpus:** `corpora/community/` holds 64 SHACL cases with
+  inline expected reports and an agent review of every expectation. Their
+  applicable dated executions (57 under the Recommendation, 58 under the
+  draft) run through the fresh, prepared and restored-product routes in
+  `cargo test -p purrdf-sparql-conformance --test community_conformance`, and
+  the `community-conformance` binary writes their records and EARL. The new
+  unpublished `purrdf-conformance-kit` compares each complete report with its
+  expectation by graph isomorphism in source context. A catalog profile with no
+  built-in dated law is counted as unsupported, apart from failures. The
+  conformance matrix gains the row.
+- **Test vocabularies:** `purrdf_iri::vocab` adds the W3C test manifest
+  (`mf`), result set (`rs`), SHACL test (`sht`) and EARL (`earl`) terms.
 - **`purrdf-hash` BLAKE3 subtree primitives:** `blake3::ChainingValue`,
   `left_subtree_len`, `subtree_chaining_value`, `merge_subtrees_non_root` and
   `merge_subtrees_root`, the same primitives and rules as the `blake3` crate's

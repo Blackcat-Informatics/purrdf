@@ -1031,12 +1031,13 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
     // Inside a substituted copy, `right` may be the placeholder the substitution walk left
     // for this operand: its site is substituted per left row with the substitution the
     // walk carried and the row together — see `crate::deferred_exists`.
-    let deferred = ctx
-        .deferred_exists
-        .as_ref()
-        .and_then(|placeholders| placeholders.get(&(std::ptr::from_ref(right) as usize)))
-        .and_then(crate::deferred_exists::Deferred::lateral)
-        .cloned();
+    let deferred = match &ctx.deferred_exists {
+        Some(placeholders) => placeholders
+            .get(&(std::ptr::from_ref(right) as usize))
+            .and_then(crate::deferred_exists::Deferred::lateral)
+            .cloned(),
+        None => None,
+    };
     if deferred.is_none() && crate::deferred_exists::is_lateral_placeholder(right) {
         return Err(EvalError::internal(
             "a nested LATERAL placeholder was evaluated outside the substituted copy that \
