@@ -719,6 +719,36 @@ fn the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed() {
 }
 
 #[test]
+fn the_lubm_join_budget_is_admitted_before_acquisition() {
+    for value in ["0", "-1", "+1", "junk", "9223372036854775808"] {
+        let (code, output) = run_lane_with_knobs(
+            "lubm",
+            "LUBM_OUT",
+            &[format!("LUBM_MAX_JOIN_STEPS={value}")],
+        );
+        assert_ne!(code, 0, "{value}: {output}");
+        assert!(output.contains("LUBM_MAX_JOIN_STEPS"), "{value}: {output}");
+        assert!(!output.contains("1/7 artifacts"), "{value}: {output}");
+    }
+    let (unusable, root) = uncreatable_arena("join-budget-admission");
+    for value in ["1", "001", "100000000", "9223372036854775807"] {
+        let (code, stdout, stderr) = run_make(&[
+            "lubm",
+            &format!("LUBM_MAX_JOIN_STEPS={value}"),
+            &format!("LUBM_OUT={unusable}"),
+        ]);
+        let output = format!("{stdout}\n{stderr}");
+        assert_ne!(code, 0, "{value}: {output}");
+        assert!(
+            !output.contains("LUBM_MAX_JOIN_STEPS must be"),
+            "{value}: {output}"
+        );
+        assert!(output.contains("LUBM_OUT="), "{value}: {output}");
+    }
+    std::fs::remove_dir_all(root).expect("remove owned admission fixture");
+}
+
+#[test]
 fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
     // `LUBM_UNIVERSITIES=0` generates no corpus at all, so it is refused by name. The valid
     // neighbour is 1 — the default and the count the published LUBM answers are quoted for — which

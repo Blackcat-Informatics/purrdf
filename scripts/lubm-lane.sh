@@ -32,6 +32,7 @@ ONTO="${LUBM_ONTO:-${LUBM_DEFAULT_ONTO}}"
 readonly LUBM_DEFAULT_DOC_BASE="http://example.org/lubm/"
 DOC_BASE="${LUBM_DOC_BASE:-${LUBM_DEFAULT_DOC_BASE}}"
 ENTAIL_SLICE="${LUBM_ENTAIL_SLICE:-3000}"
+MAX_JOIN_STEPS="${LUBM_MAX_JOIN_STEPS:-100000000}"
 OUT="${LUBM_OUT:-target/lubm}"
 BIN="${LUBM_BIN:-}"
 
@@ -94,6 +95,7 @@ step() {
 # values are admitted and normalized by Spec below.
 lane_require_positive LUBM_UNIVERSITIES UNIVERSITIES
 lane_require_positive LUBM_ENTAIL_SLICE ENTAIL_SLICE
+lane_require_positive LUBM_MAX_JOIN_STEPS MAX_JOIN_STEPS
 # Cheap necessary conditions preserve early knob diagnostics without building a
 # tool for an arena that cannot be used. Spec performs full IRI admission below.
 [[ "${DOC_BASE}" == *:* ]] || die "LUBM_DOC_BASE must be an absolute IRI (got '${DOC_BASE}')"
@@ -393,8 +395,8 @@ verify_native_graph
 
 step "7/7 run the queries, per regime"
 
-# The entailment ladder. Materializing a closure has a FIXED internal ceiling that
-# no flag raises, so a regime that cannot close over the whole dataset is offered
+# The entailment ladder. Every probe and query uses the same explicit join budget.
+# A regime that cannot close over the whole dataset within that budget is offered
 # progressively smaller rungs rather than being reported as unsupported. Each rung
 # is a real dataset and every reported row count names the rung it came from, so a
 # smaller rung never silently masquerades as a full-scale answer.
@@ -434,7 +436,7 @@ rows_of() { wc -l <"$1"; }
 run_query() {
   local query_file="$1" dataset="$2" regime="$3"
   local -a flags=(--data "${dataset}" --results-format json)
-  [[ "${regime}" == "-" ]] || flags+=(--entailment "${regime}")
+  [[ "${regime}" == "-" ]] || flags+=(--entailment "${regime}" --max-join-steps "${MAX_JOIN_STEPS}")
 
   # STDERR IS NOT RESULTS. Merging the two meant a binary that exits 0 while
   # writing anything at all to stderr -- a notice, a warning, a future governor
@@ -683,6 +685,7 @@ SUMMARY
   binary             ${BIN} (${PURRDF_VERSION})
   dataset            LUBM(${UNIVERSITIES}, ${INDEX}) seed=${SEED}
   profile            purrdf-lubm-native-v1
+  max join steps     ${MAX_JOIN_STEPS} (every entailment probe and query)
   generator sha256   ${generator_sha}
   checker sha256     ${checker_sha}
   binary sha256      ${binary_sha}
@@ -717,8 +720,8 @@ HOW TO READ THIS
   over these same complete native-profile bytes. Only 'full' rows are.
 
   A rung below 'full' appears when the 'full' attempt did not succeed. The usual
-  cause is materializing that regime's closure passing a FIXED internal ceiling
-  that no command-line flag raises, and the probe lines above carry whatever the
+  cause is materializing that regime's closure passing an admitted resource limit.
+  LUBM_MAX_JOIN_STEPS controls its join budget; the probe lines carry whatever the
   engine said in full -- including the observed and permitted counts when that is
   the cause -- so the reason is read rather than inferred from a missing row. Any
   non-zero exit demotes the rung, so read the probe line rather than assuming the

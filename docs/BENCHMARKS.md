@@ -1308,10 +1308,13 @@ that no projection gained, lost or reordered a variable — because a
 "normalisation" that quietly became a rewrite is the failure mode that would
 make every number downstream worthless.
 
-### The dataset ladder, and the ceiling that makes it necessary
+### The dataset ladder and explicit entailment budget
 
-Materializing an entailment closure passes through a **fixed internal ceiling**
-that no command-line flag raises. The lane probes each regime against progressively smaller rungs —
+Every entailment probe and query receives the same `--max-join-steps` value,
+selected by `LUBM_MAX_JOIN_STEPS` and recorded in the summary. The lane's default
+is 100,000,000 steps; the CLI's ordinary target default remains unchanged. This
+is a finite work budget, not a promise that every corpus size fits. The lane
+probes each regime against progressively smaller rungs —
 the full corpus, then one generated file, then a slice — and reports the first
 that closes, printing the observed and permitted counts verbatim for each rung
 that did not. The limit is therefore visible in the output rather than inferred
@@ -1334,6 +1337,7 @@ comparable against another engine over the same complete native-profile bytes.
 | `LUBM_ONTO` | `http://swat.cse.lehigh.edu/onto/univ-bench.owl` | Explicit schema identity; custom namespaces project the external TBox through the RDF model. |
 | `LUBM_DOC_BASE` | `http://example.org/lubm/` | Absolute document base ending in `/`, without query or fragment. |
 | `LUBM_ENTAIL_SLICE` | `3000` | Positive statement count in the smallest entailment rung, at most the shared shell-safe signed-64 maximum. |
+| `LUBM_MAX_JOIN_STEPS` | `100000000` | Positive per-invocation entailment join-step budget, at most the shared shell-safe signed-64 maximum; applies equally to probes and measured queries. |
 | `LUBM_OUT` | `target/lubm` | Output parent, absolute or relative to the repository root; it must be outside Git worktrees or covered by a tracked .gitignore. Each run reports a fresh child directory and preserves earlier artifacts. |
 | `LUBM_BIN` | *(unset)* | Prebuilt `purrdf`; otherwise Cargo builds and reports the actual executable. |
 

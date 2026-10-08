@@ -549,6 +549,7 @@ LUBM_INDEX ?= 0
 LUBM_ONTO ?= http://swat.cse.lehigh.edu/onto/univ-bench.owl
 LUBM_DOC_BASE ?= http://example.org/lubm/
 LUBM_ENTAIL_SLICE ?= 3000
+LUBM_MAX_JOIN_STEPS ?= 100000000
 LUBM_OUT ?= target/lubm
 LUBM_BIN ?=
 
@@ -556,7 +557,7 @@ LUBM_BIN ?=
 # backtick in `LUBM_OUT` used to run and the lane then worked in a directory
 # nobody named. None of these knobs is a command, so none of them reaches a
 # shell at all.
-$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
+$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_MAX_JOIN_STEPS LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
 
 lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
 	@bash scripts/lubm-lane.sh
