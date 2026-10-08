@@ -71,7 +71,6 @@ use std::sync::Arc;
 use crate::cache::{self, ContractHash};
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::guard::{GuardEvaluator, Negation};
-use crate::id::RowId;
 use crate::paths::{relax_strata, shortest_path};
 use crate::plan::RulePlan;
 use crate::seminaive::{
@@ -340,7 +339,7 @@ fn run_layer(
         }
     }
     check_budget(state)?;
-    let mut confirmed: BTreeMap<RowId, crate::seminaive::Derivation> = BTreeMap::new();
+    let mut confirmed: BTreeMap<Fact, crate::seminaive::Confirmation> = BTreeMap::new();
 
     // Run-once groups: each rule evaluated exactly once, against the whole model.
     for group in &layer.once {
@@ -388,12 +387,16 @@ fn run_layer(
     let rows = state.rel.facts_in_row_order();
     let withdrawn: Vec<Fact> = rows
         .iter()
-        .filter(|(row, _)| {
-            assumed.get(row.index()).copied().unwrap_or(false) && !confirmed.contains_key(row)
+        .filter(|(row, fact)| {
+            assumed.get(row.index()).copied().unwrap_or(false) && !confirmed.contains_key(fact)
         })
         .map(|(_, fact)| fact.clone())
         .collect();
-    state.derivations.extend(confirmed.into_values());
+    state.derivations.extend(
+        confirmed
+            .into_values()
+            .map(crate::seminaive::Confirmation::into_derivation),
+    );
     let mut retracted = hooks
         .retract(layer_index, &state.rel, &withdrawn)
         .map_err(hook_error)?;
@@ -410,8 +413,8 @@ struct GroupRun<'a, 'g> {
     stop: Option<&'g dyn StopSignal>,
     /// Per-row assumed flags.
     assumed: &'a mut Vec<bool>,
-    /// The first derivation of each assumed row a rule derived again.
-    confirmed: &'a mut BTreeMap<RowId, crate::seminaive::Derivation>,
+    /// The canonical derivation of each assumed fact a rule derived again.
+    confirmed: &'a mut BTreeMap<Fact, crate::seminaive::Confirmation>,
     /// For an iterating group, the row count each rule last ran against; `None` for a
     /// run-once group, whose rules run once against everything.
     seen: Option<&'a mut Vec<Option<usize>>>,
@@ -474,10 +477,13 @@ fn run_group(
         state.allowance(),
         run.guards,
     )?;
-    for (row, derivation) in round.confirmed() {
-        run.confirmed
-            .entry(*row)
-            .or_insert_with(|| derivation.clone());
+    for proof in round.confirmed() {
+        match run.confirmed.get_mut(proof.fact()) {
+            Some(existing) => existing.merge(proof.clone()),
+            None => {
+                run.confirmed.insert(proof.fact().clone(), proof.clone());
+            }
+        }
     }
     let committed = !round.is_empty();
     state.absorb(round)?;
@@ -1616,6 +1622,260 @@ mod tests {
             .find(|d| d.fact().subject == surface("b") && d.fact().predicate == surface("area"))
             .expect("the confirming derivation is recorded");
         assert_eq!(kept.rule(), 1);
+    }
+
+    /// Every witness component applies to assumptions too, across individual
+    /// firings, concurrent rules and separately scheduled groups. Retraction of
+    /// an unrelated earlier row must not invalidate the retained proof surfaces.
+    #[test]
+    fn assumed_confirmations_use_the_canonical_witness_in_every_group_order() {
+        struct Assumptions(Vec<Fact>);
+        impl LayerHooks for Assumptions {
+            fn assume(&mut self, layer: usize, _: &RelationStore) -> Result<Vec<Fact>, String> {
+                Ok(if layer == 1 {
+                    self.0.clone()
+                } else {
+                    Vec::new()
+                })
+            }
+            fn retract(
+                &mut self,
+                layer: usize,
+                _: &RelationStore,
+                _: &[Fact],
+            ) -> Result<Vec<Fact>, String> {
+                Ok(if layer == 1 {
+                    vec![test_fact("discard", "seed", "x")]
+                } else {
+                    Vec::new()
+                })
+            }
+        }
+        fn test_fact(s: &str, p: &str, o: &str) -> Fact {
+            Fact {
+                subject: surface(s),
+                predicate: surface(p),
+                object: surface(o),
+                graph: String::new(),
+            }
+        }
+        let fixed = |p: &str| atom(iri("a"), p, iri("x"));
+        let head = |p: &str| atom(iri("answer"), p, iri("yes"));
+        let rules = vec![
+            DlClause::datalog(fixed("q"), vec![fixed("p")]),
+            DlClause::datalog(fixed("r"), vec![fixed("q")]),
+            DlClause::datalog(head("height"), vec![fixed("r")]),
+            DlClause::datalog(head("height"), vec![fixed("p")]),
+            DlClause::datalog(head("sum"), vec![fixed("r"), fixed("r")]),
+            DlClause::datalog(head("sum"), vec![fixed("r"), fixed("p")]),
+            DlClause::datalog(head("sorted"), vec![atom(iri("z"), "seed", iri("x"))]),
+            DlClause::datalog(head("sorted"), vec![fixed("p")]),
+            DlClause::datalog(head("rule"), vec![fixed("p")]),
+            DlClause::datalog(head("rule"), vec![fixed("p")]),
+            DlClause::datalog(
+                head("authored"),
+                vec![
+                    atom(v("?x"), "edge", v("?y")),
+                    atom(v("?y"), "edge", v("?x")),
+                ],
+            ),
+        ];
+        let seeds = [
+            ("discard", "seed", surface("x")),
+            ("a", "p", surface("x")),
+            ("z", "seed", surface("x")),
+            ("a", "edge", surface("b")),
+            ("b", "edge", surface("a")),
+        ];
+        let assumed: Vec<_> = ["height", "sum", "sorted", "rule", "authored"]
+            .iter()
+            .map(|p| test_fact("answer", p, "yes"))
+            .collect();
+        let expected_rules = [3, 5, 7, 8, 10];
+        for reverse_seeds in [false, true] {
+            for groups in [
+                vec![(2..11).collect()],
+                (2..11).map(|i| vec![i]).collect(),
+                (2..11).rev().map(|i| vec![i]).collect(),
+            ] {
+                let mut seeds = seeds.to_vec();
+                if reverse_seeds {
+                    seeds.reverse();
+                }
+                let edb = store(
+                    &seeds
+                        .iter()
+                        .map(|(s, p, o)| (*s, *p, o.as_str()))
+                        .collect::<Vec<_>>(),
+                );
+                let program = compile_scheduled(
+                    rules.clone(),
+                    Schedule::new(vec![
+                        Layer::new(vec![vec![0], vec![1]], Vec::new()),
+                        Layer::new(groups, Vec::new()),
+                    ]),
+                )
+                .expect("compiles");
+                let evaluation = evaluate_scheduled(
+                    &program,
+                    edb,
+                    &Guards::default(),
+                    &mut Assumptions(assumed.clone()),
+                    &EvalOptions::default(),
+                    None,
+                )
+                .expect("evaluates");
+                for (fact, expected_rule) in assumed.iter().zip(expected_rules) {
+                    let proof = evaluation
+                        .derivations()
+                        .iter()
+                        .find(|proof| proof.fact() == fact)
+                        .expect("confirmed proof survives retraction");
+                    assert_eq!(proof.rule(), expected_rule, "{}", fact.predicate);
+                    let expected_sources = match expected_rule {
+                        3 | 7 | 8 => vec![test_fact("a", "p", "x")],
+                        5 => vec![test_fact("a", "r", "x"), test_fact("a", "p", "x")],
+                        10 => vec![test_fact("a", "edge", "b"), test_fact("b", "edge", "a")],
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(proof.sources(), expected_sources);
+                    assert_eq!(proof.proof_height(), if expected_rule == 5 { 3 } else { 1 });
+                }
+                assert!(!has(evaluation.facts(), "discard", "seed", &surface("x")));
+            }
+        }
+    }
+
+    /// Stage-major execution determines the first reached operational failure;
+    /// processing each row through all guards would incorrectly report second.
+    #[test]
+    fn crossed_guard_errors_and_malformed_rows_are_reached_in_stage_order() {
+        struct Errors {
+            malformed: bool,
+        }
+        impl GuardEvaluator for Errors {
+            fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+                if call.guard.name() == "first" && call.inputs[0] == surface("b") {
+                    return if self.malformed {
+                        Ok(vec![vec!["unexpected".to_owned()]])
+                    } else {
+                        Err("first-later-row".to_owned())
+                    };
+                }
+                if call.guard.name() == "second" {
+                    return Err("second-earlier-row".to_owned());
+                }
+                Ok(vec![Vec::new()])
+            }
+        }
+        let rule = DlClause::datalog(
+            atom(v("?x"), "result", iri("yes")),
+            vec![atom(v("?x"), "p", iri("x"))],
+        )
+        .with_guards(vec![
+            Guard::filter("first", vec!["?x".to_owned()]),
+            Guard::filter("second", vec!["?x".to_owned()]),
+        ]);
+        let program = compile_scheduled(
+            vec![rule],
+            Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
+        )
+        .expect("compiles");
+        for malformed in [false, true] {
+            let error = evaluate_scheduled(
+                &program,
+                store(&[("a", "p", &surface("x")), ("b", "p", &surface("x"))]),
+                &Errors { malformed },
+                &mut NoHooks,
+                &EvalOptions::default(),
+                None,
+            )
+            .expect_err("first-stage refusal");
+            let message = error.to_string();
+            assert!(!message.contains("second-earlier-row"), "{message}");
+            if malformed {
+                assert!(
+                    message.contains("first") && message.contains('1'),
+                    "{message}"
+                );
+            } else {
+                assert!(message.contains("first-later-row"), "{message}");
+            }
+        }
+    }
+
+    /// A later iteration can discover a better proof of an assumption without
+    /// replacing the admission proof of an ordinary fact from an earlier round.
+    #[test]
+    fn later_confirmation_rounds_compete_but_prior_admissions_still_win() {
+        struct Hooks;
+        impl LayerHooks for Hooks {
+            fn assume(&mut self, layer: usize, _: &RelationStore) -> Result<Vec<Fact>, String> {
+                Ok(if layer == 1 {
+                    vec![Fact {
+                        subject: surface("answer"),
+                        predicate: surface("confirmed"),
+                        object: surface("yes"),
+                        graph: String::new(),
+                    }]
+                } else {
+                    Vec::new()
+                })
+            }
+        }
+        let rules = vec![
+            DlClause::datalog(
+                atom(iri("high"), "mid", iri("x")),
+                vec![atom(iri("high"), "seed", iri("x"))],
+            ),
+            DlClause::datalog(
+                atom(iri("high"), "alternative", iri("x")),
+                vec![atom(iri("high"), "mid", iri("x"))],
+            ),
+            DlClause::datalog(
+                atom(iri("answer"), "confirmed", iri("yes")),
+                vec![atom(v("?s"), "alternative", iri("x"))],
+            ),
+            DlClause::datalog(
+                atom(iri("answer"), "ordinary", iri("yes")),
+                vec![atom(v("?s"), "alternative", iri("x"))],
+            ),
+            DlClause::datalog(
+                atom(iri("low"), "alternative", iri("x")),
+                vec![atom(iri("low"), "seed", iri("x"))],
+            ),
+        ];
+        let program = compile_scheduled(
+            rules,
+            Schedule::new(vec![
+                Layer::new(vec![vec![0], vec![1]], Vec::new()),
+                Layer::new(Vec::new(), vec![vec![2, 3], vec![4]]),
+            ]),
+        )
+        .expect("compiles");
+        let evaluation = evaluate_scheduled(
+            &program,
+            store(&[
+                ("high", "seed", &surface("x")),
+                ("low", "seed", &surface("x")),
+            ]),
+            &Guards::default(),
+            &mut Hooks,
+            &EvalOptions::default(),
+            None,
+        )
+        .expect("evaluates");
+        for (predicate, expected_source, height) in
+            [("confirmed", "low", 2), ("ordinary", "high", 3)]
+        {
+            let proof = evaluation
+                .derivations()
+                .iter()
+                .find(|proof| proof.fact().predicate == surface(predicate))
+                .expect("proof recorded");
+            assert_eq!(proof.sources()[0].subject, surface(expected_source));
+            assert_eq!(proof.proof_height(), height);
+        }
     }
 
     /// A malformed schedule is a typed refusal, and every rule must be scheduled once.

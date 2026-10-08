@@ -2861,15 +2861,22 @@ impl Candidate {
     /// numeric prefix decides almost every real collision, and the allocating tail runs
     /// only on an exact numeric tie.
     fn preferred_over(&self, other: &Self, rel: &RelationStore) -> bool {
-        match (self.proof_height, self.sum_source_height)
-            .cmp(&(other.proof_height, other.sum_source_height))
-        {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-        source_preference(&self.sources, self.rule, &other.sources, other.rule, rel).is_lt()
+        witness_preference(
+            (self.proof_height, self.sum_source_height),
+            (other.proof_height, other.sum_source_height),
+            || source_preference(&self.sources, self.rule, &other.sources, other.rule, rel),
+        )
+        .is_lt()
     }
+}
+
+/// The canonical numeric prefix, resolving the lexical tail only on a tie.
+fn witness_preference(
+    mine: (u32, u64),
+    theirs: (u32, u64),
+    lexical: impl FnOnce() -> std::cmp::Ordering,
+) -> std::cmp::Ordering {
+    mine.cmp(&theirs).then_with(lexical)
 }
 
 /// The lexical tail of the canonical witness law, shared with projected frontiers.
@@ -2882,11 +2889,61 @@ fn source_preference(
 ) -> std::cmp::Ordering {
     let mine: Vec<_> = mine.iter().map(|source| source.fact(rel)).collect();
     let theirs: Vec<_> = theirs.iter().map(|source| source.fact(rel)).collect();
-    let mut mine_sorted = mine.clone();
+    fact_preference(&mine, my_rule, &theirs, their_rule)
+}
+
+/// The lexical tail over owned surfaces, also valid after a store rebuild.
+fn fact_preference(
+    mine: &[Fact],
+    my_rule: usize,
+    theirs: &[Fact],
+    their_rule: usize,
+) -> std::cmp::Ordering {
+    let mut mine_sorted = mine.to_vec();
     mine_sorted.sort();
-    let mut theirs_sorted = theirs.clone();
+    let mut theirs_sorted = theirs.to_vec();
     theirs_sorted.sort();
     (mine_sorted, my_rule, mine).cmp(&(theirs_sorted, their_rule, theirs))
+}
+
+/// An assumed fact's best proof, retaining the otherwise unobservable sum needed
+/// across schedule groups. Owned facts survive the layer's retraction/rebuild.
+#[derive(Debug, Clone)]
+pub(crate) struct Confirmation {
+    derivation: Derivation,
+    sum_source_height: u64,
+}
+
+impl Confirmation {
+    /// The confirmed fact, independent of store row identities.
+    pub(crate) fn fact(&self) -> &Fact {
+        self.derivation.fact()
+    }
+
+    /// Keep the canonical proof across rounds and scheduled groups.
+    pub(crate) fn merge(&mut self, other: Self) {
+        if witness_preference(
+            (other.derivation.proof_height, other.sum_source_height),
+            (self.derivation.proof_height, self.sum_source_height),
+            || {
+                fact_preference(
+                    &other.derivation.sources,
+                    other.derivation.rule,
+                    &self.derivation.sources,
+                    self.derivation.rule,
+                )
+            },
+        )
+        .is_lt()
+        {
+            *self = other;
+        }
+    }
+
+    /// Commit only public provenance, after every group has competed.
+    pub(crate) fn into_derivation(self) -> Derivation {
+        self.derivation
+    }
 }
 
 /// Raw maximum and saturated sum of a witness's source heights.
@@ -2916,7 +2973,7 @@ pub(crate) struct RoundBuffer<'r> {
     /// Rows already in the store that the snapshot marks as ASSUMED and a rule of this
     /// round derived again, each with the derivation that did — see
     /// [`RoundSnapshot::assumed`].
-    confirmed: Vec<(RowId, Derivation)>,
+    confirmed: BTreeMap<RowId, Confirmation>,
 }
 
 impl<'r> RoundBuffer<'r> {
@@ -2927,7 +2984,7 @@ impl<'r> RoundBuffer<'r> {
             join_steps: 0,
             generates_terms: false,
             generating_rules: BTreeSet::new(),
-            confirmed: Vec::new(),
+            confirmed: BTreeMap::new(),
         }
     }
 
@@ -2937,8 +2994,8 @@ impl<'r> RoundBuffer<'r> {
     }
 
     /// The assumed rows a rule of the round derived again, with the derivations.
-    pub(crate) fn confirmed(&self) -> &[(RowId, Derivation)] {
-        &self.confirmed
+    pub(crate) fn confirmed(&self) -> impl Iterator<Item = &Confirmation> {
+        self.confirmed.values()
     }
 
     /// Insert or quality-merge one candidate.
@@ -2962,7 +3019,14 @@ impl<'r> RoundBuffer<'r> {
     /// Fold a completed rule-local buffer in at the scheduling-erasing serial boundary.
     fn merge_from(&mut self, other: Self, rel: &RelationStore) {
         self.join_steps = self.join_steps.saturating_add(other.join_steps);
-        self.confirmed.extend(other.confirmed);
+        for (row, proof) in other.confirmed {
+            match self.confirmed.get_mut(&row) {
+                Some(existing) => existing.merge(proof),
+                None => {
+                    self.confirmed.insert(row, proof);
+                }
+            }
+        }
         for (key, candidate) in other.entries {
             self.insert(key, candidate, rel);
         }
@@ -3167,9 +3231,8 @@ fn emit_solution<'r>(
     if let Some(row) = present_row(&key, rel) {
         if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
             let [subject, predicate, object, graph] = key.terms().map(|term| term.surface(rel));
-            buffer.confirmed.push((
-                row,
-                Derivation {
+            let confirmation = Confirmation {
+                derivation: Derivation {
                     fact: Fact {
                         subject,
                         predicate,
@@ -3180,7 +3243,14 @@ fn emit_solution<'r>(
                     sources: solution.sources.iter().map(|s| s.fact(rel)).collect(),
                     proof_height: proof_height.saturating_add(1),
                 },
-            ));
+                sum_source_height,
+            };
+            match buffer.confirmed.get_mut(&row) {
+                Some(existing) => existing.merge(confirmation),
+                None => {
+                    buffer.confirmed.insert(row, confirmation);
+                }
+            }
         }
         return;
     }
