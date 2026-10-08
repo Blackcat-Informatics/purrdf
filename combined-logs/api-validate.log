@@ -1,0 +1,13 @@
+     Cloning 2aa091423dab31a39bf2415abaec9d5c07b311e5
+    Building purrdf-validate v3.0.1 (current)
+       Built [   6.667s] (current)
+     Parsing purrdf-validate v3.0.1 (current)
+      Parsed [   0.007s] (current)
+    Building purrdf-validate v3.0.1 (baseline)
+       Built [   7.091s] (baseline)
+     Parsing purrdf-validate v3.0.1 (baseline)
+      Parsed [   0.007s] (baseline)
+    Checking purrdf-validate v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.011s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [  14.545s] purrdf-validate

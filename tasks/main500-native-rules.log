@@ -1,0 +1,12 @@
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/datalog)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 37.77s
+     Running tests/native_xpath.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-shapes/89a1d570c0d1f1f9/out/native_xpath-89a1d570c0d1f1f9)
+
+running 3 tests
+test global_rules_preserve_native_laws_and_reached_operational_refusals ... ok
+test rules_entailment_constructs_under_the_selected_law_and_aborts_on_refusal ... ok
+test a_rules_resource_refusal_aborts_and_the_neighbour_runs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.05s
+

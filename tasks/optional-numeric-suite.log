@@ -1,0 +1,17 @@
+    Finished `test` profile [optimized] target(s) in 0.14s
+     Running tests/numeric_parallel_determinism.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/df5f81a9e67474db/out/numeric_parallel_determinism-df5f81a9e67474db)
+
+running 10 tests
+test inclusive_fuel_boundary_keeps_full_values_and_all_dimensions ... ok
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+test a_scratch_ceiling_trips_at_one_row ... ok
+test per_group_counts_trip_at_one_group ... ok
+test a_filter_over_exact_values_trips_at_one_row ... ok
+test an_optional_filter_over_exact_values_trips_at_one_row ... ok
+test a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip ... ok
+test per_group_statistical_aggregates_over_exact_values_trip_at_one_group ... ok
+test per_group_sums_over_exact_values_trip_at_one_group ... ok
+test a_projection_over_exact_values_trips_at_one_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s
+

@@ -1,0 +1,528 @@
+conformance (python)	UNKNOWN STEP	﻿2026-10-07T03:17:57.3798426Z Current runner version: '2.337.0'
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3816577Z ##[group]Runner Image Provisioner
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3817185Z Hosted Compute Agent
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3817531Z Version: 20260901.588
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3817961Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3818393Z Build Date: 2026-09-01T19:56:44Z
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3818788Z Worker ID: {19d04394-c26a-460f-851e-9ce5c3d20d4b}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3819233Z Azure Region: centralus
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3819580Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3820405Z ##[group]Operating System
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3820773Z Ubuntu
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3821085Z 24.04.5
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3821440Z LTS
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3821748Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3822220Z ##[group]Runner Image
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3822622Z Image: ubuntu-24.04
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3822959Z Version: 20260927.320.1
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3823730Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3824615Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3825208Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3825856Z ##[group]GITHUB_TOKEN Permissions
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3827050Z Contents: read
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3827421Z Metadata: read
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3827826Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3829107Z Secret source: Actions
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3829663Z Cache mode: write
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.3830086Z Prepare workflow directory
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.4046973Z Prepare all required actions
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.4093116Z Getting action download info
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.7160210Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.7869564Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:57.9804137Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:58.8143234Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3157067Z Complete job name: conformance (python)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3894389Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3895445Z with:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3895986Z   persist-credentials: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3896685Z   repository: Blackcat-Informatics/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3902434Z   token: ***
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3902978Z   ssh-strict: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3903533Z   ssh-user: git
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3904096Z   clean: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3904666Z   sparse-checkout-cone-mode: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3905353Z   fetch-depth: 1
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3905898Z   fetch-tags: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3906459Z   show-progress: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3907066Z   lfs: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3907911Z   submodules: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3908844Z   set-safe-directory: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3909785Z   allow-unsafe-pr-checkout: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.3910854Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4738776Z Syncing repository: Blackcat-Informatics/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4740715Z ##[group]Getting Git version info
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4741529Z Working directory is '/home/runner/work/purrdf/purrdf'
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4742931Z [command]/usr/bin/git version
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4933059Z git version 2.55.0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4948115Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4957013Z Temporarily overriding HOME='/home/runner/work/_temp/e48d3997-a7b1-4c27-acea-07480078dab4' before making global git config changes
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4959458Z Adding repository directory to the temporary git global config as a safe directory
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.4961456Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5096679Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5100347Z ##[group]Determining repository object format
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5102473Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5103980Z ##[group]Initializing the repository
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5109517Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5510295Z hint: Using 'master' as the name for the initial branch. This default branch name
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5511646Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5513277Z hint: to use in all of your new repositories, which will suppress this warning,
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5514217Z hint: call:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5514722Z hint:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5515379Z hint: 	git config --global init.defaultBranch <name>
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5516156Z hint:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5516885Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5518158Z hint: 'development'. The just-created branch can be renamed via this command:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5519109Z hint:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5519636Z hint: 	git branch -m <name>
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5520218Z hint:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5521007Z hint: Disable this message with "git config set advice.defaultBranchName false"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5522716Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5524868Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5642950Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5643978Z ##[group]Disabling automatic garbage collection
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.5645064Z [command]/usr/bin/git config --local gc.auto 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6206517Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6208015Z ##[group]Setting up auth
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6209006Z Removing SSH command configuration
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6212449Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6244115Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6536257Z Removing HTTP extra header
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6540517Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6567684Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6739421Z Removing includeIf entries pointing to credentials config files
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6743093Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6767969Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.6944173Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.7404664Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.8245391Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.8869615Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.9031157Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.9168910Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.9169799Z ##[group]Fetching the repository
+conformance (python)	UNKNOWN STEP	2026-10-07T03:17:59.9174846Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9198fa8786754dc2fa26e6af52e5271fb897ecaa:refs/remotes/pull/448/merge
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8024344Z From https://github.com/Blackcat-Informatics/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8024841Z  * [new ref]           9198fa8786754dc2fa26e6af52e5271fb897ecaa -> pull/448/merge
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8027178Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8027477Z ##[group]Determining the checkout info
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8027919Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8031677Z [command]/usr/bin/git sparse-checkout disable
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8076345Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8098871Z ##[group]Checking out the ref
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:03.8101150Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/448/merge
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7785768Z Note: switching to 'refs/remotes/pull/448/merge'.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7786474Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7786875Z You are in 'detached HEAD' state. You can look around, make experimental
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7789499Z changes and commit them, and you can discard any commits you make in this
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7790097Z state without impacting any branches by switching back to a branch.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7790348Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7790578Z If you want to create a new branch to retain commits you create, you may
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7790873Z do so (now or later) by using -c with the switch command. Example:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791019Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791094Z   git switch -c <new-branch-name>
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791208Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791288Z Or undo this operation with:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791385Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791438Z   git switch -
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791523Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791653Z Turn off this advice by setting config variable advice.detachedHead to false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7791828Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7792026Z HEAD is now at 9198fa87 Merge 9e9e67c80d832175bdafb8e938d7abae00486f8b into dfc0c21adabe557e5d11f027aaf2576bddbe1dd6
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7824504Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7859387Z [command]/usr/bin/git log -1 --format=%H
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7881056Z 9198fa8786754dc2fa26e6af52e5271fb897ecaa
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7894078Z ##[group]Removing auth
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7894663Z Removing SSH command configuration
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7895113Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.7923111Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8119368Z Removing HTTP extra header
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8122403Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8148906Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8336058Z Removing includeIf entries pointing to credentials config files
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8338475Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8360904Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8361317Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8361624Z includeif.gitdir:/github/workspace/.git.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8361849Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8367146Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8385697Z /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8396625Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8421804Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8438524Z /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8447169Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8471594Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8487881Z /github/runner_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8493249Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8519480Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8538054Z /github/runner_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8545877Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8700411Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8881099Z Removing credentials config '/home/runner/work/_temp/git-credentials-11652fcd-9fc2-4eaa-b33e-068a55464d13.config'
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.8888938Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9145982Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9146208Z with:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9146321Z   toolchain: nightly
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9146445Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9204948Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9236534Z ##[group]Run : parse toolchain version
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9236755Z ^[[36;1m: parse toolchain version^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9236913Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9237215Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9237522Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9237685Z ^[[36;1m  exit 1^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9237874Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9238148Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9238445Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9238721Z ^[[36;1m  else^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9238954Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9239197Z ^[[36;1m  fi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9239363Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9239653Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9239900Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9240182Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9240443Z ^[[36;1melse^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9240583Z ^[[36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9240743Z ^[[36;1mfi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9471251Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9471448Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9471727Z   toolchain: nightly
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9471853Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9583558Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=37]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9601951Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9623572Z ##[group]Run : construct rustup command line
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9623766Z ^[[36;1m: construct rustup command line^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9624019Z ^[[36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9624359Z ^[[36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9624629Z ^[[36;1mecho "downgrade=" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9673548Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9673733Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9673840Z   targets: 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9673947Z   components: 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9674066Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9749805Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=14]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9752374Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9770635Z ##[group]Run : set $CARGO_HOME
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9770796Z ^[[36;1m: set $CARGO_HOME^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9770979Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9815742Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:04.9815926Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0451307Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=69]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0453580Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0936537Z ##[group]Run : install rustup if needed
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0936826Z ^[[36;1m: install rustup if needed^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0937105Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0937732Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0938343Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0938591Z ^[[36;1mfi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0991127Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0991312Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0991431Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.0991574Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1060109Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=60]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1063695Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1089714Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1092067Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1333933Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1334259Z ^[[36;1mrustup toolchain install nightly --profile minimal --no-self-update^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1382674Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1382893Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1383014Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1383163Z   RUSTUP_PERMIT_COPY_RENAME: 1
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1383299Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.1860787Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.8183785Z info: latest update on 2026-10-07 for version 1.101.0-nightly (8d1a76430 2026-10-06)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:05.8184188Z info: downloading 3 components
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2776918Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2832561Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2833241Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2904233Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=7181]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2908966Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2925483Z ##[group]Run rustup default nightly
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2925694Z ^[[36;1mrustup default nightly^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2975914Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2976099Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2976218Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.2976357Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3070087Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3075589Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3075825Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3128228Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3128561Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3128995Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3143621Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=23]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3147437Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3162429Z ##[group]Run : create cachekey
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3162616Z ^[[36;1m: create cachekey^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3162905Z ^[[36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3163421Z ^[[36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3163697Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3213484Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3213673Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3213792Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3213936Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3473953Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=32]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3476005Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3491820Z ##[group]Run : disable incremental compilation
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3492041Z ^[[36;1m: disable incremental compilation^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3492413Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3492601Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3492760Z ^[[36;1mfi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3543825Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3544014Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3544134Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3544278Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3611711Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=13]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3613378Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3627988Z ##[group]Run : enable colors in Cargo output
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3628184Z ^[[36;1m: enable colors in Cargo output^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3628359Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3628551Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3628713Z ^[[36;1mfi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3675201Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3675383Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3675500Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3675658Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3675782Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3736164Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=12]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3739296Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3753836Z ##[group]Run : enable Cargo sparse registry
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3754028Z ^[[36;1m: enable Cargo sparse registry^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3754227Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3754612Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3755007Z ^[[36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3755318Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3755616Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3755892Z ^[[36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3756200Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3756486Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3756676Z ^[[36;1m  fi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3756782Z ^[[36;1mfi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3800232Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3800415Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3800532Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3800675Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3800801Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.3800931Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4039886Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=29]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4043501Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4058630Z ##[group]Run : work around spurious network errors in curl 8.0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4058884Z ^[[36;1m: work around spurious network errors in curl 8.0^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4059202Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4059561Z ^[[36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4059815Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4059986Z ^[[36;1mfi^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4106916Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4107100Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4107217Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4107363Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4107487Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4107615Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4256827Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=21]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4259335Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4274283Z ##[group]Run rustc +nightly --version --verbose
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4274490Z ^[[36;1mrustc +nightly --version --verbose^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4320332Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4320518Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4320637Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4320781Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4320909Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4321040Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4458914Z rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4459372Z binary: rustc
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4459724Z commit-hash: 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4460096Z commit-date: 2026-10-06
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4460380Z host: x86_64-unknown-linux-gnu
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4460623Z release: 1.101.0-nightly
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4461101Z LLVM version: 23.1.3
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4473231Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=21]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4561296Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4561506Z with:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4561625Z   shared-key: workspace-test
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4561762Z   save-if: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4561878Z   prefix-key: v0-rust
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562000Z   add-job-id-key: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562298Z   add-rust-environment-hash-key: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562449Z   cache-targets: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562571Z   cache-all-crates: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562708Z   cache-workspace-crates: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562848Z   cache-provider: github
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4562971Z   cache-bin: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563083Z   lookup-only: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563203Z   cmd-format: {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563310Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563427Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563566Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563689Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.4563824Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.6354367Z (node:2278) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:12.6355282Z (Use `node --trace-deprecation ...` to show where the warning was created)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4178996Z ##[group]Cache Configuration
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4179276Z Cache Provider:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4179455Z     github
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4179633Z Workspaces:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4179824Z     /home/runner/work/purrdf/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4180056Z Cache Paths:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4180240Z     /home/runner/.cargo/bin
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4180460Z     /home/runner/.cargo/.crates.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4180705Z     /home/runner/.cargo/.crates2.json
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4180946Z     /home/runner/.cargo/registry
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4181165Z     /home/runner/.cargo/git
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4181391Z     /home/runner/work/purrdf/purrdf/target
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4181640Z Restore Key:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4181903Z     v0-rust-workspace-test-Linux-x64-300f5e68
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4182331Z Cache Key:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4182554Z     v0-rust-workspace-test-Linux-x64-300f5e68-78fb4371
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4182824Z .. Prefix:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4183019Z   - v0-rust-workspace-test-Linux-x64
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4183265Z .. Environment considered:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4183467Z   - Rust Versions:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4183678Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4184347Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4185960Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4186316Z   - CARGO_HOME
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4186525Z   - CARGO_INCREMENTAL
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4186709Z   - CARGO_TERM_COLOR
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4186832Z .. Lockfiles considered:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4187109Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4187541Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4187898Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4188251Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4188633Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4189058Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4189360Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4189676Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4190007Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4190330Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4190653Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4190970Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4191765Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4192367Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4192685Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4193017Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4193372Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4193723Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4194068Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4194384Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4194721Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4195073Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4195425Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4195753Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4196144Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4196470Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4196793Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4197161Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4197563Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4197903Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4198250Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4198632Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4198948Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4199251Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4199601Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4200015Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4200426Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4200809Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4201180Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4201531Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4201866Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4202323Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4202678Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4203019Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4203313Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4203855Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4203958Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.4204033Z ... Restoring cache ...
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:17.5559059Z Cache hit for restore-key: v0-rust-workspace-test-Linux-x64-300f5e68-35c91432
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.4229012Z Received 36526528 of 36526528 (100.0%), 49.5 MBs/sec
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.4229286Z Cache Size: ~35 MB (36526528 B)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.4246173Z [command]/usr/bin/tar -xf /home/runner/work/_temp/ae5fd51a-0e34-4f43-b64f-1d69c841db1e/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.5670909Z Cache restored successfully
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.5689029Z Restored from cache key "v0-rust-workspace-test-Linux-x64-300f5e68-35c91432" full match: false.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6648763Z ##[group]Run curl -LsSf https://astral.sh/uv/install.sh | sh
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6649045Z ^[[36;1mcurl -LsSf https://astral.sh/uv/install.sh | sh^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6649240Z ^[[36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6699414Z shell: /usr/bin/bash -e {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6699553Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6699810Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6699953Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6700081Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6700210Z   CACHE_ON_FAILURE: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.6700333Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:18.8434382Z downloading uv 0.12.23 x86_64-unknown-linux-gnu
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4298148Z installing to /home/runner/.local/bin
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4342938Z   uv
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4357488Z   uvx
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4385728Z everything's installed!
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4812611Z ##[group]Run make conformance CONFORMANCE_ARGS="--shard $SHARD --emit-results target/conformance-results/$SHARD.json"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4813320Z ^[[36;1mmake conformance CONFORMANCE_ARGS="--shard $SHARD --emit-results target/conformance-results/$SHARD.json"^[[0m
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4867293Z shell: /usr/bin/bash -e {0}
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4867437Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4867562Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4867711Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4867862Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4867997Z   CACHE_ON_FAILURE: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4868125Z   SHARD: python
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.4868245Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:18:19.6639624Z python3 scripts/conformance-matrix.py --shard python --emit-results target/conformance-results/python.json
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6231352Z conformance-matrix: shard `python` (2 of 31 suites)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6231619Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6231715Z PurRDF conformance matrix
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6232009Z ====================================================================================================================
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6233230Z   SUITE                    SOURCE                                               PASS  XF/SKIP  BUDGET   FAIL  STATUS
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6233536Z --------------------------------------------------------------------------------------------------------------------
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6233877Z   rdflib LSP drop-in gate  rdflib 7.6 own tests                                   81        5       5      0  GREEN
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6234250Z   Python binding suite     first-party (incl. compat differential vs rdflib)    4164        4       4      0  GREEN
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6234605Z --------------------------------------------------------------------------------------------------------------------
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6234891Z   TOTAL                                                                         4245        9       9      0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6235035Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6235087Z Notes:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6235538Z   - rdflib LSP drop-in gate: 81 pass · 5 strict-xfail (ledgered)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6235807Z   - Python binding suite: 4164 pass · 4 strict-xfail (ledgered)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6235949Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6237739Z VERDICT: GREEN — all conformance suites pass or are ledgered
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6237959Z 
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6238216Z wrote the shard's rows to target/conformance-results/python.json; `--from-results` judges the whole matrix
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6350059Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6350287Z with:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6350424Z   name: conformance-results-python
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6350601Z   path: target/conformance-results/python.json
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6350776Z   if-no-files-found: error
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6350918Z   compression-level: 6
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351048Z   overwrite: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351178Z   include-hidden-files: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351321Z   archive: true
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351436Z env:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351555Z   CARGO_HOME: /home/runner/.cargo
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351702Z   CARGO_INCREMENTAL: 0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351832Z   CARGO_TERM_COLOR: always
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6351965Z   CACHE_ON_FAILURE: false
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.6352238Z ##[endgroup]
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.7263720Z With the provided path, there will be 1 file uploaded
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.7266699Z Artifact name is valid!
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:39.7267115Z Root directory input is valid!
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.0069204Z Uploading artifact: conformance-results-python.zip
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.0097648Z Beginning upload of artifact content to blob storage
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.1730923Z Uploaded bytes 2704
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.2088067Z Finished uploading artifact content to blob storage!
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.2088591Z SHA256 digest of uploaded artifact is f95267bc061d03e34e11541a544718062f63e2829bf7e14773f1127b7b6a45c8
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.2089051Z Finalizing artifact upload
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.5169989Z Artifact conformance-results-python successfully finalized. Artifact ID 11458084704
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.5170781Z Artifact conformance-results-python has been successfully uploaded! Final size is 2704 bytes. Artifact ID is 11458084704
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.5173263Z Artifact download URL: https://github.com/Blackcat-Informatics/purrdf/actions/runs/37566090234/artifacts/11458084704
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.5307183Z Post job cleanup.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7041507Z (node:3578) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7042362Z (Use `node --trace-deprecation ...` to show where the warning was created)
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7193642Z Post job cleanup.
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7750454Z [command]/usr/bin/git version
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7778877Z git version 2.55.0
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7800969Z Temporarily overriding HOME='/home/runner/work/_temp/347469dc-3fde-4194-91f4-72667dea5eaa' before making global git config changes
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7801661Z Adding repository directory to the temporary git global config as a safe directory
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7805043Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7828264Z Removing SSH command configuration
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7832391Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.7856956Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8042051Z Removing HTTP extra header
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8045049Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8068147Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8243183Z Removing includeIf entries pointing to credentials config files
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8246842Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8269660Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+conformance (python)	UNKNOWN STEP	2026-10-07T03:24:40.8600310Z Cleaning up orphan processes

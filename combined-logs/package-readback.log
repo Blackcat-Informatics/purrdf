@@ -1,0 +1,3 @@
+crates/rdf-wasm/js/pkg/purrdf_wasm_bg.wasm: OK
+crates/rdf-wasm/js/pkg/purrdf_wasm.js: OK
+crates/rdf-wasm/js/package.json: OK

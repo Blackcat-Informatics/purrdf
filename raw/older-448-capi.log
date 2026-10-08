@@ -1,0 +1,1323 @@
+capi	UNKNOWN STEP	﻿2026-10-07T03:17:57.4250371Z Current runner version: '2.337.0'
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4283767Z ##[group]Runner Image Provisioner
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4285335Z Hosted Compute Agent
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4286421Z Version: 20260901.588
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4287498Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4288859Z Build Date: 2026-09-01T19:56:44Z
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4290030Z Worker ID: {3be07746-0f5f-44d8-9bf7-4b7d3d469453}
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4291234Z Azure Region: eastus
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4292254Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4295271Z ##[group]Operating System
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4296279Z Ubuntu
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4297251Z 24.04.5
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4298096Z LTS
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4299086Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4299974Z ##[group]Runner Image
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4300978Z Image: ubuntu-24.04
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4302032Z Version: 20260927.320.1
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4304199Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4307197Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4308966Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4310821Z ##[group]GITHUB_TOKEN Permissions
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4313748Z Contents: read
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4314661Z Metadata: read
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4316013Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4318983Z Secret source: Actions
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4320571Z Cache mode: write
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4322149Z Prepare workflow directory
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4788884Z Prepare all required actions
+capi	UNKNOWN STEP	2026-10-07T03:17:57.4859426Z Getting action download info
+capi	UNKNOWN STEP	2026-10-07T03:17:57.7114654Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+capi	UNKNOWN STEP	2026-10-07T03:17:57.8160941Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+capi	UNKNOWN STEP	2026-10-07T03:17:58.0285578Z Complete job name: capi
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1050705Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1051796Z with:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1052260Z   persist-credentials: false
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1052845Z   repository: Blackcat-Informatics/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1057420Z   token: ***
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1057892Z   ssh-strict: true
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1058360Z   ssh-user: git
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1058800Z   clean: true
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1059269Z   sparse-checkout-cone-mode: true
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1059812Z   fetch-depth: 1
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1060259Z   fetch-tags: false
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1060726Z   show-progress: true
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1061194Z   lfs: false
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1061620Z   submodules: false
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1062084Z   set-safe-directory: true
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1062631Z   allow-unsafe-pr-checkout: false
+capi	UNKNOWN STEP	2026-10-07T03:17:58.1063526Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2052612Z Syncing repository: Blackcat-Informatics/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2054495Z ##[group]Getting Git version info
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2055596Z Working directory is '/home/runner/work/purrdf/purrdf'
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2056728Z [command]/usr/bin/git version
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2155076Z git version 2.55.0
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2175708Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2185989Z Temporarily overriding HOME='/home/runner/work/_temp/5b4cdbe4-7bc8-403a-9a29-9b602c588af9' before making global git config changes
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2187481Z Adding repository directory to the temporary git global config as a safe directory
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2191131Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2237534Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2241705Z ##[group]Determining repository object format
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2243410Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2244984Z ##[group]Initializing the repository
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2248400Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2378327Z hint: Using 'master' as the name for the initial branch. This default branch name
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2379795Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2380871Z hint: to use in all of your new repositories, which will suppress this warning,
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2382258Z hint: call:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2383093Z hint:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2384076Z hint: 	git config --global init.defaultBranch <name>
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2385533Z hint:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2386670Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2388446Z hint: 'development'. The just-created branch can be renamed via this command:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2389793Z hint:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2390547Z hint: 	git branch -m <name>
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2391394Z hint:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2392586Z hint: Disable this message with "git config set advice.defaultBranchName false"
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2394502Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2397659Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2446550Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2448469Z ##[group]Disabling automatic garbage collection
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2450208Z [command]/usr/bin/git config --local gc.auto 0
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2479879Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2481321Z ##[group]Setting up auth
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2481911Z Removing SSH command configuration
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2485735Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2515799Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2879860Z Removing HTTP extra header
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2885528Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+capi	UNKNOWN STEP	2026-10-07T03:17:58.2918406Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3127412Z Removing includeIf entries pointing to credentials config files
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3131682Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3160159Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3373074Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3405865Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3434463Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3468285Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3497657Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3523317Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3524102Z ##[group]Fetching the repository
+capi	UNKNOWN STEP	2026-10-07T03:17:58.3529385Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9198fa8786754dc2fa26e6af52e5271fb897ecaa:refs/remotes/pull/448/merge
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1462846Z From https://github.com/Blackcat-Informatics/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1465429Z  * [new ref]           9198fa8786754dc2fa26e6af52e5271fb897ecaa -> pull/448/merge
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1469413Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1471075Z ##[group]Determining the checkout info
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1472962Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1478620Z [command]/usr/bin/git sparse-checkout disable
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1529091Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1558662Z ##[group]Checking out the ref
+capi	UNKNOWN STEP	2026-10-07T03:18:02.1560918Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/448/merge
+capi	UNKNOWN STEP	2026-10-07T03:18:03.1887426Z Updating files:  62% (11252/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2140201Z Updating files:  63% (11390/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2219309Z Updating files:  64% (11570/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2288458Z Updating files:  65% (11751/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2362675Z Updating files:  66% (11932/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2438857Z Updating files:  67% (12113/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2504920Z Updating files:  68% (12294/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2568797Z Updating files:  69% (12474/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2628634Z Updating files:  70% (12655/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2697190Z Updating files:  71% (12836/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2759943Z Updating files:  72% (13017/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2829565Z Updating files:  73% (13197/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2894120Z Updating files:  74% (13378/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.2958388Z Updating files:  75% (13559/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3023475Z Updating files:  76% (13740/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3089014Z Updating files:  77% (13921/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3165150Z Updating files:  78% (14101/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3229720Z Updating files:  79% (14282/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3292912Z Updating files:  80% (14463/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3355382Z Updating files:  81% (14644/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3417939Z Updating files:  82% (14824/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3509302Z Updating files:  83% (15005/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3573638Z Updating files:  84% (15186/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3639094Z Updating files:  85% (15367/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3705990Z Updating files:  86% (15548/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3771053Z Updating files:  87% (15728/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3836633Z Updating files:  88% (15909/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.3929382Z Updating files:  89% (16090/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4000211Z Updating files:  90% (16271/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4068256Z Updating files:  91% (16451/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4137404Z Updating files:  92% (16632/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4206886Z Updating files:  93% (16813/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4274989Z Updating files:  94% (16994/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4346113Z Updating files:  95% (17175/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4418153Z Updating files:  96% (17355/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4491503Z Updating files:  97% (17536/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4566437Z Updating files:  98% (17717/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4637865Z Updating files:  99% (17898/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4638530Z Updating files: 100% (18078/18078)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4639040Z Updating files: 100% (18078/18078), done.
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4810782Z Note: switching to 'refs/remotes/pull/448/merge'.
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4811192Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4811488Z You are in 'detached HEAD' state. You can look around, make experimental
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4812143Z changes and commit them, and you can discard any commits you make in this
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4812778Z state without impacting any branches by switching back to a branch.
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4813150Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4813411Z If you want to create a new branch to retain commits you create, you may
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4814007Z do so (now or later) by using -c with the switch command. Example:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4814347Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4814503Z   git switch -c <new-branch-name>
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4814960Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4815120Z Or undo this operation with:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4815340Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4815481Z   git switch -
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4815649Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4815967Z Turn off this advice by setting config variable advice.detachedHead to false
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4816621Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4817102Z HEAD is now at 9198fa87 Merge 9e9e67c80d832175bdafb8e938d7abae00486f8b into dfc0c21adabe557e5d11f027aaf2576bddbe1dd6
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4843091Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4892083Z [command]/usr/bin/git log -1 --format=%H
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4920324Z 9198fa8786754dc2fa26e6af52e5271fb897ecaa
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4929607Z ##[group]Removing auth
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4933523Z Removing SSH command configuration
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4934067Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+capi	UNKNOWN STEP	2026-10-07T03:18:03.4964241Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5194919Z Removing HTTP extra header
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5268214Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5271667Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5465875Z Removing includeIf entries pointing to credentials config files
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5470106Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5497444Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5498030Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5498525Z includeif.gitdir:/github/workspace/.git.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5498953Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5506328Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5528008Z /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5537463Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5576505Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5596653Z /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5606508Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5647574Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5663056Z /github/runner_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5675974Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5708530Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5729783Z /github/runner_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5743203Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5768043Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+capi	UNKNOWN STEP	2026-10-07T03:18:03.5994387Z Removing credentials config '/home/runner/work/_temp/git-credentials-4c9ab54b-1c40-449c-8102-692cb2b1578d.config'
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6003913Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6330694Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6331370Z with:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6331612Z   toolchain: nightly
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6331871Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6427449Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6476339Z ##[group]Run : parse toolchain version
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6476779Z ^[[36;1m: parse toolchain version^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6477117Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6477695Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6478308Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6478660Z ^[[36;1m  exit 1^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6479045Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6479564Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6480152Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6480724Z ^[[36;1m  else^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6481167Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6481671Z ^[[36;1m  fi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6482016Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6482601Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6483116Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6483689Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6484249Z ^[[36;1melse^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6484551Z ^[[36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6485067Z ^[[36;1mfi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6780086Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6780584Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6780864Z   toolchain: nightly
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6781176Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6911203Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=48]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6935646Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6966690Z ##[group]Run : construct rustup command line
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6967079Z ^[[36;1m: construct rustup command line^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6967581Z ^[[36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6968287Z ^[[36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.6968834Z ^[[36;1mecho "downgrade=" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7024269Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7024979Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7025244Z   targets: 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7025478Z   components: 
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7025729Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7116554Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=18]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7120478Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7149613Z ##[group]Run : set $CARGO_HOME
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7149935Z ^[[36;1m: set $CARGO_HOME^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7150308Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7205836Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7206247Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7290668Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=16]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7293444Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7329945Z ##[group]Run : install rustup if needed
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7330307Z ^[[36;1m: install rustup if needed^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7330652Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7331466Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7332262Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7332586Z ^[[36;1mfi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7387734Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7388133Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7388380Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7388674Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7471346Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=17]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7476103Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7482881Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7487320Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7517416Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7518036Z ^[[36;1mrustup toolchain install nightly --profile minimal --no-self-update^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7572919Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7573317Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7573568Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7573886Z   RUSTUP_PERMIT_COPY_RENAME: 1
+capi	UNKNOWN STEP	2026-10-07T03:18:03.7574173Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:03.8136588Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+capi	UNKNOWN STEP	2026-10-07T03:18:03.9351820Z info: latest update on 2026-10-07 for version 1.101.0-nightly (8d1a76430 2026-10-06)
+capi	UNKNOWN STEP	2026-10-07T03:18:03.9352653Z info: downloading 3 components
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5218912Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5285046Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5285930Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5350394Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=7786]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5358664Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5463399Z ##[group]Run rustup default nightly
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5463722Z ^[[36;1mrustup default nightly^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5528140Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5528544Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5528761Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5529022Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5652406Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5659372Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5659715Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5723081Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5723841Z 
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5724577Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5740734Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=38]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5746464Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5779728Z ##[group]Run : create cachekey
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5780018Z ^[[36;1m: create cachekey^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5780534Z ^[[36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5781478Z ^[[36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5782021Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5845623Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5845995Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5846209Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.5846478Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6172335Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=42]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6175711Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6208774Z ##[group]Run : disable incremental compilation
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6209143Z ^[[36;1m: disable incremental compilation^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6209477Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6209828Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6210141Z ^[[36;1mfi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6279393Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6279762Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6279968Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6280221Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6375549Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=19]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6377853Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6409511Z ##[group]Run : enable colors in Cargo output
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6409855Z ^[[36;1m: enable colors in Cargo output^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6410172Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6410520Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6410812Z ^[[36;1mfi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6476636Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6477000Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6477212Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6477492Z   CARGO_INCREMENTAL: 0
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6477712Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6568632Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=19]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6573729Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6606355Z ##[group]Run : enable Cargo sparse registry
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6606697Z ^[[36;1m: enable Cargo sparse registry^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6607073Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6607780Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6608519Z ^[[36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6609132Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6609690Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6610205Z ^[[36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6610808Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6611337Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6611687Z ^[[36;1m  fi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6611881Z ^[[36;1mfi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6674095Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6674441Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6674647Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6675050Z   CARGO_INCREMENTAL: 0
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6675273Z   CARGO_TERM_COLOR: always
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6675500Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6981737Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=40]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.6987098Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7020710Z ##[group]Run : work around spurious network errors in curl 8.0
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7021153Z ^[[36;1m: work around spurious network errors in curl 8.0^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7021728Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7022362Z ^[[36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7022833Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7023153Z ^[[36;1mfi^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7092216Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7092567Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7092777Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7093048Z   CARGO_INCREMENTAL: 0
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7093274Z   CARGO_TERM_COLOR: always
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7093502Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7291937Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=30]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7296519Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7388325Z ##[group]Run rustc +nightly --version --verbose
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7388696Z ^[[36;1mrustc +nightly --version --verbose^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7456025Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7456393Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7456607Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7456882Z   CARGO_INCREMENTAL: 0
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7457119Z   CARGO_TERM_COLOR: always
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7457361Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7638865Z rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7639494Z binary: rustc
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7639956Z commit-hash: 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7640512Z commit-date: 2026-10-06
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7640949Z host: x86_64-unknown-linux-gnu
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7641409Z release: 1.101.0-nightly
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7641956Z LLVM version: 23.1.3
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7657526Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=36]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7729968Z ##[group]Run cargo install cargo-c --version 0.10.23 --locked
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7730434Z ^[[36;1mcargo install cargo-c --version 0.10.23 --locked^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7795529Z shell: /usr/bin/bash -e {0}
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7795799Z env:
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7796009Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7796284Z   CARGO_INCREMENTAL: 0
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7796521Z   CARGO_TERM_COLOR: always
+capi	UNKNOWN STEP	2026-10-07T03:18:11.7796757Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:18:11.8420257Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+capi	UNKNOWN STEP	2026-10-07T03:18:11.9599264Z info: latest update on 2026-10-07 for version 1.101.0-nightly (8d1a76430 2026-10-06)
+capi	UNKNOWN STEP	2026-10-07T03:18:11.9723517Z info: downloading 4 components
+capi	UNKNOWN STEP	2026-10-07T03:18:16.0835092Z ^[[1m^[[92m    Updating^[[0m crates.io index
+capi	UNKNOWN STEP	2026-10-07T03:18:16.1286492Z ^[[1m^[[92m Downloading^[[0m crates ...
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3079025Z ^[[1m^[[92m  Downloaded^[[0m cargo-c v0.10.23+cargo-0.97.1
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3368263Z ^[[1m^[[92m  Installing^[[0m cargo-c v0.10.23+cargo-0.97.1
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3369069Z ^[[1m^[[33mwarning^[[0m: default toolchain implicitly overridden with `nightly-x86_64-unknown-linux-gnu` by rustup toolchain file
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3369669Z   ^[[1m^[[94m|^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3370102Z   ^[[1m^[[94m= ^[[0m^[[1mhelp^[[0m: use `cargo +stable install` if you meant to use the stable toolchain
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3370968Z   ^[[1m^[[94m= ^[[0m^[[1mnote^[[0m: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+capi	UNKNOWN STEP	2026-10-07T03:18:16.3457968Z ^[[1m^[[92m    Updating^[[0m crates.io index
+capi	UNKNOWN STEP	2026-10-07T03:18:17.3396322Z ^[[1m^[[33mwarning^[[0m: package `chacha20 v0.10.0` in Cargo.lock is yanked in registry `crates-io`
+capi	UNKNOWN STEP	2026-10-07T03:18:17.3655580Z ^[[1m^[[92m    Updating^[[0m crates.io index
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5130834Z ^[[1m^[[92m Downloading^[[0m crates ...
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5368568Z ^[[1m^[[92m  Downloaded^[[0m anstyle-hyperlink v1.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5403758Z ^[[1m^[[92m  Downloaded^[[0m anstyle-query v1.1.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5420752Z ^[[1m^[[92m  Downloaded^[[0m cfg-if v1.0.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5438696Z ^[[1m^[[92m  Downloaded^[[0m anstyle v1.0.14
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5464526Z ^[[1m^[[92m  Downloaded^[[0m anstream v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5487961Z ^[[1m^[[92m  Downloaded^[[0m base16ct v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5503936Z ^[[1m^[[92m  Downloaded^[[0m futures-sink v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5512441Z ^[[1m^[[92m  Downloaded^[[0m arrayvec v0.7.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5540592Z ^[[1m^[[92m  Downloaded^[[0m async-trait v0.1.89
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5592183Z ^[[1m^[[92m  Downloaded^[[0m autocfg v1.5.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5619051Z ^[[1m^[[92m  Downloaded^[[0m bitmaps v2.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5635983Z ^[[1m^[[92m  Downloaded^[[0m cargo-util-schemas v0.14.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5666981Z ^[[1m^[[92m  Downloaded^[[0m annotate-snippets v0.12.16
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5706816Z ^[[1m^[[92m  Downloaded^[[0m camino v1.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5734200Z ^[[1m^[[92m  Downloaded^[[0m allocator-api2 v0.2.21
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5763372Z ^[[1m^[[92m  Downloaded^[[0m arrayref v0.3.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5777711Z ^[[1m^[[92m  Downloaded^[[0m cargo-credential v0.4.10
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5793794Z ^[[1m^[[92m  Downloaded^[[0m cargo-util v0.2.29
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5812169Z ^[[1m^[[92m  Downloaded^[[0m cfg_aliases v0.2.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5823091Z ^[[1m^[[92m  Downloaded^[[0m base64ct v1.8.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5854072Z ^[[1m^[[92m  Downloaded^[[0m block-buffer v0.10.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5866323Z ^[[1m^[[92m  Downloaded^[[0m cargo-util-terminal v0.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5878854Z ^[[1m^[[92m  Downloaded^[[0m cc v1.2.63
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5911881Z ^[[1m^[[92m  Downloaded^[[0m gix-trace v0.1.20
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5926608Z ^[[1m^[[92m  Downloaded^[[0m ar_archive_writer v0.5.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5966955Z ^[[1m^[[92m  Downloaded^[[0m chacha20 v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.5995151Z ^[[1m^[[92m  Downloaded^[[0m generic-array v0.14.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6011805Z ^[[1m^[[92m  Downloaded^[[0m getrandom v0.2.17
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6048263Z ^[[1m^[[92m  Downloaded^[[0m gix-utils v0.3.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6063932Z ^[[1m^[[92m  Downloaded^[[0m getrandom v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6109514Z ^[[1m^[[92m  Downloaded^[[0m bitflags v2.11.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6153788Z ^[[1m^[[92m  Downloaded^[[0m block-buffer v0.12.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6167552Z ^[[1m^[[92m  Downloaded^[[0m equivalent v1.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6177582Z ^[[1m^[[92m  Downloaded^[[0m bytes v1.11.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6221183Z ^[[1m^[[92m  Downloaded^[[0m arc-swap v1.9.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6264460Z ^[[1m^[[92m  Downloaded^[[0m constant_time_eq v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6285988Z ^[[1m^[[92m  Downloaded^[[0m digest v0.10.7
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6304683Z ^[[1m^[[92m  Downloaded^[[0m cmov v0.5.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6327067Z ^[[1m^[[92m  Downloaded^[[0m cpufeatures v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6345497Z ^[[1m^[[92m  Downloaded^[[0m crypto-common v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6360135Z ^[[1m^[[92m  Downloaded^[[0m displaydoc v0.2.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6384935Z ^[[1m^[[92m  Downloaded^[[0m ff v0.13.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6401343Z ^[[1m^[[92m  Downloaded^[[0m http-auth v0.1.10
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6423749Z ^[[1m^[[92m  Downloaded^[[0m aho-corasick v1.1.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6479722Z ^[[1m^[[92m  Downloaded^[[0m crypto-common v0.1.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6488490Z ^[[1m^[[92m  Downloaded^[[0m ctutils v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6507560Z ^[[1m^[[92m  Downloaded^[[0m digest v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6535452Z ^[[1m^[[92m  Downloaded^[[0m ed25519-compact v2.3.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6558961Z ^[[1m^[[92m  Downloaded^[[0m fallible-iterator v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6577544Z ^[[1m^[[92m  Downloaded^[[0m futures-channel v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6604482Z ^[[1m^[[92m  Downloaded^[[0m color-print v0.3.7
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6645679Z ^[[1m^[[92m  Downloaded^[[0m crypto-bigint v0.5.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6716671Z ^[[1m^[[92m  Downloaded^[[0m futures-io v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6726168Z ^[[1m^[[92m  Downloaded^[[0m futures-util v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.6906158Z ^[[1m^[[92m  Downloaded^[[0m gix v0.81.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7178137Z ^[[1m^[[92m  Downloaded^[[0m fallible-streaming-iterator v0.1.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7191691Z ^[[1m^[[92m  Downloaded^[[0m form_urlencoded v1.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7205706Z ^[[1m^[[92m  Downloaded^[[0m gix-merge v0.14.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7394488Z ^[[1m^[[92m  Downloaded^[[0m pkcs8 v0.10.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7422847Z ^[[1m^[[92m  Downloaded^[[0m cargo-credential-libsecret v0.5.7
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7431752Z ^[[1m^[[92m  Downloaded^[[0m errno v0.3.14
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7446911Z ^[[1m^[[92m  Downloaded^[[0m cargo-platform v0.3.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7458701Z ^[[1m^[[92m  Downloaded^[[0m gix-worktree v0.50.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7473790Z ^[[1m^[[92m  Downloaded^[[0m clap v4.6.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7567172Z ^[[1m^[[92m  Downloaded^[[0m ct-codecs v1.1.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7577752Z ^[[1m^[[92m  Downloaded^[[0m futures-core v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7590637Z ^[[1m^[[92m  Downloaded^[[0m gix-features v0.46.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7614594Z ^[[1m^[[92m  Downloaded^[[0m unicode-bom v2.0.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7627146Z ^[[1m^[[92m  Downloaded^[[0m deranged v0.5.8
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7640616Z ^[[1m^[[92m  Downloaded^[[0m icu_collections v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7701377Z ^[[1m^[[92m  Downloaded^[[0m log v0.4.30
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7725738Z ^[[1m^[[92m  Downloaded^[[0m clap_lex v1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7736408Z ^[[1m^[[92m  Downloaded^[[0m colorchoice v1.0.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7745725Z ^[[1m^[[92m  Downloaded^[[0m crc32fast v1.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7763511Z ^[[1m^[[92m  Downloaded^[[0m filetime v0.2.29
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7779499Z ^[[1m^[[92m  Downloaded^[[0m futures-executor v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7792890Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-channel v0.5.15
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7832350Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-deque v0.8.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7845151Z ^[[1m^[[92m  Downloaded^[[0m ecdsa v0.16.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7861700Z ^[[1m^[[92m  Downloaded^[[0m color-print-proc-macro v0.3.7
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7878205Z ^[[1m^[[92m  Downloaded^[[0m matchers v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7888486Z ^[[1m^[[92m  Downloaded^[[0m anstyle-parse v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7903656Z ^[[1m^[[92m  Downloaded^[[0m cpufeatures v0.2.17
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7916939Z ^[[1m^[[92m  Downloaded^[[0m dashmap v6.2.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7941320Z ^[[1m^[[92m  Downloaded^[[0m either v1.16.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7954761Z ^[[1m^[[92m  Downloaded^[[0m fastrand v2.4.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7968519Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-utils v0.8.21
+capi	UNKNOWN STEP	2026-10-07T03:18:17.7994096Z ^[[1m^[[92m  Downloaded^[[0m crates-io v0.40.19
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8002543Z ^[[1m^[[92m  Downloaded^[[0m foldhash v0.1.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8014283Z ^[[1m^[[92m  Downloaded^[[0m futures-task v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8025865Z ^[[1m^[[92m  Downloaded^[[0m terminal_size v0.4.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8038471Z ^[[1m^[[92m  Downloaded^[[0m faster-hex v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8052731Z ^[[1m^[[92m  Downloaded^[[0m anyhow v1.0.102
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8091763Z ^[[1m^[[92m  Downloaded^[[0m base64 v0.22.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8128471Z ^[[1m^[[92m  Downloaded^[[0m byteorder v1.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8143410Z ^[[1m^[[92m  Downloaded^[[0m clap_derive v4.6.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8164462Z ^[[1m^[[92m  Downloaded^[[0m gix-fs v0.19.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8180010Z ^[[1m^[[92m  Downloaded^[[0m gix-protocol v0.59.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8210554Z ^[[1m^[[92m  Downloaded^[[0m gix-ignore v0.19.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8220944Z ^[[1m^[[92m  Downloaded^[[0m gix-traverse v0.55.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8238109Z ^[[1m^[[92m  Downloaded^[[0m anstyle-progress v0.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8248957Z ^[[1m^[[92m  Downloaded^[[0m fnv v1.0.7
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8257393Z ^[[1m^[[92m  Downloaded^[[0m yoke-derive v0.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8268536Z ^[[1m^[[92m  Downloaded^[[0m futures v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8316860Z ^[[1m^[[92m  Downloaded^[[0m toml_datetime v1.1.1+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8328892Z ^[[1m^[[92m  Downloaded^[[0m foldhash v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8340700Z ^[[1m^[[92m  Downloaded^[[0m pin-project-lite v0.2.17
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8398833Z ^[[1m^[[92m  Downloaded^[[0m serde_ignored v0.1.14
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8410978Z ^[[1m^[[92m  Downloaded^[[0m tinyvec_macros v0.1.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8418852Z ^[[1m^[[92m  Downloaded^[[0m gix-dir v0.23.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8445158Z ^[[1m^[[92m  Downloaded^[[0m itoa v1.0.18
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8458930Z ^[[1m^[[92m  Downloaded^[[0m gix-config-value v0.17.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8471337Z ^[[1m^[[92m  Downloaded^[[0m toml_datetime v0.7.5+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8483486Z ^[[1m^[[92m  Downloaded^[[0m unicase v2.9.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8497086Z ^[[1m^[[92m  Downloaded^[[0m const-oid v0.9.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8514878Z ^[[1m^[[92m  Downloaded^[[0m erased-serde v0.4.10
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8538578Z ^[[1m^[[92m  Downloaded^[[0m gix-ref v0.61.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8582099Z ^[[1m^[[92m  Downloaded^[[0m time-macros v0.2.27
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8603879Z ^[[1m^[[92m  Downloaded^[[0m const-oid v0.10.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8627057Z ^[[1m^[[92m  Downloaded^[[0m lazy_static v1.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8643829Z ^[[1m^[[92m  Downloaded^[[0m find-msvc-tools v0.1.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8659240Z ^[[1m^[[92m  Downloaded^[[0m gix-filter v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8684111Z ^[[1m^[[92m  Downloaded^[[0m rustfix v0.9.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8697565Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-epoch v0.9.18
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8720717Z ^[[1m^[[92m  Downloaded^[[0m der v0.7.10
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8772060Z ^[[1m^[[92m  Downloaded^[[0m futures-timer v3.0.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8791295Z ^[[1m^[[92m  Downloaded^[[0m gix-chunk v0.7.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8802400Z ^[[1m^[[92m  Downloaded^[[0m gix-command v0.8.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8811771Z ^[[1m^[[92m  Downloaded^[[0m gix-bitmap v0.3.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8820955Z ^[[1m^[[92m  Downloaded^[[0m group v0.13.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8835864Z ^[[1m^[[92m  Downloaded^[[0m icu_normalizer_data v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8856084Z ^[[1m^[[92m  Downloaded^[[0m signature v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8869732Z ^[[1m^[[92m  Downloaded^[[0m gix-diff v0.61.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8897186Z ^[[1m^[[92m  Downloaded^[[0m rustc-stable-hash v0.1.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8912281Z ^[[1m^[[92m  Downloaded^[[0m sha2 v0.10.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8936885Z ^[[1m^[[92m  Downloaded^[[0m curl v0.4.49
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8977324Z ^[[1m^[[92m  Downloaded^[[0m gix-credentials v0.37.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.8993537Z ^[[1m^[[92m  Downloaded^[[0m gix-status v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9012017Z ^[[1m^[[92m  Downloaded^[[0m quote v1.0.45
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9038343Z ^[[1m^[[92m  Downloaded^[[0m smallvec v1.15.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9058567Z ^[[1m^[[92m  Downloaded^[[0m sha1 v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9075335Z ^[[1m^[[92m  Downloaded^[[0m clap_complete v4.6.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9103759Z ^[[1m^[[92m  Downloaded^[[0m thiserror v2.0.18
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9171398Z ^[[1m^[[92m  Downloaded^[[0m gix-error v0.2.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9187529Z ^[[1m^[[92m  Downloaded^[[0m gix-lock v21.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9198931Z ^[[1m^[[92m  Downloaded^[[0m gix-negotiate v0.29.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9209884Z ^[[1m^[[92m  Downloaded^[[0m heck v0.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9222741Z ^[[1m^[[92m  Downloaded^[[0m io-close v0.3.7
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9232845Z ^[[1m^[[92m  Downloaded^[[0m is_terminal_polyfill v1.70.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9242143Z ^[[1m^[[92m  Downloaded^[[0m jobserver v0.1.34
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9261921Z ^[[1m^[[92m  Downloaded^[[0m toml_parser v1.1.2+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9284692Z ^[[1m^[[92m  Downloaded^[[0m typeid v1.0.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9296636Z ^[[1m^[[92m  Downloaded^[[0m utf8_iter v1.0.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9306408Z ^[[1m^[[92m  Downloaded^[[0m yoke v0.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9323721Z ^[[1m^[[92m  Downloaded^[[0m hash32 v0.3.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9337774Z ^[[1m^[[92m  Downloaded^[[0m icu_properties_data v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9443122Z ^[[1m^[[92m  Downloaded^[[0m maybe-async v0.2.11
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9470108Z ^[[1m^[[92m  Downloaded^[[0m openssl-probe v0.1.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9480744Z ^[[1m^[[92m  Downloaded^[[0m gix-glob v0.24.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9493492Z ^[[1m^[[92m  Downloaded^[[0m gix-url v0.35.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9506269Z ^[[1m^[[92m  Downloaded^[[0m gix-prompt v0.14.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9517165Z ^[[1m^[[92m  Downloaded^[[0m gix-revision v0.43.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9534434Z ^[[1m^[[92m  Downloaded^[[0m heapless v0.8.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9571348Z ^[[1m^[[92m  Downloaded^[[0m git2-curl v0.21.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9580314Z ^[[1m^[[92m  Downloaded^[[0m slab v0.4.12
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9592506Z ^[[1m^[[92m  Downloaded^[[0m toml_writer v1.1.1+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9605971Z ^[[1m^[[92m  Downloaded^[[0m blake3 v1.8.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9682783Z ^[[1m^[[92m  Downloaded^[[0m kstring v2.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9698774Z ^[[1m^[[92m  Downloaded^[[0m sha1 v0.10.6
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9714014Z ^[[1m^[[92m  Downloaded^[[0m socket2 v0.6.4
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9731542Z ^[[1m^[[92m  Downloaded^[[0m unicode-ident v1.0.24
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9758732Z ^[[1m^[[92m  Downloaded^[[0m stable_deref_trait v1.2.1
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9766990Z ^[[1m^[[92m  Downloaded^[[0m supports-unicode v3.0.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9777409Z ^[[1m^[[92m  Downloaded^[[0m sized-chunks v0.6.5
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9802593Z ^[[1m^[[92m  Downloaded^[[0m tracing-attributes v0.1.31
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9828207Z ^[[1m^[[92m  Downloaded^[[0m clru v0.6.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9840277Z ^[[1m^[[92m  Downloaded^[[0m pathdiff v0.2.3
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9849353Z ^[[1m^[[92m  Downloaded^[[0m time-core v0.1.8
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9860332Z ^[[1m^[[92m  Downloaded^[[0m toml v1.1.2+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9899703Z ^[[1m^[[92m  Downloaded^[[0m flate2 v1.1.9
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9947732Z ^[[1m^[[92m  Downloaded^[[0m jiff-static v0.2.28
+capi	UNKNOWN STEP	2026-10-07T03:18:17.9972571Z ^[[1m^[[92m  Downloaded^[[0m elliptic-curve v0.13.8
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0009817Z ^[[1m^[[92m  Downloaded^[[0m utf8parse v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0019217Z ^[[1m^[[92m  Downloaded^[[0m os_info v3.15.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0050813Z ^[[1m^[[92m  Downloaded^[[0m rand_core v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0066261Z ^[[1m^[[92m  Downloaded^[[0m serde-untagged v0.1.9
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0081910Z ^[[1m^[[92m  Downloaded^[[0m serde_spanned v1.1.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0093049Z ^[[1m^[[92m  Downloaded^[[0m opener v0.8.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0107614Z ^[[1m^[[92m  Downloaded^[[0m tinystr v0.8.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0127463Z ^[[1m^[[92m  Downloaded^[[0m semver v1.0.28
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0149973Z ^[[1m^[[92m  Downloaded^[[0m memchr v2.8.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0203147Z ^[[1m^[[92m  Downloaded^[[0m shlex v2.0.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0215608Z ^[[1m^[[92m  Downloaded^[[0m sha2 v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0251831Z ^[[1m^[[92m  Downloaded^[[0m tracing-log v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0264593Z ^[[1m^[[92m  Downloaded^[[0m libloading v0.9.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0288495Z ^[[1m^[[92m  Downloaded^[[0m same-file v1.0.6
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0301522Z ^[[1m^[[92m  Downloaded^[[0m rand v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0337886Z ^[[1m^[[92m  Downloaded^[[0m version_check v0.9.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0349813Z ^[[1m^[[92m  Downloaded^[[0m memoffset v0.9.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0361613Z ^[[1m^[[92m  Downloaded^[[0m potential_utf v0.1.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0371972Z ^[[1m^[[92m  Downloaded^[[0m gix-hashtable v0.13.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0381119Z ^[[1m^[[92m  Downloaded^[[0m gix-index v0.49.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0416875Z ^[[1m^[[92m  Downloaded^[[0m litemap v0.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0439095Z ^[[1m^[[92m  Downloaded^[[0m serde_core v1.0.228
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0465243Z ^[[1m^[[92m  Downloaded^[[0m tracing-core v0.1.36
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0490919Z ^[[1m^[[92m  Downloaded^[[0m zerovec-derive v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0505085Z ^[[1m^[[92m  Downloaded^[[0m typenum v1.20.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0539607Z ^[[1m^[[92m  Downloaded^[[0m unicode-normalization v0.1.25
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0572524Z ^[[1m^[[92m  Downloaded^[[0m scopeguard v1.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0583958Z ^[[1m^[[92m  Downloaded^[[0m subtle v2.6.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0595098Z ^[[1m^[[92m  Downloaded^[[0m zerofrom v0.1.8
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0604223Z ^[[1m^[[92m  Downloaded^[[0m idna_adapter v1.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0612963Z ^[[1m^[[92m  Downloaded^[[0m nonempty v0.12.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0624210Z ^[[1m^[[92m  Downloaded^[[0m num-conv v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0632631Z ^[[1m^[[92m  Downloaded^[[0m shell-escape v0.1.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0641697Z ^[[1m^[[92m  Downloaded^[[0m shell-words v1.1.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0650802Z ^[[1m^[[92m  Downloaded^[[0m supports-hyperlinks v3.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0661387Z ^[[1m^[[92m  Downloaded^[[0m tinyvec v1.11.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0686349Z ^[[1m^[[92m  Downloaded^[[0m toml v0.9.12+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0725762Z ^[[1m^[[92m  Downloaded^[[0m bstr v1.12.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0801427Z ^[[1m^[[92m  Downloaded^[[0m gix-archive v0.30.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0812043Z ^[[1m^[[92m  Downloaded^[[0m gix-date v0.15.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0827647Z ^[[1m^[[92m  Downloaded^[[0m sharded-slab v0.1.7
+capi	UNKNOWN STEP	2026-10-07T03:18:18.0859994Z ^[[1m^[[92m  Downloaded^[[0m cbindgen v0.29.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1780749Z ^[[1m^[[92m  Downloaded^[[0m url v2.5.8
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1805345Z ^[[1m^[[92m  Downloaded^[[0m rfc6979 v0.4.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1815408Z ^[[1m^[[92m  Downloaded^[[0m rustversion v1.0.22
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1842560Z ^[[1m^[[92m  Downloaded^[[0m nu-ansi-term v0.50.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1865748Z ^[[1m^[[92m  Downloaded^[[0m rand_core v0.6.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1879068Z ^[[1m^[[92m  Downloaded^[[0m sec1 v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1894489Z ^[[1m^[[92m  Downloaded^[[0m writeable v0.6.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1913838Z ^[[1m^[[92m  Downloaded^[[0m parking_lot_core v0.9.12
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1934615Z ^[[1m^[[92m  Downloaded^[[0m serde v1.0.228
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1968234Z ^[[1m^[[92m  Downloaded^[[0m tempfile v3.27.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.1992682Z ^[[1m^[[92m  Downloaded^[[0m clap_builder v4.6.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2054486Z ^[[1m^[[92m  Downloaded^[[0m minimal-lexical v0.2.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2099939Z ^[[1m^[[92m  Downloaded^[[0m pasetors v0.7.8
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2151015Z ^[[1m^[[92m  Downloaded^[[0m proc-macro2 v1.0.106
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2179548Z ^[[1m^[[92m  Downloaded^[[0m openssl-sys v0.9.116
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2233652Z ^[[1m^[[92m  Downloaded^[[0m zerotrie v0.2.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2271777Z ^[[1m^[[92m  Downloaded^[[0m rusqlite v0.39.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2336630Z ^[[1m^[[92m  Downloaded^[[0m regex v1.12.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2387743Z ^[[1m^[[92m  Downloaded^[[0m nom v7.1.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2437418Z ^[[1m^[[92m  Downloaded^[[0m zerovec v0.11.6
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2496192Z ^[[1m^[[92m  Downloaded^[[0m p384 v0.13.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2539264Z ^[[1m^[[92m  Downloaded^[[0m tracing-subscriber v0.3.23
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2619437Z ^[[1m^[[92m  Downloaded^[[0m serde_json v1.0.150
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2690299Z ^[[1m^[[92m  Downloaded^[[0m gix-attributes v0.31.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2706272Z ^[[1m^[[92m  Downloaded^[[0m hmac v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2725204Z ^[[1m^[[92m  Downloaded^[[0m syn v2.0.117
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2827568Z ^[[1m^[[92m  Downloaded^[[0m winnow v0.7.15
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2921703Z ^[[1m^[[92m  Downloaded^[[0m zlib-rs v0.6.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.2978727Z ^[[1m^[[92m  Downloaded^[[0m unicode-width v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.3041237Z ^[[1m^[[92m  Downloaded^[[0m vcpkg v0.2.15
+capi	UNKNOWN STEP	2026-10-07T03:18:18.3579429Z ^[[1m^[[92m  Downloaded^[[0m winnow v1.0.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.3673601Z ^[[1m^[[92m  Downloaded^[[0m orion v0.17.14
+capi	UNKNOWN STEP	2026-10-07T03:18:18.3767418Z ^[[1m^[[92m  Downloaded^[[0m time v0.3.47
+capi	UNKNOWN STEP	2026-10-07T03:18:18.3893793Z ^[[1m^[[92m  Downloaded^[[0m is_executable v1.0.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.3907216Z ^[[1m^[[92m  Downloaded^[[0m fiat-crypto v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4011818Z ^[[1m^[[92m  Downloaded^[[0m object v0.39.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4122103Z ^[[1m^[[92m  Downloaded^[[0m object v0.37.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4230509Z ^[[1m^[[92m  Downloaded^[[0m home v0.5.12
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4240964Z ^[[1m^[[92m  Downloaded^[[0m ordered-float v2.10.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4254000Z ^[[1m^[[92m  Downloaded^[[0m gix-actor v0.40.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4265985Z ^[[1m^[[92m  Downloaded^[[0m gix-validate v0.11.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4277824Z ^[[1m^[[92m  Downloaded^[[0m nix v0.31.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4391839Z ^[[1m^[[92m  Downloaded^[[0m rustix v1.1.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4658079Z ^[[1m^[[92m  Downloaded^[[0m gix-sec v0.13.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4669702Z ^[[1m^[[92m  Downloaded^[[0m powerfmt v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4680862Z ^[[1m^[[92m  Downloaded^[[0m rustc-hash v2.1.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4693464Z ^[[1m^[[92m  Downloaded^[[0m gix-quote v0.7.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4702769Z ^[[1m^[[92m  Downloaded^[[0m gix-shallow v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4712320Z ^[[1m^[[92m  Downloaded^[[0m regex-syntax v0.8.10
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4777525Z ^[[1m^[[92m  Downloaded^[[0m tracing-chrome v0.7.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4790610Z ^[[1m^[[92m  Downloaded^[[0m zerofrom-derive v0.1.7
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4800716Z ^[[1m^[[92m  Downloaded^[[0m hex v0.4.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4816073Z ^[[1m^[[92m  Downloaded^[[0m tracing v0.1.44
+capi	UNKNOWN STEP	2026-10-07T03:18:18.4967531Z ^[[1m^[[92m  Downloaded^[[0m gix-config v0.54.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5010746Z ^[[1m^[[92m  Downloaded^[[0m gix-revwalk v0.29.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5022069Z ^[[1m^[[92m  Downloaded^[[0m implib v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5037927Z ^[[1m^[[92m  Downloaded^[[0m static_assertions v1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5051574Z ^[[1m^[[92m  Downloaded^[[0m strsim v0.11.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5063995Z ^[[1m^[[92m  Downloaded^[[0m percent-encoding v2.3.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5072358Z ^[[1m^[[92m  Downloaded^[[0m serde-value v0.7.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5082115Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.16.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5131632Z ^[[1m^[[92m  Downloaded^[[0m hashlink v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5148954Z ^[[1m^[[92m  Downloaded^[[0m hybrid-array v0.4.12
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5170278Z ^[[1m^[[92m  Downloaded^[[0m lock_api v0.4.14
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5182542Z ^[[1m^[[92m  Downloaded^[[0m rand_xoshiro v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5201646Z ^[[1m^[[92m  Downloaded^[[0m zeroize v1.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5214231Z ^[[1m^[[92m  Downloaded^[[0m gix-tempfile v21.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5227372Z ^[[1m^[[92m  Downloaded^[[0m gix-worktree-state v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5240561Z ^[[1m^[[92m  Downloaded^[[0m globset v0.4.18
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5254784Z ^[[1m^[[92m  Downloaded^[[0m shlex v1.3.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5267297Z ^[[1m^[[92m  Downloaded^[[0m thiserror-impl v2.0.18
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5281253Z ^[[1m^[[92m  Downloaded^[[0m thread_local v1.1.9
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5296099Z ^[[1m^[[92m  Downloaded^[[0m regex-automata v0.4.14
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5433136Z ^[[1m^[[92m  Downloaded^[[0m libssh2-sys v0.3.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5773064Z ^[[1m^[[92m  Downloaded^[[0m pkg-config v0.3.33
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5788053Z ^[[1m^[[92m  Downloaded^[[0m walkdir v2.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5806243Z ^[[1m^[[92m  Downloaded^[[0m gix-discover v0.49.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5821455Z ^[[1m^[[92m  Downloaded^[[0m gix-hash v0.23.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5835591Z ^[[1m^[[92m  Downloaded^[[0m gix-pathspec v0.16.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.5849882Z ^[[1m^[[92m  Downloaded^[[0m jiff v0.2.28
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6015004Z ^[[1m^[[92m  Downloaded^[[0m sha1-checked v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6072640Z ^[[1m^[[92m  Downloaded^[[0m gix-refspec v0.39.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6089165Z ^[[1m^[[92m  Downloaded^[[0m glob v0.3.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6103697Z ^[[1m^[[92m  Downloaded^[[0m gix-commitgraph v0.35.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6119060Z ^[[1m^[[92m  Downloaded^[[0m gix-worktree-stream v0.30.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6131828Z ^[[1m^[[92m  Downloaded^[[0m synstructure v0.13.2
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6142028Z ^[[1m^[[92m  Downloaded^[[0m zmij v1.0.21
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6159846Z ^[[1m^[[92m  Downloaded^[[0m gix-path v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6177746Z ^[[1m^[[92m  Downloaded^[[0m gix-packetline v0.21.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6195970Z ^[[1m^[[92m  Downloaded^[[0m libz-sys v1.1.29
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6424015Z ^[[1m^[[92m  Downloaded^[[0m pem-rfc7468 v0.7.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6443480Z ^[[1m^[[92m  Downloaded^[[0m primeorder v0.13.6
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6455991Z ^[[1m^[[92m  Downloaded^[[0m gix-submodule v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6467723Z ^[[1m^[[92m  Downloaded^[[0m gix-object v0.58.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6499090Z ^[[1m^[[92m  Downloaded^[[0m hmac v0.13.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6520152Z ^[[1m^[[92m  Downloaded^[[0m icu_provider v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6545887Z ^[[1m^[[92m  Downloaded^[[0m memmap2 v0.9.10
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6562277Z ^[[1m^[[92m  Downloaded^[[0m num-traits v0.2.19
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6587862Z ^[[1m^[[92m  Downloaded^[[0m once_cell v1.21.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6612586Z ^[[1m^[[92m  Downloaded^[[0m serde_derive v1.0.228
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6643198Z ^[[1m^[[92m  Downloaded^[[0m spki v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6661454Z ^[[1m^[[92m  Downloaded^[[0m toml_edit v0.25.12+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6699745Z ^[[1m^[[92m  Downloaded^[[0m gix-odb v0.78.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6731727Z ^[[1m^[[92m  Downloaded^[[0m icu_locale_core v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6800887Z ^[[1m^[[92m  Downloaded^[[0m icu_properties v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6823524Z ^[[1m^[[92m  Downloaded^[[0m parking_lot v0.12.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6847843Z ^[[1m^[[92m  Downloaded^[[0m gix-transport v0.55.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6883659Z ^[[1m^[[92m  Downloaded^[[0m tar v0.4.46
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6912185Z ^[[1m^[[92m  Downloaded^[[0m ignore v0.4.25
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6933576Z ^[[1m^[[92m  Downloaded^[[0m icu_normalizer v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6969452Z ^[[1m^[[92m  Downloaded^[[0m gix-blame v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.6996480Z ^[[1m^[[92m  Downloaded^[[0m gix-pack v0.68.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7061147Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.17.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7112774Z ^[[1m^[[92m  Downloaded^[[0m prodash v31.0.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7151457Z ^[[1m^[[92m  Downloaded^[[0m imara-diff v0.1.8
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7191034Z ^[[1m^[[92m  Downloaded^[[0m http v1.4.1
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7226965Z ^[[1m^[[92m  Downloaded^[[0m indexmap v2.14.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7268498Z ^[[1m^[[92m  Downloaded^[[0m encoding_rs v0.8.35
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7463465Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.14.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7511948Z ^[[1m^[[92m  Downloaded^[[0m idna v1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7545905Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.15.5
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7594144Z ^[[1m^[[92m  Downloaded^[[0m hkdf v0.12.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7617215Z ^[[1m^[[92m  Downloaded^[[0m itertools v0.14.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7685778Z ^[[1m^[[92m  Downloaded^[[0m git2 v0.20.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7766836Z ^[[1m^[[92m  Downloaded^[[0m im-rc v15.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7821947Z ^[[1m^[[92m  Downloaded^[[0m imara-diff v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.7864100Z ^[[1m^[[92m  Downloaded^[[0m curl-sys v0.4.88+curl-8.20.0
+capi	UNKNOWN STEP	2026-10-07T03:18:18.8486615Z ^[[1m^[[92m  Downloaded^[[0m libgit2-sys v0.18.5+1.9.4
+capi	UNKNOWN STEP	2026-10-07T03:18:18.9091157Z ^[[1m^[[92m  Downloaded^[[0m libc v0.2.186
+capi	UNKNOWN STEP	2026-10-07T03:18:18.9499457Z ^[[1m^[[92m  Downloaded^[[0m libnghttp2-sys v0.1.13+1.68.1
+capi	UNKNOWN STEP	2026-10-07T03:18:19.0682343Z ^[[1m^[[92m  Downloaded^[[0m cargo v0.97.1
+capi	UNKNOWN STEP	2026-10-07T03:18:19.2216733Z ^[[1m^[[92m  Downloaded^[[0m linux-raw-sys v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:18:19.2926645Z ^[[1m^[[92m  Downloaded^[[0m libsqlite3-sys v0.37.0
+capi	UNKNOWN STEP	2026-10-07T03:18:19.4672732Z ^[[1m^[[92m   Compiling^[[0m proc-macro2 v1.0.106
+capi	UNKNOWN STEP	2026-10-07T03:18:19.4673329Z ^[[1m^[[92m   Compiling^[[0m quote v1.0.45
+capi	UNKNOWN STEP	2026-10-07T03:18:19.4673757Z ^[[1m^[[92m   Compiling^[[0m unicode-ident v1.0.24
+capi	UNKNOWN STEP	2026-10-07T03:18:19.4674174Z ^[[1m^[[92m   Compiling^[[0m libc v0.2.186
+capi	UNKNOWN STEP	2026-10-07T03:18:19.5276254Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+capi	UNKNOWN STEP	2026-10-07T03:18:19.5629416Z ^[[1m^[[92m   Compiling^[[0m memchr v2.8.1
+capi	UNKNOWN STEP	2026-10-07T03:18:19.6266878Z ^[[1m^[[92m   Compiling^[[0m regex-syntax v0.8.10
+capi	UNKNOWN STEP	2026-10-07T03:18:20.3716431Z ^[[1m^[[92m   Compiling^[[0m syn v2.0.117
+capi	UNKNOWN STEP	2026-10-07T03:18:20.7577137Z ^[[1m^[[92m   Compiling^[[0m aho-corasick v1.1.4
+capi	UNKNOWN STEP	2026-10-07T03:18:21.3047254Z ^[[1m^[[92m   Compiling^[[0m typenum v1.20.1
+capi	UNKNOWN STEP	2026-10-07T03:18:22.7916456Z ^[[1m^[[92m   Compiling^[[0m regex-automata v0.4.14
+capi	UNKNOWN STEP	2026-10-07T03:18:25.6196234Z ^[[1m^[[92m   Compiling^[[0m serde_core v1.0.228
+capi	UNKNOWN STEP	2026-10-07T03:18:27.3027509Z ^[[1m^[[92m   Compiling^[[0m bstr v1.12.1
+capi	UNKNOWN STEP	2026-10-07T03:18:28.0506144Z ^[[1m^[[92m   Compiling^[[0m smallvec v1.15.1
+capi	UNKNOWN STEP	2026-10-07T03:18:28.2526371Z ^[[1m^[[92m   Compiling^[[0m version_check v0.9.5
+capi	UNKNOWN STEP	2026-10-07T03:18:28.4376748Z ^[[1m^[[92m   Compiling^[[0m thiserror v2.0.18
+capi	UNKNOWN STEP	2026-10-07T03:18:28.4496508Z ^[[1m^[[92m   Compiling^[[0m thiserror-impl v2.0.18
+capi	UNKNOWN STEP	2026-10-07T03:18:28.6366065Z ^[[1m^[[92m   Compiling^[[0m zeroize v1.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:28.7576162Z ^[[1m^[[92m   Compiling^[[0m stable_deref_trait v1.2.1
+capi	UNKNOWN STEP	2026-10-07T03:18:28.7996721Z ^[[1m^[[92m   Compiling^[[0m generic-array v0.14.9
+capi	UNKNOWN STEP	2026-10-07T03:18:28.8716242Z ^[[1m^[[92m   Compiling^[[0m once_cell v1.21.4
+capi	UNKNOWN STEP	2026-10-07T03:18:28.9243913Z ^[[1m^[[92m   Compiling^[[0m subtle v2.6.1
+capi	UNKNOWN STEP	2026-10-07T03:18:29.0356524Z ^[[1m^[[92m   Compiling^[[0m bitflags v2.11.1
+capi	UNKNOWN STEP	2026-10-07T03:18:29.5436725Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+capi	UNKNOWN STEP	2026-10-07T03:18:29.5471075Z ^[[1m^[[92m   Compiling^[[0m fastrand v2.4.1
+capi	UNKNOWN STEP	2026-10-07T03:18:29.5986368Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.9.6
+capi	UNKNOWN STEP	2026-10-07T03:18:29.7116267Z ^[[1m^[[92m   Compiling^[[0m gix-trace v0.1.20
+capi	UNKNOWN STEP	2026-10-07T03:18:29.7546646Z ^[[1m^[[92m   Compiling^[[0m parking_lot_core v0.9.12
+capi	UNKNOWN STEP	2026-10-07T03:18:29.7866649Z ^[[1m^[[92m   Compiling^[[0m tinyvec_macros v0.1.1
+capi	UNKNOWN STEP	2026-10-07T03:18:29.8246678Z ^[[1m^[[92m   Compiling^[[0m tinyvec v1.11.0
+capi	UNKNOWN STEP	2026-10-07T03:18:30.2926267Z ^[[1m^[[92m   Compiling^[[0m gix-validate v0.11.2
+capi	UNKNOWN STEP	2026-10-07T03:18:30.5014108Z ^[[1m^[[92m   Compiling^[[0m scopeguard v1.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:30.5516452Z ^[[1m^[[92m   Compiling^[[0m lock_api v0.4.14
+capi	UNKNOWN STEP	2026-10-07T03:18:30.7366026Z ^[[1m^[[92m   Compiling^[[0m gix-path v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:18:30.7849421Z ^[[1m^[[92m   Compiling^[[0m unicode-normalization v0.1.25
+capi	UNKNOWN STEP	2026-10-07T03:18:31.0346235Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.1.6
+capi	UNKNOWN STEP	2026-10-07T03:18:31.0916199Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.10.4
+capi	UNKNOWN STEP	2026-10-07T03:18:31.1816088Z ^[[1m^[[92m   Compiling^[[0m gix-utils v0.3.3
+capi	UNKNOWN STEP	2026-10-07T03:18:31.2832542Z ^[[1m^[[92m   Compiling^[[0m crc32fast v1.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:31.4056287Z ^[[1m^[[92m   Compiling^[[0m digest v0.10.7
+capi	UNKNOWN STEP	2026-10-07T03:18:31.4126238Z ^[[1m^[[92m   Compiling^[[0m parking_lot v0.12.5
+capi	UNKNOWN STEP	2026-10-07T03:18:31.6026180Z ^[[1m^[[92m   Compiling^[[0m same-file v1.0.6
+capi	UNKNOWN STEP	2026-10-07T03:18:31.6970372Z ^[[1m^[[92m   Compiling^[[0m walkdir v2.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:32.2656325Z ^[[1m^[[92m   Compiling^[[0m jobserver v0.1.34
+capi	UNKNOWN STEP	2026-10-07T03:18:32.2956175Z ^[[1m^[[92m   Compiling^[[0m itoa v1.0.18
+capi	UNKNOWN STEP	2026-10-07T03:18:32.3726712Z ^[[1m^[[92m   Compiling^[[0m shlex v2.0.1
+capi	UNKNOWN STEP	2026-10-07T03:18:32.4761685Z ^[[1m^[[92m   Compiling^[[0m find-msvc-tools v0.1.9
+capi	UNKNOWN STEP	2026-10-07T03:18:32.4906586Z ^[[1m^[[92m   Compiling^[[0m zlib-rs v0.6.3
+capi	UNKNOWN STEP	2026-10-07T03:18:32.5216795Z ^[[1m^[[92m   Compiling^[[0m bytes v1.11.1
+capi	UNKNOWN STEP	2026-10-07T03:18:32.6246297Z ^[[1m^[[92m   Compiling^[[0m cc v1.2.63
+capi	UNKNOWN STEP	2026-10-07T03:18:33.4066240Z ^[[1m^[[92m   Compiling^[[0m prodash v31.0.0
+capi	UNKNOWN STEP	2026-10-07T03:18:34.0626564Z ^[[1m^[[92m   Compiling^[[0m crossbeam-channel v0.5.15
+capi	UNKNOWN STEP	2026-10-07T03:18:34.6776272Z ^[[1m^[[92m   Compiling^[[0m foldhash v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:34.8356168Z ^[[1m^[[92m   Compiling^[[0m gix-error v0.2.4
+capi	UNKNOWN STEP	2026-10-07T03:18:35.2106661Z ^[[1m^[[92m   Compiling^[[0m equivalent v1.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:35.2466064Z ^[[1m^[[92m   Compiling^[[0m heapless v0.8.0
+capi	UNKNOWN STEP	2026-10-07T03:18:35.3689744Z ^[[1m^[[92m   Compiling^[[0m gix-features v0.46.2
+capi	UNKNOWN STEP	2026-10-07T03:18:35.3755698Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.2.17
+capi	UNKNOWN STEP	2026-10-07T03:18:35.4106258Z ^[[1m^[[92m   Compiling^[[0m byteorder v1.5.0
+capi	UNKNOWN STEP	2026-10-07T03:18:35.5661247Z ^[[1m^[[92m   Compiling^[[0m hash32 v0.3.1
+capi	UNKNOWN STEP	2026-10-07T03:18:35.6606773Z ^[[1m^[[92m   Compiling^[[0m pkg-config v0.3.33
+capi	UNKNOWN STEP	2026-10-07T03:18:36.0716775Z ^[[1m^[[92m   Compiling^[[0m rustix v1.1.4
+capi	UNKNOWN STEP	2026-10-07T03:18:36.6287053Z ^[[1m^[[92m   Compiling^[[0m linux-raw-sys v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:18:36.8566203Z ^[[1m^[[92m   Compiling^[[0m faster-hex v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:18:37.2366574Z ^[[1m^[[92m   Compiling^[[0m sha1 v0.10.6
+capi	UNKNOWN STEP	2026-10-07T03:18:37.6606085Z ^[[1m^[[92m   Compiling^[[0m jiff v0.2.28
+capi	UNKNOWN STEP	2026-10-07T03:18:37.6755981Z ^[[1m^[[92m   Compiling^[[0m allocator-api2 v0.2.21
+capi	UNKNOWN STEP	2026-10-07T03:18:38.0736166Z ^[[1m^[[92m   Compiling^[[0m vcpkg v0.2.15
+capi	UNKNOWN STEP	2026-10-07T03:18:38.6126268Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.16.1
+capi	UNKNOWN STEP	2026-10-07T03:18:39.4856381Z ^[[1m^[[92m   Compiling^[[0m sha1-checked v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:18:40.2736384Z ^[[1m^[[92m   Compiling^[[0m rand_core v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:18:40.3723100Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:18:40.4816237Z ^[[1m^[[92m   Compiling^[[0m gix-hash v0.23.0
+capi	UNKNOWN STEP	2026-10-07T03:18:40.5606047Z ^[[1m^[[92m   Compiling^[[0m winnow v0.7.15
+capi	UNKNOWN STEP	2026-10-07T03:18:41.0006623Z ^[[1m^[[92m   Compiling^[[0m gix-hashtable v0.13.0
+capi	UNKNOWN STEP	2026-10-07T03:18:41.0558340Z ^[[1m^[[92m   Compiling^[[0m synstructure v0.13.2
+capi	UNKNOWN STEP	2026-10-07T03:18:41.0656014Z ^[[1m^[[92m   Compiling^[[0m memmap2 v0.9.10
+capi	UNKNOWN STEP	2026-10-07T03:18:41.3056627Z ^[[1m^[[92m   Compiling^[[0m tempfile v3.27.0
+capi	UNKNOWN STEP	2026-10-07T03:18:41.5790754Z ^[[1m^[[92m   Compiling^[[0m zerofrom-derive v0.1.7
+capi	UNKNOWN STEP	2026-10-07T03:18:42.1616249Z ^[[1m^[[92m   Compiling^[[0m gix-date v0.15.4
+capi	UNKNOWN STEP	2026-10-07T03:18:42.6192427Z ^[[1m^[[92m   Compiling^[[0m zerofrom v0.1.8
+capi	UNKNOWN STEP	2026-10-07T03:18:42.7096352Z ^[[1m^[[92m   Compiling^[[0m yoke-derive v0.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:43.2346257Z ^[[1m^[[92m   Compiling^[[0m gix-actor v0.40.0
+capi	UNKNOWN STEP	2026-10-07T03:18:43.5726187Z ^[[1m^[[92m   Compiling^[[0m gix-object v0.58.0
+capi	UNKNOWN STEP	2026-10-07T03:18:43.5778825Z ^[[1m^[[92m   Compiling^[[0m openssl-sys v0.9.116
+capi	UNKNOWN STEP	2026-10-07T03:18:43.8996264Z ^[[1m^[[92m   Compiling^[[0m libz-sys v1.1.29
+capi	UNKNOWN STEP	2026-10-07T03:18:44.0606205Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.14.5
+capi	UNKNOWN STEP	2026-10-07T03:18:44.8216250Z ^[[1m^[[92m   Compiling^[[0m dashmap v6.2.1
+capi	UNKNOWN STEP	2026-10-07T03:18:44.9516206Z ^[[1m^[[92m   Compiling^[[0m yoke v0.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:45.1086631Z ^[[1m^[[92m   Compiling^[[0m gix-fs v0.19.2
+capi	UNKNOWN STEP	2026-10-07T03:18:45.4056347Z ^[[1m^[[92m   Compiling^[[0m gix-chunk v0.7.2
+capi	UNKNOWN STEP	2026-10-07T03:18:45.6076130Z ^[[1m^[[92m   Compiling^[[0m gix-tempfile v21.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:45.6906221Z ^[[1m^[[92m   Compiling^[[0m gix-quote v0.7.2
+capi	UNKNOWN STEP	2026-10-07T03:18:45.9516732Z ^[[1m^[[92m   Compiling^[[0m zerovec-derive v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:18:46.4316221Z ^[[1m^[[92m   Compiling^[[0m nonempty v0.12.0
+capi	UNKNOWN STEP	2026-10-07T03:18:46.5536444Z ^[[1m^[[92m   Compiling^[[0m displaydoc v0.2.6
+capi	UNKNOWN STEP	2026-10-07T03:18:46.8888443Z ^[[1m^[[92m   Compiling^[[0m zerovec v0.11.6
+capi	UNKNOWN STEP	2026-10-07T03:18:47.0546660Z ^[[1m^[[92m   Compiling^[[0m percent-encoding v2.3.2
+capi	UNKNOWN STEP	2026-10-07T03:18:47.2368755Z ^[[1m^[[92m   Compiling^[[0m gix-commitgraph v0.35.0
+capi	UNKNOWN STEP	2026-10-07T03:18:47.4206064Z ^[[1m^[[92m   Compiling^[[0m gix-glob v0.24.0
+capi	UNKNOWN STEP	2026-10-07T03:18:47.5706253Z ^[[1m^[[92m   Compiling^[[0m gix-revwalk v0.29.0
+capi	UNKNOWN STEP	2026-10-07T03:18:47.8056558Z ^[[1m^[[92m   Compiling^[[0m gix-lock v21.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:48.1727709Z ^[[1m^[[92m   Compiling^[[0m libnghttp2-sys v0.1.13+1.68.1
+capi	UNKNOWN STEP	2026-10-07T03:18:48.1766076Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.2.17
+capi	UNKNOWN STEP	2026-10-07T03:18:48.2626329Z ^[[1m^[[92m   Compiling^[[0m tinystr v0.8.3
+capi	UNKNOWN STEP	2026-10-07T03:18:48.3482763Z ^[[1m^[[92m   Compiling^[[0m rand_core v0.6.4
+capi	UNKNOWN STEP	2026-10-07T03:18:48.4050835Z ^[[1m^[[92m   Compiling^[[0m gix-config-value v0.17.2
+capi	UNKNOWN STEP	2026-10-07T03:18:48.5203106Z ^[[1m^[[92m   Compiling^[[0m writeable v0.6.3
+capi	UNKNOWN STEP	2026-10-07T03:18:48.6816078Z ^[[1m^[[92m   Compiling^[[0m unicode-bom v2.0.3
+capi	UNKNOWN STEP	2026-10-07T03:18:48.7845657Z ^[[1m^[[92m   Compiling^[[0m serde v1.0.228
+capi	UNKNOWN STEP	2026-10-07T03:18:48.9123422Z ^[[1m^[[92m   Compiling^[[0m zmij v1.0.21
+capi	UNKNOWN STEP	2026-10-07T03:18:49.0168354Z ^[[1m^[[92m   Compiling^[[0m litemap v0.8.2
+capi	UNKNOWN STEP	2026-10-07T03:18:49.1336687Z ^[[1m^[[92m   Compiling^[[0m potential_utf v0.1.5
+capi	UNKNOWN STEP	2026-10-07T03:18:49.1716516Z ^[[1m^[[92m   Compiling^[[0m icu_locale_core v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:49.2302761Z ^[[1m^[[92m   Compiling^[[0m zerotrie v0.2.4
+capi	UNKNOWN STEP	2026-10-07T03:18:50.0109728Z ^[[1m^[[92m   Compiling^[[0m curl-sys v0.4.88+curl-8.20.0
+capi	UNKNOWN STEP	2026-10-07T03:18:50.1404081Z ^[[1m^[[92m   Compiling^[[0m serde_derive v1.0.228
+capi	UNKNOWN STEP	2026-10-07T03:18:50.4665208Z ^[[1m^[[92m   Compiling^[[0m utf8_iter v1.0.4
+capi	UNKNOWN STEP	2026-10-07T03:18:50.5596973Z ^[[1m^[[92m   Compiling^[[0m icu_properties_data v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:50.6376167Z ^[[1m^[[92m   Compiling^[[0m serde_json v1.0.150
+capi	UNKNOWN STEP	2026-10-07T03:18:50.7136328Z ^[[1m^[[92m   Compiling^[[0m autocfg v1.5.1
+capi	UNKNOWN STEP	2026-10-07T03:18:50.9955020Z ^[[1m^[[92m   Compiling^[[0m icu_normalizer_data v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:51.0786288Z ^[[1m^[[92m   Compiling^[[0m static_assertions v1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:18:51.1095952Z ^[[1m^[[92m   Compiling^[[0m log v0.4.30
+capi	UNKNOWN STEP	2026-10-07T03:18:51.2633928Z ^[[1m^[[92m   Compiling^[[0m base64ct v1.8.3
+capi	UNKNOWN STEP	2026-10-07T03:18:51.5059863Z ^[[1m^[[92m   Compiling^[[0m pem-rfc7468 v0.7.0
+capi	UNKNOWN STEP	2026-10-07T03:18:52.0596039Z ^[[1m^[[92m   Compiling^[[0m kstring v2.0.2
+capi	UNKNOWN STEP	2026-10-07T03:18:52.1116792Z ^[[1m^[[92m   Compiling^[[0m icu_collections v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:52.2243484Z ^[[1m^[[92m   Compiling^[[0m icu_provider v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:52.7516461Z ^[[1m^[[92m   Compiling^[[0m gix-sec v0.13.3
+capi	UNKNOWN STEP	2026-10-07T03:18:53.0106119Z ^[[1m^[[92m   Compiling^[[0m shell-words v1.1.1
+capi	UNKNOWN STEP	2026-10-07T03:18:53.1756562Z ^[[1m^[[92m   Compiling^[[0m gix-command v0.8.1
+capi	UNKNOWN STEP	2026-10-07T03:18:53.5936054Z ^[[1m^[[92m   Compiling^[[0m gix-attributes v0.31.0
+capi	UNKNOWN STEP	2026-10-07T03:18:53.8896064Z ^[[1m^[[92m   Compiling^[[0m der v0.7.10
+capi	UNKNOWN STEP	2026-10-07T03:18:55.9789076Z ^[[1m^[[92m   Compiling^[[0m filetime v0.2.29
+capi	UNKNOWN STEP	2026-10-07T03:18:56.0035695Z ^[[1m^[[92m   Compiling^[[0m pin-project-lite v0.2.17
+capi	UNKNOWN STEP	2026-10-07T03:18:56.0312982Z ^[[1m^[[92m   Compiling^[[0m spki v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:18:56.1044162Z ^[[1m^[[92m   Compiling^[[0m icu_normalizer v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:56.2250227Z ^[[1m^[[92m   Compiling^[[0m icu_properties v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:18:56.5172765Z ^[[1m^[[92m   Compiling^[[0m gix-ref v0.61.0
+capi	UNKNOWN STEP	2026-10-07T03:18:57.2932918Z ^[[1m^[[92m   Compiling^[[0m libssh2-sys v0.3.1
+capi	UNKNOWN STEP	2026-10-07T03:18:57.4054107Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.17.1
+capi	UNKNOWN STEP	2026-10-07T03:18:57.7492652Z ^[[1m^[[92m   Compiling^[[0m hmac v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:18:57.8060833Z ^[[1m^[[92m   Compiling^[[0m hybrid-array v0.4.12
+capi	UNKNOWN STEP	2026-10-07T03:18:58.1636331Z ^[[1m^[[92m   Compiling^[[0m openssl-probe v0.1.6
+capi	UNKNOWN STEP	2026-10-07T03:18:58.2882263Z ^[[1m^[[92m   Compiling^[[0m curl v0.4.49
+capi	UNKNOWN STEP	2026-10-07T03:18:58.3352668Z ^[[1m^[[92m   Compiling^[[0m indexmap v2.14.0
+capi	UNKNOWN STEP	2026-10-07T03:18:59.0443653Z ^[[1m^[[92m   Compiling^[[0m idna_adapter v1.2.2
+capi	UNKNOWN STEP	2026-10-07T03:18:59.0918295Z ^[[1m^[[92m   Compiling^[[0m pkcs8 v0.10.2
+capi	UNKNOWN STEP	2026-10-07T03:18:59.6126649Z ^[[1m^[[92m   Compiling^[[0m ff v0.13.1
+capi	UNKNOWN STEP	2026-10-07T03:18:59.6785409Z ^[[1m^[[92m   Compiling^[[0m gix-traverse v0.55.0
+capi	UNKNOWN STEP	2026-10-07T03:19:00.4631002Z ^[[1m^[[92m   Compiling^[[0m gix-packetline v0.21.4
+capi	UNKNOWN STEP	2026-10-07T03:19:00.6891751Z ^[[1m^[[92m   Compiling^[[0m gix-bitmap v0.3.2
+capi	UNKNOWN STEP	2026-10-07T03:19:00.8939497Z ^[[1m^[[92m   Compiling^[[0m tracing-core v0.1.36
+capi	UNKNOWN STEP	2026-10-07T03:19:01.4008476Z ^[[1m^[[92m   Compiling^[[0m socket2 v0.6.4
+capi	UNKNOWN STEP	2026-10-07T03:19:01.7496273Z ^[[1m^[[92m   Compiling^[[0m winnow v1.0.3
+capi	UNKNOWN STEP	2026-10-07T03:19:02.0490744Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:19:02.0714486Z ^[[1m^[[92m   Compiling^[[0m utf8parse v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:19:02.1015895Z ^[[1m^[[92m   Compiling^[[0m fnv v1.0.7
+capi	UNKNOWN STEP	2026-10-07T03:19:02.1278174Z ^[[1m^[[92m   Compiling^[[0m anyhow v1.0.102
+capi	UNKNOWN STEP	2026-10-07T03:19:02.2191179Z ^[[1m^[[92m   Compiling^[[0m base16ct v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:19:02.3596656Z ^[[1m^[[92m   Compiling^[[0m cmov v0.5.4
+capi	UNKNOWN STEP	2026-10-07T03:19:02.5613913Z ^[[1m^[[92m   Compiling^[[0m anstyle v1.0.14
+capi	UNKNOWN STEP	2026-10-07T03:19:02.7286718Z ^[[1m^[[92m   Compiling^[[0m ctutils v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:19:02.8627908Z ^[[1m^[[92m   Compiling^[[0m sec1 v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:19:03.5116694Z ^[[1m^[[92m   Compiling^[[0m toml_parser v1.1.2+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:19:03.6036425Z ^[[1m^[[92m   Compiling^[[0m gix-index v0.49.0
+capi	UNKNOWN STEP	2026-10-07T03:19:04.8372802Z ^[[1m^[[92m   Compiling^[[0m anstyle-parse v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:19:04.9290598Z ^[[1m^[[92m   Compiling^[[0m group v0.13.0
+capi	UNKNOWN STEP	2026-10-07T03:19:05.0195199Z ^[[1m^[[92m   Compiling^[[0m idna v1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:19:07.1460882Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:19:08.1976250Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.12.0
+capi	UNKNOWN STEP	2026-10-07T03:19:08.3015930Z ^[[1m^[[92m   Compiling^[[0m hkdf v0.12.4
+capi	UNKNOWN STEP	2026-10-07T03:19:08.3566885Z ^[[1m^[[92m   Compiling^[[0m gix-pathspec v0.16.1
+capi	UNKNOWN STEP	2026-10-07T03:19:08.3626366Z ^[[1m^[[92m   Compiling^[[0m num-traits v0.2.19
+capi	UNKNOWN STEP	2026-10-07T03:19:08.4326673Z ^[[1m^[[92m   Compiling^[[0m gix-ignore v0.19.1
+capi	UNKNOWN STEP	2026-10-07T03:19:08.7189945Z ^[[1m^[[92m   Compiling^[[0m crypto-bigint v0.5.5
+capi	UNKNOWN STEP	2026-10-07T03:19:10.2194578Z ^[[1m^[[92m   Compiling^[[0m form_urlencoded v1.2.2
+capi	UNKNOWN STEP	2026-10-07T03:19:10.3536199Z ^[[1m^[[92m   Compiling^[[0m gix-url v0.35.3
+capi	UNKNOWN STEP	2026-10-07T03:19:10.6457243Z ^[[1m^[[92m   Compiling^[[0m libgit2-sys v0.18.5+1.9.4
+capi	UNKNOWN STEP	2026-10-07T03:19:10.8456883Z ^[[1m^[[92m   Compiling^[[0m serde_spanned v1.1.1
+capi	UNKNOWN STEP	2026-10-07T03:19:10.8921330Z ^[[1m^[[92m   Compiling^[[0m tracing-attributes v0.1.31
+capi	UNKNOWN STEP	2026-10-07T03:19:11.3875026Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+capi	UNKNOWN STEP	2026-10-07T03:19:11.5376186Z ^[[1m^[[92m   Compiling^[[0m powerfmt v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:19:11.6026163Z ^[[1m^[[92m   Compiling^[[0m colorchoice v1.0.5
+capi	UNKNOWN STEP	2026-10-07T03:19:11.6330399Z ^[[1m^[[92m   Compiling^[[0m rustversion v1.0.22
+capi	UNKNOWN STEP	2026-10-07T03:19:11.6973005Z ^[[1m^[[92m   Compiling^[[0m foldhash v0.1.5
+capi	UNKNOWN STEP	2026-10-07T03:19:11.7867388Z ^[[1m^[[92m   Compiling^[[0m anstyle-query v1.1.5
+capi	UNKNOWN STEP	2026-10-07T03:19:11.7956343Z ^[[1m^[[92m   Compiling^[[0m typeid v1.0.3
+capi	UNKNOWN STEP	2026-10-07T03:19:11.8366505Z ^[[1m^[[92m   Compiling^[[0m is_terminal_polyfill v1.70.2
+capi	UNKNOWN STEP	2026-10-07T03:19:11.8465098Z ^[[1m^[[92m   Compiling^[[0m tracing v0.1.44
+capi	UNKNOWN STEP	2026-10-07T03:19:11.8716989Z ^[[1m^[[92m   Compiling^[[0m anstream v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:19:11.9266353Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.15.5
+capi	UNKNOWN STEP	2026-10-07T03:19:12.1434271Z ^[[1m^[[92m   Compiling^[[0m deranged v0.5.8
+capi	UNKNOWN STEP	2026-10-07T03:19:12.3146281Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:19:12.5976289Z ^[[1m^[[92m   Compiling^[[0m url v2.5.8
+capi	UNKNOWN STEP	2026-10-07T03:19:13.4130493Z ^[[1m^[[92m   Compiling^[[0m elliptic-curve v0.13.8
+capi	UNKNOWN STEP	2026-10-07T03:19:13.6806526Z ^[[1m^[[92m   Compiling^[[0m gix-worktree v0.50.0
+capi	UNKNOWN STEP	2026-10-07T03:19:14.9846832Z ^[[1m^[[92m   Compiling^[[0m gix-prompt v0.14.2
+capi	UNKNOWN STEP	2026-10-07T03:19:15.1397552Z ^[[1m^[[92m   Compiling^[[0m gix-revision v0.43.0
+capi	UNKNOWN STEP	2026-10-07T03:19:15.3076740Z ^[[1m^[[92m   Compiling^[[0m encoding_rs v0.8.35
+capi	UNKNOWN STEP	2026-10-07T03:19:15.5895605Z ^[[1m^[[92m   Compiling^[[0m num-conv v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:19:15.6965737Z ^[[1m^[[92m   Compiling^[[0m futures-sink v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:19:15.7455696Z ^[[1m^[[92m   Compiling^[[0m cfg_aliases v0.2.1
+capi	UNKNOWN STEP	2026-10-07T03:19:15.8026735Z ^[[1m^[[92m   Compiling^[[0m futures-core v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:19:15.8759263Z ^[[1m^[[92m   Compiling^[[0m erased-serde v0.4.10
+capi	UNKNOWN STEP	2026-10-07T03:19:15.9760546Z ^[[1m^[[92m   Compiling^[[0m time-core v0.1.8
+capi	UNKNOWN STEP	2026-10-07T03:19:16.0716945Z ^[[1m^[[92m   Compiling^[[0m time v0.3.47
+capi	UNKNOWN STEP	2026-10-07T03:19:19.3920614Z ^[[1m^[[92m   Compiling^[[0m gix-filter v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:19:20.0866295Z ^[[1m^[[92m   Compiling^[[0m futures-channel v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:19:20.3766875Z ^[[1m^[[92m   Compiling^[[0m nix v0.31.3
+capi	UNKNOWN STEP	2026-10-07T03:19:20.6163306Z ^[[1m^[[92m   Compiling^[[0m gix-refspec v0.39.0
+capi	UNKNOWN STEP	2026-10-07T03:19:22.3816750Z ^[[1m^[[92m   Compiling^[[0m gix-credentials v0.37.2
+capi	UNKNOWN STEP	2026-10-07T03:19:23.4235931Z ^[[1m^[[92m   Compiling^[[0m imara-diff v0.1.8
+capi	UNKNOWN STEP	2026-10-07T03:19:23.9996159Z ^[[1m^[[92m   Compiling^[[0m rfc6979 v0.4.0
+capi	UNKNOWN STEP	2026-10-07T03:19:24.0597915Z ^[[1m^[[92m   Compiling^[[0m gix-discover v0.49.0
+capi	UNKNOWN STEP	2026-10-07T03:19:24.1436222Z ^[[1m^[[92m   Compiling^[[0m signature v2.2.0
+capi	UNKNOWN STEP	2026-10-07T03:19:24.1988257Z ^[[1m^[[92m   Compiling^[[0m clru v0.6.3
+capi	UNKNOWN STEP	2026-10-07T03:19:24.3557190Z ^[[1m^[[92m   Compiling^[[0m terminal_size v0.4.4
+capi	UNKNOWN STEP	2026-10-07T03:19:24.4062081Z ^[[1m^[[92m   Compiling^[[0m libsqlite3-sys v0.37.0
+capi	UNKNOWN STEP	2026-10-07T03:19:24.5889486Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+capi	UNKNOWN STEP	2026-10-07T03:19:24.9347210Z ^[[1m^[[92m   Compiling^[[0m toml_datetime v1.1.1+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:19:25.2136300Z ^[[1m^[[92m   Compiling^[[0m heck v0.5.0
+capi	UNKNOWN STEP	2026-10-07T03:19:25.2428609Z ^[[1m^[[92m   Compiling^[[0m lazy_static v1.5.0
+capi	UNKNOWN STEP	2026-10-07T03:19:25.2796439Z ^[[1m^[[92m   Compiling^[[0m object v0.37.3
+capi	UNKNOWN STEP	2026-10-07T03:19:25.3886289Z ^[[1m^[[92m   Compiling^[[0m base64 v0.22.1
+capi	UNKNOWN STEP	2026-10-07T03:19:25.8394569Z ^[[1m^[[92m   Compiling^[[0m clap_lex v1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:19:26.0801843Z ^[[1m^[[92m   Compiling^[[0m strsim v0.11.1
+capi	UNKNOWN STEP	2026-10-07T03:19:26.8468295Z ^[[1m^[[92m   Compiling^[[0m slab v0.4.12
+capi	UNKNOWN STEP	2026-10-07T03:19:26.9334686Z ^[[1m^[[92m   Compiling^[[0m futures-task v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:19:27.0043910Z ^[[1m^[[92m   Compiling^[[0m toml_writer v1.1.1+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:19:27.1491025Z ^[[1m^[[92m   Compiling^[[0m futures-io v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:19:27.2716337Z ^[[1m^[[92m   Compiling^[[0m minimal-lexical v0.2.1
+capi	UNKNOWN STEP	2026-10-07T03:19:27.8802545Z ^[[1m^[[92m   Compiling^[[0m nom v7.1.3
+capi	UNKNOWN STEP	2026-10-07T03:19:27.9275894Z ^[[1m^[[92m   Compiling^[[0m flate2 v1.1.9
+capi	UNKNOWN STEP	2026-10-07T03:19:28.1646527Z ^[[1m^[[92m   Compiling^[[0m futures-util v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:19:29.3225874Z ^[[1m^[[92m   Compiling^[[0m clap_builder v4.6.0
+capi	UNKNOWN STEP	2026-10-07T03:19:30.7934082Z ^[[1m^[[92m   Compiling^[[0m clap_derive v4.6.1
+capi	UNKNOWN STEP	2026-10-07T03:19:32.1516578Z ^[[1m^[[92m   Compiling^[[0m sharded-slab v0.1.7
+capi	UNKNOWN STEP	2026-10-07T03:19:34.6906585Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+capi	UNKNOWN STEP	2026-10-07T03:19:40.8576079Z ^[[1m^[[92m   Compiling^[[0m gix-pack v0.68.0
+capi	UNKNOWN STEP	2026-10-07T03:19:44.9475364Z ^[[1m^[[92m   Compiling^[[0m gix-transport v0.55.1
+capi	UNKNOWN STEP	2026-10-07T03:19:49.1934431Z ^[[1m^[[92m   Compiling^[[0m gix-dir v0.23.0
+capi	UNKNOWN STEP	2026-10-07T03:19:50.4802142Z ^[[1m^[[92m   Compiling^[[0m ecdsa v0.16.9
+capi	UNKNOWN STEP	2026-10-07T03:19:51.0662018Z ^[[1m^[[92m   Compiling^[[0m arc-swap v1.9.1
+capi	UNKNOWN STEP	2026-10-07T03:19:51.1396421Z ^[[1m^[[92m   Compiling^[[0m gix-diff v0.61.0
+capi	UNKNOWN STEP	2026-10-07T03:19:51.2974035Z ^[[1m^[[92m   Compiling^[[0m ordered-float v2.10.1
+capi	UNKNOWN STEP	2026-10-07T03:19:51.5403026Z ^[[1m^[[92m   Compiling^[[0m tar v0.4.46
+capi	UNKNOWN STEP	2026-10-07T03:19:52.3076408Z ^[[1m^[[92m   Compiling^[[0m primeorder v0.13.6
+capi	UNKNOWN STEP	2026-10-07T03:19:52.5096296Z ^[[1m^[[92m   Compiling^[[0m tracing-log v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:19:52.7597934Z ^[[1m^[[92m   Compiling^[[0m gix-config v0.54.0
+capi	UNKNOWN STEP	2026-10-07T03:19:54.9176860Z ^[[1m^[[92m   Compiling^[[0m globset v0.4.18
+capi	UNKNOWN STEP	2026-10-07T03:19:58.0833228Z ^[[1m^[[92m   Compiling^[[0m memoffset v0.9.1
+capi	UNKNOWN STEP	2026-10-07T03:19:58.1701378Z ^[[1m^[[92m   Compiling^[[0m gix-shallow v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:19:58.6806565Z ^[[1m^[[92m   Compiling^[[0m gix-negotiate v0.29.0
+capi	UNKNOWN STEP	2026-10-07T03:19:58.9287205Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.10.9
+capi	UNKNOWN STEP	2026-10-07T03:19:59.5916681Z ^[[1m^[[92m   Compiling^[[0m blake3 v1.8.5
+capi	UNKNOWN STEP	2026-10-07T03:19:59.7498709Z ^[[1m^[[92m   Compiling^[[0m im-rc v15.1.0
+capi	UNKNOWN STEP	2026-10-07T03:19:59.8316853Z ^[[1m^[[92m   Compiling^[[0m matchers v0.2.0
+capi	UNKNOWN STEP	2026-10-07T03:19:59.9076000Z ^[[1m^[[92m   Compiling^[[0m maybe-async v0.2.11
+capi	UNKNOWN STEP	2026-10-07T03:20:00.3886256Z ^[[1m^[[92m   Compiling^[[0m bitmaps v2.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:00.7258074Z ^[[1m^[[92m   Compiling^[[0m thread_local v1.1.9
+capi	UNKNOWN STEP	2026-10-07T03:20:00.8736259Z ^[[1m^[[92m   Compiling^[[0m unicode-width v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:20:01.0736882Z ^[[1m^[[92m   Compiling^[[0m nu-ansi-term v0.50.3
+capi	UNKNOWN STEP	2026-10-07T03:20:01.2166620Z ^[[1m^[[92m   Compiling^[[0m fiat-crypto v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:20:01.5186676Z ^[[1m^[[92m   Compiling^[[0m object v0.39.1
+capi	UNKNOWN STEP	2026-10-07T03:20:01.6519450Z ^[[1m^[[92m   Compiling^[[0m tracing-subscriber v0.3.23
+capi	UNKNOWN STEP	2026-10-07T03:20:07.0129404Z ^[[1m^[[92m   Compiling^[[0m orion v0.17.14
+capi	UNKNOWN STEP	2026-10-07T03:20:08.0736054Z ^[[1m^[[92m   Compiling^[[0m sized-chunks v0.6.5
+capi	UNKNOWN STEP	2026-10-07T03:20:08.3046301Z ^[[1m^[[92m   Compiling^[[0m annotate-snippets v0.12.16
+capi	UNKNOWN STEP	2026-10-07T03:20:12.9257687Z ^[[1m^[[92m   Compiling^[[0m gix-protocol v0.59.0
+capi	UNKNOWN STEP	2026-10-07T03:20:14.0046686Z ^[[1m^[[92m   Compiling^[[0m p384 v0.13.1
+capi	UNKNOWN STEP	2026-10-07T03:20:16.5133916Z ^[[1m^[[92m   Compiling^[[0m ignore v0.4.25
+capi	UNKNOWN STEP	2026-10-07T03:20:16.7366469Z ^[[1m^[[92m   Compiling^[[0m gix-submodule v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:20:18.6136094Z ^[[1m^[[92m   Compiling^[[0m cargo v0.97.1
+capi	UNKNOWN STEP	2026-10-07T03:20:18.8306954Z ^[[1m^[[92m   Compiling^[[0m gix-status v0.28.0
+capi	UNKNOWN STEP	2026-10-07T03:20:20.7814015Z ^[[1m^[[92m   Compiling^[[0m serde-value v0.7.0
+capi	UNKNOWN STEP	2026-10-07T03:20:21.3562466Z ^[[1m^[[92m   Compiling^[[0m gix-odb v0.78.0
+capi	UNKNOWN STEP	2026-10-07T03:20:22.2666045Z ^[[1m^[[92m   Compiling^[[0m serde-untagged v0.1.9
+capi	UNKNOWN STEP	2026-10-07T03:20:22.6076364Z ^[[1m^[[92m   Compiling^[[0m clap v4.6.1
+capi	UNKNOWN STEP	2026-10-07T03:20:26.7836290Z ^[[1m^[[92m   Compiling^[[0m futures-executor v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:20:27.1526528Z ^[[1m^[[92m   Compiling^[[0m color-print-proc-macro v0.3.7
+capi	UNKNOWN STEP	2026-10-07T03:20:27.1756049Z ^[[1m^[[92m   Compiling^[[0m toml v1.1.2+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:27.9986313Z ^[[1m^[[92m   Compiling^[[0m cargo-credential v0.4.10
+capi	UNKNOWN STEP	2026-10-07T03:20:30.3246247Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:20:31.6001065Z ^[[1m^[[92m   Compiling^[[0m chacha20 v0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:20:31.8106156Z ^[[1m^[[92m   Compiling^[[0m rand_xoshiro v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:20:32.3196184Z ^[[1m^[[92m   Compiling^[[0m anstyle-hyperlink v1.0.2
+capi	UNKNOWN STEP	2026-10-07T03:20:32.4555944Z ^[[1m^[[92m   Compiling^[[0m ed25519-compact v2.3.0
+capi	UNKNOWN STEP	2026-10-07T03:20:32.5036004Z ^[[1m^[[92m   Compiling^[[0m hashlink v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:20:32.8441175Z ^[[1m^[[92m   Compiling^[[0m semver v1.0.28
+capi	UNKNOWN STEP	2026-10-07T03:20:33.4476372Z ^[[1m^[[92m   Compiling^[[0m toml_datetime v0.7.5+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:33.7605998Z ^[[1m^[[92m   Compiling^[[0m regex v1.12.3
+capi	UNKNOWN STEP	2026-10-07T03:20:34.9716717Z ^[[1m^[[92m   Compiling^[[0m libloading v0.9.0
+capi	UNKNOWN STEP	2026-10-07T03:20:35.1356661Z ^[[1m^[[92m   Compiling^[[0m arrayref v0.3.9
+capi	UNKNOWN STEP	2026-10-07T03:20:35.1442045Z ^[[1m^[[92m   Compiling^[[0m supports-hyperlinks v3.2.0
+capi	UNKNOWN STEP	2026-10-07T03:20:35.1716337Z ^[[1m^[[92m   Compiling^[[0m arrayvec v0.7.6
+capi	UNKNOWN STEP	2026-10-07T03:20:35.2689008Z ^[[1m^[[92m   Compiling^[[0m supports-unicode v3.0.0
+capi	UNKNOWN STEP	2026-10-07T03:20:35.3421607Z ^[[1m^[[92m   Compiling^[[0m cbindgen v0.29.3
+capi	UNKNOWN STEP	2026-10-07T03:20:35.3461990Z ^[[1m^[[92m   Compiling^[[0m shell-escape v0.1.5
+capi	UNKNOWN STEP	2026-10-07T03:20:35.4646292Z ^[[1m^[[92m   Compiling^[[0m either v1.16.0
+capi	UNKNOWN STEP	2026-10-07T03:20:35.4966395Z ^[[1m^[[92m   Compiling^[[0m anstyle-progress v0.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:35.6566991Z ^[[1m^[[92m   Compiling^[[0m constant_time_eq v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:20:35.7759520Z ^[[1m^[[92m   Compiling^[[0m is_executable v1.0.5
+capi	UNKNOWN STEP	2026-10-07T03:20:35.8236787Z ^[[1m^[[92m   Compiling^[[0m fallible-iterator v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:20:36.2061322Z ^[[1m^[[92m   Compiling^[[0m shlex v1.3.0
+capi	UNKNOWN STEP	2026-10-07T03:20:36.4198001Z ^[[1m^[[92m   Compiling^[[0m fallible-streaming-iterator v0.1.9
+capi	UNKNOWN STEP	2026-10-07T03:20:36.4936076Z ^[[1m^[[92m   Compiling^[[0m ct-codecs v1.1.6
+capi	UNKNOWN STEP	2026-10-07T03:20:36.5206807Z ^[[1m^[[92m   Compiling^[[0m hex v0.4.3
+capi	UNKNOWN STEP	2026-10-07T03:20:36.7106286Z ^[[1m^[[92m   Compiling^[[0m camino v1.2.2
+capi	UNKNOWN STEP	2026-10-07T03:20:36.7285692Z ^[[1m^[[92m   Compiling^[[0m cargo-util v0.2.29
+capi	UNKNOWN STEP	2026-10-07T03:20:36.8506319Z ^[[1m^[[92m   Compiling^[[0m pasetors v0.7.8
+capi	UNKNOWN STEP	2026-10-07T03:20:38.4981502Z ^[[1m^[[92m   Compiling^[[0m rusqlite v0.39.0
+capi	UNKNOWN STEP	2026-10-07T03:20:39.4226857Z ^[[1m^[[92m   Compiling^[[0m clap_complete v4.6.5
+capi	UNKNOWN STEP	2026-10-07T03:20:40.6296146Z ^[[1m^[[92m   Compiling^[[0m git2 v0.20.4
+capi	UNKNOWN STEP	2026-10-07T03:20:41.8505096Z ^[[1m^[[92m   Compiling^[[0m itertools v0.14.0
+capi	UNKNOWN STEP	2026-10-07T03:20:42.0104598Z ^[[1m^[[92m   Compiling^[[0m cargo-util-terminal v0.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:42.5867394Z ^[[1m^[[92m   Compiling^[[0m cargo-credential-libsecret v0.5.7
+capi	UNKNOWN STEP	2026-10-07T03:20:42.8726153Z ^[[1m^[[92m   Compiling^[[0m toml v0.9.12+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:43.8986607Z ^[[1m^[[92m   Compiling^[[0m git2-curl v0.21.0
+capi	UNKNOWN STEP	2026-10-07T03:20:44.6616569Z ^[[1m^[[92m   Compiling^[[0m cargo-util-schemas v0.14.0
+capi	UNKNOWN STEP	2026-10-07T03:20:46.5976640Z ^[[1m^[[92m   Compiling^[[0m rand v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:20:47.3686265Z ^[[1m^[[92m   Compiling^[[0m color-print v0.3.7
+capi	UNKNOWN STEP	2026-10-07T03:20:47.4056335Z ^[[1m^[[92m   Compiling^[[0m futures v0.3.32
+capi	UNKNOWN STEP	2026-10-07T03:20:47.4388218Z ^[[1m^[[92m   Compiling^[[0m ar_archive_writer v0.5.1
+capi	UNKNOWN STEP	2026-10-07T03:20:47.9546514Z ^[[1m^[[92m   Compiling^[[0m gix v0.81.0
+capi	UNKNOWN STEP	2026-10-07T03:20:48.3256321Z ^[[1m^[[92m   Compiling^[[0m os_info v3.15.0
+capi	UNKNOWN STEP	2026-10-07T03:20:49.3256319Z ^[[1m^[[92m   Compiling^[[0m tracing-chrome v0.7.2
+capi	UNKNOWN STEP	2026-10-07T03:20:50.3106067Z ^[[1m^[[92m   Compiling^[[0m crates-io v0.40.19
+capi	UNKNOWN STEP	2026-10-07T03:20:52.8806448Z ^[[1m^[[92m   Compiling^[[0m toml_edit v0.25.12+spec-1.1.0
+capi	UNKNOWN STEP	2026-10-07T03:20:53.3316095Z ^[[1m^[[92m   Compiling^[[0m sha1 v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:20:53.7426171Z ^[[1m^[[92m   Compiling^[[0m hmac v0.13.0
+capi	UNKNOWN STEP	2026-10-07T03:20:53.8616183Z ^[[1m^[[92m   Compiling^[[0m rustfix v0.9.6
+capi	UNKNOWN STEP	2026-10-07T03:20:57.7376576Z ^[[1m^[[92m   Compiling^[[0m http v1.4.1
+capi	UNKNOWN STEP	2026-10-07T03:20:59.1676554Z ^[[1m^[[92m   Compiling^[[0m serde_ignored v0.1.14
+capi	UNKNOWN STEP	2026-10-07T03:20:59.3376259Z ^[[1m^[[92m   Compiling^[[0m cargo-platform v0.3.3
+capi	UNKNOWN STEP	2026-10-07T03:20:59.8126356Z ^[[1m^[[92m   Compiling^[[0m opener v0.8.4
+capi	UNKNOWN STEP	2026-10-07T03:20:59.8236570Z ^[[1m^[[92m   Compiling^[[0m async-trait v0.1.89
+capi	UNKNOWN STEP	2026-10-07T03:21:00.3631043Z ^[[1m^[[92m   Compiling^[[0m http-auth v0.1.10
+capi	UNKNOWN STEP	2026-10-07T03:21:00.5456609Z ^[[1m^[[92m   Compiling^[[0m unicase v2.9.0
+capi	UNKNOWN STEP	2026-10-07T03:21:00.7057060Z ^[[1m^[[92m   Compiling^[[0m home v0.5.12
+capi	UNKNOWN STEP	2026-10-07T03:21:00.7544465Z ^[[1m^[[92m   Compiling^[[0m glob v0.3.3
+capi	UNKNOWN STEP	2026-10-07T03:21:00.7836237Z ^[[1m^[[92m   Compiling^[[0m futures-timer v3.0.4
+capi	UNKNOWN STEP	2026-10-07T03:21:01.3883050Z ^[[1m^[[92m   Compiling^[[0m rustc-hash v2.1.2
+capi	UNKNOWN STEP	2026-10-07T03:21:01.4516299Z ^[[1m^[[92m   Compiling^[[0m rustc-stable-hash v0.1.2
+capi	UNKNOWN STEP	2026-10-07T03:21:01.8946480Z ^[[1m^[[92m   Compiling^[[0m pathdiff v0.2.3
+capi	UNKNOWN STEP	2026-10-07T03:21:19.0886247Z ^[[1m^[[92m   Compiling^[[0m implib v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:21:29.8600321Z ^[[1m^[[92m   Compiling^[[0m cargo-c v0.10.23+cargo-0.97.1
+capi	UNKNOWN STEP	2026-10-07T03:22:49.3383235Z ^[[1m^[[92m    Finished^[[0m `release` profile [optimized] target(s) in 4m 33s
+capi	UNKNOWN STEP	2026-10-07T03:22:49.3648759Z ^[[1m^[[92m  Installing^[[0m /home/runner/.cargo/bin/cargo-capi
+capi	UNKNOWN STEP	2026-10-07T03:22:49.3649598Z ^[[1m^[[92m  Installing^[[0m /home/runner/.cargo/bin/cargo-cbuild
+capi	UNKNOWN STEP	2026-10-07T03:22:49.3650177Z ^[[1m^[[92m  Installing^[[0m /home/runner/.cargo/bin/cargo-cinstall
+capi	UNKNOWN STEP	2026-10-07T03:22:49.3650702Z ^[[1m^[[92m  Installing^[[0m /home/runner/.cargo/bin/cargo-ctest
+capi	UNKNOWN STEP	2026-10-07T03:22:49.3654084Z ^[[1m^[[92m   Installed^[[0m package `cargo-c v0.10.23+cargo-0.97.1` (executables `cargo-capi`, `cargo-cbuild`, `cargo-cinstall`, `cargo-ctest`)
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7876466Z ##[group]Run make capi-check
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7876802Z ^[[36;1mmake capi-check^[[0m
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7938175Z shell: /usr/bin/bash -e {0}
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7938426Z env:
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7938628Z   CARGO_HOME: /home/runner/.cargo
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7938895Z   CARGO_INCREMENTAL: 0
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7939118Z   CARGO_TERM_COLOR: always
+capi	UNKNOWN STEP	2026-10-07T03:22:49.7939340Z ##[endgroup]
+capi	UNKNOWN STEP	2026-10-07T03:22:49.8631043Z python3 scripts/capi-header.py --self-test
+capi	UNKNOWN STEP	2026-10-07T03:22:49.9300819Z ....
+capi	UNKNOWN STEP	2026-10-07T03:22:49.9301251Z ----------------------------------------------------------------------
+capi	UNKNOWN STEP	2026-10-07T03:22:49.9301811Z Ran 4 tests in 0.002s
+capi	UNKNOWN STEP	2026-10-07T03:22:49.9302356Z 
+capi	UNKNOWN STEP	2026-10-07T03:22:49.9302475Z OK
+capi	UNKNOWN STEP	2026-10-07T03:22:49.9366198Z python3 scripts/capi-header.py --check crates/rdf-capi/include/purrdf.h
+capi	UNKNOWN STEP	2026-10-07T03:22:50.3911105Z ^[[1m^[[92m    Updating^[[0m crates.io index
+capi	UNKNOWN STEP	2026-10-07T03:22:50.7563510Z ^[[1m^[[92m Downloading^[[0m crates ...
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8746027Z ^[[1m^[[92m  Downloaded^[[0m polyval v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8815098Z ^[[1m^[[92m  Downloaded^[[0m aes v0.9.3
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8857099Z ^[[1m^[[92m  Downloaded^[[0m universal-hash v0.6.1
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8868126Z ^[[1m^[[92m  Downloaded^[[0m cpubits v0.1.1
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8878227Z ^[[1m^[[92m  Downloaded^[[0m aead v0.6.1
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8896292Z ^[[1m^[[92m  Downloaded^[[0m ghash v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8910111Z ^[[1m^[[92m  Downloaded^[[0m hybrid-array v0.4.15
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8933369Z ^[[1m^[[92m  Downloaded^[[0m regex v1.12.4
+capi	UNKNOWN STEP	2026-10-07T03:22:50.8988407Z ^[[1m^[[92m  Downloaded^[[0m getrandom v0.3.4
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9024121Z ^[[1m^[[92m  Downloaded^[[0m visual-hashing v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9049829Z ^[[1m^[[92m  Downloaded^[[0m rayon v1.12.0
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9145684Z ^[[1m^[[92m  Downloaded^[[0m inout v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9159289Z ^[[1m^[[92m  Downloaded^[[0m ctr v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9181921Z ^[[1m^[[92m  Downloaded^[[0m aes-gcm v0.11.1
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9212398Z ^[[1m^[[92m  Downloaded^[[0m twox-hash v2.1.2
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9236961Z ^[[1m^[[92m  Downloaded^[[0m rayon-core v1.13.0
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9275369Z ^[[1m^[[92m  Downloaded^[[0m cipher v0.5.2
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9299330Z ^[[1m^[[92m  Downloaded^[[0m memchr v2.8.2
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9354925Z ^[[1m^[[92m  Downloaded^[[0m block-buffer v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9369151Z ^[[1m^[[92m  Downloaded^[[0m regex-syntax v0.8.11
+capi	UNKNOWN STEP	2026-10-07T03:22:50.9518455Z ^[[1m^[[92m  Downloaded^[[0m structured-zstd v0.0.49
+capi	UNKNOWN STEP	2026-10-07T03:22:51.0453575Z ^[[1m^[[92m   Compiling^[[0m typenum v1.20.1
+capi	UNKNOWN STEP	2026-10-07T03:22:51.0455218Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+capi	UNKNOWN STEP	2026-10-07T03:22:51.0456561Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:22:51.0457405Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+capi	UNKNOWN STEP	2026-10-07T03:22:51.0744019Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+capi	UNKNOWN STEP	2026-10-07T03:22:51.1056995Z ^[[1m^[[92m   Compiling^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+capi	UNKNOWN STEP	2026-10-07T03:22:51.2026494Z ^[[1m^[[92m   Compiling^[[0m regex-syntax v0.8.11
+capi	UNKNOWN STEP	2026-10-07T03:22:51.2726421Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+capi	UNKNOWN STEP	2026-10-07T03:22:52.5306863Z ^[[1m^[[92m   Compiling^[[0m hybrid-array v0.4.15
+capi	UNKNOWN STEP	2026-10-07T03:22:52.8986212Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+capi	UNKNOWN STEP	2026-10-07T03:22:53.2242316Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:22:53.2265807Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:22:53.3386366Z ^[[1m^[[92m   Compiling^[[0m regex-automata v0.4.14
+capi	UNKNOWN STEP	2026-10-07T03:22:54.8536433Z ^[[1m^[[92m   Compiling^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+capi	UNKNOWN STEP	2026-10-07T03:23:00.1920719Z ^[[1m^[[92m   Compiling^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+capi	UNKNOWN STEP	2026-10-07T03:23:02.2357451Z ^[[1m^[[92m   Compiling^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+capi	UNKNOWN STEP	2026-10-07T03:23:05.6112375Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:23:05.7296410Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:23:06.8886814Z ^[[1m^[[92m   Compiling^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+capi	UNKNOWN STEP	2026-10-07T03:23:07.8391410Z ^[[1m^[[92m   Compiling^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+capi	UNKNOWN STEP	2026-10-07T03:23:10.2583448Z ^[[1m^[[92m   Compiling^[[0m regex v1.12.4
+capi	UNKNOWN STEP	2026-10-07T03:23:11.1526477Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.17.1
+capi	UNKNOWN STEP	2026-10-07T03:23:12.1246175Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+capi	UNKNOWN STEP	2026-10-07T03:23:12.2006617Z ^[[1m^[[92m   Compiling^[[0m libc v0.2.186
+capi	UNKNOWN STEP	2026-10-07T03:23:12.5576094Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+capi	UNKNOWN STEP	2026-10-07T03:23:12.9216337Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+capi	UNKNOWN STEP	2026-10-07T03:23:12.9526543Z ^[[1m^[[92m   Compiling^[[0m either v1.16.0
+capi	UNKNOWN STEP	2026-10-07T03:23:14.0636676Z ^[[1m^[[92m   Compiling^[[0m rayon v1.12.0
+capi	UNKNOWN STEP	2026-10-07T03:23:14.9386347Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.3.4
+capi	UNKNOWN STEP	2026-10-07T03:23:14.9806147Z ^[[1m^[[92m   Compiling^[[0m inout v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:23:15.0633999Z ^[[1m^[[92m   Compiling^[[0m cmov v0.5.4
+capi	UNKNOWN STEP	2026-10-07T03:23:15.2579308Z ^[[1m^[[92m   Compiling^[[0m ctutils v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:23:15.4546939Z ^[[1m^[[92m   Compiling^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+capi	UNKNOWN STEP	2026-10-07T03:23:15.4896727Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+capi	UNKNOWN STEP	2026-10-07T03:23:15.6221714Z ^[[1m^[[92m   Compiling^[[0m cpubits v0.1.1
+capi	UNKNOWN STEP	2026-10-07T03:23:15.6484671Z ^[[1m^[[92m   Compiling^[[0m universal-hash v0.6.1
+capi	UNKNOWN STEP	2026-10-07T03:23:15.7016315Z ^[[1m^[[92m   Compiling^[[0m cipher v0.5.2
+capi	UNKNOWN STEP	2026-10-07T03:23:15.9518798Z ^[[1m^[[92m   Compiling^[[0m polyval v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:23:16.1859048Z ^[[1m^[[92m   Compiling^[[0m fastrand v2.4.1
+capi	UNKNOWN STEP	2026-10-07T03:23:16.4286134Z ^[[1m^[[92m   Compiling^[[0m twox-hash v2.1.2
+capi	UNKNOWN STEP	2026-10-07T03:23:16.5046169Z ^[[1m^[[92m   Compiling^[[0m structured-zstd v0.0.49
+capi	UNKNOWN STEP	2026-10-07T03:23:17.0778669Z ^[[1m^[[92m   Compiling^[[0m ghash v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:23:17.1316384Z ^[[1m^[[92m   Compiling^[[0m ctr v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:23:17.2666231Z ^[[1m^[[92m   Compiling^[[0m aes v0.9.3
+capi	UNKNOWN STEP	2026-10-07T03:23:17.8776089Z ^[[1m^[[92m   Compiling^[[0m aead v0.6.1
+capi	UNKNOWN STEP	2026-10-07T03:23:17.9636169Z ^[[1m^[[92m   Compiling^[[0m aes-gcm v0.11.1
+capi	UNKNOWN STEP	2026-10-07T03:23:18.0536638Z ^[[1m^[[92m   Compiling^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+capi	UNKNOWN STEP	2026-10-07T03:23:19.0736123Z ^[[1m^[[92m   Compiling^[[0m visual-hashing v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:23:21.7978208Z ^[[1m^[[92m   Compiling^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+capi	UNKNOWN STEP	2026-10-07T03:23:37.7506681Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+capi	UNKNOWN STEP	2026-10-07T03:23:44.3477384Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+capi	UNKNOWN STEP	2026-10-07T03:24:02.7126676Z ^[[1m^[[92m   Compiling^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+capi	UNKNOWN STEP	2026-10-07T03:24:29.6476849Z ^[[1m^[[92m   Compiling^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+capi	UNKNOWN STEP	2026-10-07T03:25:03.4896576Z ^[[1m^[[92m   Compiling^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+capi	UNKNOWN STEP	2026-10-07T03:25:05.9896497Z ^[[1m^[[92m   Compiling^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+capi	UNKNOWN STEP	2026-10-07T03:25:23.4142802Z ^[[1m^[[92m   Compiling^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+capi	UNKNOWN STEP	2026-10-07T03:26:07.3266539Z ^[[1m^[[92m   Compiling^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+capi	UNKNOWN STEP	2026-10-07T03:26:25.9509970Z ^[[1m^[[92m   Compiling^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+capi	UNKNOWN STEP	2026-10-07T03:26:32.5054609Z ^[[1m^[[92m   Compiling^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+capi	UNKNOWN STEP	2026-10-07T03:26:46.5966560Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+capi	UNKNOWN STEP	2026-10-07T03:26:53.5046377Z ^[[1m^[[92m   Compiling^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+capi	UNKNOWN STEP	2026-10-07T03:26:59.8961720Z ^[[1m^[[92m   Compiling^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+capi	UNKNOWN STEP	2026-10-07T03:27:01.5986473Z ^[[1m^[[92m   Compiling^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+capi	UNKNOWN STEP	2026-10-07T03:27:08.0866438Z ^[[1m^[[92m   Compiling^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+capi	UNKNOWN STEP	2026-10-07T03:27:13.3023356Z ^[[1m^[[92m   Compiling^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+capi	UNKNOWN STEP	2026-10-07T03:27:15.4682612Z ^[[1m^[[92m   Compiling^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+capi	UNKNOWN STEP	2026-10-07T03:27:51.7164095Z ^[[1m^[[92m   Compiling^[[0m purrdf-capi v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-capi)
+capi	UNKNOWN STEP	2026-10-07T03:28:04.3332221Z ^[[1m^[[92m    Finished^[[0m `dev` profile [optimized + debuginfo] target(s) in 5m 14s
+capi	UNKNOWN STEP	2026-10-07T03:28:04.3421918Z ^[[1m^[[92m    Building^[[0m pkg-config files
+capi	UNKNOWN STEP	2026-10-07T03:28:04.3424061Z ^[[1m^[[92m    Building^[[0m header file using cbindgen
+capi	UNKNOWN STEP	2026-10-07T03:28:04.7892809Z ^[[1m^[[92m  Populating^[[0m uninstalled header directory
+capi	UNKNOWN STEP	2026-10-07T03:28:05.9152864Z OK: committed purrdf.h matches the captured private cargo-c artifact
+capi	UNKNOWN STEP	2026-10-07T03:28:05.9238989Z cargo test -p purrdf-capi --test c_smoke --locked
+capi	UNKNOWN STEP	2026-10-07T03:28:06.0387280Z ^[[1m^[[92m   Compiling^[[0m typenum v1.20.1
+capi	UNKNOWN STEP	2026-10-07T03:28:06.0389444Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+capi	UNKNOWN STEP	2026-10-07T03:28:06.0390215Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.3.0
+capi	UNKNOWN STEP	2026-10-07T03:28:06.0390730Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+capi	UNKNOWN STEP	2026-10-07T03:28:06.0746289Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+capi	UNKNOWN STEP	2026-10-07T03:28:06.1036109Z ^[[1m^[[92m   Compiling^[[0m regex-syntax v0.8.11
+capi	UNKNOWN STEP	2026-10-07T03:28:06.2656518Z ^[[1m^[[92m   Compiling^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+capi	UNKNOWN STEP	2026-10-07T03:28:06.3527021Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+capi	UNKNOWN STEP	2026-10-07T03:28:07.5367494Z ^[[1m^[[92m   Compiling^[[0m hybrid-array v0.4.15
+capi	UNKNOWN STEP	2026-10-07T03:28:07.8466267Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+capi	UNKNOWN STEP	2026-10-07T03:28:08.1836232Z ^[[1m^[[92m   Compiling^[[0m regex-automata v0.4.14
+capi	UNKNOWN STEP	2026-10-07T03:28:08.2466591Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:28:09.8436334Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.12.1
+capi	UNKNOWN STEP	2026-10-07T03:28:09.9466542Z ^[[1m^[[92m   Compiling^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+capi	UNKNOWN STEP	2026-10-07T03:28:15.0603578Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+capi	UNKNOWN STEP	2026-10-07T03:28:15.1786639Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+capi	UNKNOWN STEP	2026-10-07T03:28:16.7786544Z ^[[1m^[[92m   Compiling^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+capi	UNKNOWN STEP	2026-10-07T03:28:17.3323188Z ^[[1m^[[92m   Compiling^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+capi	UNKNOWN STEP	2026-10-07T03:28:20.6386109Z ^[[1m^[[92m   Compiling^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+capi	UNKNOWN STEP	2026-10-07T03:28:21.1706553Z ^[[1m^[[92m   Compiling^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+capi	UNKNOWN STEP	2026-10-07T03:28:23.4286639Z ^[[1m^[[92m   Compiling^[[0m regex v1.12.4
+capi	UNKNOWN STEP	2026-10-07T03:28:25.0396211Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.17.1
+capi	UNKNOWN STEP	2026-10-07T03:28:26.0576244Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+capi	UNKNOWN STEP	2026-10-07T03:28:26.4336357Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+capi	UNKNOWN STEP	2026-10-07T03:28:26.4921511Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+capi	UNKNOWN STEP	2026-10-07T03:28:27.5705616Z ^[[1m^[[92m   Compiling^[[0m either v1.16.0
+capi	UNKNOWN STEP	2026-10-07T03:28:27.7428214Z ^[[1m^[[92m   Compiling^[[0m libc v0.2.186
+capi	UNKNOWN STEP	2026-10-07T03:28:28.4606223Z ^[[1m^[[92m   Compiling^[[0m rayon v1.12.0
+capi	UNKNOWN STEP	2026-10-07T03:28:28.6036204Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.3.4
+capi	UNKNOWN STEP	2026-10-07T03:28:29.0066237Z ^[[1m^[[92m   Compiling^[[0m inout v0.2.2
+capi	UNKNOWN STEP	2026-10-07T03:28:29.0936166Z ^[[1m^[[92m   Compiling^[[0m cmov v0.5.4
+capi	UNKNOWN STEP	2026-10-07T03:28:29.2886144Z ^[[1m^[[92m   Compiling^[[0m ctutils v0.4.2
+capi	UNKNOWN STEP	2026-10-07T03:28:29.4846571Z ^[[1m^[[92m   Compiling^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+capi	UNKNOWN STEP	2026-10-07T03:28:29.6137090Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+capi	UNKNOWN STEP	2026-10-07T03:28:29.6526485Z ^[[1m^[[92m   Compiling^[[0m cpubits v0.1.1
+capi	UNKNOWN STEP	2026-10-07T03:28:29.6817360Z ^[[1m^[[92m   Compiling^[[0m universal-hash v0.6.1
+capi	UNKNOWN STEP	2026-10-07T03:28:29.7396305Z ^[[1m^[[92m   Compiling^[[0m cipher v0.5.2
+capi	UNKNOWN STEP	2026-10-07T03:28:29.9806181Z ^[[1m^[[92m   Compiling^[[0m polyval v0.7.3
+capi	UNKNOWN STEP	2026-10-07T03:28:30.2216255Z ^[[1m^[[92m   Compiling^[[0m fastrand v2.4.1
+capi	UNKNOWN STEP	2026-10-07T03:28:30.4630891Z ^[[1m^[[92m   Compiling^[[0m twox-hash v2.1.2
+capi	UNKNOWN STEP	2026-10-07T03:28:30.5388115Z ^[[1m^[[92m   Compiling^[[0m structured-zstd v0.0.49
+capi	UNKNOWN STEP	2026-10-07T03:28:31.4746146Z ^[[1m^[[92m   Compiling^[[0m ghash v0.6.0
+capi	UNKNOWN STEP	2026-10-07T03:28:31.5276128Z ^[[1m^[[92m   Compiling^[[0m aes v0.9.3
+capi	UNKNOWN STEP	2026-10-07T03:28:32.1206171Z ^[[1m^[[92m   Compiling^[[0m ctr v0.10.1
+capi	UNKNOWN STEP	2026-10-07T03:28:32.2506190Z ^[[1m^[[92m   Compiling^[[0m aead v0.6.1
+capi	UNKNOWN STEP	2026-10-07T03:28:32.3417800Z ^[[1m^[[92m   Compiling^[[0m aes-gcm v0.11.1
+capi	UNKNOWN STEP	2026-10-07T03:28:32.4354224Z ^[[1m^[[92m   Compiling^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+capi	UNKNOWN STEP	2026-10-07T03:28:33.3537761Z ^[[1m^[[92m   Compiling^[[0m visual-hashing v1.0.0
+capi	UNKNOWN STEP	2026-10-07T03:28:33.8241969Z ^[[1m^[[92m   Compiling^[[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+capi	UNKNOWN STEP	2026-10-07T03:28:43.8617608Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+capi	UNKNOWN STEP	2026-10-07T03:28:50.0416709Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+capi	UNKNOWN STEP	2026-10-07T03:28:52.1296442Z ^[[1m^[[92m   Compiling^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+capi	UNKNOWN STEP	2026-10-07T03:29:16.7679746Z ^[[1m^[[92m   Compiling^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+capi	UNKNOWN STEP	2026-10-07T03:29:54.4719787Z ^[[1m^[[92m   Compiling^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+capi	UNKNOWN STEP	2026-10-07T03:30:10.0286497Z ^[[1m^[[92m   Compiling^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+capi	UNKNOWN STEP	2026-10-07T03:30:25.1036659Z ^[[1m^[[92m   Compiling^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+capi	UNKNOWN STEP	2026-10-07T03:30:28.2207682Z ^[[1m^[[92m   Compiling^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+capi	UNKNOWN STEP	2026-10-07T03:30:59.0636545Z ^[[1m^[[92m   Compiling^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+capi	UNKNOWN STEP	2026-10-07T03:31:22.4246671Z ^[[1m^[[92m   Compiling^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+capi	UNKNOWN STEP	2026-10-07T03:31:25.2007604Z ^[[1m^[[92m   Compiling^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+capi	UNKNOWN STEP	2026-10-07T03:31:41.3107041Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+capi	UNKNOWN STEP	2026-10-07T03:31:44.1637085Z ^[[1m^[[92m   Compiling^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+capi	UNKNOWN STEP	2026-10-07T03:31:51.4896506Z ^[[1m^[[92m   Compiling^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+capi	UNKNOWN STEP	2026-10-07T03:31:53.4327192Z ^[[1m^[[92m   Compiling^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+capi	UNKNOWN STEP	2026-10-07T03:31:57.5146043Z ^[[1m^[[92m   Compiling^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+capi	UNKNOWN STEP	2026-10-07T03:31:58.2086827Z ^[[1m^[[92m   Compiling^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+capi	UNKNOWN STEP	2026-10-07T03:32:00.2156603Z ^[[1m^[[92m   Compiling^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+capi	UNKNOWN STEP	2026-10-07T03:32:45.1476854Z ^[[1m^[[92m   Compiling^[[0m purrdf-capi v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-capi)
+capi	UNKNOWN STEP	2026-10-07T03:32:55.7754480Z ^[[1m^[[92m    Finished^[[0m `test` profile [optimized] target(s) in 4m 49s
+capi	UNKNOWN STEP	2026-10-07T03:32:55.7804966Z ^[[1m^[[92m     Running^[[0m tests/c_smoke.rs (target/debug/build/purrdf-capi/06da4582a994635b/out/c_smoke-06da4582a994635b)
+capi	UNKNOWN STEP	2026-10-07T03:32:55.7814392Z 
+capi	UNKNOWN STEP	2026-10-07T03:32:55.7814551Z running 1 test
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0151528Z libpurrdf ABI 0.10.0
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0151994Z   quad: subject=http://a
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0152844Z entailment golden vector: 9 case(s) matched through the C ABI
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0153675Z webont-imports-011: entailed through the C ABI with its support ontology supplied
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0154399Z entail_extensions(owl-rl): ext-eq-diff-sym
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0155260Z shapes_graph_iri: named pre-binds $shapesGraph, NULL leaves it unbound
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0155975Z check_rules: the level decides, and a refusal names its stage
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0156688Z xpath_regex: each dated law decides REGEX and sh:pattern; NULL is compatibility
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0157463Z xsd: exact canonical forms and order past every C integer type
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0158032Z division: policy set, refused, applied and counted
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0158613Z C smoke OK
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0590682Z wrote 5120 bytes and lifted 1 quad
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0594299Z test c_abi_smoke ... ok
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0594678Z 
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0595256Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0595762Z 
+capi	UNKNOWN STEP	2026-10-07T03:32:56.0760335Z Post job cleanup.
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1611293Z [command]/usr/bin/git version
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1648955Z git version 2.55.0
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1686011Z Temporarily overriding HOME='/home/runner/work/_temp/927d4b31-c33e-461d-8e0b-c964e47a8e4b' before making global git config changes
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1687400Z Adding repository directory to the temporary git global config as a safe directory
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1692561Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1722649Z Removing SSH command configuration
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1728863Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1761798Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1991578Z Removing HTTP extra header
+capi	UNKNOWN STEP	2026-10-07T03:32:56.1996808Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+capi	UNKNOWN STEP	2026-10-07T03:32:56.2028338Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+capi	UNKNOWN STEP	2026-10-07T03:32:56.2253782Z Removing includeIf entries pointing to credentials config files
+capi	UNKNOWN STEP	2026-10-07T03:32:56.2259182Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+capi	UNKNOWN STEP	2026-10-07T03:32:56.2288825Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+capi	UNKNOWN STEP	2026-10-07T03:32:56.2656680Z Cleaning up orphan processes

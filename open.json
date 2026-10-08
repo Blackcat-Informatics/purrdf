@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 406,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex",
+  "branch": "paudley/406-native-xpath-regex",
+  "slug": "native-xpath-regex",
+  "slug_drift": true,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/.stage/native-xpath-regex",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "2aa091423dab31a39bf2415abaec9d5c07b311e5",
+  "reused": true,
+  "adr_repo": false,
+  "created": [
+    "stage:/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/.stage/native-xpath-regex",
+    "issue:/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/.stage/native-xpath-regex/issue.md"
+  ],
+  "warnings": [
+    "issue title changed since the branch was created (slug would now be 'native-xpath-regex-profile-with'); keeping existing 'native-xpath-regex'"
+  ],
+  "timestamp": "2026-10-08T01:01:58-0600"
+}

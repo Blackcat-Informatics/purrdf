@@ -1,0 +1,61 @@
+     Cloning 2aa091423dab31a39bf2415abaec9d5c07b311e5
+    Building purrdf-core v3.0.1 (current)
+       Built [   5.440s] (current)
+     Parsing purrdf-core v3.0.1 (current)
+      Parsed [   0.067s] (current)
+    Building purrdf-core v3.0.1 (baseline)
+       Built [   4.277s] (baseline)
+     Parsing purrdf-core v3.0.1 (baseline)
+      Parsed [   0.065s] (baseline)
+    Checking purrdf-core v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.156s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [  10.728s] purrdf-core
+    Building purrdf-lex v3.0.1 (current)
+       Built [   0.532s] (current)
+     Parsing purrdf-lex v3.0.1 (current)
+      Parsed [   0.010s] (current)
+    Building purrdf-lex v3.0.1 (baseline)
+       Built [   0.565s] (baseline)
+     Parsing purrdf-lex v3.0.1 (baseline)
+      Parsed [   0.010s] (baseline)
+    Checking purrdf-lex v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.008s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [   1.245s] purrdf-lex
+    Building purrdf-shapes v3.0.1 (current)
+       Built [  17.542s] (current)
+     Parsing purrdf-shapes v3.0.1 (current)
+      Parsed [   0.051s] (current)
+    Building purrdf-shapes v3.0.1 (baseline)
+       Built [  19.427s] (baseline)
+     Parsing purrdf-shapes v3.0.1 (baseline)
+      Parsed [   0.050s] (baseline)
+    Checking purrdf-shapes v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.032s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [  38.435s] purrdf-shapes
+    Building purrdf-shex v3.0.1 (current)
+       Built [   1.390s] (current)
+     Parsing purrdf-shex v3.0.1 (current)
+      Parsed [   0.007s] (current)
+    Building purrdf-shex v3.0.1 (baseline)
+       Built [   0.965s] (baseline)
+     Parsing purrdf-shex v3.0.1 (baseline)
+      Parsed [   0.006s] (baseline)
+    Checking purrdf-shex v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.008s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [   2.933s] purrdf-shex
+    Building purrdf-sparql-eval v3.0.1 (current)
+       Built [   1.993s] (current)
+     Parsing purrdf-sparql-eval v3.0.1 (current)
+      Parsed [   0.051s] (current)
+    Building purrdf-sparql-eval v3.0.1 (baseline)
+       Built [   3.469s] (baseline)
+     Parsing purrdf-sparql-eval v3.0.1 (baseline)
+      Parsed [   0.048s] (baseline)
+    Checking purrdf-sparql-eval v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.033s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [   6.256s] purrdf-sparql-eval

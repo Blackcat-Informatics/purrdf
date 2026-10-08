@@ -1,0 +1,132 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling cpufeatures v0.3.0
+   Compiling libc v0.2.186
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling either v1.16.0
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/alloc-probe)
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/deflate)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/stack)
+   Compiling digest v0.11.3
+   Compiling rayon v1.12.0
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 11s
+     Running tests/governed_parallel_allocation.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/867b5c4bade22f2a/out/governed_parallel_allocation-867b5c4bade22f2a)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/governed_query.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/7cdf36be4db549e5/out/governed_query-7cdf36be4db549e5)
+
+running 27 tests
+test ac1_query_governors_accepts_every_governor_and_reaches_evaluation ... ok
+test answer_cap_boundary_is_inclusive ... ok
+test bookkeeping_cell_limit_retains_saturated_forecast_refusal ... ok
+test a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters ... ok
+test budget_trip_can_never_masquerade_as_an_empty_complete_result ... ok
+test a_fallible_federated_view_composes_page_and_remote_evidence ... ok
+test ac2_trip_is_neither_complete_nor_error ... ok
+test bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer ... ok
+test admission_refuses_an_estimated_ceiling_breach_before_evaluating ... ok
+test d6_precedence_order ... ok
+test construct_blank_reservations_obey_scratch_bytes_after_where_completes ... ok
+test ac2_ask_with_a_nonempty_certain_set_keeps_the_trip_and_carries_true ... ok
+test every_complete_outcome_has_complete_evidence ... ok
+test ledger_attributes_lateral_rhs_work_to_the_rhs_nodes ... ok
+test explain_reports_a_deterministic_per_node_ledger ... ok
+test a_withheld_bound_names_the_barrier_that_withheld_it ... ok
+test cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound ... ok
+test ledger_attributes_nested_lateral_rhs_rows_to_the_true_output ... ok
+test prepared_plans_do_not_share_a_budget_across_runs ... ok
+test metered_governors_measure_an_execution_without_bounding_it ... ok
+test an_earlier_fuel_trip_cannot_bypass_the_answer_cap_on_any_result_sequence ... ok
+test public_blank_node_filter_cannot_forge_an_upper_bound ... ok
+test the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary ... ok
+test the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundary ... ok
+test stop_only_governors_checkpoint_inside_large_bgp_path_and_expression_loops ... ok
+test answer_cap_stops_the_scan_rather_than_materializing_everything ... ok
+test plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/native_xpath.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/1387f33ad091e081/out/native_xpath-1387f33ad091e081)
+
+running 17 tests
+test a_linked_refusal_in_an_unselected_lazy_branch_does_not_execute ... ok
+test native_storage_refusals_preserve_the_resource_code_and_typed_cause ... ok
+test one_engine_reuses_a_preparation_with_request_laws_and_current_bounds ... ok
+test constant_and_dynamic_patterns_refuse_every_resource_in_its_own_channel ... ok
+test governed_and_fallible_execution_refuse_instead_of_certifying_partial_rows ... ok
+test explain_evaluates_under_the_requests_dated_law ... ok
+test on_demand_row_filters_use_the_same_law_and_typed_refusal ... ok
+test one_prepared_query_alternates_dated_laws_without_changing_compatibility ... ok
+test operational_failures_survive_negation_coalesce_logic_and_exists ... ok
+test prepared_algebra_has_fresh_regex_construction_and_execution_bounds ... ok
+test replacement_language_errors_are_unbound_but_output_refusal_aborts ... ok
+test update_where_refusal_rolls_back_the_entire_request ... ok
+test request_laws_reach_governed_queries_and_both_update_lanes ... ok
+test prepared_execution_does_not_retain_an_earlier_admission_or_refusal ... ok
+test adversary_shapes_answer_at_the_production_defaults_like_the_compatibility_engine ... ok
+test counted_repetition_shapes_answer_at_the_production_defaults_like_the_compatibility_engine ... ok
+test backreference_blowups_still_refuse_beside_an_answered_neighbour ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.88s
+
+     Running tests/numeric_governance.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/cca1894e9026ad14/out/numeric_governance-cca1894e9026ad14)
+
+running 11 tests
+test a_non_default_division_policy_is_charged ... ok
+test machine_word_numbers_charge_no_tower_work ... ok
+test a_products_growing_scale_is_charged_for_fuel ... ok
+test statistical_aggregates_are_charged ... ok
+test a_tower_operand_meeting_a_double_is_charged ... ok
+test sum_and_avg_are_charged_for_their_chain ... ok
+test unary_functions_and_casts_are_charged ... ok
+test a_comparison_that_aligns_is_charged ... ok
+test extremes_and_sorts_are_charged_for_their_comparisons ... ok
+test a_products_growing_scale_is_charged_for_memory_before_it_allocates ... ok
+test a_long_column_of_big_integers_sums_at_a_linear_cost ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/numeric_parallel_determinism.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/df5f81a9e67474db/out/numeric_parallel_determinism-df5f81a9e67474db)
+
+running 10 tests
+test inclusive_fuel_boundary_keeps_full_values_and_all_dimensions ... ok
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+test a_scratch_ceiling_trips_at_one_row ... ok
+test per_group_counts_trip_at_one_group ... ok
+test a_filter_over_exact_values_trips_at_one_row ... ok
+test an_optional_filter_over_exact_values_trips_at_one_row ... ok
+test a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip ... ok
+test per_group_statistical_aggregates_over_exact_values_trip_at_one_group ... ok
+test per_group_sums_over_exact_values_trip_at_one_group ... ok
+test a_projection_over_exact_values_trips_at_one_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+

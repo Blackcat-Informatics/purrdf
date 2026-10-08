@@ -1,0 +1,2 @@
+OK: non-Rust ratchet: 3 changed non-Rust path(s) in the staged index against b0839118abb6 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/406-native-xpath-regex 71cfecc6e] Integrate the rules foundation and synchronize the OPTIONAL worker witness

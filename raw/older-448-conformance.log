@@ -1,0 +1,336 @@
+conformance	UNKNOWN STEP	﻿2026-10-07T03:27:18.4073298Z Current runner version: '2.337.0'
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4098138Z ##[group]Runner Image Provisioner
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4099061Z Hosted Compute Agent
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4099643Z Version: 20260901.588
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4100383Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4101110Z Build Date: 2026-09-01T19:56:44Z
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4101860Z Worker ID: {8ad275ba-5321-4092-a469-4bebaafd4d59}
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4102602Z Azure Region: westus
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4103171Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4104663Z ##[group]Operating System
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4105310Z Ubuntu
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4106296Z 24.04.5
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4106868Z LTS
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4107386Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4108000Z ##[group]Runner Image
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4108616Z Image: ubuntu-24.04
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4109216Z Version: 20260927.320.1
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4110537Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4112163Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4113134Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4114312Z ##[group]GITHUB_TOKEN Permissions
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4116426Z Contents: read
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4117029Z Metadata: read
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4117694Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4119765Z Secret source: Actions
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4120820Z Cache mode: write
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4121514Z Prepare workflow directory
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4454888Z Prepare all required actions
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.4504517Z Getting action download info
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.8193214Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+conformance	UNKNOWN STEP	2026-10-07T03:27:18.9533450Z Download action repository 'actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e' (SHA:95815c38cf2ff2164869cbab79da8d1f422bc89e)
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.4671846Z Complete job name: conformance
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5447697Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5448769Z with:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5449220Z   persist-credentials: false
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5449771Z   repository: Blackcat-Informatics/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5453470Z   token: ***
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5453910Z   ssh-strict: true
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5454353Z   ssh-user: git
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5454777Z   clean: true
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5455231Z   sparse-checkout-cone-mode: true
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5455756Z   fetch-depth: 1
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5456390Z   fetch-tags: false
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5456837Z   show-progress: true
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5457291Z   lfs: false
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5457696Z   submodules: false
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5458138Z   set-safe-directory: true
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5458643Z   allow-unsafe-pr-checkout: false
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.5459417Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6429219Z Syncing repository: Blackcat-Informatics/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6431052Z ##[group]Getting Git version info
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6431834Z Working directory is '/home/runner/work/purrdf/purrdf'
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6432796Z [command]/usr/bin/git version
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6507052Z git version 2.55.0
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6528507Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6538796Z Temporarily overriding HOME='/home/runner/work/_temp/8edad072-d595-4878-afe4-237b76f02a75' before making global git config changes
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6540199Z Adding repository directory to the temporary git global config as a safe directory
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6544174Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6587893Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6591188Z ##[group]Determining repository object format
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6592647Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6593386Z ##[group]Initializing the repository
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6596999Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6698968Z hint: Using 'master' as the name for the initial branch. This default branch name
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6700242Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6701397Z hint: to use in all of your new repositories, which will suppress this warning,
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6702847Z hint: call:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6703311Z hint:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6704254Z hint: 	git config --global init.defaultBranch <name>
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6705438Z hint:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6706782Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6708591Z hint: 'development'. The just-created branch can be renamed via this command:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6709997Z hint:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6710730Z hint: 	git branch -m <name>
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6711631Z hint:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6712775Z hint: Disable this message with "git config set advice.defaultBranchName false"
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6714708Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6717889Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6761786Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6763091Z ##[group]Disabling automatic garbage collection
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6765369Z [command]/usr/bin/git config --local gc.auto 0
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6795178Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6796866Z ##[group]Setting up auth
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6797805Z Removing SSH command configuration
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6802205Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.6832910Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7161383Z Removing HTTP extra header
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7166504Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7201478Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7412697Z Removing includeIf entries pointing to credentials config files
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7417653Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7447901Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7668078Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7702925Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7733779Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7768621Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7798374Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7825845Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7826976Z ##[group]Fetching the repository
+conformance	UNKNOWN STEP	2026-10-07T03:27:19.7832820Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9198fa8786754dc2fa26e6af52e5271fb897ecaa:refs/remotes/pull/448/merge
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7264713Z From https://github.com/Blackcat-Informatics/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7266299Z  * [new ref]           9198fa8786754dc2fa26e6af52e5271fb897ecaa -> pull/448/merge
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7270531Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7271165Z ##[group]Determining the checkout info
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7272606Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7279352Z [command]/usr/bin/git sparse-checkout disable
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7341955Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7374038Z ##[group]Checking out the ref
+conformance	UNKNOWN STEP	2026-10-07T03:27:23.7378362Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/448/merge
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.7649603Z Updating files:  62% (11261/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.7868281Z Updating files:  63% (11390/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.7947396Z Updating files:  64% (11570/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8015186Z Updating files:  65% (11751/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8088761Z Updating files:  66% (11932/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8164708Z Updating files:  67% (12113/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8230252Z Updating files:  68% (12294/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8293435Z Updating files:  69% (12474/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8352406Z Updating files:  70% (12655/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8421268Z Updating files:  71% (12836/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8484652Z Updating files:  72% (13017/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8553164Z Updating files:  73% (13197/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8617643Z Updating files:  74% (13378/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8680992Z Updating files:  75% (13559/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8747425Z Updating files:  76% (13740/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8812911Z Updating files:  77% (13921/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8889902Z Updating files:  78% (14101/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.8954198Z Updating files:  79% (14282/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9018290Z Updating files:  80% (14463/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9081941Z Updating files:  81% (14644/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9145338Z Updating files:  82% (14824/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9236254Z Updating files:  83% (15005/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9300387Z Updating files:  84% (15186/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9364440Z Updating files:  85% (15367/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9431046Z Updating files:  86% (15548/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9495529Z Updating files:  87% (15728/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9559049Z Updating files:  88% (15909/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9652433Z Updating files:  89% (16090/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9718647Z Updating files:  90% (16271/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9785329Z Updating files:  91% (16451/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9854074Z Updating files:  92% (16632/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9924303Z Updating files:  93% (16813/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:24.9992754Z Updating files:  94% (16994/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0064198Z Updating files:  95% (17175/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0135846Z Updating files:  96% (17355/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0209166Z Updating files:  97% (17536/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0283481Z Updating files:  98% (17717/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0354227Z Updating files:  99% (17898/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0354852Z Updating files: 100% (18078/18078)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0355421Z Updating files: 100% (18078/18078), done.
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0527468Z Note: switching to 'refs/remotes/pull/448/merge'.
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0528025Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0528503Z You are in 'detached HEAD' state. You can look around, make experimental
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0529729Z changes and commit them, and you can discard any commits you make in this
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0530909Z state without impacting any branches by switching back to a branch.
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0531700Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0532207Z If you want to create a new branch to retain commits you create, you may
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0533339Z do so (now or later) by using -c with the switch command. Example:
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0533978Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0534260Z   git switch -c <new-branch-name>
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0534791Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0535020Z Or undo this operation with:
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0535380Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0535580Z   git switch -
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0536172Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0536757Z Turn off this advice by setting config variable advice.detachedHead to false
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0538372Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0538850Z HEAD is now at 9198fa87 Merge 9e9e67c80d832175bdafb8e938d7abae00486f8b into dfc0c21adabe557e5d11f027aaf2576bddbe1dd6
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0563152Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0609401Z [command]/usr/bin/git log -1 --format=%H
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0635717Z 9198fa8786754dc2fa26e6af52e5271fb897ecaa
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0645106Z ##[group]Removing auth
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0645581Z Removing SSH command configuration
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0649523Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0679901Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0909954Z Removing HTTP extra header
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0913524Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.0944280Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1172039Z Removing includeIf entries pointing to credentials config files
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1175852Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1201050Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1201969Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1202898Z includeif.gitdir:/github/workspace/.git.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1203625Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1211554Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1234816Z /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1243317Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1276664Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1297315Z /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1311365Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1352587Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1368788Z /github/runner_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1376429Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1410337Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1431440Z /github/runner_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1440640Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1471164Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1718533Z Removing credentials config '/home/runner/work/_temp/git-credentials-fddef518-078b-4c2e-986d-34a90dfc76b7.config'
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.1816194Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2014644Z ##[group]Run actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2015267Z with:
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2015503Z   pattern: conformance-results-*
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2015785Z   merge-multiple: true
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2016359Z   path: target/conformance-results
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2016666Z   repository: Blackcat-Informatics/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2016942Z   run-id: 37566090234
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.2017153Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.3651873Z (node:2390) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.3652799Z (Use `node --trace-deprecation ...` to show where the warning was created)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6368120Z Found 11 artifact(s)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6397230Z Filtering artifacts by pattern 'conformance-results-*'
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6398489Z Preparing to download the following artifacts:
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6399911Z - conformance-results-core (ID: 11459176314, Size: 32340, Expected Digest: sha256:8d80a0667b23e2bff9d41701b59c1aae00ebbbcfca17e2b61e92836a96b13959)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6402036Z - conformance-results-python (ID: 11458084704, Size: 2704, Expected Digest: sha256:f95267bc061d03e34e11541a544718062f63e2829bf7e14773f1127b7b6a45c8)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6404211Z - conformance-results-sparql (ID: 11458049228, Size: 5878, Expected Digest: sha256:7496059dd65c2d5214d9ccb8f684be2fb14559336a1c2bfc217ffb8b87c8b860)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.6406618Z - conformance-results-shapes (ID: 11457984489, Size: 4954, Expected Digest: sha256:d8eaacd8a0e669974420a8ee4c4bfd9d6f7bbaa2cbc456995028f7149e760588)
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.8886662Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/36bef6ca-db29-8d88-89f3-a0ab18abdc65/workflow-job-run-aa86ebe8-148c-502a-adeb-bca4adf74772/artifacts/225b99b0e3ebf6d03bf0b1703340438d6f581047951eaadf3542ae81a818bc7a.zip
+conformance	UNKNOWN STEP	2026-10-07T03:27:25.8889310Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.0234309Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/36bef6ca-db29-8d88-89f3-a0ab18abdc65/workflow-job-run-991b9f5d-10fc-5fbc-a1df-92cd228809a9/artifacts/e4f24d88316730769a97e45eec997ea0cc3fe5363ef92d62db14cb0777d55a39.zip
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.0236194Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.0395421Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/36bef6ca-db29-8d88-89f3-a0ab18abdc65/workflow-job-run-c8adbc1d-564d-5495-b913-438efd782be4/artifacts/ee95c9b8c2c66a09eb75035dddca2b6de40ed3b8cb2242fbbdc579e161a4d55a.zip
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.0398363Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.0591526Z Redirecting to blob download url: https://productionresultssa15.blob.core.windows.net/actions-results/36bef6ca-db29-8d88-89f3-a0ab18abdc65/workflow-job-run-4faa8c43-3446-5939-bf80-f399d5ce6504/artifacts/7cdf549367e6ef01486d0306615e7384828c9ece3e299ca73c73b46f6e8f2143.zip
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.0594408Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.1490767Z (node:2390) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.2152045Z SHA256 digest of downloaded artifact is 8d80a0667b23e2bff9d41701b59c1aae00ebbbcfca17e2b61e92836a96b13959
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.2153000Z Artifact download completed successfully.
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.2802922Z SHA256 digest of downloaded artifact is f95267bc061d03e34e11541a544718062f63e2829bf7e14773f1127b7b6a45c8
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.2803521Z Artifact download completed successfully.
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.2913979Z SHA256 digest of downloaded artifact is 7496059dd65c2d5214d9ccb8f684be2fb14559336a1c2bfc217ffb8b87c8b860
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.2914623Z Artifact download completed successfully.
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3143955Z SHA256 digest of downloaded artifact is d8eaacd8a0e669974420a8ee4c4bfd9d6f7bbaa2cbc456995028f7149e760588
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3144615Z Artifact download completed successfully.
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3144955Z Total of 4 artifact(s) downloaded
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3150087Z Download artifact has finished successfully
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3290708Z ##[group]Run make conformance CONFORMANCE_ARGS="--from-results target/conformance-results"
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3291483Z ^[[36;1mmake conformance CONFORMANCE_ARGS="--from-results target/conformance-results"^[[0m
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3552035Z shell: /usr/bin/bash -e {0}
+conformance	UNKNOWN STEP	2026-10-07T03:27:26.3552363Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3222076Z python3 scripts/conformance-matrix.py --from-results target/conformance-results
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3880195Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3880640Z PurRDF conformance matrix
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3881408Z =================================================================================================================================================================
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3882615Z   SUITE                                                         SOURCE                                                       PASS  XF/SKIP  BUDGET   FAIL  STATUS
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3884062Z -----------------------------------------------------------------------------------------------------------------------------------------------------------------
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3885262Z   IRI (RFC 3987 / RFC 3986 resolution)                          W3C IRI + RFC vectors                                          19        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3886542Z   RDFC-1.0 canonicalization                                     W3C rdf-canon                                                   6        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3888018Z   RDF 1.2 canonicalization profile                              purrdf-rdfc12 v2 (first-party)                                 12        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3889589Z   Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)                     W3C rdf-tests                                                 264        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3890985Z   SPARQL 1.0/1.1/1.2 evaluation (full corpus)                   W3C sparql10 + sparql11 + sparql12 + first-party             1393        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3892053Z   SPARQL 1.0 unlisted vendored files                            W3C data-r2 files no upstream manifest lists                    1        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3893077Z   SPARQL 1.0 cases superseded by RDF 1.2                        W3C data-r2 extended evaluation root                            1        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3894088Z   SPARQL CONSTRUCT (first-party corpus)                         purrdf-construct (first-party)                                 29        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3895104Z   SPARQL DESCRIBE (first-party corpus)                          purrdf-describe (first-party)                                  16        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3896214Z   SPARQL CDT (SEP-0009, vendored corpus)                        awslabs/SPARQL-CDTs                                           658        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3897093Z   SPARQL execution governors                                    purrdf-sparql-governors (first-party)                          50        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3897964Z   SPARQL embedding kNN (first-party)                            purrdf-embedding-knn (first-party)                             15        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3898822Z   HNSW approximate kNN (first-party)                            purrdf-hnsw (first-party)                                      87        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3899690Z   GeoSPARQL 1.1 determinism corpus                              purrdf-geo (first-party; OGC 22-047r1)                         20        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3900779Z   Entailment (OWL 2 DL consistency)                             W3C OWL 2 test suite                                          258        4       4      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3901744Z   Entailment (OWL 2 RL, W3C entailment tests)                   W3C OWL 2 entailment tests                                     50        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3902534Z   SHACL Core + SHACL-SPARQL                                     W3C data-shapes                                               129        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3903358Z   SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)  W3C shacl12-test-suite                                        538        6       6      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3904261Z   SHACL 1.2 unlisted vendored files                             W3C shacl12-test-suite files no manifest includes               3        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3905128Z   SHACL (first-party corpus)                                    first-party frozen reports                                     73        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3906133Z   SHACL prepared-product equivalence                            W3C data-shapes + shacl12-test-suite + first-party corpus     364        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3907037Z   XSD/XPath regExp (first-party corpus)                         first-party, XSD G + F&O 5.6                                  292        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3907791Z   SHACL Rules                                                   DASH + first-party                                             20        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3908488Z   ShEx 2.1 validation                                           shexTest v2.1.0                                              1105        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3909207Z   ShEx syntax + ShExC/ShExJ round-trip                          shexTest v2.1.0                                                10        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3910031Z   JSON Schema draft 2020-12 (official suite)                    JSON-Schema-Test-Suite 5b0ee16                               2342        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3910910Z   JSON Schema draft 2019-09 (official suite)                    JSON-Schema-Test-Suite 5b0ee16                               2298        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3911771Z   JSON Schema draft-07 (official suite)                         JSON-Schema-Test-Suite 5b0ee16                               1841        0       0      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3912612Z   GTS transport (frozen vectors)                                gmeow-gts frozen corpus, vectors/                              38        1       1      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3913400Z   rdflib LSP drop-in gate                                       rdflib 7.6 own tests                                           81        5       5      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3914192Z   Python binding suite                                          first-party (incl. compat differential vs rdflib)            4164        4       4      0  GREEN
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3915025Z -----------------------------------------------------------------------------------------------------------------------------------------------------------------
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3915710Z   TOTAL                                                                                                                     16177       20      20      0
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3916170Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3916258Z Notes:
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3916590Z   - IRI (RFC 3987 / RFC 3986 resolution): parse/validate/normalize/resolve vectors
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3917100Z   - RDFC-1.0 canonicalization: 65 vectors (64 eval + 1 negative), sharded
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3917648Z   - RDF 1.2 canonicalization profile: 19 goldens + 7 refusals, frozen and content-addressed
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3918269Z   - Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML): 264/264 vectors round-trip; 0 allowlisted gaps
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3919219Z   - SPARQL 1.0/1.1/1.2 evaluation (full corpus): 1393 pass · 0 xfail (ledgered)
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3920852Z   - SPARQL 1.0 unlisted vendored files: 20 vendored files no upstream manifest lists: 1 described entry the group leaves out, graded against the SPARQL 1.1 reading that replaced it · 8 files of the orphan sameTerm manifest, whose anonymous untyped entries cannot load · 11 payloads no manifest names
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3922707Z   - SPARQL 1.0 cases superseded by RDF 1.2: 1/1 graded against the SPARQL 1.2 order (§15.1, RDF 1.2 simple literal = xsd:string): the frozen terms exactly, the frozen order not
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3925399Z   - SPARQL CONSTRUCT (first-party corpus): 29/29 cases: triple-producing §16.2 + CONSTRUCT GRAPH quads, paired case for case, incl. the RDF 1.2 statement layer and its per-graph keying and BOTH terms a subject position refuses (a literal and a triple term) at BOTH depths it applies (an asserted subject and the subject of a triple term nested in an object, the depth at which an unenforced term model emits a document the engine's own readers refuse); the quad-template grammar bounded from both sides by 1 positive and 7 negative syntax verdicts
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3928282Z   - SPARQL DESCRIBE (first-party corpus): 16/16 cases pinning the symmetric CBD, incl. the RDF 1.2 statement layer on both sides of its subject-or-object disjunction and its per-graph scope over TriG
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3931690Z   - SPARQL CDT (SEP-0009, vendored corpus): 658/658 vendored upstream cases (awslabs/SPARQL-CDTs, commit e0a7465) across six groups: the list and map function libraries, the FOLD aggregate and the UNFOLD graph pattern, ORDER BY over composite values, and blank-node identity inside composite lexical forms. PurRDF reads TWO forms outside the published lexical space — an RDF 1.2 triple term and a directional language-tagged literal as list elements or map values — which a conformant SEP-0009 reader calls ill-formed; `crates/sparql-conformance/tests/cdt_lexical_divergence.rs` grades every composite literal in every corpus this workspace ships and proves not one of them needs either
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3934381Z   - SPARQL execution governors: 50/50 pinned cases; 42 zero/boundary/over-bound bands, frozen and content-addressed
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3937417Z   - SPARQL embedding kNN (first-party): the PURREMB kNN property-function seam end to end — rank order, join-back, the LIMIT prefix law, cross-artifact byte identity, and the `property-function-work` governor charge point the governor corpus deliberately does not band (its relations report zero work). The `knn_wasm_determinism` case pins five neighbours and their exact `xsd:double` distance lexicals as a literal, so a reassociated sum or a fused multiply-add that swaps two near-tied neighbours fails here; these numeric expectations run natively; `make wasm-test` separately selects actual WASM dispatch and SIMD kernels
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3944221Z   - HNSW approximate kNN (first-party): the approximate half of the retrieval pair, graded against the exact path as its oracle: every offered row compared to the exact scan's own `(distance, row)` order, the graph invariants that make an offer possible at all (every row reachable from the entry point, degree bounds, sorted adjacency, the fixed level formula), the approximation contract (an offer is never a proof of absence), the PURREMB guard round-trip through the real INDEX_GUARDS and INDEX_PAYLOAD sections, the SPARQL property-function seam from query text, and the decoder-hostility cases. It also grades the CORPUS the recall figures are taken over, because on this crate the distribution decides the recall, so a generator that drifted toward uniform would quietly turn every recall number into a statement about the fixture: effective dimension against a uniform control, and the achieved within-cluster cosine -- measured against the centroid each row was drawn around, pinned across a ladder of intended values, pinned again for the default shape every figure in this crate uses, and held flat across a sixty-fourfold range of widths, which is the property that separates an intended cosine from a fixed noise amplitude whose tightness collapses as the width grows. This complete corpus runs natively; focused WASM tests exercise actual dispatch, SIMD kernels and path admission
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3952230Z   - GeoSPARQL 1.1 determinism corpus: 20 geometries folded byte-wise into one u64 digest, compared with the pinned `GOLDEN_DIGEST` in crates/geo/tests/determinism.rs (`9667c2ee2cd3ad4b`): agrees. Counts CORPUS GEOMETRIES, not test functions. NO OGC conformance suite is vendored and none is claimed — the crate's SHACL shapes are first-party `example.org` mirrors of the shipped OGC 22-047r1 validator, because PurRDF mints no vocabulary IRIs, so the evaluator-seam and shape cases grade the implementation against its own reading of the specification and are gated by `make check` rather than counted here. This complete corpus runs natively; `make wasm` separately builds the release crate.
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3955635Z   - Entailment (OWL 2 DL consistency): 258/262 DL consistency verdicts · 4 ledgered · corpus is a subset: 220 more consistency-shaped cases upstream are NOT vendored (172 the tableau decided when probed, 0 non-terminating, 25 withheld, 23 with no RDF/XML premise)
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3958051Z   - Entailment (OWL 2 RL, W3C entailment tests): 50/50 agreeing · 0 ledgered · 0 actionable · corpus: 27 positive + 23 negative
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3958925Z   - SHACL Core + SHACL-SPARQL: 129 pass as approved · 0 ledgered
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3959866Z   - SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL): 538 pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3961163Z   - SHACL 1.2 unlisted vendored files: 3 entries of vendored files no upstream manifest includes, graded apart from the approved suite: 2 exactly as written · 1 with a proven delta
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3961995Z   - SHACL (first-party corpus): 73/73 byte-frozen expected reports
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3963013Z   - SHACL prepared-product equivalence: 364/376 shapes graphs agree across parse/admit/rebuild; 0 refused by the product writer; 12 whose shapes graph the conformance harnesses require the loader to refuse (a declared sht:Failure)
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3964099Z   - XSD/XPath regExp (first-party corpus): 292/292 hand-derived XSD/XPath regExp cases
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3964579Z   - SHACL Rules: 20/20 inferred-graph fixtures
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3965014Z   - ShEx 2.1 validation: 1105/1105 attempted · 0 trait-skips
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3965501Z   - ShEx syntax + ShExC/ShExJ round-trip: schemas parse + negative syntax/structure
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3967464Z   - JSON Schema draft 2020-12 (official suite): every draft 2020-12 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,463 validation cases, all 874 format cases and all 4 output-format cases pass, plus the suite-inventory case. optional/cross-draft.json evaluates a $ref into a draft 2019-09 document under 2019-09 rules
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3970192Z   - JSON Schema draft 2019-09 (official suite): every draft 2019-09 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,419 validation cases, all 874 format cases and all 4 output-format cases pass, plus the suite-inventory case. $recursiveRef, array-form items, and optional/cross-draft.json's $refs into 2020-12 and draft-07 documents, each evaluated under its own draft
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3972621Z   - JSON Schema draft-07 (official suite): every draft-07 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,047 validation cases and all 793 format cases pass, plus the suite-inventory case; draft-07 has no output-format tests
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3974408Z   - GTS transport (frozen vectors): 38/39 frozen vectors fold byte-exactly into their committed `.expected.json`; 1 ledgered divergence from an upstream expectation this reader contradicts. The corpus is governed upstream and is never regenerated here
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3975768Z   - rdflib LSP drop-in gate: 81 pass · 5 strict-xfail (ledgered)
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3976411Z   - Python binding suite: 4164 pass · 4 strict-xfail (ledgered)
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3976810Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3977042Z VERDICT: GREEN — all conformance suites pass or are ledgered
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.3977312Z 
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4043315Z ##[group]Run test "$SHARDS_RESULT" = success
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4043728Z ^[[36;1mtest "$SHARDS_RESULT" = success^[[0m
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4106919Z shell: /usr/bin/bash -e {0}
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4107199Z env:
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4107421Z   SHARDS_RESULT: success
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4107685Z ##[endgroup]
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.4308957Z Post job cleanup.
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5157280Z [command]/usr/bin/git version
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5193963Z git version 2.55.0
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5228611Z Temporarily overriding HOME='/home/runner/work/_temp/2a1abdcd-1f93-4920-809e-bbcd34c8634f' before making global git config changes
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5229518Z Adding repository directory to the temporary git global config as a safe directory
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5233355Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5266352Z Removing SSH command configuration
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5273109Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5306643Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5540719Z Removing HTTP extra header
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5545421Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5577373Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5805562Z Removing includeIf entries pointing to credentials config files
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5811420Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.5841170Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.6207250Z Cleaning up orphan processes
+conformance	UNKNOWN STEP	2026-10-07T03:27:38.6529683Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

@@ -1,0 +1,891 @@
+pytest	UNKNOWN STEP	﻿2026-10-07T03:17:58.8729094Z Current runner version: '2.337.0'
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8755560Z ##[group]Runner Image Provisioner
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8756494Z Hosted Compute Agent
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8757133Z Version: 20260901.588
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8757795Z Commit: f88ec8081b781fac6c440065ac7ff9e710ce3d0b
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8758501Z Build Date: 2026-09-01T19:56:44Z
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8759194Z Worker ID: {f173f4c5-457a-42c9-9578-a3c4416102f9}
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8760366Z Azure Region: centralus
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8760998Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8762869Z ##[group]Operating System
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8763491Z Ubuntu
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8763986Z 24.04.5
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8764551Z LTS
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8765056Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8765593Z ##[group]Runner Image
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8766226Z Image: ubuntu-24.04
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8766752Z Version: 20260927.320.1
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8768011Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260927.320/images/ubuntu/Ubuntu2404-Readme.md
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8769417Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8770507Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8771536Z ##[group]GITHUB_TOKEN Permissions
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8773998Z Contents: read
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8774545Z Metadata: read
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8775106Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8777137Z Secret source: Actions
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8778081Z Cache mode: write
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.8779045Z Prepare workflow directory
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.9096025Z Prepare all required actions
+pytest	UNKNOWN STEP	2026-10-07T03:17:58.9146609Z Getting action download info
+pytest	UNKNOWN STEP	2026-10-07T03:17:59.1957422Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+pytest	UNKNOWN STEP	2026-10-07T03:17:59.3291548Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+pytest	UNKNOWN STEP	2026-10-07T03:17:59.5275643Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.4994223Z Complete job name: pytest
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5829079Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5830285Z with:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5830826Z   persist-credentials: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5831412Z   repository: Blackcat-Informatics/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5835182Z   token: ***
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5835581Z   ssh-strict: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5836013Z   ssh-user: git
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5836492Z   clean: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5836974Z   sparse-checkout-cone-mode: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5837486Z   fetch-depth: 1
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5837891Z   fetch-tags: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5838306Z   show-progress: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5838762Z   lfs: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5839228Z   submodules: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5839746Z   set-safe-directory: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5840455Z   allow-unsafe-pr-checkout: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.5841249Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6783423Z Syncing repository: Blackcat-Informatics/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6785530Z ##[group]Getting Git version info
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6786188Z Working directory is '/home/runner/work/purrdf/purrdf'
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6787133Z [command]/usr/bin/git version
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6846182Z git version 2.55.0
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6864339Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6873716Z Temporarily overriding HOME='/home/runner/work/_temp/cabb8333-901f-4e44-941f-d58e82107916' before making global git config changes
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6875044Z Adding repository directory to the temporary git global config as a safe directory
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6878203Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6923392Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6927672Z ##[group]Determining repository object format
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6929168Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6933873Z ##[group]Initializing the repository
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.6934552Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7019171Z hint: Using 'master' as the name for the initial branch. This default branch name
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7020438Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7021733Z hint: to use in all of your new repositories, which will suppress this warning,
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7022450Z hint: call:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7022841Z hint:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7023407Z hint: 	git config --global init.defaultBranch <name>
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7024020Z hint:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7024591Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7025813Z hint: 'development'. The just-created branch can be renamed via this command:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7026584Z hint:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7027003Z hint: 	git branch -m <name>
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7027490Z hint:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7028072Z hint: Disable this message with "git config set advice.defaultBranchName false"
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7029370Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7031556Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7079403Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7080444Z ##[group]Disabling automatic garbage collection
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7082153Z [command]/usr/bin/git config --local gc.auto 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7112273Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7113553Z ##[group]Setting up auth
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7114164Z Removing SSH command configuration
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7116718Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7143129Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7435871Z Removing HTTP extra header
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7440694Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7475022Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7647593Z Removing includeIf entries pointing to credentials config files
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7652558Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7677459Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7883730Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7893056Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7921220Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7952572Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.7981830Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.8007703Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.8008869Z ##[group]Fetching the repository
+pytest	UNKNOWN STEP	2026-10-07T03:18:00.8015059Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9198fa8786754dc2fa26e6af52e5271fb897ecaa:refs/remotes/pull/448/merge
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6696703Z From https://github.com/Blackcat-Informatics/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6699784Z  * [new ref]           9198fa8786754dc2fa26e6af52e5271fb897ecaa -> pull/448/merge
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6708016Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6709340Z ##[group]Determining the checkout info
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6711207Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6712184Z [command]/usr/bin/git sparse-checkout disable
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6760418Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6790812Z ##[group]Checking out the ref
+pytest	UNKNOWN STEP	2026-10-07T03:18:03.6792430Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/448/merge
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.6986204Z Updating files:  83% (15116/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7031189Z Updating files:  84% (15186/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7078798Z Updating files:  85% (15367/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7115642Z Updating files:  86% (15548/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7150021Z Updating files:  87% (15728/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7183157Z Updating files:  88% (15909/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7245017Z Updating files:  89% (16090/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7273094Z Updating files:  90% (16271/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7302065Z Updating files:  91% (16451/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7331696Z Updating files:  92% (16632/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7371573Z Updating files:  93% (16813/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7400868Z Updating files:  94% (16994/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7432838Z Updating files:  95% (17175/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7467824Z Updating files:  96% (17355/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7508725Z Updating files:  97% (17536/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7544526Z Updating files:  98% (17717/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7576246Z Updating files:  99% (17898/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7577074Z Updating files: 100% (18078/18078)
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7578146Z Updating files: 100% (18078/18078), done.
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7748939Z Note: switching to 'refs/remotes/pull/448/merge'.
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7749595Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7750031Z You are in 'detached HEAD' state. You can look around, make experimental
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7751118Z changes and commit them, and you can discard any commits you make in this
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7751606Z state without impacting any branches by switching back to a branch.
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7751921Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7752128Z If you want to create a new branch to retain commits you create, you may
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7752574Z do so (now or later) by using -c with the switch command. Example:
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7752817Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7752929Z   git switch -c <new-branch-name>
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7753108Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7753230Z Or undo this operation with:
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7753385Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7753487Z   git switch -
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7753607Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7753823Z Turn off this advice by setting config variable advice.detachedHead to false
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7754088Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7754420Z HEAD is now at 9198fa87 Merge 9e9e67c80d832175bdafb8e938d7abae00486f8b into dfc0c21adabe557e5d11f027aaf2576bddbe1dd6
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7770555Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7811046Z [command]/usr/bin/git log -1 --format=%H
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7832234Z 9198fa8786754dc2fa26e6af52e5271fb897ecaa
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7842072Z ##[group]Removing auth
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7842491Z Removing SSH command configuration
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7843232Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.7871605Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8070410Z Removing HTTP extra header
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8073494Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8099128Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8297153Z Removing includeIf entries pointing to credentials config files
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8299417Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8323930Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8324532Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8324938Z includeif.gitdir:/github/workspace/.git.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8325302Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8330274Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8348625Z /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8355948Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8391881Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8410202Z /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8416180Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8447487Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8465409Z /github/runner_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8470905Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8511391Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8530022Z /github/runner_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8535624Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8565295Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8765407Z Removing credentials config '/home/runner/work/_temp/git-credentials-f1dd8f84-23cc-4753-9a4d-59003374e12f.config'
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.8775332Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9117930Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9118380Z with:
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9118635Z   toolchain: nightly
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9118893Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9213370Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9267248Z ##[group]Run : parse toolchain version
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9267682Z ^[[36;1m: parse toolchain version^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9267983Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9268515Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9269041Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9269331Z ^[[36;1m  exit 1^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9269694Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9270433Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9270950Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9271438Z ^[[36;1m  else^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9272053Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9272478Z ^[[36;1m  fi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9272785Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9273287Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9273735Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9274223Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9274698Z ^[[36;1melse^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9274960Z ^[[36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9275255Z ^[[36;1mfi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9480572Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9480967Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9481220Z   toolchain: nightly
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9481464Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9608918Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=39]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9631284Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9666667Z ##[group]Run : construct rustup command line
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9667022Z ^[[36;1m: construct rustup command line^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9667449Z ^[[36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9667999Z ^[[36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9668458Z ^[[36;1mecho "downgrade=" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9712176Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9712514Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9712712Z   targets: 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9712915Z   components: 
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9713152Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9794104Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=16]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9797865Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9830485Z ##[group]Run : set $CARGO_HOME
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9830780Z ^[[36;1m: set $CARGO_HOME^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9831115Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9875362Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9875739Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9952046Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=15]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9954641Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9993456Z ##[group]Run : install rustup if needed
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9993790Z ^[[36;1m: install rustup if needed^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9994117Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9994821Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9995467Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:04.9995755Z ^[[36;1mfi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0036518Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0036856Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0037076Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0037330Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0105404Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=15]
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0110148Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0117215Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0121343Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0158960Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0159580Z ^[[36;1mrustup toolchain install nightly --profile minimal --no-self-update^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0203778Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0204334Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0204749Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0205144Z   RUSTUP_PERMIT_COPY_RENAME: 1
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0205555Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.0894726Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.5130129Z info: latest update on 2026-10-07 for version 1.101.0-nightly (8d1a76430 2026-10-06)
+pytest	UNKNOWN STEP	2026-10-07T03:18:05.5131257Z info: downloading 3 components
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8365076Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8432576Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8433285Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8462695Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=9834]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8469408Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8499410Z ##[group]Run rustup default nightly
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8499820Z ^[[36;1mrustup default nightly^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8540417Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8540831Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8541144Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8541526Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8641944Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8652544Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8652867Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8716284Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8717703Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8718780Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8730593Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=26]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8735733Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8763233Z ##[group]Run : create cachekey
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8763632Z ^[[36;1m: create cachekey^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8764177Z ^[[36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8764939Z ^[[36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8765539Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8800026Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8800581Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8800941Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.8801292Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9097799Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=36]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9100857Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9149523Z ##[group]Run : disable incremental compilation
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9150235Z ^[[36;1m: disable incremental compilation^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9150665Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9151103Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9151458Z ^[[36;1mfi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9186474Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9186958Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9187270Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9187608Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9247082Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=14]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9249696Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9275193Z ##[group]Run : enable colors in Cargo output
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9275611Z ^[[36;1m: enable colors in Cargo output^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9276020Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9276452Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9276831Z ^[[36;1mfi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9307970Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9308403Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9308728Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9309139Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9309440Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9366480Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=11]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9372435Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9400226Z ##[group]Run : enable Cargo sparse registry
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9400641Z ^[[36;1m: enable Cargo sparse registry^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9401060Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9401776Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9402528Z ^[[36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9403132Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9403716Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9404244Z ^[[36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9404851Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9405437Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9405841Z ^[[36;1m  fi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9406123Z ^[[36;1mfi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9436600Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9437063Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9437376Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9437743Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9438060Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9438397Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9707317Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=33]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9712131Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9738235Z ##[group]Run : work around spurious network errors in curl 8.0
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9738755Z ^[[36;1m: work around spurious network errors in curl 8.0^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9739343Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9740312Z ^[[36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9740836Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9741277Z ^[[36;1mfi^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9773403Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9773920Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9774205Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9774546Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9774869Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9775151Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9937454Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=22]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9942124Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9968494Z ##[group]Run rustc +nightly --version --verbose
+pytest	UNKNOWN STEP	2026-10-07T03:18:14.9968903Z ^[[36;1mrustc +nightly --version --verbose^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0003413Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0003819Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0004208Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0004568Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0004927Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0005270Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0153153Z rustc 1.101.0-nightly (8d1a76430 2026-10-06)
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0153969Z binary: rustc
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0154660Z commit-hash: 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0155428Z commit-date: 2026-10-06
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0156100Z host: x86_64-unknown-linux-gnu
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0156924Z release: 1.101.0-nightly
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0157475Z LLVM version: 23.1.3
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0169522Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=22]
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0295378Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0295854Z with:
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0296297Z   shared-key: workspace-test
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0296630Z   save-if: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0296944Z   prefix-key: v0-rust
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0297255Z   add-job-id-key: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0297573Z   add-rust-environment-hash-key: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0298026Z   cache-targets: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0298337Z   cache-all-crates: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0298689Z   cache-workspace-crates: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0299029Z   cache-provider: github
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0299327Z   cache-bin: true
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0299672Z   lookup-only: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0300085Z   cmd-format: {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0300372Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0300677Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0301023Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0301411Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.0301745Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.3187941Z (node:2422) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+pytest	UNKNOWN STEP	2026-10-07T03:18:15.3189662Z (Use `node --trace-deprecation ...` to show where the warning was created)
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7652167Z ##[group]Cache Configuration
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7653012Z Cache Provider:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7653830Z     github
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7654517Z Workspaces:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7655002Z     /home/runner/work/purrdf/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7655445Z Cache Paths:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7655811Z     /home/runner/.cargo/bin
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7656261Z     /home/runner/.cargo/.crates.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7656897Z     /home/runner/.cargo/.crates2.json
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7657504Z     /home/runner/.cargo/registry
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7658027Z     /home/runner/.cargo/git
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7658527Z     /home/runner/work/purrdf/purrdf/target
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7659106Z Restore Key:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7659728Z     v0-rust-workspace-test-Linux-x64-300f5e68
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7660584Z Cache Key:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7661219Z     v0-rust-workspace-test-Linux-x64-300f5e68-78fb4371
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7661876Z .. Prefix:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7663189Z   - v0-rust-workspace-test-Linux-x64
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7663795Z .. Environment considered:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7664392Z   - Rust Versions:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7665010Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7665844Z     - 1.98.1 x86_64-unknown-linux-gnu 48a229ceaefd4985c50990b14116b6d856af0985
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7666815Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 8d1a76430406c877b35d0b627e7f796dcf0dfeca
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7667508Z   - CARGO_HOME
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7668014Z   - CARGO_INCREMENTAL
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7668436Z   - CARGO_TERM_COLOR
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7668852Z .. Lockfiles considered:
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7669462Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7670833Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7671573Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7672263Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7673037Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7673738Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7674403Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7675078Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7675788Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7676527Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7677236Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7677856Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7678824Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7679685Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7680510Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7681259Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7682067Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7682800Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7683671Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7684460Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7685322Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7686085Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7686793Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7687664Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7688400Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7689062Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7689728Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7690605Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7691437Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7692108Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7692795Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7693485Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7694146Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7694811Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7695431Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7696137Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7696880Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7697519Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7698179Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7698749Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7699323Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7700139Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7700823Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7701529Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7702149Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7703030Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7703272Z 
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.7703662Z ... Restoring cache ...
+pytest	UNKNOWN STEP	2026-10-07T03:18:21.9098832Z Cache hit for restore-key: v0-rust-workspace-test-Linux-x64-300f5e68-35c91432
+pytest	UNKNOWN STEP	2026-10-07T03:18:22.9219104Z Received 36526528 of 36526528 (100.0%), 42.3 MBs/sec
+pytest	UNKNOWN STEP	2026-10-07T03:18:22.9220022Z Cache Size: ~35 MB (36526528 B)
+pytest	UNKNOWN STEP	2026-10-07T03:18:22.9361530Z [command]/usr/bin/tar -xf /home/runner/work/_temp/c94f150a-bf0f-4710-bcb2-e386fc8c18e8/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.0889138Z Cache restored successfully
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.0907722Z Restored from cache key "v0-rust-workspace-test-Linux-x64-300f5e68-35c91432" full match: false.
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1035001Z ##[group]Run curl -LsSf https://astral.sh/uv/install.sh | sh
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1035536Z ^[[36;1mcurl -LsSf https://astral.sh/uv/install.sh | sh^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1036042Z ^[[36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1076862Z shell: /usr/bin/bash -e {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1077252Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1077616Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1077993Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1078379Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1078721Z   CACHE_ON_FAILURE: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.1079047Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.3162750Z downloading uv 0.12.23 x86_64-unknown-linux-gnu
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9622446Z installing to /home/runner/.local/bin
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9670630Z   uv
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9686102Z   uvx
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9716748Z everything's installed!
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9820980Z ##[group]Run make pytest
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9821386Z ^[[36;1mmake pytest^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9863474Z shell: /usr/bin/bash -e {0}
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9863941Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9864270Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9864675Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9865002Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9865321Z   CACHE_ON_FAILURE: false
+pytest	UNKNOWN STEP	2026-10-07T03:18:23.9865640Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:18:24.0465281Z cargo run -q --locked -p helper-census -- --python-binding-tests
+pytest	UNKNOWN STEP	2026-10-07T03:19:09.0687588Z OK: no Rust test module under bindings/python/src (28 sources scanned)
+pytest	UNKNOWN STEP	2026-10-07T03:19:09.0690184Z cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+pytest	UNKNOWN STEP	2026-10-07T03:19:09.2732713Z Downloading cpython-3.14.8-linux-x86_64-gnu (download) (34.6MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.1051486Z  Downloaded cpython-3.14.8-linux-x86_64-gnu (download)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.2991117Z Using CPython 3.14.8
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.2991867Z Creating virtual environment at: .venv
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3029141Z Resolved 107 packages in 1ms
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3100390Z    Building purrdf @ file:///home/runner/work/purrdf/purrdf/bindings/python
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3817928Z Downloading pyarrow (47.8MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3819779Z Downloading pydantic-core (2.0MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3821447Z Downloading babel (9.7MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3825893Z Downloading sphinx (3.7MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3829535Z Downloading ast-serialize (1.2MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3832512Z Downloading pygments (1.2MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3837013Z Downloading numpy (15.9MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3837511Z Downloading maturin (10.1MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3840029Z Downloading duckdb (20.5MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3841507Z Downloading mypy (14.3MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3842669Z Downloading sqlalchemy (3.1MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3844044Z Downloading pyshacl (1.2MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.3852887Z Downloading pandas (10.4MiB)
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.6148933Z    Building antlr4-python3-runtime==4.9.3
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.6722351Z    Building cfgraph==0.2.1
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.6878204Z  Downloaded pyshacl
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.6879661Z    Building pytest-logging==2015.11.4
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.6900904Z  Downloaded ast-serialize
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.6909968Z  Downloaded pygments
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.7165255Z  Downloaded pydantic-core
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.7651751Z  Downloaded sqlalchemy
+pytest	UNKNOWN STEP	2026-10-07T03:19:10.8151547Z  Downloaded sphinx
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.0117699Z  Downloaded babel
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.0560173Z  Downloaded maturin
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.0831206Z  Downloaded pandas
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.2361163Z  Downloaded numpy
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.2529733Z  Downloaded mypy
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.3441184Z  Downloaded duckdb
+pytest	UNKNOWN STEP	2026-10-07T03:19:11.7733181Z  Downloaded pyarrow
+pytest	UNKNOWN STEP	2026-10-07T03:19:12.3643464Z       Built cfgraph==0.2.1
+pytest	UNKNOWN STEP	2026-10-07T03:19:12.3830180Z       Built pytest-logging==2015.11.4
+pytest	UNKNOWN STEP	2026-10-07T03:19:12.4229797Z       Built antlr4-python3-runtime==4.9.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.3198449Z       Built purrdf @ file:///home/runner/work/purrdf/purrdf/bindings/python
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.3360442Z Prepared 104 packages in 7m 42s
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4242560Z Installed 104 packages in 88ms
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4243303Z  + alabaster==1.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4243811Z  + annotated-types==0.7.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4244308Z  + antlr4-python3-runtime==4.9.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4244784Z  + arrow==1.4.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4245235Z  + ast-serialize==0.6.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4245849Z  + attrs==26.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4246269Z  + babel==2.18.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4246883Z  + certifi==2026.6.17
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4247325Z  + cfgraph==0.2.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4256131Z  + chardet==7.4.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4256645Z  + charset-normalizer==3.4.7
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4257126Z  + click==8.4.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4257492Z  + curies==0.13.13
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4257880Z  + deprecated==1.3.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4258348Z  + deprecation==2.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4258727Z  + docutils==0.22.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4259413Z  + duckdb==1.5.5
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4259813Z  + et-xmlfile==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4260353Z  + fqdn==1.5.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4260734Z  + graphviz==0.21
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4261094Z  + greenlet==3.5.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4261476Z  + hbreader==0.9.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4261902Z  + html5rdf==1.2.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4262268Z  + idna==3.18
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4262635Z  + imagesize==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4263003Z  + iniconfig==2.3.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4263388Z  + isodate==0.7.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4263836Z  + isoduration==20.11.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4264232Z  + jinja2==3.1.6
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4264617Z  + json-flattener==0.1.9
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4265008Z  + jsonasobj==1.3.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4265590Z  + jsonasobj2==1.0.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4376675Z  + jsonpointer==3.1.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4377067Z  + jsonschema==4.26.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4377342Z  + jsonschema-specifications==2025.9.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4377688Z  + librt==0.12.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4377960Z  + linkml==1.11.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4378249Z  + linkml-runtime==1.11.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4378503Z  + markupsafe==3.0.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4378724Z  + maturin==1.14.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4378929Z  + mypy==2.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4379144Z  + mypy-extensions==1.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4379393Z  + numpy==2.5.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4379605Z  + openpyxl==3.1.5
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4379816Z  + owlrl==7.1.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4380146Z  + packaging==26.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4380418Z  + pandas==3.0.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4380702Z  + parse==1.22.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4380991Z  + pathspec==1.1.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4381289Z  + pluggy==1.6.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4381660Z  + prefixcommons==0.1.12
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4382065Z  + prefixmaps==0.2.6
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4382385Z  + prettytable==3.18.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4382925Z  + purrdf==3.0.1 (from file:///home/runner/work/purrdf/purrdf/bindings/python)
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4383506Z  + pyarrow==25.0.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4383814Z  + pydantic==2.13.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4384101Z  + pydantic-core==2.46.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4384400Z  + pygments==2.20.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4384639Z  + pyjsg==0.12.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4384903Z  + pyparsing==3.3.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4385126Z  + pyshacl==0.31.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4385353Z  + pyshex==0.9.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4385575Z  + pyshexc==0.10.3.post1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4385797Z  + pystow==0.8.19
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4386004Z  + pytest==9.0.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4386296Z  + pytest-logging==2015.11.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4386648Z  + python-dateutil==2.9.0.post0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4387257Z  + pyyaml==6.0.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4387523Z  + rdflib==7.6.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4387809Z  + rdflib-jsonld==0.6.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4388125Z  + rdflib-shim==1.0.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4388461Z  + referencing==0.37.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4388714Z  + requests==2.34.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4388925Z  + rfc3339-validator==0.1.4
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4389147Z  + rfc3987==1.3.8
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4389349Z  + roman-numerals==4.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4389568Z  + rpds-py==2026.6.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4389812Z  + shexjsg==0.9.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4390229Z  + six==1.17.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4390582Z  + snowballstemmer==3.1.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4390874Z  + sparqlslurper==0.5.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4391088Z  + sparqlwrapper==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4391299Z  + sphinx==9.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4391493Z  + sphinx-click==6.2.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4391722Z  + sphinxcontrib-applehelp==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4392017Z  + sphinxcontrib-devhelp==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4392424Z  + sphinxcontrib-htmlhelp==2.1.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4392746Z  + sphinxcontrib-jsmath==1.0.1
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4392992Z  + sphinxcontrib-qthelp==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4393257Z  + sphinxcontrib-serializinghtml==2.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4393518Z  + sqlalchemy==2.0.51
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4393844Z  + sssom==0.4.17
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4394126Z  + sssom-schema==1.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4394363Z  + tqdm==4.68.3
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4394567Z  + typing-extensions==4.15.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4394812Z  + typing-inspection==0.4.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4395166Z  + tzdata==2026.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4395479Z  + uri-template==1.3.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4395781Z  + urllib3==2.8.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4396000Z  + validators==0.35.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4396231Z  + watchdog==6.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4396439Z  + wcwidth==0.8.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4396642Z  + webcolors==25.10.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:52.4396858Z  + wrapt==2.2.2
+pytest	UNKNOWN STEP	2026-10-07T03:26:54.7058049Z ============================= test session starts ==============================
+pytest	UNKNOWN STEP	2026-10-07T03:26:54.7058564Z platform linux -- Python 3.14.8, pytest-9.0.3, pluggy-1.6.0
+pytest	UNKNOWN STEP	2026-10-07T03:26:54.7058958Z rootdir: /home/runner/work/purrdf/purrdf/bindings/python
+pytest	UNKNOWN STEP	2026-10-07T03:26:54.7059285Z configfile: pyproject.toml
+pytest	UNKNOWN STEP	2026-10-07T03:26:54.7059522Z collected 4169 items
+pytest	UNKNOWN STEP	2026-10-07T03:26:54.7059660Z 
+pytest	UNKNOWN STEP	2026-10-07T03:27:00.6957244Z tests/test_acceptance_matrix.py ....s.                                   [  0%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:00.7203129Z tests/test_aggregate_namespace.py ...........                            [  0%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:00.8197793Z tests/test_argument_refusals.py ...........................              [  1%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:00.8355096Z tests/test_codec_fidelity.py .........................                   [  1%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.0507850Z tests/test_collection.py .........                                       [  1%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.2720493Z tests/test_compat_parity.py ...........                                  [  2%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.2981794Z tests/test_construct_named_graphs.py ................................... [  2%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3037661Z .........                                                                [  3%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3191111Z tests/test_dataset.py ...........                                        [  3%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3221168Z tests/test_dataset_canonicalization.py ......                            [  3%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3455120Z tests/test_division_policy.py ..................                         [  4%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3604190Z tests/test_document_base.py ...................................          [  4%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3621881Z tests/test_engine_configuration.py ...                                   [  4%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.3650056Z tests/test_entail.py ....                                                [  5%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.5678120Z tests/test_entail_reasoning.py ......................................... [  6%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.5949734Z .............................                                            [  6%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:01.8610487Z tests/test_entail_regimes.py ........................................... [  7%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.0985423Z ............................................                             [  8%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.1190551Z tests/test_frozen_escape_vectors.py .................................... [  9%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.1595817Z ........................................................................ [ 11%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.2015381Z ........................................................................ [ 13%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.2440978Z ........................................................................ [ 14%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.2853440Z ........................................................................ [ 16%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.3265983Z ........................................................................ [ 18%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.3652542Z ........................................................................ [ 20%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.4033255Z ........................................................................ [ 21%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.4407727Z ........................................................................ [ 23%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.4790117Z ........................................................................ [ 25%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.5166790Z ........................................................................ [ 26%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.5556391Z ........................................................................ [ 28%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.5958621Z ........................................................................ [ 30%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.6364315Z ........................................................................ [ 32%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.6752810Z ........................................................................ [ 33%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.7141418Z ........................................................................ [ 35%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:02.7521957Z ........................................................................ [ 37%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:10.5295913Z ........................................................................ [ 39%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.0702360Z ................................                                         [ 39%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.0893758Z tests/test_frozen_lex_vectors.py ....................................... [ 40%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.1235522Z ........................................................................ [ 42%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.1571079Z ........................................................................ [ 44%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.1912799Z ........................................................................ [ 45%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.2249435Z ........................................................................ [ 47%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.2589296Z ........................................................................ [ 49%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.2929655Z ........................................................................ [ 51%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.3276330Z ........................................................................ [ 52%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.3628805Z ........................................................................ [ 54%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.3976910Z ........................................................................ [ 56%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.4323213Z ........................................................................ [ 57%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.4655105Z ........................................................................ [ 59%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.4999521Z ........................................................................ [ 61%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.5335154Z ........................................................................ [ 63%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.5675577Z ........................................................................ [ 64%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.6020082Z ........................................................................ [ 66%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.6391344Z ........................................................................ [ 68%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.6802829Z ........................................................................ [ 70%]
+pytest	UNKNOWN STEP	2026-10-07T03:27:53.7129732Z ........................................................................ [ 71%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.4305571Z .............................................                            [ 72%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.4319691Z tests/test_graph.py ..                                                   [ 72%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.4678422Z tests/test_graph_facade.py ..............x....                           [ 73%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.4721849Z tests/test_gts_fold_view.py ..........                                   [ 73%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.4761286Z tests/test_gts_fold_view_self_reaching.py ........                       [ 73%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.4802842Z tests/test_gts_ingest_report.py ........                                 [ 74%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.9262049Z tests/test_gts_relational_export.py .................                    [ 74%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.9282686Z tests/test_jsonld_baseline.py ...                                        [ 74%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.9322249Z tests/test_jsonld_configured.py ......                                   [ 74%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.9569397Z tests/test_namespaces.py ............................................... [ 75%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:08.9936065Z ................                                                         [ 76%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.0745541Z tests/test_native_store_contract.py .........                            [ 76%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.0884203Z tests/test_paths.py ....................                                 [ 76%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.1081267Z tests/test_plugin_discovery.py ......................................... [ 77%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.1346369Z .........................................                                [ 78%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.1400153Z tests/test_prepared_prebound_grouping.py .......                         [ 78%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.1565009Z tests/test_prepared_query.py .......................                     [ 79%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.1757660Z tests/test_projection.py ..........                                      [ 79%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.2030253Z tests/test_property_functions.py ....................................... [ 80%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.2530420Z ..........................................                               [ 81%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.3188951Z tests/test_query.py .......xx                                            [ 81%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.4105707Z tests/test_query_governors.py .......................................... [ 82%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.4156781Z .....                                                                    [ 83%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.4355109Z tests/test_query_presentation.py ....................                    [ 83%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.4374433Z tests/test_rdf_dataset_layers.py ...                                     [ 83%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:09.9762462Z tests/test_rdflib_shadow.py ............                                 [ 83%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:11.0654647Z tests/test_rdflib_suite.py ..                                            [ 83%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:11.0868641Z tests/test_rdflib_version.py .                                           [ 83%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:11.0879580Z tests/test_redeclared_withdrawn_graph.py .                               [ 84%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:11.0925669Z tests/test_resource.py ........                                          [ 84%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:25.1960906Z tests/test_retrieval.py ................................................ [ 85%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.2576737Z ........................................................................ [ 87%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.2628963Z .........                                                                [ 87%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.2846866Z tests/test_retrieval_cost_counters.py ....                               [ 87%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.4451343Z tests/test_retrieval_vector_producers.py ...........................     [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.5331153Z tests/test_sarif.py ....                                                 [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.8886918Z tests/test_scan_order_determinism.py .                                   [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.8910682Z tests/test_serialize_declared_empty_graphs.py ...                        [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.8948341Z tests/test_serialize_loss.py ........                                    [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.9420542Z tests/test_serialize_output_short_write.py ....                          [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.9454003Z tests/test_sha3.py ......                                                [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:26.9544501Z tests/test_shacl_change_path.py ..........                               [ 88%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8210571Z tests/test_shacl_change_path_typing.py .....                             [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8254664Z tests/test_shacl_conformance_disallows.py .....                          [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8281234Z tests/test_shacl_extension_usage.py ....                                 [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8520255Z tests/test_shacl_owl_imports.py ...............                          [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8588127Z tests/test_shacl_product.py ........                                     [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8599488Z tests/test_shacl_result_annotations.py .                                 [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8638754Z tests/test_shacl_rules_shapes_graph.py ...                               [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.8859719Z tests/test_shacl_shapes_graph_iri.py ...                                 [ 89%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.9690847Z tests/test_shacl_shapes_graph_well_formed.py ...                         [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:27.9709041Z tests/test_shacl_subclass_of_in_shapes_graph.py ..                       [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.0535839Z tests/test_shacl_tools.py .........                                      [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.0627529Z tests/test_shapes_product_identity.py ..........                         [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.0667660Z tests/test_shex.py .......                                               [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.0683337Z tests/test_shex_exact_facets.py .                                        [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.0803913Z tests/test_sparql_prefixes.py ....                                       [ 90%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.1451272Z tests/test_sparql_results.py ........................................... [ 91%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.1467820Z .                                                                        [ 91%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.1504380Z tests/test_sparqlprocessor.py .....                                      [ 91%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.1782941Z tests/test_term_model.py ............................................... [ 93%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.2920519Z ......................................x........                          [ 94%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.3016124Z tests/test_top_level_exports.py ............                             [ 94%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.3637713Z tests/test_xpath_regex_profiles.py ..................................... [ 95%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:28.8812740Z ........................................................................ [ 97%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:29.0318756Z ........................................................................ [ 98%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.3298505Z ......................................                                   [ 99%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6819048Z tests/test_xsd_exact_numerics.py .........                               [100%]
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6819513Z 
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6819750Z =============================== warnings summary ===============================
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6826954Z tests/test_dataset.py::test_named_graph_view_is_readable
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6827340Z tests/test_dataset.py::test_default_graph_view
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6827703Z tests/test_dataset.py::test_get_context_reads_without_registering
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6828048Z tests/test_dataset.py::test_quads_parity
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6828367Z tests/test_dataset.py::test_quads_restricted_to_named_graph
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6829065Z tests/test_dataset.py::test_dataset_iter_yields_quads
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6829815Z   /home/runner/work/purrdf/purrdf/bindings/python/.venv/lib/python3.14/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6830708Z     c = self.default_context if default else None
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6830909Z 
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6831098Z tests/test_term_model.py::test_ill_typed_matches_oracle[boolean-maybe]
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6831828Z   /home/runner/work/purrdf/purrdf/bindings/python/.venv/lib/python3.14/site-packages/rdflib/term.py:1862: UserWarning: Parsing weird boolean, 'maybe' does not map to True or False
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6832450Z     warnings.warn(
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6832574Z 
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6832803Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+pytest	UNKNOWN STEP	2026-10-07T03:28:34.6833249Z ====== 4164 passed, 1 skipped, 4 xfailed, 7 warnings in 101.17s (0:01:41) ======
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.0217205Z cd bindings/python && PURRDF_TEST_REQUIRE_EXACT=1 uv run --locked cargo test --manifest-path ../../Cargo.toml --locked -p purrdf-cli --test python_empty_graphs -- --ignored --exact installed_empty_graph_modes
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.1258436Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.1259191Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.1260717Z ^[[1m^[[92m   Compiling^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.1261338Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.2336501Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.3728996Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+pytest	UNKNOWN STEP	2026-10-07T03:28:35.4852287Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+pytest	UNKNOWN STEP	2026-10-07T03:28:36.2351270Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+pytest	UNKNOWN STEP	2026-10-07T03:28:36.6213931Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+pytest	UNKNOWN STEP	2026-10-07T03:28:36.6931386Z ^[[1m^[[92m   Compiling^[[0m inout v0.2.2
+pytest	UNKNOWN STEP	2026-10-07T03:28:36.7755151Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+pytest	UNKNOWN STEP	2026-10-07T03:28:36.7841422Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.3.4
+pytest	UNKNOWN STEP	2026-10-07T03:28:36.9334613Z ^[[1m^[[92m   Compiling^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+pytest	UNKNOWN STEP	2026-10-07T03:28:37.0979146Z ^[[1m^[[92m   Compiling^[[0m universal-hash v0.6.1
+pytest	UNKNOWN STEP	2026-10-07T03:28:37.1535200Z ^[[1m^[[92m   Compiling^[[0m cipher v0.5.2
+pytest	UNKNOWN STEP	2026-10-07T03:28:37.3946089Z ^[[1m^[[92m   Compiling^[[0m rayon v1.12.0
+pytest	UNKNOWN STEP	2026-10-07T03:28:37.5088090Z ^[[1m^[[92m   Compiling^[[0m polyval v0.7.3
+pytest	UNKNOWN STEP	2026-10-07T03:28:37.7426646Z ^[[1m^[[92m   Compiling^[[0m twox-hash v2.1.2
+pytest	UNKNOWN STEP	2026-10-07T03:28:37.8311900Z ^[[1m^[[92m   Compiling^[[0m structured-zstd v0.0.49
+pytest	UNKNOWN STEP	2026-10-07T03:28:38.7071805Z ^[[1m^[[92m   Compiling^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+pytest	UNKNOWN STEP	2026-10-07T03:28:40.2941828Z ^[[1m^[[92m   Compiling^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+pytest	UNKNOWN STEP	2026-10-07T03:28:42.6168382Z ^[[1m^[[92m   Compiling^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+pytest	UNKNOWN STEP	2026-10-07T03:28:45.5050783Z ^[[1m^[[92m   Compiling^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+pytest	UNKNOWN STEP	2026-10-07T03:28:47.0706748Z ^[[1m^[[92m   Compiling^[[0m ghash v0.6.0
+pytest	UNKNOWN STEP	2026-10-07T03:28:47.1248635Z ^[[1m^[[92m   Compiling^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+pytest	UNKNOWN STEP	2026-10-07T03:28:56.0315285Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+pytest	UNKNOWN STEP	2026-10-07T03:28:57.8524223Z ^[[1m^[[92m   Compiling^[[0m aes v0.9.3
+pytest	UNKNOWN STEP	2026-10-07T03:28:58.4376114Z ^[[1m^[[92m   Compiling^[[0m ctr v0.10.1
+pytest	UNKNOWN STEP	2026-10-07T03:28:58.5705493Z ^[[1m^[[92m   Compiling^[[0m aead v0.6.1
+pytest	UNKNOWN STEP	2026-10-07T03:28:58.6706318Z ^[[1m^[[92m   Compiling^[[0m aes-gcm v0.11.1
+pytest	UNKNOWN STEP	2026-10-07T03:28:58.7631731Z ^[[1m^[[92m   Compiling^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+pytest	UNKNOWN STEP	2026-10-07T03:28:59.7471563Z ^[[1m^[[92m   Compiling^[[0m visual-hashing v1.0.0
+pytest	UNKNOWN STEP	2026-10-07T03:29:00.2666219Z ^[[1m^[[92m   Compiling^[[0m proc-macro2 v1.0.106
+pytest	UNKNOWN STEP	2026-10-07T03:29:00.7417170Z ^[[1m^[[92m   Compiling^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+pytest	UNKNOWN STEP	2026-10-07T03:29:19.1941880Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+pytest	UNKNOWN STEP	2026-10-07T03:29:25.5727883Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+pytest	UNKNOWN STEP	2026-10-07T03:29:28.2581881Z ^[[1m^[[92m   Compiling^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+pytest	UNKNOWN STEP	2026-10-07T03:30:00.8662047Z ^[[1m^[[92m   Compiling^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+pytest	UNKNOWN STEP	2026-10-07T03:30:06.2443163Z ^[[1m^[[92m   Compiling^[[0m quote v1.0.46
+pytest	UNKNOWN STEP	2026-10-07T03:30:06.9692516Z ^[[1m^[[92m   Compiling^[[0m syn v2.0.118
+pytest	UNKNOWN STEP	2026-10-07T03:30:36.4491775Z ^[[1m^[[92m   Compiling^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+pytest	UNKNOWN STEP	2026-10-07T03:30:41.0751806Z ^[[1m^[[92m   Compiling^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+pytest	UNKNOWN STEP	2026-10-07T03:30:55.6709298Z ^[[1m^[[92m   Compiling^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+pytest	UNKNOWN STEP	2026-10-07T03:31:20.1882165Z ^[[1m^[[92m   Compiling^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+pytest	UNKNOWN STEP	2026-10-07T03:31:42.5735352Z ^[[1m^[[92m   Compiling^[[0m clap_derive v4.6.1
+pytest	UNKNOWN STEP	2026-10-07T03:31:59.0288955Z ^[[1m^[[92m   Compiling^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+pytest	UNKNOWN STEP	2026-10-07T03:32:19.1968043Z ^[[1m^[[92m   Compiling^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+pytest	UNKNOWN STEP	2026-10-07T03:32:20.3973166Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+pytest	UNKNOWN STEP	2026-10-07T03:32:33.2471918Z ^[[1m^[[92m   Compiling^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+pytest	UNKNOWN STEP	2026-10-07T03:32:39.2272083Z ^[[1m^[[92m   Compiling^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+pytest	UNKNOWN STEP	2026-10-07T03:32:40.9121839Z ^[[1m^[[92m   Compiling^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+pytest	UNKNOWN STEP	2026-10-07T03:32:44.1541614Z ^[[1m^[[92m   Compiling^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+pytest	UNKNOWN STEP	2026-10-07T03:32:47.1371737Z ^[[1m^[[92m   Compiling^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+pytest	UNKNOWN STEP	2026-10-07T03:32:49.2312247Z ^[[1m^[[92m   Compiling^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+pytest	UNKNOWN STEP	2026-10-07T03:32:53.6931302Z ^[[1m^[[92m   Compiling^[[0m clap v4.6.1
+pytest	UNKNOWN STEP	2026-10-07T03:32:53.7218463Z ^[[1m^[[92m   Compiling^[[0m purrdf-cli v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cli)
+pytest	UNKNOWN STEP	2026-10-07T03:32:59.5781764Z ^[[1m^[[92m   Compiling^[[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+pytest	UNKNOWN STEP	2026-10-07T03:33:07.0144350Z ^[[1m^[[92m   Compiling^[[0m purrdf-alloc-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/alloc-probe)
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.5980377Z ^[[1m^[[92m    Finished^[[0m `test` profile [optimized] target(s) in 5m 28s
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6036882Z ^[[1m^[[92m     Running^[[0m tests/python_empty_graphs.rs (/home/runner/work/purrdf/purrdf/target/debug/build/purrdf-cli/796c836e25711eb1/out/python_empty_graphs-796c836e25711eb1)
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6045548Z 
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6045943Z running 1 test
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6393616Z Installed native module: /home/runner/work/purrdf/purrdf/bindings/python/python/src/purrdf/purrdf_native.abi3.so
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6394447Z test installed_empty_graph_modes ... ok
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6394700Z 
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6395036Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6395539Z 
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6504247Z ##[group]Run make pydantic-oracle
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6504569Z ^[[36;1mmake pydantic-oracle^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6544112Z shell: /usr/bin/bash -e {0}
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6544393Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6544611Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6545060Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6545299Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6545532Z   CACHE_ON_FAILURE: false
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.6545757Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.7137798Z uv sync --project bindings/python --locked --no-install-project
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.7247175Z Resolved 107 packages in 1ms
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.7331079Z Uninstalled 1 package in 5ms
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.7331545Z  - purrdf==3.0.1 (from file:///home/runner/work/purrdf/purrdf/bindings/python)
+pytest	UNKNOWN STEP	2026-10-07T03:34:03.7343652Z uv run --project bindings/python --no-sync python crates/shapes/tests/pydantic_oracle.py
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7430298Z Pydantic oracle: 42 PEP 440 differential cases agree; flat 6-model and routed 8-model packages pass strict typing, live schemas, validation/alias probes, metadata/version linkage, and verified reverse SHACL import; 8 SHACL list-component probes agree; 12 temporal range-bound probes agree; 9 SHACL value-shape probes agree
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7767213Z ##[group]Run make linkml-oracle
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7767545Z ^[[36;1mmake linkml-oracle^[[0m
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7807589Z shell: /usr/bin/bash -e {0}
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7807875Z env:
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7808091Z   CARGO_HOME: /home/runner/.cargo
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7808354Z   CARGO_INCREMENTAL: 0
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7808583Z   CARGO_TERM_COLOR: always
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7808822Z   CACHE_ON_FAILURE: false
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.7809047Z ##[endgroup]
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.8403782Z uv sync --project bindings/python --locked --no-install-project
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.8509944Z Resolved 107 packages in 1ms
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.8532821Z Checked 103 packages in 0.69ms
+pytest	UNKNOWN STEP	2026-10-07T03:38:14.8544555Z uv run --project bindings/python --no-sync python crates/shapes/tests/linkml_oracle.py
+pytest	UNKNOWN STEP	2026-10-07T03:38:19.5031174Z LinkML oracle: exact $defs and 16 instance probes agree; 18 located losses, 7 verified slot renames, reverse SHACL imports, and representable widening probes pass; 8 SHACL list-component probes agree; 12 temporal range-bound probes agree; 9 SHACL value-shape probes agree through has_member, whose non-scalar drop the generator alone makes on 1
+pytest	UNKNOWN STEP	2026-10-07T03:38:19.7666302Z Post job cleanup.
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.0389473Z (node:6381) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.0390287Z (Use `node --trace-deprecation ...` to show where the warning was created)
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.0542436Z Post job cleanup.
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1362543Z [command]/usr/bin/git version
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1397206Z git version 2.55.0
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1425974Z Temporarily overriding HOME='/home/runner/work/_temp/508b1095-c99b-4e1d-a972-3772c8a6ce0a' before making global git config changes
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1427055Z Adding repository directory to the temporary git global config as a safe directory
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1431058Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1458649Z Removing SSH command configuration
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1464601Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1494873Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1711124Z Removing HTTP extra header
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1716026Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1744148Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1946485Z Removing includeIf entries pointing to credentials config files
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1954911Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.1990704Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+pytest	UNKNOWN STEP	2026-10-07T03:38:20.2355704Z Cleaning up orphan processes

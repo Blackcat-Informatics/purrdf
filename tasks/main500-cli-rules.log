@@ -1,0 +1,22 @@
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/entail)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/geo)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/markdown)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/shex)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/json)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/retrieval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/cli)
+    Finished `test` profile [optimized] target(s) in 30.94s
+     Running tests/xpath_regex_cli.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-cli/0ecec0cc6d948fef/out/xpath_regex_cli-0ecec0cc6d948fef)
+
+running 3 tests
+test rules_check_refuses_a_law_it_would_not_apply ... ok
+test rules_run_under_the_selected_law ... ok
+test rules_native_resource_refusal_writes_no_graph ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.12s
+

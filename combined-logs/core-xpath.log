@@ -1,0 +1,65 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 27.55s
+     Running unittests src/lib.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 57 tests
+test xsd_regex::xpath::cache::tests::current_admission_precedes_reuse_and_failed_laws_do_not_poison_a_program ... ok
+test xsd_regex::xpath::cache::tests::shared_ownership_reuses_current_admission_without_holding_the_cache ... ok
+test xsd_regex::xpath::cache::tests::syntax_is_recomputed_under_current_compiler_bounds ... ok
+test xsd_regex::xpath::compile::tests::all_compiler_refusals_are_operational_and_cached_admission_is_current ... ok
+test xsd_regex::xpath::compile::tests::arbitrary_decimal_quantities_keep_order_without_syntax_overflow ... ok
+test xsd_regex::xpath::compile::tests::flag_errors_are_typed_and_operational_admission_has_precedence ... ok
+test xsd_regex::xpath::compile::tests::class_grammar_has_nested_subtraction_exact_properties_and_ranges ... ok
+test xsd_regex::xpath::compile::tests::dated_grammar_controls_groups_flags_backreferences_and_reluctance ... ok
+test xsd_regex::xpath::compile::tests::compile_steps_admit_the_exact_requirement_and_refuse_one_less ... ok
+test xsd_regex::xpath::compile::tests::whitespace_removal_uses_the_existing_cursor_and_preserves_raw_offsets ... ok
+test xsd_regex::xpath::compile::tests::surrogate_category_escapes_are_invalid_in_both_dated_grammars ... ok
+test xsd_regex::xpath::compile::tests::repetition_windows_are_exact_above_u64_and_saturate_beyond_it ... ok
+test xsd_regex::xpath::compile::tests::folded_lead_ranges_rely_on_a_symmetric_case_variant_relation ... ok
+test xsd_regex::xpath::compile::tests::name_escapes_use_the_xml_10_second_edition_classes_in_both_laws ... ok
+test xsd_regex::xpath::dated_blocks::tests::dated_table_is_name_sorted_and_has_the_recommendations_rows ... ok
+test xsd_regex::xpath::pike::tests::every_operand_names_its_parent_and_only_the_root_has_none ... ok
+test xsd_regex::xpath::pike::tests::only_counts_that_decide_a_later_choice_are_stored ... ok
+test xsd_regex::xpath::compile::tests::xsd10_second_edition_block_names_are_part_of_both_dated_laws ... ok
+test xsd_regex::xpath::pike::tests::progress_levels_count_nested_nullable_repetitions ... ok
+test xsd_regex::xpath::r#match::tests::dated_dot_anchor_and_quoted_modes_have_exact_neighbors ... ok
+test xsd_regex::xpath::dated_names::tests::tables_are_sorted_disjoint_and_nest ... ok
+test xsd_regex::xpath::r#match::tests::full_case_variants_are_direct_and_do_not_fold_properties ... ok
+test xsd_regex::xpath::r#match::tests::ordered_alternatives_repetition_and_utf8_captures_are_exact ... ok
+test xsd_regex::xpath::r#match::tests::search_has_one_budget_and_each_execution_has_fresh_fuel ... ok
+test xsd_regex::xpath::tests::accumulated_work_refuses_exactly_without_spending_or_wrapping ... ok
+test xsd_regex::xpath::tests::current_admission_is_not_the_previous_executions_admission ... ok
+test xsd_regex::xpath::tests::source_admission_counts_utf8_bytes_and_refuses_before_syntax ... ok
+test xsd_regex::xpath::r#match::tests::work_state_and_all_live_storage_refusals_never_become_false ... ok
+test xsd_regex::xpath::tests::dated_laws_have_distinct_stable_names ... ok
+test xsd_regex::xpath::replace::tests::empty_match_check_and_replacement_validation_preserve_operational_refusal ... ok
+test xsd_regex::xpath::replace::tests::forx0003_forx0004_and_q_have_distinct_neighbors ... ok
+test xsd_regex::xpath::replace::tests::repeated_searches_share_work_and_do_not_inherit_stale_alternatives ... ok
+test xsd_regex::xpath::tests::zero_withholds_work_and_all_resources_have_independent_bounds ... ok
+test xsd_regex::xpath::replace::tests::output_admission_counts_utf8_and_refuses_the_whole_result ... ok
+test xsd_regex::xpath::replace::tests::shared_replacement_escapes_and_exact_digit_resolution_are_preserved ... ok
+test xsd_regex::xpath::replace::tests::replace_obeys_ordered_matches_and_resets_every_capture ... ok
+test xsd_regex::xpath::compile::tests::nested_groups_and_subtractions_construct_and_drop_on_a_bounded_native_stack ... ok
+test xsd_regex::xpath::r#match::tests::deep_capturing_groups_match_and_drop_on_a_bounded_native_stack ... ok
+test xsd_regex::xpath::r#match::tests::nullable_and_arbitrary_size_repetitions_spend_finite_work ... ok
+test xsd_regex::xpath::r#match::tests::flattened_class_unions_match_like_their_alternatives ... ok
+test xsd_regex::xpath::replace::tests::replacement_continues_on_the_thread_machine_and_resets_every_capture ... ok
+test xsd_regex::xpath::r#match::tests::single_character_greedy_runs_match_the_general_repetition ... ok
+test xsd_regex::xpath::r#match::tests::thread_machine_resources_admit_the_exact_requirement_and_refuse_one_less ... ok
+test xsd_regex::xpath::r#match::tests::linear_machines_agree_with_both_machines_on_longer_seeded_inputs ... ok
+test xsd_regex::xpath::r#match::tests::independent_finite_languages_cover_matching_and_first_search_position ... ok
+test xsd_regex::xpath::r#match::tests::skipped_search_starts_never_change_the_first_match ... ok
+test xsd_regex::xpath::r#match::tests::huge_counted_repetitions_spend_finite_work_beside_admitted_neighbours ... ok
+test xsd_regex::xpath::r#match::tests::cleared_state_caches_keep_exact_answers ... ok
+test xsd_regex::xpath::replace::tests::counted_ambiguous_replacements_over_a_megabyte_answer_like_the_compatibility_engine ... ok
+test xsd_regex::xpath::r#match::tests::adversary_shapes_answer_like_the_compatibility_engine_at_the_production_defaults ... ok
+test xsd_regex::xpath::r#match::tests::thread_machine_reports_the_backtracking_machines_matches_and_captures ... ok
+test xsd_regex::xpath::r#match::tests::ordinary_large_inputs_are_admitted_at_the_production_defaults ... ok
+test xsd_regex::xpath::r#match::tests::counted_repetitions_answer_like_the_compatibility_engine_at_the_production_defaults ... ok
+test xsd_regex::xpath::r#match::tests::linear_machines_report_the_backtracking_machines_matches_and_captures ... ok
+test xsd_regex::xpath::r#match::tests::minimums_beyond_the_input_answer_like_lesser_minimums ... ok
+test xsd_regex::xpath::r#match::tests::formerly_exponential_shapes_answer_and_backreference_blowups_still_refuse ... ok
+test xsd_regex::xpath::r#match::tests::adversary_shapes_scale_linearly_well_beyond_the_adversarys_sizes ... ok
+
+test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 1160 filtered out; finished in 35.44s
+

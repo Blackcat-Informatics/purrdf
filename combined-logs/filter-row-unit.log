@@ -1,0 +1,15 @@
+    Finished `test` profile [optimized] target(s) in 0.13s
+     Running unittests src/lib.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 8 tests
+test expr::tests::filter_duration_equality_over_bgp ... ok
+test expr::tests::filter_over_a_bound_duration_round_trips_through_interning ... ok
+test expr::tests::filter_instant_plus_duration_over_bgp ... ok
+test expr::tests::filter_duration_equality_negated_over_bgp ... ok
+test expr::tests::filter_numeric_over_bgp ... ok
+test expr::tests::filter_not_exists_over_bgp ... ok
+test expr::tests::filter_instant_difference_over_bgp ... ok
+test expr::tests::filter_negation_separates_false_from_error ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1399 filtered out; finished in 0.00s
+

@@ -1,0 +1,8 @@
+    Finished `test` profile [optimized] target(s) in 0.08s
+     Running tests/native_xpath.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-shapes/89a1d570c0d1f1f9/out/native_xpath-89a1d570c0d1f1f9)
+
+running 1 test
+test every_rule_language_infers_under_each_selected_law ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
+

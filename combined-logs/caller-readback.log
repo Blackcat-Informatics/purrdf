@@ -1,0 +1,10 @@
+Cargo.toml: OK
+Cargo.lock: OK
+rust-toolchain.toml: OK
+crates/sparql-eval/tests/native_xpath.rs: OK
+crates/shapes/tests/native_xpath.rs: OK
+crates/cli/tests/xpath_regex_cli.rs: OK
+crates/validate/src/xpath_regex.rs: OK
+crates/validate/tests/xpath_regex.rs: OK
+crates/rdf-wasm/js/index.mjs: OK
+.stage/native-xpath-regex/tasks/xpath-public-node-probe.mjs: OK

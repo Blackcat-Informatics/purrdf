@@ -1,0 +1,88 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking regex-syntax v0.8.11
+   Compiling libc v0.2.186
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking regex-automata v0.4.14
+    Checking hybrid-array v0.4.15
+    Checking either v1.16.0
+   Compiling getrandom v0.3.4
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/deflate)
+    Checking crossbeam-epoch v0.9.18
+    Checking inout v0.2.2
+    Checking ctutils v0.4.2
+    Checking digest v0.11.3
+    Checking cipher v0.5.2
+    Checking crossbeam-deque v0.8.6
+    Checking regex v1.12.4
+    Checking universal-hash v0.6.1
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/stack)
+    Checking sha2 v0.11.0
+    Checking polyval v0.7.3
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/testkit)
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking structured-zstd v0.0.49
+    Checking rayon v1.12.0
+    Checking aead v0.6.1
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/ed25519)
+    Checking visual-hashing v1.0.0
+    Checking aes-gcm v0.11.1
+   Compiling proc-macro2 v1.0.106
+    Checking unicode-ident v1.0.24
+   Compiling quote v1.0.46
+    Checking utf8parse v0.2.2
+    Checking anstyle-query v1.1.5
+    Checking anstyle v1.0.14
+    Checking is_terminal_polyfill v1.70.2
+    Checking colorchoice v1.0.5
+    Checking clap_lex v1.1.0
+    Checking anstyle-parse v1.0.0
+   Compiling heck v0.5.0
+    Checking strsim v0.11.1
+    Checking anstream v1.0.0
+    Checking clap_builder v4.6.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/iri)
+   Compiling syn v2.0.118
+   Compiling clap_derive v4.6.1
+    Checking clap v4.6.1
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/jsonschema)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/shex)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/columnar)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/json)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/markdown)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/entail)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/cli)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 34.56s

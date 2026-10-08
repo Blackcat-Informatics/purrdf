@@ -1,0 +1,88 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-query v1.1.5
+   Compiling colorchoice v1.0.5
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle v1.0.14
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/text)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/entail)
+   Compiling strsim v0.11.1
+   Compiling anstyle-parse v1.0.0
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.0
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/geo)
+   Compiling anstream v1.0.0
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/hnsw)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/columnar)
+   Compiling clap_builder v4.6.0
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/markdown)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/shex)
+   Compiling syn v2.0.118
+   Compiling clap_derive v4.6.1
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/json)
+   Compiling clap v4.6.1
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/retrieval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/cli)
+    Finished `test` profile [optimized] target(s) in 34.63s
+     Running tests/governors_cli.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-cli/de1bfbdd1ce611a0/out/governors_cli-de1bfbdd1ce611a0)
+
+running 25 tests
+test a_nonzero_deadline_stops_work_inside_the_final_operator ... ok
+test a_reifier_query_certifies_its_partial_rows ... ok
+test a_complete_governed_run_exits_0_and_answers_identically ... ok
+test a_deadline_stops_the_query_and_names_the_stop_cause ... ok
+test the_governor_report_is_byte_identical_across_runs ... ok
+test a_trip_exits_3_and_prints_the_certified_partial_answers ... ok
+test explain_over_lateral_graph_variable_is_byte_identical_across_runs ... ok
+test a_deadline_without_a_unit_is_a_usage_error ... ok
+test a_governed_query_over_a_pack_trips_identically ... ok
+test an_entailment_query_under_a_fuel_ceiling_trips_and_exits_three ... ok
+test an_answer_cap_cuts_a_query_over_an_entailed_closure ... ok
+test no_ceiling_beside_a_ceiling_is_refused_by_name ... ok
+test a_partial_answer_does_not_corrupt_the_machine_readable_stream ... ok
+test an_expired_deadline_stops_the_closure_and_claims_nothing ... ok
+test an_ungoverned_invocation_is_unchanged ... ok
+test withheld_answers_print_no_rows_and_name_the_barrier ... ok
+test an_ungoverned_entailment_query_is_unchanged ... ok
+test unenforceable_flag_combinations_are_refused_by_name ... ok
+test construct_answer_cap_counts_rdf12_statements_not_solution_rows ... ok
+test every_governor_flag_reaches_the_engines_ceiling_vector ... ok
+test explain_renders_the_ledger_and_is_byte_identical_across_runs ... ok
+test exists_counters_render_in_cli_explain ... ok
+test each_numeric_ceiling_trips_under_its_own_governor ... ok
+test the_metered_default_refuses_an_over_cap_query_and_no_ceiling_answers_it ... ok
+test optional_filter_keeps_answers_and_metered_cell_boundary ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/xpath_regex_cli.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-cli/0ecec0cc6d948fef/out/xpath_regex_cli-0ecec0cc6d948fef)
+
+running 22 tests
+test update_native_resource_refusal_applies_nothing ... ok
+test rules_check_refuses_a_law_it_would_not_apply ... ok
+test shex_numeric_bounds_stay_exact_under_the_selected_law ... ok
+test query_replace_runs_under_the_selected_law ... ok
+test validate_sparql_regex_runs_under_the_selected_law ... ok
+test every_covered_subcommand_documents_the_flag_and_its_names ... ok
+test shex_pattern_runs_under_the_selected_law ... ok
+test query_regex_runs_under_the_selected_law ... ok
+test update_where_runs_under_the_selected_law ... ok
+test validate_sh_pattern_runs_under_the_selected_law ... ok
+test shex_native_resource_refusal_writes_no_shape_map ... ok
+test validate_applies_the_law_on_every_route ... ok
+test node_expr_runs_under_the_selected_law ... ok
+test validate_native_resource_refusal_writes_no_report ... ok
+test query_native_resource_refusal_fails_the_query ... ok
+test rules_run_under_the_selected_law ... ok
+test node_expr_native_resource_refusal_writes_no_output ... ok
+test an_unknown_law_name_is_a_usage_error_and_the_exact_names_are_accepted ... ok
+test rules_native_resource_refusal_writes_no_graph ... ok
+test query_answers_the_adversary_shapes_at_the_production_defaults_like_the_compatibility_engine ... ok
+test query_answers_the_counted_repetition_shapes_at_the_production_defaults_like_the_compatibility_engine ... ok
+test query_backreference_blowup_fails_the_query_and_the_neighbour_answers ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.75s
+

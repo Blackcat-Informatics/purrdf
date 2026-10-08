@@ -1,0 +1,12 @@
+target/semver-checks/git-2aa091423dab31a39bf2415abaec9d5c07b311e5/local-purrdf_core-3_0_1-x86_64_unknown_linux_gnu-cfae5e6af5095f28/target/doc/purrdf_core.json: OK
+target/semver-checks/git-2aa091423dab31a39bf2415abaec9d5c07b311e5/local-purrdf_lex-3_0_1-x86_64_unknown_linux_gnu-1dcd2f3f7c9798fb/target/doc/purrdf_lex.json: OK
+target/semver-checks/git-2aa091423dab31a39bf2415abaec9d5c07b311e5/local-purrdf_shapes-3_0_1-x86_64_unknown_linux_gnu-695ca6531ac6441d/target/doc/purrdf_shapes.json: OK
+target/semver-checks/git-2aa091423dab31a39bf2415abaec9d5c07b311e5/local-purrdf_shex-3_0_1-x86_64_unknown_linux_gnu-846456cf80329605/target/doc/purrdf_shex.json: OK
+target/semver-checks/git-2aa091423dab31a39bf2415abaec9d5c07b311e5/local-purrdf_sparql_eval-3_0_1-x86_64_unknown_linux_gnu-6d97d4df2382a0c0/target/doc/purrdf_sparql_eval.json: OK
+target/semver-checks/git-2aa091423dab31a39bf2415abaec9d5c07b311e5/local-purrdf_validate-3_0_1-x86_64_unknown_linux_gnu-3be7cbd4ee0f8e20/target/doc/purrdf_validate.json: OK
+target/semver-checks/local-purrdf_core-3_0_1-x86_64_unknown_linux_gnu-cfae5e6af5095f28/target/doc/purrdf_core.json: OK
+target/semver-checks/local-purrdf_lex-3_0_1-x86_64_unknown_linux_gnu-1dcd2f3f7c9798fb/target/doc/purrdf_lex.json: OK
+target/semver-checks/local-purrdf_shapes-3_0_1-x86_64_unknown_linux_gnu-695ca6531ac6441d/target/doc/purrdf_shapes.json: OK
+target/semver-checks/local-purrdf_shex-3_0_1-x86_64_unknown_linux_gnu-846456cf80329605/target/doc/purrdf_shex.json: OK
+target/semver-checks/local-purrdf_sparql_eval-3_0_1-x86_64_unknown_linux_gnu-6d97d4df2382a0c0/target/doc/purrdf_sparql_eval.json: OK
+target/semver-checks/local-purrdf_validate-3_0_1-x86_64_unknown_linux_gnu-3be7cbd4ee0f8e20/target/doc/purrdf_validate.json: OK

@@ -1,0 +1,96 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling structured-zstd v0.0.49
+   Compiling cipher v0.5.2
+   Compiling ctutils v0.4.2
+   Compiling aead v0.6.1
+   Compiling unicode-ident v1.0.24
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/datalog)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/jsonschema)
+   Compiling ctr v0.10.1
+   Compiling universal-hash v0.6.1
+   Compiling aes v0.9.3
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling syn v2.0.118
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 1m 36s
+     Running tests/change_path_alloc.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-shapes/30d8704a46295a96/out/change_path_alloc-30d8704a46295a96)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.57s
+
+     Running tests/native_xpath.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-shapes/89a1d570c0d1f1f9/out/native_xpath-89a1d570c0d1f1f9)
+
+running 28 tests
+test strict_source_preflight_checks_untargeted_declarations ... ok
+test governed_native_validation_keeps_budget_and_pattern_refusals_distinct ... ok
+test alternating_laws_and_failed_admission_preserve_the_actual_warm_program ... ok
+test native_backreferences_reach_every_focus_door_without_changing_legacy ... ok
+test target_binding_uses_the_selected_law_before_acquiring_focus_nodes ... ok
+test change_path_fallback_runs_sparql_regex_under_the_selected_law ... ok
+test quoted_flag_obeys_the_selected_dated_law ... ok
+test governed_target_and_constraint_queries_share_one_budget_without_partial_findings ... ok
+test copy_on_write_validation_options_preserve_the_original_cache_owner ... ok
+test change_path_resource_refusal_raises_and_the_neighbour_is_admitted ... ok
+test sparql_function_children_inherit_native_patterns_and_refusals ... ok
+test every_binding_route_retains_the_selected_pattern_law ... ok
+test global_rules_preserve_native_laws_and_reached_operational_refusals ... ok
+test constant_dynamic_regex_and_replace_share_native_query_selection ... ok
+test rules_entailment_constructs_under_the_selected_law_and_aborts_on_refusal ... ok
+test some_value_query_failure_is_discarded_when_a_later_value_conforms ... ok
+test some_value_query_resource_refusal_survives_a_later_conforming_value ... ok
+test node_expressions_evaluate_under_each_selected_law ... ok
+test native_operational_failure_aborts_nested_boolean_constraints ... ok
+test change_path_validates_core_patterns_under_the_selected_law ... ok
+test selected_execution_preserves_prepared_product_bytes_and_restore_provenance ... ok
+test every_rule_language_infers_under_each_selected_law ... ok
+test text_graphs_validate_under_each_selected_law ... ok
+test a_node_expression_resource_refusal_aborts_and_the_neighbour_evaluates ... ok
+test a_rules_resource_refusal_aborts_and_the_neighbour_runs ... ok
+test adversary_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine ... ok
+test counted_pattern_shapes_validate_at_the_production_defaults_like_the_compatibility_engine ... ok
+test a_backreference_blowup_pattern_shape_still_refuses_beside_a_conforming_neighbour ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.52s
+
+     Running tests/sparql_path_alloc.rs (/opt/.cargo/slots/04da17a8fac3bb39/0/build/debug/build/purrdf-shapes/3400dd9d5479601b/out/sparql_path_alloc-3400dd9d5479601b)
+
+running 8 tests
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.56s
+
