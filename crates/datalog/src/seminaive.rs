@@ -46,6 +46,13 @@
 //! delta itself is a contiguous [`RowId`] span, because the commit loop mints row ids
 //! densely in one sorted pass — so delta membership is a range compare, not a hash probe.
 //!
+//! Guard-free bodies with certified independent factors use the same physical kernels
+//! once per factor in Full mode. Borrowed mode tables classify a factor tuple New when
+//! any premise is in delta. A first-new-FACTOR decomposition (earlier factors Old,
+//! anchor New, later Full) partitions these tuples without constructing an unused
+//! Cartesian body relation. Each head projects its required bindings; exact witness
+//! frontiers retain the canonical proof under globally masked heights and sums.
+//!
 //! # Determinism
 //!
 //! Round candidates are keyed in a [`BTreeMap`] and winners are committed in lexical
@@ -72,6 +79,8 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod factors;
 use std::fmt;
 
 use rayon::prelude::*;
@@ -2689,6 +2698,8 @@ struct GuardRuntime {
 /// predicate's, which is now a term like any other and so may equally well be a slot.
 #[derive(Debug, Clone)]
 pub(crate) struct RuleRuntime {
+    /// Independent positive components, certified without opaque callbacks.
+    factors: Vec<factors::Factor>,
     /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
     /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
     /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
@@ -2705,7 +2716,8 @@ impl RuleRuntime {
     /// Lower one rule's static shapes.
     pub(crate) fn new(rule: &DlClause, plan: &RulePlan) -> Self {
         let variables = plan.variables();
-        Self {
+        let mut runtime = Self {
+            factors: Vec::new(),
             head: rule
                 .head_atoms()
                 .map(|atom| ArgShape::of_atom(atom, variables))
@@ -2739,7 +2751,9 @@ impl RuleRuntime {
                 .enumerate()
                 .map(|(index, negation)| NegationRuntime::new(index, negation, rule, variables))
                 .collect(),
-        }
+        };
+        runtime.factors = factors::certify(plan, &runtime);
+        runtime
     }
 }
 
@@ -2854,14 +2868,33 @@ impl Candidate {
             std::cmp::Ordering::Greater => return false,
             std::cmp::Ordering::Equal => {}
         }
-        let mine = self.source_facts(rel);
-        let theirs = other.source_facts(rel);
-        let mut mine_sorted = mine.clone();
-        mine_sorted.sort();
-        let mut theirs_sorted = theirs.clone();
-        theirs_sorted.sort();
-        (mine_sorted, self.rule, mine) < (theirs_sorted, other.rule, theirs)
+        source_preference(&self.sources, self.rule, &other.sources, other.rule, rel).is_lt()
     }
+}
+
+/// The lexical tail of the canonical witness law, shared with projected frontiers.
+fn source_preference(
+    mine: &[SourceRow],
+    my_rule: usize,
+    theirs: &[SourceRow],
+    their_rule: usize,
+    rel: &RelationStore,
+) -> std::cmp::Ordering {
+    let mine: Vec<_> = mine.iter().map(|source| source.fact(rel)).collect();
+    let theirs: Vec<_> = theirs.iter().map(|source| source.fact(rel)).collect();
+    let mut mine_sorted = mine.clone();
+    mine_sorted.sort();
+    let mut theirs_sorted = theirs.clone();
+    theirs_sorted.sort();
+    (mine_sorted, my_rule, mine).cmp(&(theirs_sorted, their_rule, theirs))
+}
+
+/// Raw maximum and saturated sum of a witness's source heights.
+fn source_heights(sources: &[SourceRow], depth: &[u32]) -> (u32, u64) {
+    sources.iter().fold((0, 0u64), |(maximum, sum), source| {
+        let height = depth[source.row.index()];
+        (maximum.max(height), sum.saturating_add(u64::from(height)))
+    })
 }
 
 /// One round's candidate winners, keyed by head fact.
@@ -3017,6 +3050,9 @@ fn evaluate_rule<'r>(
 ) -> Result<RoundBuffer<'r>, EvalError> {
     let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
     let mut governor = StepGovernor::new(allowance);
+    if runtime.factors.len() > 1 && matches!(strategy, JoinStrategy::Planned) {
+        return factors::evaluate(entry, snapshot, &mut governor);
+    }
     let mut solutions = join_body(
         plan,
         JoinSnapshot {
@@ -3101,58 +3137,63 @@ fn evaluate_rule<'r>(
     let mut buffer = RoundBuffer::new();
     buffer.join_steps = governor.consumed;
     for solution in solutions {
-        let mut proof_height = 0u32;
-        let mut sum_source_height = 0u64;
-        for source in &solution.sources {
-            let height = snapshot.depth[source.row.index()];
-            proof_height = proof_height.max(height);
-            sum_source_height = sum_source_height.saturating_add(u64::from(height));
-        }
         for head in &runtime.head {
-            let key = HeadKey {
-                subject: head_term(&head[POSITION_SUBJECT], &solution),
-                predicate: head_term(&head[POSITION_PREDICATE], &solution),
-                object: head_term(&head[POSITION_OBJECT], &solution),
-                graph: head_term(&head[POSITION_GRAPH], &solution),
-            };
-            let key = intern_key(key, rel);
-            // A fact a prior round or stratum already derived is not a derivation: earlier
-            // wins, exactly as the reference fixpoint decides it. Every one of the four
-            // positions must already be interned for the quad to be present.
-            if let Some(row) = present_row(&key, rel) {
-                if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
-                    let [subject, predicate, object, graph] =
-                        key.terms().map(|term| term.surface(rel));
-                    buffer.confirmed.push((
-                        row,
-                        Derivation {
-                            fact: Fact {
-                                subject,
-                                predicate,
-                                object,
-                                graph,
-                            },
-                            rule: entry.index,
-                            sources: solution.sources.iter().map(|s| s.fact(rel)).collect(),
-                            proof_height: proof_height.saturating_add(1),
-                        },
-                    ));
-                }
-                continue;
-            }
-            buffer.insert(
-                key,
-                Candidate {
-                    rule: entry.index,
-                    sources: solution.sources.clone(),
-                    proof_height: proof_height.saturating_add(1),
-                    sum_source_height,
-                },
-                rel,
-            );
+            emit_solution(&mut buffer, head, &solution, entry.index, snapshot);
         }
     }
     Ok(buffer)
+}
+
+/// Emit one head using the shared ordinary and factorized provenance path.
+fn emit_solution<'r>(
+    buffer: &mut RoundBuffer<'r>,
+    head: &'r [ArgShape; ATOM_ARITY],
+    solution: &SlotSolution,
+    rule: usize,
+    snapshot: RoundSnapshot<'_>,
+) {
+    let rel = snapshot.rel;
+    let (proof_height, sum_source_height) = source_heights(&solution.sources, snapshot.depth);
+    let key = HeadKey {
+        subject: head_term(&head[POSITION_SUBJECT], solution),
+        predicate: head_term(&head[POSITION_PREDICATE], solution),
+        object: head_term(&head[POSITION_OBJECT], solution),
+        graph: head_term(&head[POSITION_GRAPH], solution),
+    };
+    let key = intern_key(key, rel);
+    // A fact a prior round or stratum already derived is not a derivation: earlier
+    // wins, exactly as the reference fixpoint decides it. Every one of the four
+    // positions must already be interned for the quad to be present.
+    if let Some(row) = present_row(&key, rel) {
+        if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
+            let [subject, predicate, object, graph] = key.terms().map(|term| term.surface(rel));
+            buffer.confirmed.push((
+                row,
+                Derivation {
+                    fact: Fact {
+                        subject,
+                        predicate,
+                        object,
+                        graph,
+                    },
+                    rule,
+                    sources: solution.sources.iter().map(|s| s.fact(rel)).collect(),
+                    proof_height: proof_height.saturating_add(1),
+                },
+            ));
+        }
+        return;
+    }
+    buffer.insert(
+        key,
+        Candidate {
+            rule,
+            sources: solution.sources.clone(),
+            proof_height: proof_height.saturating_add(1),
+            sum_source_height,
+        },
+        rel,
+    );
 }
 
 /// The store row of the fact `key` names, if it is present.
