@@ -163,6 +163,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **`purrdf-hash` BLAKE3 subtree primitives:** `blake3::ChainingValue`,
+  `left_subtree_len`, `subtree_chaining_value`, `merge_subtrees_non_root` and
+  `merge_subtrees_root`, the same primitives and rules as the `blake3` crate's
+  `hazmat` module, over the existing tree code. BLAKE3's hash is the root of a
+  Merkle tree over 1 KiB chunks, so a piece of an input can be proved to belong
+  to its hash by its siblings' chaining values alone: verified streaming,
+  verified range reads, and erasure shards checked against the identity of the
+  artifact they belong to. A subtree at a misaligned offset panics rather than
+  yielding a chaining value no input produces. Zero new dependencies.
+
 - **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups,
   482 cases, and the sort extension) is vendored byte-for-byte and graded in
   `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The extension's
