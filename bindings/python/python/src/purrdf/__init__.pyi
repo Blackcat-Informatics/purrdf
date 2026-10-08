@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import CapsuleType
 from typing import IO, Any, Callable, Required, TypeAlias, TypedDict, overload
 
@@ -403,8 +403,19 @@ _PathRelation = (
 
 # ── Query results ───────────────────────────────────────────────────────────────
 
+# A SELECT row retains every projected cell in order, including unbound None.
+# Integer positions use tuple-style negative indexing and IndexError at either end;
+# named access uses the first matching projection, raising KeyError if absent.
 class QuerySolution:
     def __getitem__(self, key: str | Variable | int) -> _Term | None: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[_Term | None]: ...
+
+# Private return-only implementation type; not a module-level constructor.
+class _QuerySolutionIterator:
+    def __iter__(self) -> _QuerySolutionIterator: ...
+    def __next__(self) -> _Term | None: ...
+    def __length_hint__(self) -> int: ...
 
 class QuerySolutions:
     @property
@@ -748,6 +759,24 @@ class _QuadStore:
         aggregate_namespace: str | None = ...,
         xpath_regex: str | None = ...,
         division: str | None = ...,
+    ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
+    def query_rdflib(
+        self,
+        query: str,
+        *,
+        substitutions: dict[Variable, _Term] | None = ...,
+        extension_namespaces: list[str] | None = ...,
+        property_fn_namespaces: list[str] | None = ...,
+        standpoint_predicates: tuple[str, str] | None = ...,
+        relations: dict[str, _Relation] | None = ...,
+        relations_from_graph: dict[str, _RelationFromGraph] | None = ...,
+        path_relations: dict[str, _PathRelation] | None = ...,
+        aggregate_namespace: str | None = ...,
+        xpath_regex: str | None = ...,
+        division: str | None = ...,
+        named_graphs: bool = ...,
+        default_graph: NamedNode | BlankNode | None = ...,
+        default_union: bool = ...,
     ) -> QuerySolutions | QueryTriples | QueryQuads | QueryBoolean: ...
     # Governed sibling of `query`: every ceiling is inclusive; an omitted dimension
     # remains metered at an effectively unreachable ceiling. `deadline_ms` is a

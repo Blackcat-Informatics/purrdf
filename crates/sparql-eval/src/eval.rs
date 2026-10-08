@@ -3041,7 +3041,7 @@ pub(crate) fn eval_cached_bgp_evaluated<D: DatasetView + Sync>(
     })
 }
 
-fn eval_evaluated_with<D: DatasetView + Sync>(
+pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
     evaluate: impl FnOnce(&mut EvalCtx<'_, D>) -> Result<Evaluated<D::Id>, EvalError>,
@@ -3087,6 +3087,7 @@ const fn pattern_construct(pattern: &GraphPattern) -> &'static str {
         GraphPattern::Join { .. } => "group graph pattern",
         GraphPattern::LeftJoin { .. } => "OPTIONAL",
         GraphPattern::Lateral { .. } => "LATERAL",
+        GraphPattern::Apply { .. } => "contextual application",
         GraphPattern::Filter { .. } => "FILTER",
         GraphPattern::Union { .. } => "UNION",
         GraphPattern::Graph { .. } => "GRAPH",
@@ -3365,6 +3366,200 @@ fn eval_node<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_node_with(pattern, (), ctx)
+}
+
+/// A contextual consumer runs while the producer is yielding its input rows.
+/// The unit specialization carries no consumer, ABI parameter or runtime test.
+type YieldFunction<'a, D> = dyn for<'d> FnMut(
+        &SolutionSeq<<D as DatasetView>::Id>,
+        &mut EvalCtx<'d, D>,
+    ) -> Result<std::ops::ControlFlow<()>, EvalError>
+    + 'a;
+
+pub(crate) struct RowConsumer<'a, D: DatasetView + Sync> {
+    function: &'a mut YieldFunction<'a, D>,
+    stopped: bool,
+}
+
+impl<'a, D: DatasetView + Sync> RowConsumer<'a, D> {
+    pub(crate) fn new(function: &'a mut YieldFunction<'a, D>) -> Self {
+        Self {
+            function,
+            stopped: false,
+        }
+    }
+}
+
+pub(crate) trait RowDelivery<D: DatasetView + Sync> {
+    const ACTIVE: bool;
+    type Borrowed<'a>: RowDelivery<D>
+    where
+        Self: 'a;
+    fn reborrow(&mut self) -> Self::Borrowed<'_>;
+    fn stopped(&self) -> bool;
+    fn deliver(
+        &mut self,
+        rows: &SolutionSeq<D::Id>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(), EvalError>;
+}
+
+impl<D: DatasetView + Sync> RowDelivery<D> for () {
+    const ACTIVE: bool = false;
+    type Borrowed<'a> = ();
+    fn reborrow(&mut self) {}
+    fn stopped(&self) -> bool {
+        false
+    }
+    fn deliver(
+        &mut self,
+        _rows: &SolutionSeq<D::Id>,
+        _ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        Ok(())
+    }
+}
+
+impl<'s, D: DatasetView + Sync> RowDelivery<D> for &mut RowConsumer<'s, D> {
+    const ACTIVE: bool = true;
+    type Borrowed<'a>
+        = &'a mut RowConsumer<'s, D>
+    where
+        Self: 'a;
+    fn reborrow(&mut self) -> Self::Borrowed<'_> {
+        &mut **self
+    }
+    fn stopped(&self) -> bool {
+        self.stopped
+    }
+    fn deliver(
+        &mut self,
+        rows: &SolutionSeq<D::Id>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        if self.stopped {
+            return Ok(());
+        }
+        if ctx.expression_barrier.observed().is_some() || ctx.stop_check().is_some() {
+            self.stopped = true;
+            return Ok(());
+        }
+        self.stopped = (self.function)(rows, ctx)?.is_break();
+        Ok(())
+    }
+}
+
+pub(crate) fn eval_yielding<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    delivery: &mut RowConsumer<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_evaluated_with(pattern, ctx, |ctx| {
+        eval_delivered_node(pattern, delivery, ctx)
+    })
+}
+
+/// Keep contextual dispatch out of the recursive admission frame, just as the
+/// native dispatcher does. Both boundaries instantiate the same match below.
+#[inline(never)]
+fn eval_delivered_node<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    delivery: &mut RowConsumer<'_, D>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_node_with(pattern, delivery, ctx)
+}
+
+/// Compose a row transformer with its producer without materializing the
+/// producer before the transformer runs. Output blocks use the shared union
+/// alignment home; child truncation and expression barriers keep their lifts.
+#[inline(never)]
+pub(crate) fn yield_transform<D: DatasetView + Sync, M: RowDelivery<D>>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    mut delivery: M,
+    mut transform: impl FnMut(
+        SolutionSeq<D::Id>,
+        &mut EvalCtx<'_, D>,
+    ) -> Result<Evaluated<D::Id>, EvalError>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
+    let mut lift = crate::governor::lift::Lift::at(node);
+    let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+        let restore = ctx.enter_node(node);
+        let transformed = transform(rows.clone(), ctx);
+        ctx.leave_node(restore);
+        let transformed = transformed?;
+        if let Some(rows) = lift.absorb(0, transformed) {
+            delivery.deliver(&rows, ctx)?;
+            blocks.push(rows);
+        }
+        Ok(if delivery.stopped() {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        })
+    };
+    let child = eval_yielding(inner, &mut RowConsumer::new(&mut consume), ctx)?;
+    drop(consume);
+    if lift.absorb(0, child).is_none() {
+        return Ok(lift.withheld());
+    }
+    if let Some(tripped) = ctx.expression_barrier.observed() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node,
+            tripped,
+            syntactic_schema(node),
+        )));
+    }
+    Ok(lift.finish(crate::binop::concat_union(blocks, ctx)))
+}
+
+// Specialize the one match into the native boundary with its original default
+// attribute, and into the separate out-of-line contextual boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn eval_node_with<D: DatasetView + Sync, M: RowDelivery<D>>(
+    pattern: &GraphPattern,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if !M::ACTIVE {
+        return dispatch_node(pattern, &mut delivery, ctx);
+    }
+    let streamed = M::ACTIVE
+        && matches!(
+            pattern,
+            GraphPattern::Filter { .. }
+                | GraphPattern::Join { .. }
+                | GraphPattern::Minus { .. }
+                | GraphPattern::Extend { .. }
+                | GraphPattern::Project { .. }
+                | GraphPattern::Apply { .. }
+                | GraphPattern::Union { .. }
+                | GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. }
+                | GraphPattern::Graph { .. }
+        );
+    let evaluated = dispatch_node(pattern, &mut delivery, ctx)?;
+    if !streamed {
+        deliver_evaluated(&evaluated, delivery, ctx)?;
+    }
+    Ok(evaluated)
+}
+
+// Inline the one bare match directly into the mode boundary. A captured
+// dispatcher closure would add storage and a call frame to native recursion.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn dispatch_node<D: DatasetView + Sync, M: RowDelivery<D>>(
+    pattern: &GraphPattern,
+    delivery: &mut M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     match pattern {
         // Leaves: a truncation cannot happen "below" them, so they have no lift.
         GraphPattern::Bgp { patterns } => {
@@ -3384,20 +3579,35 @@ fn eval_node<D: DatasetView + Sync>(
             variables, bindings, ctx,
         )?)),
 
-        GraphPattern::Join { left, right } => crate::binop::eval_join(pattern, left, right, ctx),
-        GraphPattern::Union { arms } => crate::binop::eval_union(pattern, arms, ctx),
+        GraphPattern::Join { left, right } => {
+            crate::binop::eval_join_delivered(pattern, left, right, delivery.reborrow(), ctx)
+        }
+        GraphPattern::Union { arms } => {
+            crate::binop::eval_union_delivered(pattern, arms, delivery.reborrow(), ctx)
+        }
         GraphPattern::LeftJoin {
             left,
             right,
             expression,
         } => crate::binop::eval_left_join(pattern, left, right, expression.as_ref(), ctx),
-        GraphPattern::Minus { left, right } => crate::binop::eval_minus(pattern, left, right, ctx),
-        GraphPattern::Filter { expr, inner } => crate::expr::eval_filter(pattern, expr, inner, ctx),
+        GraphPattern::Minus { left, right } => {
+            crate::binop::eval_minus_delivered(pattern, left, right, delivery.reborrow(), ctx)
+        }
+        GraphPattern::Filter { expr, inner } => {
+            crate::expr::eval_filter_with(pattern, expr, inner, delivery.reborrow(), ctx)
+        }
         GraphPattern::Extend {
             inner,
             variable,
             expression,
-        } => crate::expr::eval_extend(pattern, inner, variable, expression, ctx),
+        } => crate::expr::eval_extend_with(
+            pattern,
+            inner,
+            variable,
+            expression,
+            delivery.reborrow(),
+            ctx,
+        ),
         GraphPattern::Unfold {
             inner,
             expression,
@@ -3412,21 +3622,33 @@ fn eval_node<D: DatasetView + Sync>(
             ctx,
         ),
         GraphPattern::Project { inner, variables } => {
-            crate::modifier::eval_project(pattern, inner, variables, ctx)
+            crate::modifier::eval_project_with(pattern, inner, variables, delivery.reborrow(), ctx)
         }
         GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-            crate::modifier::eval_dedup(pattern, inner, ctx)
+            crate::modifier::eval_dedup_delivered::<D, false, _>(
+                pattern,
+                inner,
+                delivery.reborrow(),
+                ctx,
+            )
         }
         GraphPattern::Slice {
             inner,
             start,
             length,
-        } => crate::modifier::eval_slice(pattern, inner, *start, *length, ctx),
+        } => crate::modifier::eval_slice_with(
+            pattern,
+            inner,
+            *start,
+            *length,
+            delivery.reborrow(),
+            ctx,
+        ),
         GraphPattern::OrderBy { inner, expression } => {
             crate::modifier::eval_order_by(pattern, inner, expression, ctx)
         }
         GraphPattern::Graph { name, inner } => {
-            crate::modifier::eval_graph(pattern, name, inner, ctx)
+            crate::modifier::eval_graph_with(pattern, name, inner, delivery.reborrow(), ctx)
         }
         GraphPattern::Group {
             inner,
@@ -3441,6 +3663,11 @@ fn eval_node<D: DatasetView + Sync>(
         GraphPattern::Lateral { left, right } => {
             crate::binop::eval_lateral(pattern, left, right, ctx)
         }
+        GraphPattern::Apply {
+            left,
+            right,
+            policy,
+        } => crate::binop::eval_apply_with(pattern, left, right, policy, delivery.reborrow(), ctx),
         // A call reached without an enclosing `Lateral` — nothing was written before it
         // in its group — so it is driven over the identity table. The correlated shape
         // (the parser's usual one) is intercepted by `binop::eval_lateral`, which hands
@@ -3449,6 +3676,30 @@ fn eval_node<D: DatasetView + Sync>(
             crate::property_fn_eval::eval_property_function(call, ctx)
         }
     }
+}
+
+/// Deliver a materializing operator's completed rows outside the dispatcher
+/// frame, keeping row storage and consumer callbacks out of recursive dispatch.
+#[inline(never)]
+pub(crate) fn deliver_evaluated<D: DatasetView + Sync, M: RowDelivery<D>>(
+    evaluated: &Evaluated<D::Id>,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
+    let seq = evaluated.rows();
+    for row in &seq.rows {
+        if delivery.stopped() {
+            break;
+        }
+        delivery.deliver(
+            &SolutionSeq {
+                schema: Arc::clone(&seq.schema),
+                rows: vec![row.clone()],
+            },
+            ctx,
+        )?;
+    }
+    Ok(())
 }
 
 /// Derive the columns an algebra node exposes without evaluating it.
@@ -3568,7 +3819,8 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                     right,
                     expression: _,
                 }
-                | GraphPattern::Lateral { left, right } => {
+                | GraphPattern::Lateral { left, right }
+                | GraphPattern::Apply { left, right, .. } => {
                     steps.push(Step::Union);
                     steps.push(Step::Derive(right));
                     steps.push(Step::Derive(left));
@@ -5530,7 +5782,8 @@ mod syntactic_schema_tests {
             }
             GraphPattern::Join { left, right }
             | GraphPattern::LeftJoin { left, right, .. }
-            | GraphPattern::Lateral { left, right } => reference(left).union(&reference(right)),
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. } => reference(left).union(&reference(right)),
             GraphPattern::Union { arms } => {
                 arms.iter().fold(VarSchema::default(), |schema, arm| {
                     schema.union(&reference(arm))

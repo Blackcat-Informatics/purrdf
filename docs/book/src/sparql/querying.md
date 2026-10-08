@@ -267,8 +267,8 @@ body see it, and it survives a `GROUP BY` as a constant, so `SELECT $this
 
 rdflib 7.6's `initBindings` is not the reference for this behaviour: it rebinds
 a pre-bound name wherever the query assigns it, so an assignment there overrides
-the bound value instead of joining with it. PurRDF follows the single join rule
-above at every depth.
+the bound value instead of joining with it. The native query APIs follow the
+single join rule above at every depth.
 
 A `VALUES ?p { … }` joins with the bound value where it is written, by the same
 rule at every depth: it keeps the rows that agree with the bound value, so
@@ -294,9 +294,13 @@ loads. The `VALUES` rule differs by lane:
 
 See [SHACL validation](../validation/shacl.md).
 
-The rdflib compatibility shim passes `initBindings` to the native engine as
-substitutions, so `purrdf.compat.rdflib.Graph.query(..., initBindings=...)` refuses
-a reassignment as `Store.query` and `Store.prepare` do.
+The rdflib compatibility shim compiles contextual mappings in Rust through the
+shared native evaluator. `purrdf.compat.rdflib.Graph.query(..., initBindings=...)`
+keeps initial bindings separate from returned mappings and permits RDFLib's
+variable reassignment, including nested groups, `OPTIONAL`, `MINUS`, `EXISTS`
+and grouping. Public results retain the original variable names and suppress
+empty projected mappings. `Store.query`, `Store.prepare` and SHACL retain their
+native pre-binding and assignment rules.
 
 ## Numeric casts
 

@@ -1038,6 +1038,46 @@ pub enum GraphPattern {
         /// The list index / map value binding; absent in the one-variable form.
         companion: Option<Variable>,
     },
+    /// Apply a stored right operand to each driver using explicit input names.
+    /// Input names are immutable context cells, distinct from output aliases.
+    Apply {
+        /// Driver evaluated once.
+        left: Child<Self>,
+        /// Operand stored once, including for a scope-restricted retry.
+        right: Child<Self>,
+        /// Per-driver application law.
+        policy: Box<ApplicationPolicy>,
+    },
+}
+
+/// An explicit correlation map and the shared per-driver application law.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ApplicationPolicy {
+    /// A reached GRAPH operation requires a dataset rather than a single-graph host.
+    pub dataset_required: bool,
+    /// The RHS is a zero-or-one-row scalar continuation over an empty mapping.
+    /// Composition may append scalar operators without materializing a stage.
+    pub row_pipeline: bool,
+    /// A stored `Reduced` operand compares only consecutive actual mappings.
+    pub reduced_adjacent: bool,
+    /// Actual mapping columns and row scheduling for a stored `Group` operand.
+    /// Aggregate updates follow yielded input rows; `DISTINCT *` reads this domain.
+    /// This mode requires an empty driver and no correlation or optional policy.
+    pub group_domain: Option<Box<[Variable]>>,
+    /// `(input, driver)` cells substituted across synthetic projection boundaries.
+    pub inputs: Vec<(Variable, Variable)>,
+    /// The optional-application policy, or an ordinary inner application.
+    pub optional: Option<OptionalApplication>,
+}
+
+/// Optional application tests the first result before consulting remembered scope.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OptionalApplication {
+    /// `(input, driver)` cells for the remembered-scope retry.
+    pub retry_inputs: Vec<(Variable, Variable)>,
+    /// Boolean input selecting forgotten visibility for the first attempt and
+    /// actual visibility for the retry. The condition is stored once.
+    pub forget_marker: Variable,
 }
 
 /// A property-function call resolved at parse time: the predicate IRI plus the

@@ -425,6 +425,8 @@ impl QueryPurpose {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AdmissionReason {
+    /// Contextual application algebra requires its dedicated preparation route.
+    ContextualApplication,
     /// A MINUS pattern forbidden for this query role.
     Minus,
     /// A federated SERVICE pattern; remote execution is never admitted.
@@ -491,6 +493,9 @@ impl AdmissionRefusal {
 impl fmt::Display for AdmissionRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let description = match self.reason {
+            AdmissionReason::ContextualApplication => {
+                "contextual application algebra requires its typed preparation route"
+            }
             AdmissionReason::Minus => "MINUS is forbidden",
             AdmissionReason::Service => "SERVICE is forbidden",
             AdmissionReason::Values => "VALUES is forbidden",

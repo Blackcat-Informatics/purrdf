@@ -32,20 +32,22 @@ impl QueryRefusal {
     }
 
     /// Separate declaration failure from a restriction whose applicability
-    /// depends on actual execution. Query-form well-formedness always applies;
+    /// depends on actual execution. Query-form and typed-route well-formedness always apply;
     /// REC20170720 additionally requires graph-wide Core/component admission.
     pub(crate) fn requires_parse_failure(&self) -> bool {
         match self {
             Self::Legacy(_) => true,
             Self::Dated(refusal) => {
-                refusal.reason() == AdmissionReason::QueryForm
-                    || (refusal.profile() == ShaclProfile::REC_20170720
-                        && matches!(
-                            refusal.purpose(),
-                            QueryPurpose::SelectConstraint
-                                | QueryPurpose::SelectValidator
-                                | QueryPurpose::AskValidator
-                        ))
+                matches!(
+                    refusal.reason(),
+                    AdmissionReason::QueryForm | AdmissionReason::ContextualApplication
+                ) || (refusal.profile() == ShaclProfile::REC_20170720
+                    && matches!(
+                        refusal.purpose(),
+                        QueryPurpose::SelectConstraint
+                            | QueryPurpose::SelectValidator
+                            | QueryPurpose::AskValidator
+                    ))
             }
         }
     }

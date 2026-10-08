@@ -165,6 +165,13 @@ enum FoldParts {
 }
 
 impl FoldAccumulator {
+    pub(crate) fn for_arguments(arity: usize) -> Self {
+        Self::new(if arity == 1 {
+            FoldTarget::List
+        } else {
+            FoldTarget::Map
+        })
+    }
     /// A fresh, empty accumulator for `target`.
     fn new(target: FoldTarget) -> Self {
         Self {

@@ -173,6 +173,14 @@ fn take_pattern(pattern: &mut GraphPattern, work: &mut DropWork) {
                 release_expr(expression, work);
             }
         }
+        G::Apply {
+            left,
+            right,
+            policy: _,
+        } => {
+            take_child(left, work);
+            take_child(right, work);
+        }
         G::Filter { expr, inner } => {
             take_expr(expr, work);
             take_child(inner, work);
@@ -320,7 +328,10 @@ impl Kids<'_> {
 
 /// A copy of the tree under `root`, built bottom-up over a work list: each node's
 /// copy is assembled from its shallow fields and its children's finished copies.
-pub(crate) fn clone_tree(root: NodeRef<'_>) -> Owned {
+pub(crate) fn clone_tree<const MAP_EXISTS: bool>(
+    root: NodeRef<'_>,
+    mut map_exists: impl FnMut(&GraphPattern) -> GraphPattern,
+) -> Owned {
     enum Step<'a> {
         Enter(NodeRef<'a>),
         Exit(NodeRef<'a>, usize),
@@ -330,6 +341,12 @@ pub(crate) fn clone_tree(root: NodeRef<'_>) -> Owned {
     while let Some(step) = stack.pop() {
         match step {
             Step::Enter(node) => {
+                if MAP_EXISTS && let NodeRef::Expr(Expression::Exists(body)) = node {
+                    copies.push(Owned::Expr(Expression::Exists(Child::new(map_exists(
+                        body,
+                    )))));
+                    continue;
+                }
                 if let Some(copy) = clone_leaf(node) {
                     copies.push(copy);
                     continue;
@@ -475,6 +492,23 @@ fn assemble_pattern(pattern: &GraphPattern, kids: &mut Kids<'_>) -> GraphPattern
         G::Lateral { .. } => G::Lateral {
             left: kids.pattern().into(),
             right: kids.pattern().into(),
+        },
+        G::Apply { policy, .. } => G::Apply {
+            left: kids.pattern().into(),
+            right: kids.pattern().into(),
+            policy: Box::new(crate::algebra::ApplicationPolicy {
+                dataset_required: policy.dataset_required,
+                row_pipeline: policy.row_pipeline,
+                reduced_adjacent: policy.reduced_adjacent,
+                group_domain: policy.group_domain.clone(),
+                inputs: policy.inputs.clone(),
+                optional: policy.optional.as_ref().map(|optional| {
+                    crate::algebra::OptionalApplication {
+                        retry_inputs: optional.retry_inputs.clone(),
+                        forget_marker: optional.forget_marker.clone(),
+                    }
+                }),
+            }),
         },
         G::Filter { .. } => G::Filter {
             expr: kids.expr(),
@@ -623,5 +657,20 @@ fn assemble_path(path: &PropertyPathExpression, kids: &mut Kids<'_>) -> Property
         P::Wildcard { namespace } => P::Wildcard {
             namespace: namespace.clone(),
         },
+    }
+}
+
+impl Expression {
+    /// Clone scalar expression structure while replacing each EXISTS body once.
+    ///
+    /// The callback receives each original body in source order. Its replacement
+    /// is owned directly; neither the original body nor its descendants are copied.
+    /// The shared iterative clone owns every other expression operation.
+    #[must_use]
+    pub fn map_exists_bodies(&self, map: impl FnMut(&GraphPattern) -> GraphPattern) -> Self {
+        match clone_tree::<true>(NodeRef::Expr(self), map) {
+            Owned::Expr(expression) => expression,
+            _ => unreachable!("an expression clone returns an expression"),
+        }
     }
 }

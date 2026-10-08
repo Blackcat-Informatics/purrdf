@@ -448,6 +448,17 @@ impl Shape {
         decimal_add(self, other)
     }
 
+    /// A coefficient/scale bound covering either operand of a running comparison.
+    #[must_use]
+    pub fn comparison_bound(self, other: Self) -> Self {
+        Self::bound(
+            self.digits
+                .saturating_sub(self.scale)
+                .max(other.digits.saturating_sub(other.scale)),
+            self.scale.max(other.scale),
+        )
+    }
+
     /// The cost of rendering a value of this shape as its canonical lexical form.
     #[must_use]
     pub const fn render_cost(self) -> Cost {
@@ -640,32 +651,61 @@ pub(crate) const fn decimal_div(a: Shape, b: Shape, policy: super::DivisionPolic
 /// `n²/2` and refuse a fold the fold itself would finish.
 #[must_use]
 pub fn sum_chain(values: impl IntoIterator<Item = Shape>) -> (Cost, Option<Shape>) {
-    let mut total = Cost::ZERO;
-    let mut running: Option<Shape> = None;
-    let (mut longest_whole, mut largest_scale, mut count) = (0_u64, 0_u64, 0_u64);
+    let mut chain = SumChain::default();
     for value in values {
-        count = count.saturating_add(1);
+        chain.push(value);
+    }
+    chain.finish()
+}
+
+/// Incremental form of [`sum_chain`], pricing each addition before it runs.
+#[derive(Debug, Default)]
+pub struct SumChain {
+    total: Cost,
+    running: Option<Shape>,
+    longest_whole: u64,
+    largest_scale: u64,
+    count: u64,
+}
+
+impl SumChain {
+    /// Add one operand shape and return this addition's incremental cost.
+    // Keep the extracted recurrence in its caller, without per-operand state/ABI traffic.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub fn push(&mut self, value: Shape) -> Cost {
+        self.count = self.count.saturating_add(1);
         let whole = value.digits.saturating_sub(value.scale);
-        if whole > longest_whole {
-            longest_whole = whole;
+        if whole > self.longest_whole {
+            self.longest_whole = whole;
         }
-        if value.scale > largest_scale {
-            largest_scale = value.scale;
+        if value.scale > self.largest_scale {
+            self.largest_scale = value.scale;
         }
-        running = Some(match running {
+        let mut step = Cost::ZERO;
+        self.running = Some(match self.running {
             None => value,
             Some(acc) => {
                 // ⌈log10 count⌉ for count ≥ 2: the digits of count − 1.
-                let carry = u64::from((count - 1).ilog10()) + 1;
-                let next = Shape::bound(longest_whole.saturating_add(carry), largest_scale);
+                let carry = u64::from((self.count - 1).ilog10()) + 1;
+                let next =
+                    Shape::bound(self.longest_whole.saturating_add(carry), self.largest_scale);
                 if !(acc.is_bounded() && value.is_bounded() && next.is_bounded()) {
-                    total = total.then(acc.add_cost(value));
+                    step = acc.add_cost(value);
+                    self.total = self.total.then(step);
                 }
                 next
             }
         });
+        step
     }
-    (total, running)
+
+    /// Return the complete chain cost and its resulting shape bound.
+    #[inline]
+    #[must_use]
+    pub const fn finish(&self) -> (Cost, Option<Shape>) {
+        (self.total, self.running)
+    }
 }
 
 /// An upper bound on what comparing `values` costs when each takes part in at

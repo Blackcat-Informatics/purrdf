@@ -2178,6 +2178,10 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 }
                 steps.push(Step::Visit(left, active_graph));
             }
+            GraphPattern::Apply { left, right, .. } => {
+                steps.push(Step::Visit(right, active_graph));
+                steps.push(Step::Visit(left, active_graph));
+            }
             GraphPattern::Union { arms } => {
                 steps.extend(arms.iter().rev().map(|arm| Step::Visit(arm, active_graph)));
             }
@@ -4558,7 +4562,9 @@ mod survey_tests {
                 patterns,
                 survey,
             ),
-            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. } => {
                 reference_survey(
                     dataset,
                     active_dataset,

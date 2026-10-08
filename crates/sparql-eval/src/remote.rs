@@ -530,6 +530,7 @@ fn nth_child_pattern(node: &GraphPattern, index: usize) -> Option<&GraphPattern>
         GraphPattern::Join { left, right }
         | GraphPattern::LeftJoin { left, right, .. }
         | GraphPattern::Lateral { left, right }
+        | GraphPattern::Apply { left, right, .. }
         | GraphPattern::Minus { left, right } => match index {
             0 => Some(left),
             1 => Some(right),
@@ -604,6 +605,11 @@ fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphP
         GraphPattern::Lateral { .. } => GraphPattern::Lateral {
             left: Child::new(next()),
             right: Child::new(next()),
+        },
+        GraphPattern::Apply { policy, .. } => GraphPattern::Apply {
+            left: Child::new(next()),
+            right: Child::new(next()),
+            policy: policy.clone(),
         },
         GraphPattern::Filter { expr, .. } => GraphPattern::Filter {
             expr: expr.clone(),
@@ -3280,6 +3286,15 @@ mod body_walk_tests {
                 let right = reference_sanitize(right);
                 join_dropping_empty_values(left, right)
             }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => GraphPattern::Apply {
+                left: Child::new(reference_sanitize(left)),
+                right: Child::new(reference_sanitize(right)),
+                policy: policy.clone(),
+            },
             GraphPattern::LeftJoin {
                 left,
                 right,

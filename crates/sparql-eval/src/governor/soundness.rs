@@ -435,6 +435,21 @@ where
     F: FnMut(PatternPart<'a>) -> bool,
 {
     match pattern {
+        GraphPattern::Apply {
+            left,
+            right,
+            policy,
+        } => {
+            visit(PatternPart::Child(left, ChildEdge::MONOTONE))
+                || visit(PatternPart::Child(
+                    right,
+                    if policy.optional.is_some() {
+                        ChildEdge::OPAQUE
+                    } else {
+                        ChildEdge::MONOTONE_BAG
+                    },
+                ))
+        }
         // Leaves. A truncation cannot happen "below" them; they are where truncation
         // originates.
         GraphPattern::Bgp { patterns: _ } => false,
@@ -974,6 +989,10 @@ pub(crate) const fn child_row_ceiling(
         // [`visit_pattern_parts`]) and so admits no pushdown of its own, which is exactly
         // right for the unfused path, where that node is never the one evaluated.
         GraphPattern::Lateral { left: _, right: _ } => None,
+        // Declared application emits each completed RHS row without the native
+        // LATERAL compatibility rejection. Its first k rows need at most k rows
+        // from any one RHS invocation; the driver can still lose every row.
+        GraphPattern::Apply { .. } => if ordinal == 1 { Some(ceiling) } else { None },
 
         // Everything below can drop rows, duplicate them, reorder them, or interleave two
         // arms, so no finite prefix of a child bounds the parent's first `k` rows.
@@ -1299,11 +1318,12 @@ pub(crate) const fn pattern_label_index(pattern: &GraphPattern) -> usize {
             element: _,
             companion: _,
         } => 19,
+        GraphPattern::Apply { .. } => 20,
     }
 }
 
 /// Every [`GraphPattern`] variant's stable label, indexed by [`pattern_label_index`].
-pub(crate) const PATTERN_LABELS: [&str; 20] = [
+pub(crate) const PATTERN_LABELS: [&str; 21] = [
     "Bgp",
     "Path",
     "Join",
@@ -1324,6 +1344,7 @@ pub(crate) const PATTERN_LABELS: [&str; 20] = [
     "Group",
     "PropertyFunction",
     "Unfold",
+    "Apply",
 ];
 
 /// `pattern`'s variant label, for diagnostics and for the coverage test.
@@ -1743,6 +1764,14 @@ fn push_pattern_parts<'a>(pattern: &'a GraphPattern, steps: &mut Vec<AnalysisSte
             steps.push(AnalysisStep::EnterPattern(left));
             steps.push(AnalysisStep::EnterPattern(right));
         }
+        GraphPattern::Apply {
+            left,
+            right,
+            policy: _,
+        } => {
+            steps.push(AnalysisStep::EnterPattern(left));
+            steps.push(AnalysisStep::EnterPattern(right));
+        }
         GraphPattern::Union { arms } => {
             for arm in arms {
                 steps.push(AnalysisStep::EnterPattern(arm));
@@ -1941,6 +1970,39 @@ fn assemble_pattern(pattern: &GraphPattern, values: &mut AnalysisValues) -> Node
                     .collect(),
                 has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
                 can_hard_error: l.can_hard_error || r.can_hard_error,
+            }
+        }
+        GraphPattern::Apply { policy, .. } => {
+            let right = values.pattern();
+            let left = values.pattern();
+            let mut free_vars: DetHashSet<_> =
+                left.free_vars.union(&right.free_vars).cloned().collect();
+            free_vars.extend(
+                policy
+                    .inputs
+                    .iter()
+                    .flat_map(|(input, driver)| [input.clone(), driver.clone()]),
+            );
+            if let Some(optional) = &policy.optional {
+                free_vars.extend(
+                    optional
+                        .retry_inputs
+                        .iter()
+                        .flat_map(|(input, driver)| [input.clone(), driver.clone()]),
+                );
+            }
+            NodeAnalysis {
+                free_vars,
+                certainly_bound: if policy.optional.is_some() {
+                    left.certainly_bound
+                } else {
+                    left.certainly_bound
+                        .union(&right.certainly_bound)
+                        .cloned()
+                        .collect()
+                },
+                has_stateful_builtin: left.has_stateful_builtin || right.has_stateful_builtin,
+                can_hard_error: left.can_hard_error || right.can_hard_error,
             }
         }
         // Free variables are the arms' union and a certainly-bound variable is bound by
@@ -2540,6 +2602,7 @@ fn pattern_probe_step<'p, 't>(
         | GraphPattern::Slice { .. }
         | GraphPattern::Group { .. }
         | GraphPattern::Lateral { .. }
+        | GraphPattern::Apply { .. }
         | GraphPattern::Service { .. } => false,
     }
 }
@@ -2638,6 +2701,7 @@ pub(crate) fn exists_row_collision<'a>(
                     | GraphPattern::PropertyFunction(_) => {}
                     GraphPattern::Join { left, right }
                     | GraphPattern::Lateral { left, right }
+                    | GraphPattern::Apply { left, right, .. }
                     | GraphPattern::LeftJoin { left, right, .. } => {
                         pending.push(CollisionStep::Row(right, scope));
                         pending.push(CollisionStep::Row(left, scope));
@@ -2734,6 +2798,7 @@ pub(crate) fn exists_row_collision<'a>(
                     }
                     GraphPattern::Join { left, right }
                     | GraphPattern::Lateral { left, right }
+                    | GraphPattern::Apply { left, right, .. }
                     | GraphPattern::LeftJoin { left, right, .. } => {
                         pending.push(CollisionStep::GroupKey(right, variables, scope));
                         pending.push(CollisionStep::GroupKey(left, variables, scope));
@@ -3865,8 +3930,26 @@ mod tests {
             left: boxed(called),
             right: boxed(service),
         };
-        let optional = GraphPattern::LeftJoin {
+        let application = GraphPattern::Apply {
             left: boxed(lateral),
+            right: boxed(GraphPattern::Filter {
+                inner: boxed(bgp()),
+                expr: Expression::Exists(boxed(other_bgp())),
+            }),
+            policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                dataset_required: false,
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: None,
+                inputs: vec![(Variable::new("context"), Variable::new("driver"))],
+                optional: Some(purrdf_sparql_algebra::algebra::OptionalApplication {
+                    retry_inputs: vec![(Variable::new("context"), Variable::new("remembered"))],
+                    forget_marker: Variable::new("visibility"),
+                }),
+            }),
+        };
+        let optional = GraphPattern::LeftJoin {
+            left: boxed(application),
             right: boxed(other_bgp()),
             expression: Some(Expression::Bound(Variable::new("o"))),
         };
@@ -4161,6 +4244,38 @@ mod iterative_walks {
                         .union(&r.certainly_bound)
                         .cloned()
                         .collect(),
+                    has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
+                    can_hard_error: l.can_hard_error || r.can_hard_error,
+                }
+            }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                let l = reference_analyze_pattern(left, table);
+                let r = reference_analyze_pattern(right, table);
+                let mut free = DetHashSet::default();
+                free.extend(l.free_vars);
+                free.extend(r.free_vars);
+                for (input, driver) in &policy.inputs {
+                    free.extend([input.clone(), driver.clone()]);
+                }
+                if let Some(optional) = &policy.optional {
+                    for (input, driver) in &optional.retry_inputs {
+                        free.extend([input.clone(), driver.clone()]);
+                    }
+                }
+                NodeAnalysis {
+                    free_vars: free,
+                    certainly_bound: if policy.optional.is_some() {
+                        l.certainly_bound
+                    } else {
+                        l.certainly_bound
+                            .union(&r.certainly_bound)
+                            .cloned()
+                            .collect()
+                    },
                     has_stateful_builtin: l.has_stateful_builtin || r.has_stateful_builtin,
                     can_hard_error: l.can_hard_error || r.can_hard_error,
                 }
@@ -4585,6 +4700,7 @@ mod iterative_walks {
             | GraphPattern::Slice { .. }
             | GraphPattern::Group { .. }
             | GraphPattern::Lateral { .. }
+            | GraphPattern::Apply { .. }
             | GraphPattern::Service { .. } => false,
         }
     }
@@ -4642,6 +4758,7 @@ mod iterative_walks {
             | GraphPattern::PropertyFunction(_) => None,
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => {
                 reference_row_collision(left, row_scope)
                     .or_else(|| reference_row_collision(right, row_scope))
@@ -4729,6 +4846,7 @@ mod iterative_walks {
             }
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => {
                 reference_group_key_collision(left, variables, row_scope)
                     .or_else(|| reference_group_key_collision(right, variables, row_scope))
@@ -4889,7 +5007,7 @@ mod iterative_walks {
             if !self.spend() {
                 return self.leaf();
             }
-            match self.pick(20) {
+            match self.pick(21) {
                 0..=2 => self.leaf(),
                 3 => GraphPattern::Join {
                     left: Child::new(self.pattern()),
@@ -4898,6 +5016,26 @@ mod iterative_walks {
                 4 => GraphPattern::Lateral {
                     left: Child::new(self.pattern()),
                     right: Child::new(self.pattern()),
+                },
+                20 => GraphPattern::Apply {
+                    left: Child::new(self.pattern()),
+                    right: Child::new(self.pattern()),
+                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: false,
+                        row_pipeline: false,
+                        reduced_adjacent: false,
+                        group_domain: None,
+                        inputs: vec![(Variable::new("context"), Variable::new("driver"))],
+                        optional: self.coin().then(|| {
+                            purrdf_sparql_algebra::algebra::OptionalApplication {
+                                retry_inputs: vec![(
+                                    Variable::new("context"),
+                                    Variable::new("remembered"),
+                                )],
+                                forget_marker: Variable::new("visibility"),
+                            }
+                        }),
+                    }),
                 },
                 5 => GraphPattern::Minus {
                     left: Child::new(self.pattern()),

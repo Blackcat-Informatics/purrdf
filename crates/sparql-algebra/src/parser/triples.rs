@@ -163,7 +163,7 @@ pub(super) struct PathLevel {
     inverse: bool,
 }
 
-impl Parser<'_, '_> {
+impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
     // ── the triples machine ─────────────────────────────────────────────────
 
     /// Read one `GraphNode` — a nested blank-node property list, a nested collection, a

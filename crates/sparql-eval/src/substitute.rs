@@ -317,7 +317,7 @@ pub(crate) fn interned_variable(name: &str) -> Variable {
 /// [`GroundTerm`]). A pre-binding is an instruction to narrow the answer, so a
 /// component that cannot be made into a term is reported to the caller rather than
 /// degraded into an `UNDEF` cell that would silently widen it — see [`lang`].
-fn build_probes(
+pub(crate) fn build_probes(
     substitutions: Prebindings<'_>,
 ) -> Result<Vec<(Variable, GroundTerm)>, RdfDiagnostic> {
     let mut probes = Vec::with_capacity(substitutions.len());
@@ -746,6 +746,7 @@ fn enter_push<'p>(
         GraphPattern::Lateral { left, .. } => {
             Some((take_child(left), PushStage::Left, probes.clone()))
         }
+        GraphPattern::Apply { .. } => None,
         // A sub-`SELECT` projecting the variable passes each of its rows' binding of it
         // out unchanged, so restricting its inner rows restricts its output the same
         // way; a variable it does NOT project is a different variable inside it, and is
@@ -2304,6 +2305,7 @@ fn own_expressions<'n>(
         | GraphPattern::Minus { .. }
         | GraphPattern::Union { .. }
         | GraphPattern::Lateral { .. }
+        | GraphPattern::Apply { .. }
         | GraphPattern::LeftJoin {
             expression: None, ..
         }
@@ -2344,6 +2346,7 @@ fn enter_substitution(
             return Step::Finished((node, core));
         }
         GraphPattern::Values { .. } => return Step::Finished((node, core)),
+        GraphPattern::Apply { .. } => return Step::Finished((node, core)),
         // BOTH arms, unlike ordinary parameter pushdown: SHACL binds each matched
         // occurrence before this operator evaluates, with leaf-local VALUES retaining
         // every replaced column. A restricted OPTIONAL match becoming a miss is the
@@ -2998,20 +3001,7 @@ fn for_each_expression<'e>(
     }
 }
 
-/// [`for_each_expression`], with each expression handed over for rewriting. `visit`
-/// sees each expression before the walk reads what it holds, so an expression it
-/// replaces is walked as replaced.
-fn for_each_expression_mut<'e>(
-    roots: impl IntoIterator<Item = &'e mut Expression>,
-    mut visit: impl FnMut(&mut Expression),
-) {
-    let mut pending: Vec<&'e mut Expression> = roots.into_iter().collect();
-    pending.reverse();
-    while let Some(expr) = pending.pop() {
-        visit(expr);
-        push_operands_mut(expr, &mut pending);
-    }
-}
+pub(crate) use purrdf_sparql_algebra::walk::for_each_expression_mut;
 
 /// Push the expressions `expr` holds onto `pending`, last first, so the work list pops
 /// them in source order. Wildcard-free: an expression variant added later must say
@@ -3053,48 +3043,6 @@ fn push_operands<'e>(expr: &'e Expression, pending: &mut Vec<&'e Expression>) {
         }
         Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
             pending.extend(list.iter().rev());
-        }
-    }
-}
-
-/// [`push_operands`], for rewriting.
-fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Expression>) {
-    match expr {
-        Expression::Variable(_)
-        | Expression::Bound(_)
-        | Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Exists(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            pending.extend(operands.iter_mut().rev());
-        }
-        Expression::Arithmetic(first, steps) => {
-            pending.extend(steps.iter_mut().rev().map(|(_, operand)| operand));
-            pending.push(first);
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            pending.push(right);
-            pending.push(left);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            pending.push(inner);
-        }
-        Expression::In(target, list) => {
-            pending.extend(list.iter_mut().rev());
-            pending.push(target);
-        }
-        Expression::If(cond, then_expr, else_expr) => {
-            pending.push(else_expr);
-            pending.push(then_expr);
-            pending.push(cond);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            pending.extend(list.iter_mut().rev());
         }
     }
 }
@@ -4564,7 +4512,7 @@ mod walk_tests {
                 complete_shacl_leaf(pattern, &expr_subs.0, scope);
                 (false, core)
             }
-            GraphPattern::Values { .. } => (false, core),
+            GraphPattern::Values { .. } | GraphPattern::Apply { .. } => (false, core),
             GraphPattern::Join { left, right } | GraphPattern::Minus { left, right } => {
                 reference_substitute_in_graph_pattern(left, expr_subs, beneath);
                 reference_substitute_in_graph_pattern(right, expr_subs, beneath);
@@ -6155,6 +6103,7 @@ fn for_each_child_pattern_mut<'p>(
         GraphPattern::Join { left, right }
         | GraphPattern::LeftJoin { left, right, .. }
         | GraphPattern::Lateral { left, right }
+        | GraphPattern::Apply { left, right, .. }
         | GraphPattern::Minus { left, right } => {
             visit(left);
             visit(right);

@@ -1110,16 +1110,21 @@ class Graph:
         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
         base: str | None = None,
         extension_namespaces: list[str] | None = None,
+        property_fn_namespaces: list[str] | None = None,
         standpoint_predicates: tuple[str, str] | None = None,
+        relations: dict[str, object] | None = None,
+        relations_from_graph: dict[str, object] | None = None,
+        path_relations: dict[str, object] | None = None,
+        aggregate_namespace: str | None = None,
+        division: str | None = None,
         xpath_regex: str | None = None,
         **kwargs: object,
     ) -> Result:
         """Run a SPARQL query; return a :class:`~.query.Result`.
 
-        ``initBindings`` are applied through the native ``substitutions`` kwarg —
-        the engine pre-binds each variable (keeping it projectable and propagating
-        into ``OPTIONAL``/``MINUS``/``EXISTS``/sub-queries), matching RDFLib's
-        ``initBindings`` semantics without an injected ``VALUES`` row.
+        The native contextual compiler keeps ``initBindings`` separate from each
+        returned mapping, preserving RDFLib assignment and fallback semantics
+        through ``OPTIONAL``/``MINUS``/``EXISTS`` and subqueries.
 
         ``base`` is spliced in as a leading ``BASE`` prologue declaration so
         relative IRIs in the query text resolve against it, matching RDFLib's
@@ -1140,11 +1145,20 @@ class Graph:
         if base:
             query_object = f"BASE <{base}>\n" + query_object
         substitutions = _native_substitutions(initBindings) if initBindings else None
-        res = self._store.query(
+        res = self._store.query_rdflib(
             query_object,
             substitutions=substitutions,
             extension_namespaces=extension_namespaces,
+            property_fn_namespaces=property_fn_namespaces,
             standpoint_predicates=standpoint_predicates,
+            relations=relations,
+            relations_from_graph=relations_from_graph,
+            path_relations=path_relations,
+            aggregate_namespace=aggregate_namespace,
+            division=division,
+            named_graphs=isinstance(self, Dataset),
+            default_graph=_native_subject(self._graph_name) if self._graph_name is not None else None,
+            default_union=getattr(self, "default_union", False),
             xpath_regex=xpath_regex,
         )
         if isinstance(res, purrdf.QueryBoolean):
@@ -1173,7 +1187,7 @@ class Graph:
         variables = list(res.variables)
         var_names = tuple(Variable(v.value) for v in variables)
         rows = [
-            ResultRow(tuple(from_native(sol[v]) for v in variables), var_names)
+            ResultRow(tuple(from_native(sol[index]) for index in range(len(variables))), var_names)
             for sol in res
         ]
         return Result("SELECT", rows=rows, variables=var_names)

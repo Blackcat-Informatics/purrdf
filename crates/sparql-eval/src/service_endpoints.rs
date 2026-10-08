@@ -317,6 +317,17 @@ fn classify(
                         pending.push(ClassifyStep::Pattern(right, direct));
                         pending.push(ClassifyStep::Pattern(left, direct));
                     }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        pending.push(ClassifyStep::Pattern(
+                            right,
+                            direct && policy.optional.is_none(),
+                        ));
+                        pending.push(ClassifyStep::Pattern(left, direct));
+                    }
                     GraphPattern::Union { arms } => {
                         pending.extend(
                             arms.iter()
@@ -643,6 +654,19 @@ impl ServedIndex {
                     merge(&mut summary, right_summary);
                     summary
                 }
+                GraphPattern::Apply { policy, .. } => {
+                    let mut summary = part(kids);
+                    let right_summary = part(kids);
+                    merge(
+                        &mut summary,
+                        if policy.optional.is_some() {
+                            indirect(right_summary)
+                        } else {
+                            right_summary
+                        },
+                    );
+                    summary
+                }
                 GraphPattern::Union { .. } => {
                     let mut summary = Vec::new();
                     for arm_summary in kids.by_ref() {
@@ -769,6 +793,14 @@ fn summary_parts<'a>(node: SummaryNode<'a>, push: &mut impl FnMut(SummaryNode<'a
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
             | GraphPattern::Minus { left, right } => {
+                push(SummaryNode::Pattern(left));
+                push(SummaryNode::Pattern(right));
+            }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy: _,
+            } => {
                 push(SummaryNode::Pattern(left));
                 push(SummaryNode::Pattern(right));
             }
@@ -1498,6 +1530,57 @@ mod tests {
     use crate::remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 
     const EX: &str = "http://example.org/";
+
+    #[test]
+    fn parent_served_lookup_keeps_optional_contextual_endpoints_indirect() {
+        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern};
+        let endpoint = Variable::new("endpoint");
+        for optional in [false, true] {
+            let application = GraphPattern::Apply {
+                left: Child::new(GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                }),
+                right: Child::new(GraphPattern::Service {
+                    name: NamedNodePattern::Variable(endpoint.clone()),
+                    inner: Child::new(GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }),
+                    silent: false,
+                }),
+                policy: crate::rdflib::test_application_policy(Vec::new(), optional),
+            };
+            let root = GraphPattern::Join {
+                left: Child::new(GraphPattern::Bgp {
+                    patterns: Vec::new(),
+                }),
+                right: Child::new(application),
+            };
+            let GraphPattern::Join { right, .. } = &root else {
+                unreachable!()
+            };
+            let tree = crate::plan::Tree::build(&root);
+            let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
+                panic!("variable endpoint is indexed")
+            };
+            let served = tree
+                .shape()
+                .node_of(right)
+                .and_then(|id| index.served_at(id))
+                .expect("parent operand has a served summary");
+            assert_eq!(
+                served.as_ref(),
+                if optional {
+                    &[][..]
+                } else {
+                    std::slice::from_ref(&endpoint)
+                }
+            );
+            assert_eq!(
+                served.as_ref(),
+                super::served_endpoint_variables(right, None)
+            );
+        }
+    }
     use purrdf_xsd::datatype::XSD_STRING;
 
     /// `ex:g1 → ex:e1`, `ex:g2 → ex:e2`, `ex:g3 → ex:e1` (a repeated endpoint), `ex:g4 →
@@ -2346,6 +2429,14 @@ pub(crate) mod walk_tests {
                 classify_reference(left, direct, scopes, uses);
                 classify_reference(right, direct, scopes, uses);
             }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                classify_reference(left, direct, scopes, uses);
+                classify_reference(right, direct && policy.optional.is_none(), scopes, uses);
+            }
             GraphPattern::Union { arms } => {
                 for arm in arms {
                     classify_reference(arm, direct, scopes, uses);
@@ -2491,6 +2582,23 @@ pub(crate) mod walk_tests {
                     let mut summary = self.summarize_reference(left, ids);
                     let right_summary = self.summarize_reference(right, ids);
                     merge(&mut summary, right_summary);
+                    summary
+                }
+                GraphPattern::Apply {
+                    left,
+                    right,
+                    policy,
+                } => {
+                    let mut summary = self.summarize_reference(left, ids);
+                    let right_summary = self.summarize_reference(right, ids);
+                    merge(
+                        &mut summary,
+                        if policy.optional.is_some() {
+                            indirect(right_summary)
+                        } else {
+                            right_summary
+                        },
+                    );
                     summary
                 }
                 GraphPattern::Union { arms } => {
@@ -2749,7 +2857,15 @@ pub(crate) mod walk_tests {
         *budget -= 1;
         let child =
             |choices: &mut Choices, budget: &mut usize| Child::new(pattern(choices, budget));
-        match choices.pick(17) {
+        match choices.pick(18) {
+            17 => GraphPattern::Apply {
+                left: child(choices, budget),
+                right: child(choices, budget),
+                policy: crate::rdflib::test_application_policy(
+                    vec![(choices.variable(), choices.variable())],
+                    choices.flag(),
+                ),
+            },
             0 => leaf(choices),
             1 | 2 => service(choices),
             3 => GraphPattern::Join {

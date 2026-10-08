@@ -69,6 +69,59 @@ fn native_storage_refusals_preserve_the_resource_code_and_typed_cause() {
 }
 
 #[test]
+fn contextual_reassignment_reuses_current_dated_laws_and_refuses_resource_exhaustion() {
+    let data = empty_dataset();
+    let engine = NativeSparqlEngine::new().with_xpath_regex(Profile::Xpath20, Limits::new());
+    let query = r#"SELECT ?carrier ?value WHERE {
+        VALUES ?carrier { 1 }
+        BIND(0 AS ?value)
+        BIND(REGEX("a", "(?:a)") AS ?value)
+    }"#;
+    let prepared = engine
+        .prepare_rdflib_query(query, None, &[], QueryOptions::EMPTY)
+        .unwrap();
+    for (profile, expected) in [
+        (Profile::Xpath31, "true"),
+        (Profile::Xpath20, "0"),
+        (Profile::Xpath31, "true"),
+    ] {
+        let options = QueryOptions::new().with_xpath_regex(profile, Limits::new());
+        let (_, rows) = solutions(
+            engine
+                .query_rdflib_prepared_view(&data, &prepared, options)
+                .unwrap(),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(render_cell(rows[0][0].as_ref()), "1");
+        // A syntax error retains the previous actual assignment. A successful
+        // rebind replaces it, independently of the engine's default dated law.
+        assert_eq!(render_cell(rows[0][1].as_ref()), expected);
+    }
+    let exhausted = QueryOptions::new().with_xpath_regex(
+        Profile::Xpath31,
+        Limits::new().with(Resource::PatternBytes, 0),
+    );
+    assert_eq!(
+        engine
+            .query_rdflib_prepared_view(&data, &prepared, exhausted)
+            .unwrap_err()
+            .code,
+        Resource::PatternBytes.code(),
+        "resource exhaustion must not restore the earlier assignment"
+    );
+    let (_, rows) = solutions(
+        engine
+            .query_rdflib_prepared_view(
+                &data,
+                &prepared,
+                QueryOptions::new().with_xpath_regex(Profile::Xpath31, Limits::new()),
+            )
+            .unwrap(),
+    );
+    assert_eq!(render_cell(rows[0][1].as_ref()), "true");
+}
+
+#[test]
 fn one_prepared_query_alternates_dated_laws_without_changing_compatibility() {
     let data = empty_dataset();
     let compatibility = NativeSparqlEngine::new();

@@ -39,6 +39,50 @@ use crate::{
     query_with_entailment_closure_governed,
 };
 
+/// Static host selection: the ordinary query captures no graph-selection state.
+trait QueryMode {
+    type Selection: Send;
+    const RDFLIB: bool;
+    fn selection(self) -> PyResult<Self::Selection>;
+    fn dataset(selection: &Self::Selection, dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>>;
+    fn single_graph(selection: &Self::Selection) -> bool;
+}
+
+impl QueryMode for () {
+    type Selection = ();
+    const RDFLIB: bool = false;
+    fn selection(self) -> PyResult<()> {
+        Ok(())
+    }
+    fn dataset((): &(), dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>> {
+        Ok(dataset)
+    }
+    fn single_graph((): &()) -> bool {
+        false
+    }
+}
+
+impl QueryMode for (bool, Option<&Bound<'_, PyAny>>, bool) {
+    type Selection = (bool, Option<TermValue>, bool);
+    const RDFLIB: bool = true;
+    fn selection(self) -> PyResult<Self::Selection> {
+        Ok((
+            self.0,
+            extract_graph_name(self.1)?.as_ref().map(rdf_term_to_value),
+            self.2,
+        ))
+    }
+    fn dataset(scope: &Self::Selection, dataset: Arc<RdfDataset>) -> PyResult<Arc<RdfDataset>> {
+        purrdf_sparql_eval::select_query_dataset(&dataset, scope.0, scope.1.as_ref(), scope.2)
+            .map_err(|error| {
+                PyValueError::new_err(format!("query graph selection failed: {error}"))
+            })
+    }
+    fn single_graph(scope: &Self::Selection) -> bool {
+        !scope.0
+    }
+}
+
 /// The copy-on-write RDF 1.2 quad store `Store` and `MutableDataset` extend: the
 /// one home of the query, UPDATE, iteration and validation-capsule surface they
 /// share.
@@ -165,55 +209,63 @@ impl PyQuadStore {
         xpath_regex: Option<&str>,
         division: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        presentation::settled(move || {
-            // Parsed before any work, so an unreadable policy runs nothing.
-            let division = division_policy(division.as_deref())?;
-            let subs = collect_substitutions(substitutions)?;
-            // Python data is converted to owned `TermValue`s HERE, while the GIL is
-            // held; nothing below re-enters the interpreter.
-            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-            let config = EngineConfig {
-                extension_namespaces,
-                property_fn_namespaces,
-                standpoint_predicates,
-                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
-            };
-            let inner = &self.inner;
-            // Snapshot + engine build + evaluation run detached (GIL released);
-            // results are materialized into Python objects after reacquiring.
-            let result = py.detach(move || {
-                let dataset = inner
-                    .freeze()
-                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
-                let registry = build_relations(specs, &dataset)?;
-                let aggregates =
-                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
-                let parser_options = engine_parser_options(&config);
-                let engine = build_engine(config);
-                engine
-                    .query_with_options_view(
-                        &*dataset,
-                        SparqlRequest {
-                            query,
-                            base_iri: None,
-                            substitutions: &subs,
-                        },
-                        purrdf_sparql_eval::QueryOptions::new()
-                            .with_env(&extension_env(
-                                parser_options,
-                                registry.as_ref(),
-                                aggregates.as_ref(),
-                            )?)
-                            .with_division(division),
-                    )
-                    .map_err(|e| {
-                        presentation::value_error(format!("query evaluation error: {e}"), &e)
-                    })
-            })?;
-            materialize_results(py, result)
-        })
+        self.query_impl(
+            py,
+            query,
+            substitutions,
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+            relations,
+            relations_from_graph,
+            path_relations,
+            aggregate_namespace,
+            xpath_regex,
+            division,
+            (),
+        )
     }
 
+    /// Execute RDFLib contextual assignment semantics through the native compiler.
+    #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, property_fn_namespaces=None, standpoint_predicates=None, relations=None, relations_from_graph=None, path_relations=None, aggregate_namespace=None, xpath_regex=None, division=None, named_graphs=true, default_graph=None, default_union=false))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each engine-configuration axis is named explicitly at the call site"
+    )]
+    fn query_rdflib(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        division: Option<String>,
+        named_graphs: bool,
+        default_graph: Option<&Bound<'_, PyAny>>,
+        default_union: bool,
+    ) -> PyResult<Py<PyAny>> {
+        self.query_impl(
+            py,
+            query,
+            substitutions,
+            extension_namespaces,
+            property_fn_namespaces,
+            standpoint_predicates,
+            relations,
+            relations_from_graph,
+            path_relations,
+            aggregate_namespace,
+            xpath_regex,
+            division,
+            (named_graphs, default_graph, default_union),
+        )
+    }
     /// Run a SPARQL query under caller-supplied execution governors, returning a
     /// `QueryOutcome` rather than the results directly.
     ///
@@ -976,4 +1028,80 @@ fn collect_substitutions(
         out.push((name, rdf_term_to_value(&extract_term(&value)?)));
     }
     Ok(out)
+}
+
+impl PyQuadStore {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "shared named host configuration axes"
+    )]
+    fn query_impl<M: QueryMode>(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        substitutions: Option<&Bound<'_, PyDict>>,
+        extension_namespaces: Option<Vec<String>>,
+        property_fn_namespaces: Option<Vec<String>>,
+        standpoint_predicates: Option<(String, String)>,
+        relations: Option<&Bound<'_, PyDict>>,
+        relations_from_graph: Option<&Bound<'_, PyDict>>,
+        path_relations: Option<&Bound<'_, PyDict>>,
+        aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
+        division: Option<String>,
+        mode: M,
+    ) -> PyResult<Py<PyAny>> {
+        presentation::settled(move || {
+            // Parsed before any work, so an unreadable policy runs nothing.
+            let division = division_policy(division.as_deref())?;
+            let selection = mode.selection()?;
+            let subs = collect_substitutions(substitutions)?;
+            // Python data is converted to owned `TermValue`s HERE, while the GIL is
+            // held; nothing below re-enters the interpreter.
+            let specs = collect_relations(relations, relations_from_graph, path_relations)?;
+            let config = EngineConfig {
+                extension_namespaces,
+                property_fn_namespaces,
+                standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
+            };
+            let inner = &self.inner;
+            // Snapshot + engine build + evaluation run detached (GIL released);
+            // results are materialized into Python objects after reacquiring.
+            let result = py.detach(move || {
+                let dataset = inner
+                    .freeze()
+                    .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))?;
+                let dataset = M::dataset(&selection, dataset)?;
+                let registry = build_relations(specs, &dataset)?;
+                let aggregates =
+                    purrdf_validate::query::statistical_aggregates(aggregate_namespace.as_deref());
+                let parser_options = engine_parser_options(&config);
+                let engine = build_engine(config);
+                let env = extension_env(parser_options, registry.as_ref(), aggregates.as_ref())?;
+                let options = purrdf_sparql_eval::QueryOptions::new()
+                    .with_env(&env)
+                    .with_division(division);
+                let request = SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &subs,
+                };
+                let result = if M::RDFLIB {
+                    engine.query_rdflib_with_options_view(
+                        &*dataset,
+                        request,
+                        options,
+                        M::single_graph(&selection),
+                    )
+                } else {
+                    engine.query_with_options_view(&*dataset, request, options)
+                };
+                result.map_err(|e| {
+                    presentation::value_error(format!("query evaluation error: {e}"), &e)
+                })
+            })?;
+            materialize_results(py, result)
+        })
+    }
 }

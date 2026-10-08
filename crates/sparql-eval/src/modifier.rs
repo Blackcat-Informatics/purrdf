@@ -191,6 +191,33 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     Ok(SolutionSeq { schema, rows })
 }
 
+// One authored projection kernel with caller-local iterator identities: sharing
+// one generic closure made its outer bulk specialization a two-use outlined call.
+// Bind each input once, in argument order, while retaining the safe container homes.
+macro_rules! eval_project_sequence {
+    ($seq:expr, $out:expr) => {{
+        let seq = $seq;
+        let out = $out;
+        // For each projected column, the source column in the inner schema (if any).
+        let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
+        // Reserve the exact row count, then use Vec's bulk extension so row capacity
+        // and final length publication stay outside the per-row projection work.
+        let mut rows = Vec::with_capacity(seq.rows.len());
+        rows.extend(seq.rows.iter().map(|row| {
+            let row = row.as_slice();
+            // Use SmallVec's reserved-slot bulk loop without a FromIterator wrapper
+            // or repeated push capacity/tag/length work for each projected cell.
+            let mut projected = Solution::new();
+            projected.extend(
+                src.iter()
+                    .map(|source| source.and_then(|column| row[column])),
+            );
+            projected
+        }));
+        SolutionSeq { schema: out, rows }
+    }};
+}
+
 /// `SELECT`-list projection: restrict to `variables` in order. A projected variable
 /// absent from the inner solution yields an all-unbound column.
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
@@ -214,15 +241,40 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
         let schema = layout();
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
-    let out = layout();
-    // For each projected column, the source column in the inner schema (if any).
-    let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
-    let rows = seq
-        .rows
-        .iter()
-        .map(|row| src.iter().map(|s| s.and_then(|c| row[c])).collect())
-        .collect();
-    Ok(lift.finish(SolutionSeq { schema: out, rows }))
+    let projected = eval_project_sequence!(&seq, layout());
+    Ok(lift.finish(projected))
+}
+
+// Erase the static delivery wrapper; the native operator retains its call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    variables: &[Variable],
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if M::ACTIVE {
+        crate::eval::yield_transform(
+            node,
+            inner,
+            delivery,
+            |seq, ctx| {
+                let out = if ctx.dataset.storage_live_budget().is_some() {
+                    Arc::new(VarSchema::from_vars(variables.iter().cloned()))
+                } else {
+                    VarSchema::interned(variables)
+                };
+                let lift = Lift::at(node);
+                let projected = eval_project_sequence!(&seq, out);
+                Ok(lift.finish(projected))
+            },
+            ctx,
+        )
+    } else {
+        eval_project(node, inner, variables, ctx)
+    }
 }
 
 /// `DISTINCT` and `REDUCED`: drop duplicate whole-solution rows, preserving first-seen
@@ -235,8 +287,19 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
 /// output, which is why a truncation below either operator keeps its bound instead of
 /// voiding every `SELECT DISTINCT` in the corpus.
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
+// Erase the ZST mode at the wrapper; the shared kernel keeps its call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub(crate) fn eval_dedup<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_dedup_with::<D, false>(node, inner, ctx)
+}
+
+#[inline(never)]
+pub(crate) fn eval_dedup_with<D: DatasetView + Sync, const ADJACENT: bool>(
     node: &GraphPattern,
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
@@ -247,12 +310,75 @@ pub(crate) fn eval_dedup<D: DatasetView + Sync>(
     };
     // A shared blank's column is not part of a solution: two rows that differ only
     // there are the same solution (see `crate::blank_scope`).
-    Ok(lift.finish(dedup(crate::blank_scope::without_joined_blanks(seq))))
+    Ok(lift.finish(dedup::<_, ADJACENT>(
+        crate::blank_scope::without_joined_blanks(seq),
+    )))
+}
+
+// Erase the static delivery wrapper; the native operator retains its call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_dedup_delivered<
+    D: DatasetView + Sync,
+    const ADJACENT: bool,
+    M: crate::eval::RowDelivery<D>,
+>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if !M::ACTIVE {
+        return if ADJACENT {
+            eval_dedup_with::<D, true>(node, inner, ctx)
+        } else {
+            eval_dedup(node, inner, ctx)
+        };
+    }
+    eval_dedup_yielding::<D, ADJACENT, M>(node, inner, delivery, ctx)
+}
+
+#[inline(never)]
+fn eval_dedup_yielding<
+    D: DatasetView + Sync,
+    const ADJACENT: bool,
+    M: crate::eval::RowDelivery<D>,
+>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut seen = DetHashSet::default();
+    let mut previous = None;
+    crate::eval::yield_transform(
+        node,
+        inner,
+        delivery,
+        |seq, _ctx| {
+            let mut seq = crate::blank_scope::without_joined_blanks(seq);
+            seq.rows.retain(|row| {
+                if ADJACENT {
+                    let keep = previous.as_ref() != Some(row);
+                    previous = Some(row.clone());
+                    keep
+                } else {
+                    seen.insert(row.clone())
+                }
+            });
+            Ok(Evaluated::Complete(seq))
+        },
+        ctx,
+    )
 }
 
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
 /// RDF-term identity — see the scratch-interner promotion rule).
-fn dedup<I: ViewTermId>(seq: SolutionSeq<I>) -> SolutionSeq<I> {
+fn dedup<I: ViewTermId, const ADJACENT: bool>(mut seq: SolutionSeq<I>) -> SolutionSeq<I> {
+    if ADJACENT {
+        seq.rows.dedup();
+        return seq;
+    }
     let mut unique = DetHashMap::with_capacity_and_hasher(seq.rows.len(), DetHasher::default());
     for (ordinal, row) in seq.rows.into_iter().enumerate() {
         if let Entry::Vacant(entry) = unique.entry(row) {
@@ -301,6 +427,66 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
         schema: seq.schema,
         rows,
     }))
+}
+
+// Erase the static delivery wrapper; the native operator retains its call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_slice_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    start: usize,
+    length: Option<usize>,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if !M::ACTIVE {
+        return eval_slice(node, inner, start, length, ctx);
+    }
+    eval_slice_yielding(node, inner, start, length, delivery, ctx)
+}
+
+#[inline(never)]
+fn eval_slice_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    start: usize,
+    length: Option<usize>,
+    mut delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let mut lift = Lift::at(node);
+    if length == Some(0) {
+        return Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(inner))));
+    }
+    let mut index = 0usize;
+    let mut kept = 0usize;
+    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
+    let mut consume = |seq: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+        for row in &seq.rows {
+            if index >= start {
+                let output = SolutionSeq {
+                    schema: Arc::clone(&seq.schema),
+                    rows: vec![row.clone()],
+                };
+                delivery.deliver(&output, ctx)?;
+                blocks.push(output);
+                kept = kept.saturating_add(1);
+            }
+            index = index.saturating_add(1);
+            if delivery.stopped() || length.is_some_and(|limit| kept >= limit) {
+                return Ok(std::ops::ControlFlow::Break(()));
+            }
+        }
+        Ok(std::ops::ControlFlow::Continue(()))
+    };
+    let evaluated =
+        crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
+    drop(consume);
+    if lift.absorb(0, evaluated).is_none() {
+        return Ok(lift.withheld());
+    }
+    Ok(lift.finish(crate::binop::concat_union(blocks, ctx)))
 }
 
 /// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
@@ -428,10 +614,11 @@ pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderE
 /// variable, every named graph in turn, binding the variable to each).
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
 #[inline(never)]
-pub(crate) fn eval_graph<D: DatasetView + Sync>(
+pub(crate) fn eval_graph_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     node: &GraphPattern,
     name: &NamedNodePattern,
     inner: &GraphPattern,
+    mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     match name {
@@ -451,7 +638,27 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
                 {
                     let saved = ctx.active_graph;
                     ctx.active_graph = GraphMatch::Named(id);
-                    let result = eval_evaluated(inner, ctx);
+                    let result = if M::ACTIVE {
+                        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+                            let producer_graph = ctx.active_graph;
+                            ctx.active_graph = saved;
+                            let delivered = delivery.deliver(rows, ctx);
+                            ctx.active_graph = producer_graph;
+                            delivered?;
+                            Ok(if delivery.stopped() {
+                                std::ops::ControlFlow::Break(())
+                            } else {
+                                std::ops::ControlFlow::Continue(())
+                            })
+                        };
+                        crate::eval::eval_yielding(
+                            inner,
+                            &mut crate::eval::RowConsumer::new(&mut consume),
+                            ctx,
+                        )
+                    } else {
+                        eval_evaluated(inner, ctx)
+                    };
                     ctx.active_graph = saved;
                     let Some(seq) = lift.absorb(0, result?) else {
                         return Ok(lift.withheld());
@@ -463,7 +670,7 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
                 _ => Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(inner)))),
             }
         }
-        NamedNodePattern::Variable(v) => eval_graph_var(node, v, inner, ctx),
+        NamedNodePattern::Variable(v) => eval_graph_var(node, v, inner, delivery, ctx),
     }
 }
 
@@ -632,6 +839,7 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
                     expression: _,
                 }
                 | GraphPattern::Lateral { left, right: _ }
+                | GraphPattern::Apply { left, .. }
                 | GraphPattern::Minus { left, right: _ } => steps.push(Step::Answer(left)),
                 GraphPattern::Filter { expr: _, inner }
                 | GraphPattern::Extend {
@@ -719,6 +927,10 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
 /// ([`DatasetView::reifier_quads_of`] / [`DatasetView::annotations_of_with_graph`]) are
 /// per-reifier slices of these same two tables, so a table with no row in `g` at all has
 /// no row in `g` for any particular reifier either.
+// Keep the three short-circuiting first-row probes in the graph-major caller.
+// The ordinary static mode must not add a helper call/live frame per graph.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
     let scope = GraphMatch::Named(g);
     dataset
@@ -759,10 +971,11 @@ fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
 /// flight: the graph being scanned contributes nothing (its block is incomplete) while
 /// every graph already scanned keeps its complete block — commit granularity at the
 /// per-graph boundary, which is this operator's input row.
-fn eval_graph_var<D: DatasetView + Sync>(
+fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     node: &GraphPattern,
     var: &Variable,
     inner: &GraphPattern,
+    mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
@@ -793,6 +1006,9 @@ fn eval_graph_var<D: DatasetView + Sync>(
     // must NOT answer by re-evaluating the inner pattern (see the `match` after the loop).
     let mut passed_over_a_graph = false;
     for g in graphs {
+        if M::ACTIVE && delivery.stopped() {
+            break;
+        }
         // The graph-major narrowing. A graph that holds no row of any kind cannot
         // contribute a solution to an inner pattern that needs one, so it is passed over
         // for the price of a short-circuiting emptiness probe rather than a whole inner
@@ -803,7 +1019,33 @@ fn eval_graph_var<D: DatasetView + Sync>(
             continue;
         }
         ctx.active_graph = GraphMatch::Named(g);
-        let inner_seq = match eval_evaluated(inner, ctx) {
+        let evaluated = if M::ACTIVE {
+            let mut consume = |seq: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+                let mut rows = Vec::new();
+                let schema =
+                    append_graph_rows(seq.clone(), var, SolutionTerm::Existing(g), &mut rows);
+                let producer_graph = ctx.active_graph;
+                ctx.active_graph = saved;
+                let delivered = delivery.deliver(
+                    &SolutionSeq {
+                        schema: Arc::new(schema),
+                        rows,
+                    },
+                    ctx,
+                );
+                ctx.active_graph = producer_graph;
+                delivered?;
+                Ok(if delivery.stopped() {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                })
+            };
+            crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)
+        } else {
+            eval_evaluated(inner, ctx)
+        };
+        let inner_seq = match evaluated {
             Ok(Evaluated::Complete(seq)) => seq,
             Ok(truncation @ Evaluated::Truncated(_)) => {
                 truncated = true;
@@ -818,36 +1060,12 @@ fn eval_graph_var<D: DatasetView + Sync>(
                 return Err(e);
             }
         };
-        let mut sch = (*inner_seq.schema).clone();
-        let candidate = SolutionTerm::Existing(g);
-        match sch.index_of(var) {
-            // `var` is already a column of the inner pattern's own schema (e.g. it
-            // came from a `VALUES` clause nested directly inside this `GRAPH ?g`
-            // block): JOIN this candidate graph against each row's existing
-            // binding instead of overwriting it — unbound rows adopt `g`,
-            // rows bound to a DIFFERENT value are rejected, rows already bound to
-            // `g` pass through unchanged.
-            Some(gcol) => {
-                for mut row in inner_seq.rows {
-                    let compatible = !matches!(row[gcol], Some(existing) if existing != candidate);
-                    if compatible {
-                        row[gcol] = Some(candidate);
-                        rows.push(row);
-                    }
-                }
-            }
-            // `var` is fresh to the inner pattern: append it as a new column.
-            None => {
-                let gcol = sch.push(var.clone());
-                let width = sch.len();
-                for mut row in inner_seq.rows {
-                    row.resize(width, None);
-                    row[gcol] = Some(candidate);
-                    rows.push(row);
-                }
-            }
-        }
-        out_schema = Some(sch);
+        out_schema = Some(append_graph_rows(
+            inner_seq,
+            var,
+            SolutionTerm::Existing(g),
+            &mut rows,
+        ));
     }
     ctx.active_graph = saved;
 
@@ -878,6 +1096,11 @@ fn eval_graph_var<D: DatasetView + Sync>(
             schema.push(var.clone());
             Arc::new(schema)
         }
+        None if M::ACTIVE => {
+            let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
+            schema.push(var.clone());
+            Arc::new(schema)
+        }
         None => {
             let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
                 return Ok(lift.withheld());
@@ -888,6 +1111,40 @@ fn eval_graph_var<D: DatasetView + Sync>(
         }
     };
     Ok(lift.finish(SolutionSeq { schema, rows }))
+}
+
+/// Match a graph candidate against an existing column, or append its new column.
+/// The native graph loop supplies its one output buffer across every graph.
+// Share the sequence loop without a second call boundary or native result copy.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn append_graph_rows<I: ViewTermId>(
+    seq: SolutionSeq<I>,
+    var: &Variable,
+    candidate: SolutionTerm<I>,
+    rows: &mut Vec<Solution<I>>,
+) -> VarSchema {
+    let mut schema = (*seq.schema).clone();
+    match schema.index_of(var) {
+        Some(column) => {
+            for mut row in seq.rows {
+                if !matches!(row[column], Some(existing) if existing != candidate) {
+                    row[column] = Some(candidate);
+                    rows.push(row);
+                }
+            }
+        }
+        None => {
+            let column = schema.push(var.clone());
+            let width = schema.len();
+            for mut row in seq.rows {
+                row.resize(width, None);
+                row[column] = Some(candidate);
+                rows.push(row);
+            }
+        }
+    }
+    schema
 }
 
 // ---------------------------------------------------------------------------
@@ -1453,13 +1710,50 @@ pub fn fold_values_with_division(
 /// grouped input is opaque and the lift withholds every row, carrying the barrier in
 /// their place. Computing the aggregates anyway and discarding them would be the same
 /// answer at higher cost, so the operator returns before grouping.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
+// The ZST wrapper must disappear; the shared body retains the native boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 pub(crate) fn eval_group<D: DatasetView + Sync>(
     node: &GraphPattern,
     inner: &GraphPattern,
     variables: &[Variable],
     aggregates: &[(Variable, AggregateExpression)],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_group_with(node, inner, variables, aggregates, (), ctx)
+}
+
+pub(crate) trait GroupDomain: Copy + Sync {
+    const CONTEXTUAL: bool;
+    fn visible(&self, schema: &VarSchema) -> Option<Vec<usize>>;
+}
+
+impl GroupDomain for () {
+    const CONTEXTUAL: bool = false;
+    fn visible(&self, schema: &VarSchema) -> Option<Vec<usize>> {
+        crate::blank_scope::visible_columns(schema)
+    }
+}
+
+impl GroupDomain for &[Variable] {
+    const CONTEXTUAL: bool = true;
+    fn visible(&self, schema: &VarSchema) -> Option<Vec<usize>> {
+        Some(
+            self.iter()
+                .filter_map(|name| schema.index_of(name))
+                .collect(),
+        )
+    }
+}
+
+// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+#[inline(never)]
+pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    variables: &[Variable],
+    aggregates: &[(Variable, AggregateExpression)],
+    domain: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     // The output schema is syntactic, including when the input is truncated.
@@ -1475,6 +1769,13 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         }
     }
     let out_schema = Arc::new(out_schema);
+    if M::CONTEXTUAL
+        && !aggregates
+            .iter()
+            .any(|(_, agg)| matches!(agg.function(), AggregateFunction::Fold))
+    {
+        return contextual_group_rows(node, inner, variables, aggregates, out_schema, domain, ctx);
+    }
     let mut lift = Lift::at(node);
     let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
@@ -1566,7 +1867,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                 row[..var_count].copy_from_slice(key);
                 for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
                     row[var_count + j] =
-                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, child)?;
+                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, child)?;
                 }
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 ledger.settle(1, child);
@@ -1610,7 +1911,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                 row[..var_count].copy_from_slice(key);
                 for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
                     row[var_count + j] =
-                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
+                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, ctx)?;
                 }
                 rows.push(row);
             }
@@ -1623,7 +1924,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
             // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
             row[..var_count].copy_from_slice(key);
             for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
-                row[var_count + j] = eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
+                row[var_count + j] =
+                    eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, ctx)?;
             }
             rows.push(row);
         }
@@ -1663,6 +1965,469 @@ fn link_aggregates<'e, D: DatasetView + Sync>(
                 .collect()
         })
         .collect()
+}
+
+/// Stateful scheduling of the existing accumulators. Contextual aggregates update
+/// in input-row order, including across groups. A DISTINCT eligibility read and
+/// an accepted update are separate VM evaluations; the update's value enters the
+/// witness set. SAMPLE retires after its first bound update.
+enum ContextualFold {
+    Builtin(Box<dyn crate::agg_fn::AggregateAccumulator>),
+    Numeric(Option<NumericFold>, NumericAggregate),
+    Custom(Box<ContextualCustomFold>),
+}
+
+struct ContextualCustomFold {
+    accumulator: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    aggregate: Arc<dyn crate::agg_fn::CustomAggregate>,
+    iri: String,
+    scalarvals: Vec<(String, TermValue)>,
+    survivors: Vec<Vec<TermValue>>,
+    admitted_work: u64,
+}
+
+impl ContextualFold {
+    fn start<D: DatasetView + Sync>(
+        agg: &AggregateExpression,
+        ctx: &EvalCtx<'_, D>,
+        local_trip: &std::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+    ) -> Result<Option<Self>, EvalError> {
+        Ok(Some(match agg.function() {
+            AggregateFunction::Count => Self::Builtin(Box::<CountAccumulator>::default()),
+            AggregateFunction::Sum => {
+                Self::Numeric(Some(NumericFold::Empty), NumericAggregate::Sum)
+            }
+            AggregateFunction::Avg => {
+                Self::Numeric(Some(NumericFold::Empty), NumericAggregate::Avg)
+            }
+            AggregateFunction::Min => Self::Builtin(Box::<MinAccumulator>::default()),
+            AggregateFunction::Max => Self::Builtin(Box::<MaxAccumulator>::default()),
+            AggregateFunction::Sample => Self::Builtin(Box::<SampleAccumulator>::default()),
+            AggregateFunction::GroupConcat => Self::Builtin(Box::new(GroupConcatAccumulator::new(
+                agg.separator().unwrap_or(" ").to_owned(),
+            ))),
+            AggregateFunction::Custom(iri) => {
+                let iri = iri.as_str();
+                let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
+                    EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
+                })?;
+                let bound = crate::agg_fn::state_bound_contained(custom.as_ref(), iri)?;
+                if let Err(tripped) =
+                    ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bound)
+                {
+                    record_contextual_trip(ctx, local_trip, tripped);
+                    return Ok(None);
+                }
+                let scalarvals: Vec<_> = agg
+                    .scalarvals()
+                    .iter()
+                    .map(|(name, value)| (name.clone(), literal_to_value(value)))
+                    .collect();
+                let initial = crate::agg_fn::exact_numeric_cost_contained(
+                    custom.as_ref(),
+                    iri,
+                    &[],
+                    &scalarvals,
+                    ctx.division,
+                )?;
+                if let Err(tripped) = ctx.charge_exact_numeric(initial) {
+                    record_contextual_trip(ctx, local_trip, tripped);
+                    return Ok(None);
+                }
+                Self::Custom(Box::new(ContextualCustomFold {
+                    accumulator: crate::agg_fn::init_contained(
+                        custom.as_ref(),
+                        iri,
+                        &scalarvals,
+                        ctx.division,
+                    )?,
+                    aggregate: custom,
+                    iri: iri.to_owned(),
+                    scalarvals,
+                    survivors: Vec::new(),
+                    admitted_work: initial.work(),
+                }))
+            }
+            AggregateFunction::Fold => Self::Builtin(Box::new(
+                crate::cdt_agg::FoldAccumulator::for_arguments(agg.args().len()),
+            )),
+        }))
+    }
+
+    fn step<D: DatasetView + Sync>(
+        &mut self,
+        values: Vec<TermValue>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Option<purrdf_core::TrippedGovernor>, EvalError> {
+        match self {
+            Self::Builtin(acc) => acc.step(&values).map(|()| None),
+            Self::Custom(custom) => {
+                // Price the complete fold before its arithmetic; argument
+                // expressions have already run in contextual row order.
+                custom.survivors.push(values);
+                // Preserve update order and early host errors. A complete-only
+                // declaration requires accepted-prefix preflight before each
+                // step; charge only growth in its conservative work bound.
+                let cost = crate::agg_fn::exact_numeric_cost_contained(
+                    custom.aggregate.as_ref(),
+                    &custom.iri,
+                    &custom.survivors,
+                    &custom.scalarvals,
+                    ctx.division,
+                )?;
+                let growth = purrdf_xsd::exact::Cost::new(
+                    cost.work().saturating_sub(custom.admitted_work),
+                    cost.bytes(),
+                );
+                if let Err(tripped) = ctx.charge_exact_numeric(growth) {
+                    return Ok(Some(tripped));
+                }
+                custom.admitted_work = custom.admitted_work.max(cost.work());
+                crate::agg_fn::step_contained(
+                    custom.accumulator.as_mut(),
+                    &custom.iri,
+                    custom.survivors.last().expect("accepted tuple"),
+                )?;
+                Ok(None)
+            }
+            Self::Numeric(fold, _) => {
+                if let Some(value) = values.first()
+                    && !xsd_of(value).is_some_and(|value| {
+                        fold.as_mut().is_some_and(|fold| fold.step_xsd(&value))
+                    })
+                {
+                    *fold = None;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    fn finish(
+        self,
+        division: DivisionPolicy,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Result<Option<TermValue>, EvalError> {
+        match self {
+            Self::Builtin(acc) => acc.finish(),
+            Self::Custom(custom) => {
+                let ContextualCustomFold {
+                    accumulator, iri, ..
+                } = *custom;
+                crate::agg_fn::finish_contained(accumulator, &iri, absorb)
+            }
+            Self::Numeric(fold, aggregate) => Ok(fold.and_then(|fold| match aggregate {
+                NumericAggregate::Sum => fold.finish_sum(),
+                NumericAggregate::Avg if matches!(fold, NumericFold::Empty) => {
+                    Some(TermValue::integer(0))
+                }
+                NumericAggregate::Avg => fold.finish_avg(division, absorb),
+            })),
+        }
+    }
+}
+
+struct ContextualLane<I: ViewTermId> {
+    fold: ContextualFold,
+    numeric_cost: ContextualNumericCost,
+    seen: Option<DetHashSet<Vec<Option<SolutionTerm<I>>>>>,
+    retired: bool,
+}
+
+type ContextualGroups<I> = DetHashMap<Solution<I>, (usize, Vec<ContextualLane<I>>)>;
+
+#[derive(Default)]
+struct ContextualNumericCost {
+    sum: purrdf_xsd::exact::cost::SumChain,
+    comparison: Option<purrdf_xsd::exact::cost::Shape>,
+    count: u64,
+}
+
+impl ContextualNumericCost {
+    fn step(
+        &mut self,
+        function: &AggregateFunction,
+        values: &[TermValue],
+    ) -> purrdf_xsd::exact::Cost {
+        use purrdf_xsd::exact::Cost;
+        self.count = self.count.saturating_add(1);
+        let Some(shape) = values.first().and_then(crate::expr::literal_shape) else {
+            return Cost::ZERO;
+        };
+        match function {
+            AggregateFunction::Sum | AggregateFunction::Avg => self.sum.push(shape),
+            AggregateFunction::Min | AggregateFunction::Max => {
+                let previous = self.comparison;
+                self.comparison = Some(previous.map_or(shape, |old| old.comparison_bound(shape)));
+                previous.map_or(Cost::ZERO, |old| {
+                    if old.is_bounded() && shape.is_bounded() {
+                        Cost::ZERO
+                    } else {
+                        old.cmp_cost(shape)
+                    }
+                })
+            }
+            _ => Cost::ZERO,
+        }
+    }
+
+    fn finish(
+        &self,
+        function: &AggregateFunction,
+        division: DivisionPolicy,
+    ) -> purrdf_xsd::exact::Cost {
+        self.sum
+            .finish()
+            .1
+            .map_or(purrdf_xsd::exact::Cost::ZERO, |total| {
+                aggregate_numeric_tail_cost::<true>(function, total, self.count, division)
+            })
+    }
+}
+
+fn record_contextual_trip<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    local: &std::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+    trip: purrdf_core::TrippedGovernor,
+) {
+    ctx.record_barrier(trip);
+    if local.get().is_none() {
+        local.set(Some(trip));
+    }
+}
+
+fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    variables: &[Variable],
+    aggregates: &[(Variable, AggregateExpression)],
+    out_schema: Arc<VarSchema>,
+    domain: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let in_schema = crate::eval::syntactic_schema(inner);
+    let var_count = out_schema.len() - aggregates.len();
+    let key_cols: Vec<_> = out_schema.vars()[..var_count]
+        .iter()
+        .map(|name| in_schema.index_of(name))
+        .collect();
+    let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
+    let mut states = ContextualGroups::<D::Id>::default();
+    let local_trip = std::cell::Cell::new(None);
+    let visible = domain.visible(&in_schema);
+    let mut consume = |input: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+        if ctx.expression_barrier.observed().is_some() || ctx.stop_check().is_some() {
+            return Ok(std::ops::ControlFlow::Break(()));
+        }
+        let restore = ctx.enter_node(node);
+        let result = (|| {
+            let seq = input.clone().reorder_like(&in_schema);
+            for row in &seq.rows {
+                // Labelled BNODE uses the contextual query's shared identity,
+                // including argument evaluation performed by an accumulator.
+                ctx.current_row = 0;
+                let key: Solution<D::Id> = key_cols
+                    .iter()
+                    .map(|column| column.and_then(|column| row[column]))
+                    .collect();
+                if !states.contains_key(&key) {
+                    let ordinal = states.len();
+                    let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    };
+                    states.insert(key.clone(), (ordinal, lanes));
+                }
+                let lanes = &mut states
+                    .get_mut(&key)
+                    .expect("first row initialized its group")
+                    .1;
+                for ((lane, (_, agg)), links) in
+                    lanes.iter_mut().zip(aggregates).zip(links.iter_mut())
+                {
+                    if lane.retired {
+                        continue;
+                    }
+                    let identity = |row: &Solution<D::Id>| -> Vec<Option<SolutionTerm<D::Id>>> {
+                        visible.as_ref().map_or_else(
+                            || row.to_vec(),
+                            |keep| keep.iter().map(|&column| row[column]).collect(),
+                        )
+                    };
+                    if let Some(seen) = &lane.seen {
+                        let probe = if agg.args().is_empty() {
+                            identity(row)
+                        } else {
+                            links[..agg.args().len()]
+                                .iter_mut()
+                                .map(|link| link.term(row, &seq.schema, ctx))
+                                .collect::<Result<Vec<_>, _>>()?
+                        };
+                        if seen.contains(&probe) {
+                            continue;
+                        }
+                    }
+                    let terms = if agg.args().is_empty() {
+                        identity(row)
+                    } else {
+                        links[..agg.args().len()]
+                            .iter_mut()
+                            .map(|link| link.term(row, &seq.schema, ctx))
+                            .collect::<Result<Vec<_>, _>>()?
+                    };
+                    if !agg.args().is_empty()
+                        && terms.iter().any(Option::is_none)
+                        && !matches!(agg.function(), AggregateFunction::Fold)
+                    {
+                        continue;
+                    }
+                    let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
+                        ctx,
+                        ChargePoint::AggregateAccumulation,
+                    );
+                    if let Err(tripped) = checkpoint.pass(ctx) {
+                        record_contextual_trip(ctx, &local_trip, tripped);
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    }
+                    let values = if agg.args().is_empty() {
+                        Vec::new()
+                    } else {
+                        terms
+                            .iter()
+                            .filter_map(|term| *term)
+                            .map(|term| {
+                                ctx.scratch
+                                    .try_value_of(ctx.dataset, term)
+                                    .map_err(EvalError::source_read)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                    };
+                    let bytes = values
+                        .iter()
+                        .map(crate::scratch::value_bytes)
+                        .fold(0u64, u64::saturating_add);
+                    if let Err(tripped) =
+                        ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+                    {
+                        record_contextual_trip(ctx, &local_trip, tripped);
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    }
+                    if let Err(tripped) =
+                        ctx.charge_exact_numeric(lane.numeric_cost.step(agg.function(), &values))
+                    {
+                        record_contextual_trip(ctx, &local_trip, tripped);
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    }
+                    if let Some(tripped) = lane.fold.step(values, ctx)? {
+                        record_contextual_trip(ctx, &local_trip, tripped);
+                        return Ok(std::ops::ControlFlow::Break(()));
+                    }
+                    if let Some(seen) = &mut lane.seen {
+                        seen.insert(terms);
+                    }
+                    lane.retired = matches!(agg.function(), AggregateFunction::Sample);
+                }
+            }
+            Ok(std::ops::ControlFlow::Continue(()))
+        })();
+        ctx.leave_node(restore);
+        result
+    };
+    let evaluated =
+        crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
+    drop(consume);
+    let mut lift = Lift::at(node);
+    if lift.absorb(0, evaluated).is_none() {
+        return Ok(lift.finish(SolutionSeq::empty(out_schema)));
+    }
+    if let Some(tripped) = local_trip
+        .get()
+        .or_else(|| ctx.expression_barrier.observed())
+    {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node, tripped, out_schema,
+        )));
+    }
+    if states.is_empty() && variables.is_empty() && !aggregates.is_empty() {
+        let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
+            return Ok(Evaluated::Truncated(Truncation::barred_at(
+                node,
+                local_trip
+                    .get()
+                    .expect("refused accumulator admission records its barrier"),
+                out_schema,
+            )));
+        };
+        states.insert(Solution::new(), (0, lanes));
+    }
+    let mut groups: Vec<_> = states.into_iter().collect();
+    groups.sort_unstable_by_key(|(_, (ordinal, _))| *ordinal);
+    let rows = groups
+        .into_iter()
+        .map(|(key, (_, lanes))| {
+            let mut row = purrdf_core::smallvec![None; out_schema.len()];
+            if local_trip.get().is_some() {
+                return Ok(row);
+            }
+            row[..var_count].copy_from_slice(&key);
+            for (column, lane) in lanes.into_iter().enumerate() {
+                if let Err(tripped) = ctx.charge_exact_numeric(
+                    lane.numeric_cost
+                        .finish(aggregates[column].1.function(), ctx.division),
+                ) {
+                    record_contextual_trip(ctx, &local_trip, tripped);
+                    return Ok(row);
+                }
+                row[var_count + column] = lane
+                    .fold
+                    .finish(ctx.division, &mut |code| {
+                        ctx.record_expression_error(Some(code));
+                    })?
+                    .map(|value| ctx.scratch.try_intern_checked(ctx.dataset, value))
+                    .transpose()
+                    .map_err(EvalError::source_read)?
+                    .flatten();
+            }
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>, EvalError>>()?;
+    if let Some(tripped) = local_trip.get() {
+        return Ok(Evaluated::Truncated(Truncation::barred_at(
+            node, tripped, out_schema,
+        )));
+    }
+    Ok(lift.finish(SolutionSeq {
+        schema: out_schema,
+        rows,
+    }))
+}
+
+fn contextual_lanes<D: DatasetView + Sync>(
+    aggregates: &[(Variable, AggregateExpression)],
+    ctx: &EvalCtx<'_, D>,
+    local_trip: &std::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+) -> Result<Option<Vec<ContextualLane<D::Id>>>, EvalError> {
+    let mut lanes = Vec::with_capacity(aggregates.len());
+    for (_, agg) in aggregates {
+        if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+            record_contextual_trip(ctx, local_trip, tripped);
+            return Ok(None);
+        }
+        let Some(fold) = ContextualFold::start(agg, ctx, local_trip)? else {
+            return Ok(None);
+        };
+        lanes.push(ContextualLane {
+            fold,
+            numeric_cost: ContextualNumericCost::default(),
+            seen: (agg.distinct
+                && !matches!(
+                    agg.function(),
+                    AggregateFunction::Min | AggregateFunction::Max | AggregateFunction::Sample
+                ))
+            .then(DetHashSet::default),
+            retired: false,
+        });
+    }
+    Ok(Some(lanes))
 }
 
 /// Compute one aggregate over a group's rows, its expressions evaluated through `links`
@@ -1709,12 +2474,13 @@ fn link_aggregates<'e, D: DatasetView + Sync>(
 /// unbound — the same doctrine [`crate::user_fn::eval_native_function`]'s
 /// invocation charge follows — leaving [`eval_group`] to notice the barrier and
 /// withhold the whole grouped output.
-fn eval_aggregate<D: DatasetView + Sync>(
+fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     agg: &AggregateExpression,
     links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
     rows: &[Solution<D::Id>],
     schema: &VarSchema,
+    domain: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
@@ -1766,10 +2532,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
         // A solution is its pattern's variables only, so a shared blank's column
         // (see `crate::blank_scope`) is left out of the row identity `DISTINCT *`
         // compares; `None` — every schema without one — compares the row itself.
-        let visible = agg
-            .distinct
-            .then(|| crate::blank_scope::visible_columns(schema))
-            .flatten();
+        let visible = agg.distinct.then(|| domain.visible(schema)).flatten();
         let mut seen: Option<DetHashSet<std::borrow::Cow<'_, Solution<D::Id>>>> =
             agg.distinct.then(DetHashSet::default);
         let mut survivors: usize = 0;
@@ -2007,7 +2770,7 @@ pub(crate) fn aggregate_numeric_cost(
     survivors: &[TermValue],
     division: DivisionPolicy,
 ) -> purrdf_xsd::exact::Cost {
-    use purrdf_xsd::exact::cost::{Shape, compare_chain, sum_chain};
+    use purrdf_xsd::exact::cost::{compare_chain, sum_chain};
     // A lexical form of nineteen bytes or fewer holds at most eighteen fractional
     // digits and nineteen digits in all, inside the machine words, so a group of only
     // those is priced by this length check alone. Its running SUM can still pass
@@ -2030,23 +2793,44 @@ pub(crate) fn aggregate_numeric_cost(
             if total.is_bounded() && division == DivisionPolicy::xsd_default() {
                 return chain;
             }
-            if matches!(function, AggregateFunction::Sum) {
-                return chain.then(total.render_cost());
-            }
-            let count = Shape::of_value(&XsdValue::Integer {
-                value: i128::try_from(survivors.len()).unwrap_or(i128::MAX),
-                datatype: XsdDatatype::Integer,
-            })
-            .expect("an integer has a shape");
-            chain
-                .then(total.div_cost(count, division))
-                .then(total.quotient(count, division).render_cost())
+            chain.then(aggregate_numeric_tail_cost::<false>(
+                function,
+                total,
+                survivors.len() as u64,
+                division,
+            ))
         }
         AggregateFunction::Min | AggregateFunction::Max => {
             compare_chain(&shapes().collect::<Vec<_>>(), 1)
         }
         _ => purrdf_xsd::exact::Cost::ZERO,
     }
+}
+
+// Preserve the native fold's inline tail and erase its already-excluded fast-path test.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn aggregate_numeric_tail_cost<const CHECK_FAST_PATH: bool>(
+    function: &AggregateFunction,
+    total: purrdf_xsd::exact::cost::Shape,
+    count: u64,
+    division: DivisionPolicy,
+) -> purrdf_xsd::exact::Cost {
+    use purrdf_xsd::exact::{Cost, cost::Shape};
+    if CHECK_FAST_PATH && total.is_bounded() && division == DivisionPolicy::xsd_default() {
+        return Cost::ZERO;
+    }
+    if matches!(function, AggregateFunction::Sum) {
+        return total.render_cost();
+    }
+    let count = Shape::of_value(&XsdValue::Integer {
+        value: i128::from(count),
+        datatype: XsdDatatype::Integer,
+    })
+    .expect("an integer has a shape");
+    total
+        .div_cost(count, division)
+        .then(total.quotient(count, division).render_cost())
 }
 
 /// [`fold_builtin`]'s per-row step closure for every built-in whose argument
@@ -7130,6 +7914,7 @@ mod emptiness_proof_tests {
             GraphPattern::Union { arms } => arms.iter().all(reference_pattern),
             GraphPattern::LeftJoin { left, .. }
             | GraphPattern::Lateral { left, .. }
+            | GraphPattern::Apply { left, .. }
             | GraphPattern::Minus { left, .. } => reference_pattern(left),
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Extend { inner, .. }

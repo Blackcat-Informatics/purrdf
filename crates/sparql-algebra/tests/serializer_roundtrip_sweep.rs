@@ -261,6 +261,40 @@ fn normalize_join_assoc(p: &GraphPattern, aliases: &BTreeMap<Variable, Variable>
             left: Child::new(normalize_join_assoc(left, aliases)),
             right: Child::new(normalize_join_assoc(right, aliases)),
         },
+        GraphPattern::Apply {
+            left,
+            right,
+            policy,
+        } => {
+            let rename_pairs = |pairs: &[(Variable, Variable)]| {
+                pairs
+                    .iter()
+                    .map(|(input, driver)| {
+                        (
+                            alpha_variable(input, aliases),
+                            alpha_variable(driver, aliases),
+                        )
+                    })
+                    .collect()
+            };
+            let mut policy = policy.clone();
+            policy.group_domain = policy.group_domain.as_ref().map(|domain| {
+                domain
+                    .iter()
+                    .map(|variable| alpha_variable(variable, aliases))
+                    .collect()
+            });
+            policy.inputs = rename_pairs(&policy.inputs);
+            if let Some(optional) = &mut policy.optional {
+                optional.retry_inputs = rename_pairs(&optional.retry_inputs);
+                optional.forget_marker = alpha_variable(&optional.forget_marker, aliases);
+            }
+            GraphPattern::Apply {
+                left: Child::new(normalize_join_assoc(left, aliases)),
+                right: Child::new(normalize_join_assoc(right, aliases)),
+                policy,
+            }
+        }
         GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
             expr: alpha_expression(expr, aliases),
             inner: Child::new(normalize_join_assoc(inner, aliases)),
@@ -1030,6 +1064,74 @@ fn corpus_round_trips_through_the_serializer() {
         failures.len(),
         failures.join("\n\n")
     );
+}
+
+#[test]
+fn contextual_application_normalization_preserves_policy_and_aliases_every_slot() {
+    use purrdf_sparql_algebra::algebra::{ApplicationPolicy, OptionalApplication};
+
+    let a = Variable::hidden("a");
+    let b = Variable::hidden("b");
+    let marker = Variable::hidden("marker");
+    let caller = Variable::new("caller");
+    let alpha = Variable::new("alpha");
+    let beta = Variable::new("beta");
+    let gamma = Variable::new("gamma");
+    let leaf = |variable| GraphPattern::Values {
+        variables: vec![variable],
+        bindings: vec![vec![None]],
+    };
+    let join = |left, right| GraphPattern::Join {
+        left: Child::new(left),
+        right: Child::new(right),
+    };
+    let operand = join(leaf(a.clone()), join(leaf(b.clone()), leaf(caller.clone())));
+    let original = GraphPattern::Apply {
+        left: Child::new(operand.clone()),
+        right: Child::new(operand),
+        policy: Box::new(ApplicationPolicy {
+            dataset_required: true,
+            row_pipeline: false,
+            reduced_adjacent: true,
+            group_domain: Some(vec![a.clone(), b.clone(), caller.clone()].into_boxed_slice()),
+            inputs: vec![(a.clone(), b.clone()), (b.clone(), caller.clone())],
+            optional: Some(OptionalApplication {
+                retry_inputs: vec![(b.clone(), a.clone()), (marker.clone(), caller.clone())],
+                forget_marker: marker.clone(),
+            }),
+        }),
+    };
+    let aliases = BTreeMap::from([
+        (a, alpha.clone()),
+        (b, beta.clone()),
+        (marker, gamma.clone()),
+    ]);
+    let normalized = join(
+        join(leaf(alpha.clone()), leaf(beta.clone())),
+        leaf(caller.clone()),
+    );
+    let expected = GraphPattern::Apply {
+        left: Child::new(normalized.clone()),
+        right: Child::new(normalized),
+        policy: Box::new(ApplicationPolicy {
+            dataset_required: true,
+            row_pipeline: false,
+            reduced_adjacent: true,
+            group_domain: Some(
+                vec![alpha.clone(), beta.clone(), caller.clone()].into_boxed_slice(),
+            ),
+            inputs: vec![
+                (alpha.clone(), beta.clone()),
+                (beta.clone(), caller.clone()),
+            ],
+            optional: Some(OptionalApplication {
+                retry_inputs: vec![(beta, alpha), (gamma.clone(), caller)],
+                forget_marker: gamma,
+            }),
+        }),
+    };
+    assert_eq!(normalize_join_assoc(&original, &aliases), expected);
+    assert_eq!(normalize_join_assoc(&expected, &BTreeMap::new()), expected);
 }
 
 #[test]

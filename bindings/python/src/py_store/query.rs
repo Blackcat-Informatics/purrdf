@@ -68,9 +68,9 @@ use purrdf_sparql_eval::{
     ShortestPathWitnessRelation, StandpointPredicates, StopCause, StopSignal, TrippedGovernor,
     WallDeadline,
 };
-use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyString};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyString};
 
 use super::io::{PyRdfFormat, serialize_quads, serialize_triples};
 use super::store::next_quad;
@@ -742,6 +742,13 @@ impl PyQuerySolutions {
 }
 
 /// A single SELECT solution row (`QuerySolution`).
+///
+/// A row is a sequence of its projected values in projection order, the shape of
+/// rdflib's `ResultRow`: `len(row)` is the projection width, `for value in row`
+/// yields one value per projected variable with `None` for an unbound one, and an
+/// `int` index reads a position as a tuple does (negative from the end,
+/// `IndexError` past either end). A name or `Variable` reads the same values by
+/// variable (`KeyError` for one the query does not project).
 #[pyclass(name = "QuerySolution")]
 #[derive(Debug)]
 pub struct PyQuerySolution {
@@ -749,36 +756,106 @@ pub struct PyQuerySolution {
     row: Vec<Option<RdfTerm>>,
 }
 
-#[pymethods]
 impl PyQuerySolution {
-    /// Look a binding up by variable name (`str`), `Variable`, or position
-    /// (`int`). An unbound variable yields `None`; an unknown name is a
-    /// `KeyError`.
-    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
-        let index = if let Ok(i) = key.extract::<usize>() {
-            if i >= self.row.len() {
-                return Err(PyKeyError::new_err(format!("no variable at position {i}")));
-            }
-            i
-        } else {
-            let name = if let Ok(var) = key.cast::<PyVariable>() {
-                var.get().inner.clone()
-            } else if let Ok(s) = key.cast::<PyString>() {
-                s.to_str()?.to_owned()
-            } else {
-                return Err(PyTypeError::new_err(
-                    "solution key must be a str, Variable, or int",
-                ));
-            };
-            self.variables
-                .iter()
-                .position(|v| v.as_str() == name)
-                .ok_or_else(|| PyKeyError::new_err(format!("no variable named `{name}`")))?
-        };
+    /// The value at `index`, `None` when its variable is unbound.
+    fn cell(&self, py: Python<'_>, index: usize) -> PyResult<Option<Py<PyAny>>> {
         match &self.row[index] {
             Some(term) => Ok(Some(term_to_py(py, term)?)),
             None => Ok(None),
         }
+    }
+}
+
+#[pymethods]
+impl PyQuerySolution {
+    /// Look a binding up by variable name (`str`), `Variable`, or position
+    /// (`int`, negative counting from the end). An unbound variable yields
+    /// `None`; an unknown name is a `KeyError` and a position outside the row an
+    /// `IndexError`.
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
+        if let Ok(i) = key.extract::<isize>() {
+            let index = if i < 0 {
+                self.row.len().checked_sub(i.unsigned_abs())
+            } else {
+                usize::try_from(i)
+                    .ok()
+                    .filter(|&index| index < self.row.len())
+            };
+            let index = index.ok_or_else(|| {
+                PyIndexError::new_err(format!(
+                    "solution index {i} out of range for a row of {} variables",
+                    self.row.len()
+                ))
+            })?;
+            return self.cell(py, index);
+        }
+        if key.is_instance_of::<PyInt>() {
+            return Err(PyIndexError::new_err(format!(
+                "solution index {key} out of range for a row of {} variables",
+                self.row.len()
+            )));
+        }
+        let name = if let Ok(var) = key.cast::<PyVariable>() {
+            var.get().inner.clone()
+        } else if let Ok(s) = key.cast::<PyString>() {
+            s.to_str()?.to_owned()
+        } else {
+            return Err(PyTypeError::new_err(
+                "solution key must be a str, Variable, or int",
+            ));
+        };
+        let index = self
+            .variables
+            .iter()
+            .position(|v| v.as_str() == name)
+            .ok_or_else(|| PyKeyError::new_err(format!("no variable named `{name}`")))?;
+        self.cell(py, index)
+    }
+
+    /// The projection width: one value per projected variable, bound or not.
+    fn __len__(&self) -> usize {
+        self.row.len()
+    }
+
+    /// The row's values in projection order, `None` for an unbound variable.
+    fn __iter__(slf: PyRef<'_, Self>) -> PyQuerySolutionIterator {
+        PyQuerySolutionIterator {
+            row: slf.into(),
+            pos: 0,
+        }
+    }
+}
+
+/// A lazy row iterator retaining the owning Python row independently of results.
+/// Each iterator has its own position and converts only the next requested cell.
+#[pyclass(name = "_QuerySolutionIterator")]
+#[derive(Debug)]
+struct PyQuerySolutionIterator {
+    row: Py<PyQuerySolution>,
+    pos: usize,
+}
+
+#[pymethods]
+impl PyQuerySolutionIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    /// Remaining projected cells, without converting or allocating any values.
+    fn __length_hint__(&self, py: Python<'_>) -> usize {
+        self.row.borrow(py).row.len() - self.pos
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let row = self.row.borrow(py);
+        if self.pos >= row.row.len() {
+            return Ok(None);
+        }
+        // Python None is a yielded unbound cell, not the iterator's end marker.
+        // Keep the position unchanged if conversion raises an exception.
+        let value = row.cell(py, self.pos)?.unwrap_or_else(|| py.None());
+        self.pos += 1;
+        Ok(Some(value))
     }
 }
 

@@ -1045,7 +1045,10 @@ fn pattern_iris<'a>(
             path,
             object,
         } => pending.extend([Reach::Term(subject), Reach::Path(path), Reach::Term(object)]),
-        G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
+        G::Join { left, right }
+        | G::Lateral { left, right }
+        | G::Apply { left, right, .. }
+        | G::Minus { left, right } => {
             pending.extend([Reach::Pattern(left), Reach::Pattern(right)]);
         }
         G::Union { arms } => pending.extend(arms.iter().map(Reach::Pattern)),
@@ -1125,6 +1128,49 @@ mod rdf_fact_tests {
     use super::*;
 
     const EX: &str = "https://example.org/vocab/";
+
+    #[test]
+    fn contextual_application_collects_both_child_iris_and_nested_exists() {
+        use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+        use purrdf_sparql_algebra::tree::Child;
+        use purrdf_sparql_algebra::{Expression, GraphPattern, SparqlParser, Variable};
+
+        let parse_body = |text| {
+            let purrdf_sparql_algebra::Query::Ask { pattern, .. } =
+                SparqlParser::new().parse_query(text).unwrap()
+            else {
+                panic!("ASK fixture")
+            };
+            pattern
+        };
+        let pattern = GraphPattern::Apply {
+            left: Child::new(parse_body("ASK { BIND(<https://example.org/left> AS ?x) }")),
+            right: Child::new(parse_body(
+                "ASK { FILTER EXISTS { GRAPH <https://example.org/graph> { <https://example.org/right> <https://example.org/p> <https://example.org/o> } } }",
+            )),
+            policy: Box::new(ApplicationPolicy {
+                dataset_required: false,
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: None,
+                inputs: vec![(Variable::new("x"), Variable::new("driver"))],
+                optional: None,
+            }),
+        };
+        let nested = GraphPattern::Filter {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            expr: Expression::Exists(Child::new(pattern.clone())),
+        };
+        let expected: BTreeSet<_> = ["left", "graph", "right", "p", "o"]
+            .map(|name| NamedNode::new_unchecked(format!("https://example.org/{name}")))
+            .into_iter()
+            .collect();
+        for pattern in [&pattern, &nested] {
+            let mut found = BTreeSet::new();
+            walk_graph_pattern(pattern, &mut found);
+            assert_eq!(found, expected);
+        }
+    }
 
     /// Each status writes its own stable token.
     #[test]

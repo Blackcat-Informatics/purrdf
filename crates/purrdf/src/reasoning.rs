@@ -1265,6 +1265,7 @@ fn collect_returned_value_variables(pattern: &GraphPattern, names: &mut BTreeSet
             GraphPattern::Join { left, right }
             | GraphPattern::Minus { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => pending.extend([&**left, &**right]),
             GraphPattern::Union { arms } => pending.extend(arms.iter()),
             GraphPattern::Filter { inner, .. }
@@ -1367,6 +1368,7 @@ fn collect_all_variables(pattern: &GraphPattern, names: &mut BTreeSet<String>) {
             GraphPattern::Join { left, right }
             | GraphPattern::Minus { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => pending.extend([&**left, &**right]),
             GraphPattern::Union { arms } => pending.extend(arms.iter()),
             GraphPattern::Extend {
@@ -1556,6 +1558,15 @@ fn restrict_pattern(
         GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
             left: recurse(left),
             right: recurse(right),
+        },
+        GraphPattern::Apply {
+            left,
+            right,
+            policy,
+        } => GraphPattern::Apply {
+            left: recurse(left),
+            right: recurse(right),
+            policy: policy.clone(),
         },
         GraphPattern::LeftJoin {
             left,
@@ -1825,6 +1836,7 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
             GraphPattern::Join { left, right }
             | GraphPattern::Minus { left, right }
             | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
             | GraphPattern::LeftJoin { left, right, .. } => {
                 pending.extend([&**right, &**left]);
             }
@@ -1883,6 +1895,68 @@ mod tests {
 
     use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
     use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS;
+
+    #[test]
+    fn contextual_application_visitors_preserve_children_and_ordinary_admission_refuses_it() {
+        use purrdf_sparql_algebra::SparqlParser;
+        use purrdf_sparql_algebra::algebra::ApplicationPolicy;
+
+        let Query::Ask { pattern: left, .. } = SparqlParser::new()
+            .parse_query("ASK { ?s <http://example.org/left> ?o BIND(?o AS ?a) }")
+            .unwrap()
+        else {
+            panic!("ASK fixture")
+        };
+        let Query::Ask { pattern: right, .. } = SparqlParser::new()
+            .parse_query("ASK { ?other <http://example.org/right> ?v BIND(?v AS ?b) }")
+            .unwrap()
+        else {
+            panic!("ASK fixture")
+        };
+        let policy = Box::new(ApplicationPolicy {
+            dataset_required: false,
+            row_pipeline: false,
+            reduced_adjacent: false,
+            group_domain: None,
+            inputs: Vec::new(),
+            optional: None,
+        });
+        let pattern = GraphPattern::Apply {
+            left: Child::new(left),
+            right: Child::new(right),
+            policy: policy.clone(),
+        };
+        let mut names = BTreeSet::new();
+        collect_all_variables(&pattern, &mut names);
+        assert_eq!(
+            names,
+            ["s", "o", "a", "other", "v", "b"]
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        );
+        names.clear();
+        collect_returned_value_variables(&pattern, &mut names);
+        assert_eq!(names, ["o", "v"].map(str::to_owned).into_iter().collect());
+        let mut triples = Vec::new();
+        collect_bgp(&pattern, &mut triples);
+        assert_eq!(triples.len(), 2);
+        let rewritten = restrict_pattern(&pattern, &names, &[]);
+        let GraphPattern::Apply {
+            policy: retained, ..
+        } = &rewritten
+        else {
+            panic!("structural visitor retains the typed operator");
+        };
+        assert_eq!(retained, &policy);
+        let mut query = SparqlParser::new().parse_query("ASK {}").unwrap();
+        let Query::Ask { pattern: root, .. } = &mut query else {
+            unreachable!()
+        };
+        *root = rewritten;
+        let error = PreparedQuery::rewritten(query, QueryOptions::EMPTY).unwrap_err();
+        assert!(error.to_string().contains("contextual"), "{error}");
+    }
 
     #[test]
     fn every_regime_maps_to_its_own_query_plan_and_only_rif_reads_the_rules() {

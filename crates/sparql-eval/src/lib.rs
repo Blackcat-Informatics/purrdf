@@ -128,6 +128,8 @@ pub mod predicate_use;
 pub mod property_fn;
 mod property_fn_eval;
 mod property_fn_plan;
+mod rdflib;
+pub use rdflib::select_query_dataset;
 mod registry_id;
 // The SPARQL 1.1 Protocol request surface: HTTP request → operation, dataset
 // parameters applied as text, and response-format negotiation. No I/O.
@@ -182,7 +184,7 @@ pub use agg_fn::{
 pub use engine::ShaclPrebinding;
 pub use engine::{
     FallibleGraphBuildResult, GraphBuildError, GraphBuildStats, NativeSparqlEngine, PlanCache,
-    PreparedQuery, QueryOptions,
+    PreparedQuery, PreparedRdflibQuery, QueryOptions,
 };
 pub use error::{EvalError, UnsupportedKind};
 pub use eval::{

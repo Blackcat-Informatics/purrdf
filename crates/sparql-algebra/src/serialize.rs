@@ -217,6 +217,13 @@ pub(crate) fn validate_carrier_pattern(pattern: &GraphPattern) -> crate::Result<
     pattern.validate_hidden_variables()?;
     let mut error = None;
     walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
+        if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Apply { .. })) {
+            error = Some(crate::ParseError::Unsupported(
+                "explicit contextual application has no SPARQL query-text representation"
+                    .to_owned(),
+            ));
+            return Flow::Stop;
+        }
         if visit == Visit::Enter
             && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
         {
@@ -751,6 +758,7 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
     match p {
         GraphPattern::LeftJoin { .. }
         | GraphPattern::Lateral { .. }
+        | GraphPattern::Apply { .. }
         | GraphPattern::Minus { .. }
         | GraphPattern::Filter { .. }
         | GraphPattern::Extend { .. }
@@ -1183,6 +1191,9 @@ fn group_body<'a>(
         return;
     }
     match p {
+        GraphPattern::Apply { .. } => {
+            unreachable!("carrier admission rejects contextual application")
+        }
         GraphPattern::Bgp { patterns } => {
             for (i, tp) in patterns.iter().enumerate() {
                 if i > 0 {
@@ -3132,6 +3143,15 @@ mod tests {
     /// variant is a compile error here, not a silent blind spot.
     fn normalize(p: &GraphPattern) -> GraphPattern {
         match p {
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => GraphPattern::Apply {
+                left: Child::new(normalize(left)),
+                right: Child::new(normalize(right)),
+                policy: policy.clone(),
+            },
             GraphPattern::Lateral { left, right } => {
                 let left = normalize(left);
                 let right = normalize(right);

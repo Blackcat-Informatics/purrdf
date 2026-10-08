@@ -126,6 +126,42 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
+    eval_filter_sequence(node, expr, seq, lift, ctx)
+}
+
+// Erase the static delivery wrapper; the native operator retains its call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    expr: &Expression,
+    inner: &GraphPattern,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if M::ACTIVE {
+        crate::eval::yield_transform(
+            node,
+            inner,
+            delivery,
+            |seq, ctx| eval_filter_sequence(node, expr, seq, Lift::at(node), ctx),
+            ctx,
+        )
+    } else {
+        eval_filter(node, expr, inner, ctx)
+    }
+}
+
+// Share the sequence loop without a second call boundary or native result copy.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn eval_filter_sequence<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expr: &Expression,
+    seq: SolutionSeq<D::Id>,
+    lift: Lift<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     let schema = seq.schema.clone();
     // The `row-expression-evaluation` charge point, charged **per row** rather than per
     // sub-expression so that the cost of a `FILTER` is a property of the data it sees
@@ -247,7 +283,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         let mut schema = lift.absorbed_schema().map_or_else(
             || (*crate::eval::syntactic_schema(inner)).clone(),
             |s| (*s).clone(),
@@ -255,6 +291,44 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         schema.push(var.clone());
         return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
     };
+    eval_extend_sequence(node, var, expr, seq, lift, ctx)
+}
+
+// Erase the static delivery wrapper; the native operator retains its call boundary.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+pub(crate) fn eval_extend_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+    node: &GraphPattern,
+    inner: &GraphPattern,
+    var: &Variable,
+    expr: &Expression,
+    delivery: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if M::ACTIVE {
+        crate::eval::yield_transform(
+            node,
+            inner,
+            delivery,
+            |seq, ctx| eval_extend_sequence(node, var, expr, seq, Lift::at(node), ctx),
+            ctx,
+        )
+    } else {
+        eval_extend(node, inner, var, expr, ctx)
+    }
+}
+
+// Share the sequence loop without a second call boundary or native result copy.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn eval_extend_sequence<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    var: &Variable,
+    expr: &Expression,
+    mut seq: SolutionSeq<D::Id>,
+    lift: Lift<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     // The `row-expression-evaluation` charge point; see `eval_filter` for why it is per
     // row rather than per sub-expression, why the refused rows are cut before the
     // expression runs rather than after, and how a forked loop's admissions are
@@ -1305,6 +1379,22 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                     | GraphPattern::Lateral { left, right } => {
                         pending.push(VarNode::Pattern(left, endpoint));
                         pending.push(VarNode::Pattern(right, endpoint));
+                    }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        pending.push(VarNode::Pattern(left, endpoint));
+                        pending.push(VarNode::Pattern(right, endpoint));
+                        for (input, driver) in &policy.inputs {
+                            out.extend([input.clone(), driver.clone()]);
+                        }
+                        if let Some(optional) = &policy.optional {
+                            for (input, driver) in &optional.retry_inputs {
+                                out.extend([input.clone(), driver.clone()]);
+                            }
+                        }
                     }
                     GraphPattern::Union { arms } => {
                         pending.extend(arms.iter().map(|arm| VarNode::Pattern(arm, endpoint)));
@@ -2528,7 +2618,7 @@ pub(crate) fn substitute_pattern(
 ) -> Result<Box<GraphPattern>, EvalError> {
     crate::stack::walk(|| {
         let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
-        substitute_pattern_impl(pattern, row, &mut tracking, &mut Deferral::eager())
+        substitute_pattern_impl::<false>(pattern, row, &mut tracking, &mut Deferral::eager())
     })
 }
 
@@ -2544,14 +2634,14 @@ pub(crate) fn substitute_pattern(
               lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
               32-bit targets such as wasm32, where the same box is still the field's type"
 )]
-pub(crate) fn substitute_pattern_deferring(
+pub(crate) fn substitute_pattern_deferring<const PRESERVE: bool>(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
     defer: &mut Deferral<'_>,
 ) -> Result<Box<GraphPattern>, EvalError> {
     crate::stack::walk(|| {
         let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
-        substitute_pattern_impl(pattern, row, &mut tracking, defer)
+        substitute_pattern_impl::<PRESERVE>(pattern, row, &mut tracking, defer)
     })
 }
 
@@ -2590,7 +2680,7 @@ impl<'a> Deferral<'a> {
     }
 
     /// A walk that defers nothing.
-    fn eager() -> Self {
+    pub(crate) fn eager() -> Self {
         Self {
             enclosing: None,
             sites: None,
@@ -2896,7 +2986,7 @@ struct SubstitutionTracking<'a> {
               lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
               32-bit targets such as wasm32, where the same box is still the field's type"
 )]
-pub(crate) fn substitute_pattern_tracked(
+pub(crate) fn substitute_pattern_tracked<const PRESERVE: bool>(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
     tracked: &mut SubstitutionSourceMap,
@@ -2911,7 +3001,7 @@ pub(crate) fn substitute_pattern_tracked(
             claimed: &mut claimed,
         };
         let mut tracking = Some(&mut tracking);
-        substitute_pattern_impl(pattern, row, &mut tracking, defer)
+        substitute_pattern_impl::<PRESERVE>(pattern, row, &mut tracking, defer)
     })
 }
 
@@ -2932,7 +3022,7 @@ pub(crate) fn substitute_pattern_tracked(
               lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
               32-bit targets such as wasm32, where the same box is still the field's type"
 )]
-fn substitute_pattern_impl(
+fn substitute_pattern_impl<const PRESERVE: bool>(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
@@ -3002,11 +3092,11 @@ fn substitute_pattern_impl(
         GraphPattern::Filter { expr, inner } => {
             let mut free = FreeVars::default();
             defer.expr_vars(expr, &mut free);
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Filter {
-                    expr: substitute_expr(expr, row, map, defer),
+                    expr: substitute_expr::<PRESERVE>(expr, row, map, defer),
                     inner: inner_final.into(),
                 },
                 pattern,
@@ -3020,13 +3110,13 @@ fn substitute_pattern_impl(
         } => {
             let mut free = FreeVars::default();
             defer.expr_vars(expression, &mut free);
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Extend {
                     inner: inner_final.into(),
                     variable: variable.clone(),
-                    expression: substitute_expr(expression, row, map, defer),
+                    expression: substitute_expr::<PRESERVE>(expression, row, map, defer),
                 },
                 pattern,
                 map,
@@ -3044,12 +3134,12 @@ fn substitute_pattern_impl(
         } => {
             let mut free = FreeVars::default();
             defer.expr_vars(expression, &mut free);
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Unfold {
                     inner: inner_final.into(),
-                    expression: substitute_expr(expression, row, map, defer),
+                    expression: substitute_expr::<PRESERVE>(expression, row, map, defer),
                     element: element.clone(),
                     companion: companion.clone(),
                 },
@@ -3058,8 +3148,8 @@ fn substitute_pattern_impl(
             )
         }
         GraphPattern::Join { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map, defer);
-            let right_sub = substitute_pattern_impl(right, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
+            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Join {
                     left: left_sub.into(),
@@ -3076,7 +3166,7 @@ fn substitute_pattern_impl(
             // address it left.
             let mut arms_sub = Vec::with_capacity(arms.len());
             for arm in arms {
-                let boxed = substitute_pattern_impl(arm, row, map, defer);
+                let boxed = substitute_pattern_impl::<PRESERVE>(arm, row, map, defer);
                 let before = std::ptr::from_ref(boxed.as_ref()) as usize;
                 arms_sub.push(*boxed);
                 let after = arms_sub.last().map_or(before, |moved| {
@@ -3101,16 +3191,16 @@ fn substitute_pattern_impl(
             if let Some(e) = expression {
                 defer.expr_vars(e, &mut free);
             }
-            let left_sub = substitute_pattern_impl(left, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
             let left_final = wrap_with_expr_term_only_values(left_sub, &free, row, left, map);
-            let right_sub = substitute_pattern_impl(right, row, map, defer);
+            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::LeftJoin {
                     left: left_final.into(),
                     right: right_sub.into(),
                     expression: expression
                         .as_ref()
-                        .map(|e| substitute_expr(e, row, map, defer)),
+                        .map(|e| substitute_expr::<PRESERVE>(e, row, map, defer)),
                 },
                 pattern,
                 map,
@@ -3121,8 +3211,8 @@ fn substitute_pattern_impl(
         // only from the PARSER's LATERAL scope check (§18.2.1 governs scope, not
         // evaluation-time injection).
         GraphPattern::Minus { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map, defer);
-            let right_sub = substitute_pattern_impl(right, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
+            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Minus {
                     left: left_sub.into(),
@@ -3139,7 +3229,7 @@ fn substitute_pattern_impl(
         // call in place, and the driver of the rest is joined onto the LEFT operand —
         // the same placement `crate::substitute`'s whole-query rewrites use.
         GraphPattern::Lateral { left, right } => {
-            let left_sub = substitute_pattern_impl(left, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
             let (left_sub, right_sub) = if let GraphPattern::PropertyFunction(call) = &**right {
                 let mut bound = call.clone();
                 let seed =
@@ -3160,7 +3250,10 @@ fn substitute_pattern_impl(
                 // with this row and that one together: see `crate::deferred_exists`.
                 (left_sub, placeholder)
             } else {
-                (left_sub, substitute_pattern_impl(right, row, map, defer))
+                (
+                    left_sub,
+                    substitute_pattern_impl::<PRESERVE>(right, row, map, defer),
+                )
             };
             boxed_and_mapped(
                 GraphPattern::Lateral {
@@ -3208,7 +3301,7 @@ fn substitute_pattern_impl(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             let graph_node = boxed_and_mapped(
                 GraphPattern::Graph {
                     name: resolved_name,
@@ -3251,7 +3344,7 @@ fn substitute_pattern_impl(
             // The body is forwarded as text, so it is substituted in full: a placeholder
             // left in it would be sent to the endpoint in place of the body.
             defer.eager_depth += 1;
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             defer.eager_depth -= 1;
             let unresolved = match &resolved_name {
                 purrdf_sparql_algebra::NamedNodePattern::Variable(v) => Some(v.clone()),
@@ -3289,7 +3382,7 @@ fn substitute_pattern_impl(
                     }
                 }
             }
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::OrderBy {
@@ -3298,7 +3391,9 @@ fn substitute_pattern_impl(
                         .iter()
                         .map(|oe| match oe {
                             purrdf_sparql_algebra::OrderExpression::Asc(e) => {
-                                purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr(
+                                purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr::<
+                                    PRESERVE,
+                                >(
                                     e,
                                     row,
                                     &mut *map,
@@ -3306,7 +3401,9 @@ fn substitute_pattern_impl(
                                 ))
                             }
                             purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                                purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr(
+                                purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr::<
+                                    PRESERVE,
+                                >(
                                     e,
                                     row,
                                     &mut *map,
@@ -3338,7 +3435,7 @@ fn substitute_pattern_impl(
                     defer.expr_vars(order.expression(), &mut free);
                 }
             }
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
             boxed_and_mapped(
                 GraphPattern::Group {
@@ -3350,7 +3447,9 @@ fn substitute_pattern_impl(
                             let args = agg
                                 .args()
                                 .iter()
-                                .map(|e| substitute_expr(e, row, &mut *map, &mut *defer))
+                                .map(|e| {
+                                    substitute_expr::<PRESERVE>(e, row, &mut *map, &mut *defer)
+                                })
                                 .collect();
                             let order_by = agg
                                 .order_by()
@@ -3358,7 +3457,7 @@ fn substitute_pattern_impl(
                                 .map(|order| {
                                     crate::modifier::rebuild_order(
                                         order,
-                                        substitute_expr(
+                                        substitute_expr::<PRESERVE>(
                                             order.expression(),
                                             row,
                                             &mut *map,
@@ -3389,7 +3488,7 @@ fn substitute_pattern_impl(
         }
         // Leaf patterns that need no substitution.
         GraphPattern::Distinct { inner } => {
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Distinct {
                     inner: inner_sub.into(),
@@ -3399,7 +3498,7 @@ fn substitute_pattern_impl(
             )
         }
         GraphPattern::Reduced { inner } => {
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Reduced {
                     inner: inner_sub.into(),
@@ -3413,7 +3512,7 @@ fn substitute_pattern_impl(
             start,
             length,
         } => {
-            let inner_sub = substitute_pattern_impl(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
             boxed_and_mapped(
                 GraphPattern::Slice {
                     inner: inner_sub.into(),
@@ -3427,8 +3526,12 @@ fn substitute_pattern_impl(
         // The Project-boundary narrowing this walk's theorem depends on: only the
         // projected variables survive to the inner pattern's substitution.
         GraphPattern::Project { inner, variables } => {
-            let narrowed = row.narrow_to(variables);
-            let inner_sub = substitute_pattern_impl(inner, &narrowed, map, defer);
+            let inner_sub = if PRESERVE {
+                substitute_pattern_impl::<PRESERVE>(inner, row, map, defer)
+            } else {
+                let narrowed = row.narrow_to(variables);
+                substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer)
+            };
             boxed_and_mapped(
                 GraphPattern::Project {
                     inner: inner_sub.into(),
@@ -3439,6 +3542,40 @@ fn substitute_pattern_impl(
             )
         }
         GraphPattern::Values { .. } => boxed_and_mapped(pattern.clone(), pattern, map),
+        GraphPattern::Apply {
+            left,
+            right,
+            policy,
+        } => {
+            let left = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
+            let declared: DetHashSet<_> = policy.inputs.iter().map(|(input, _)| input).collect();
+            let mut outer = row.clone();
+            outer.expr.retain(|(name, _)| !declared.contains(name));
+            outer.term.retain(|(name, _)| !declared.contains(name));
+            let right = substitute_pattern_impl::<PRESERVE>(right, &outer, map, defer);
+            let optional = policy.optional.as_ref().map(|optional| {
+                purrdf_sparql_algebra::algebra::OptionalApplication {
+                    retry_inputs: optional.retry_inputs.clone(),
+                    forget_marker: optional.forget_marker.clone(),
+                }
+            });
+            boxed_and_mapped(
+                GraphPattern::Apply {
+                    left: left.into(),
+                    right: right.into(),
+                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                        dataset_required: policy.dataset_required,
+                        row_pipeline: policy.row_pipeline,
+                        reduced_adjacent: policy.reduced_adjacent,
+                        group_domain: policy.group_domain.clone(),
+                        inputs: policy.inputs.clone(),
+                        optional,
+                    }),
+                },
+                pattern,
+                map,
+            )
+        }
     }
 }
 
@@ -3798,7 +3935,7 @@ fn plant_mapped_driver(
 /// `Expression::Bound`, by contrast, IS total here: it only needs to know
 /// THAT `v` is bound, which `row.term` (not `row.expr`) answers for every
 /// term kind.
-fn substitute_expr(
+fn substitute_expr<const PRESERVE: bool>(
     expr: &Expression,
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
@@ -3838,71 +3975,80 @@ fn substitute_expr(
             expr.clone()
         }
         Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
-        Expression::Or(operands) => Expression::Or(
-            operands.map_ref(|operand| substitute_expr(operand, row, &mut *map, &mut *defer)),
-        ),
-        Expression::And(operands) => Expression::And(
-            operands.map_ref(|operand| substitute_expr(operand, row, &mut *map, &mut *defer)),
-        ),
+        Expression::Or(operands) => {
+            Expression::Or(operands.map_ref(|operand| {
+                substitute_expr::<PRESERVE>(operand, row, &mut *map, &mut *defer)
+            }))
+        }
+        Expression::And(operands) => {
+            Expression::And(operands.map_ref(|operand| {
+                substitute_expr::<PRESERVE>(operand, row, &mut *map, &mut *defer)
+            }))
+        }
         Expression::Arithmetic(first, steps) => Expression::Arithmetic(
-            Child::new(substitute_expr(first, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(first, row, map, defer)),
             steps.map_ref(|(op, operand)| {
-                (*op, substitute_expr(operand, row, &mut *map, &mut *defer))
+                (
+                    *op,
+                    substitute_expr::<PRESERVE>(operand, row, &mut *map, &mut *defer),
+                )
             }),
         ),
         Expression::Equal(a, b) => Expression::Equal(
-            Child::new(substitute_expr(a, row, map, defer)),
-            Child::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
         ),
         Expression::SameTerm(a, b) => Expression::SameTerm(
-            Child::new(substitute_expr(a, row, map, defer)),
-            Child::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
         ),
         Expression::Greater(a, b) => Expression::Greater(
-            Child::new(substitute_expr(a, row, map, defer)),
-            Child::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
         ),
         Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(
-            Child::new(substitute_expr(a, row, map, defer)),
-            Child::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
         ),
         Expression::Less(a, b) => Expression::Less(
-            Child::new(substitute_expr(a, row, map, defer)),
-            Child::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
         ),
         Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Child::new(substitute_expr(a, row, map, defer)),
-            Child::new(substitute_expr(b, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
         ),
         Expression::UnaryPlus(a) => {
-            Expression::UnaryPlus(Child::new(substitute_expr(a, row, map, defer)))
+            Expression::UnaryPlus(Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)))
         }
         Expression::UnaryMinus(a) => {
-            Expression::UnaryMinus(Child::new(substitute_expr(a, row, map, defer)))
+            Expression::UnaryMinus(Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)))
         }
-        Expression::Not(a) => Expression::Not(Child::new(substitute_expr(a, row, map, defer))),
+        Expression::Not(a) => {
+            Expression::Not(Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)))
+        }
         Expression::If(c, t, e) => Expression::If(
-            Child::new(substitute_expr(c, row, map, defer)),
-            Child::new(substitute_expr(t, row, map, defer)),
-            Child::new(substitute_expr(e, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(c, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(t, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(e, row, map, defer)),
         ),
         Expression::In(needle, haystack) => Expression::In(
-            Child::new(substitute_expr(needle, row, map, defer)),
+            Child::new(substitute_expr::<PRESERVE>(needle, row, map, defer)),
             haystack
                 .iter()
-                .map(|h| substitute_expr(h, row, &mut *map, &mut *defer))
+                .map(|h| substitute_expr::<PRESERVE>(h, row, &mut *map, &mut *defer))
                 .collect(),
         ),
         Expression::Coalesce(items) => Expression::Coalesce(
             items
                 .iter()
-                .map(|i| substitute_expr(i, row, &mut *map, &mut *defer))
+                .map(|i| substitute_expr::<PRESERVE>(i, row, &mut *map, &mut *defer))
                 .collect(),
         ),
         Expression::FunctionCall(f, args) => Expression::FunctionCall(
             f.clone(),
             args.iter()
-                .map(|a| substitute_expr(a, row, &mut *map, &mut *defer))
+                .map(|a| substitute_expr::<PRESERVE>(a, row, &mut *map, &mut *defer))
                 .collect(),
         ),
         // Outside a `SERVICE` body the nested body is not copied at all: it is left as a
@@ -3915,7 +4061,9 @@ fn substitute_expr(
         // their ledger identity through `map`.
         Expression::Exists(inner_pat) => match defer.defer(inner_pat, row) {
             Some(placeholder) => Expression::Exists(placeholder.into()),
-            None => Expression::Exists(substitute_pattern_impl(inner_pat, row, map, defer).into()),
+            None => Expression::Exists(
+                substitute_pattern_impl::<PRESERVE>(inner_pat, row, map, defer).into(),
+            ),
         },
     }
 }
@@ -12049,6 +12197,22 @@ mod walk_tests {
             | GraphPattern::Lateral { left, right } => {
                 reference_pattern_vars_outside(left, endpoint, out);
                 reference_pattern_vars_outside(right, endpoint, out);
+            }
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                reference_pattern_vars_outside(left, endpoint, out);
+                reference_pattern_vars_outside(right, endpoint, out);
+                for (input, driver) in &policy.inputs {
+                    out.extend([input.clone(), driver.clone()]);
+                }
+                if let Some(optional) = &policy.optional {
+                    for (input, driver) in &optional.retry_inputs {
+                        out.extend([input.clone(), driver.clone()]);
+                    }
+                }
             }
             GraphPattern::Union { arms } => {
                 for arm in arms {
