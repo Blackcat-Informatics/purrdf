@@ -5,7 +5,7 @@
 #
 # Every msgid is a unit of docs/book/src/ as mdbook-xgettext extracts it; an
 # empty msgstr renders as the English source (translation lag is visible to the
-# reader by construction). Gated by scripts/check-i18n-glossary.py (make check)
+# reader by construction). Gated by helper-census --glossary-gate (make check)
 # and scripts/check-i18n-render.py (make check-i18n; the docs workflow).
 # Refresh the msgids after the English source changes: make book-po-update.
 msgid ""

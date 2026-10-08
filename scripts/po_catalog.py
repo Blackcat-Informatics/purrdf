@@ -3,10 +3,10 @@
 
 """A minimal reader for gettext ``.po``/``.pot`` catalogues.
 
-Shared by ``check-i18n-glossary.py`` and ``check-i18n-render.py``, which read
+The rendering gate ``check-i18n-render.py`` reads
 the book's translation catalogue (``docs/book/po/zh-Hans.po``) and the
 template ``mdbook-xgettext`` extracts from the English source. Only the parts
-of the format those gates need are modelled: the ``msgctxt``/``msgid``/
+of the format that gate needs are modelled: the ``msgctxt``/``msgid``/
 ``msgstr`` triple with its continuation lines, the ``fuzzy`` flag, and the
 ``#~`` obsolete marker. Plural forms are read but never produced by
 ``mdbook-xgettext``, so they are folded into ``msgstr`` rather than modelled.

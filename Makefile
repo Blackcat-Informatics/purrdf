@@ -139,7 +139,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
 	python3 scripts/check-doc-claims.py
-	python3 scripts/check-i18n-glossary.py
+	cargo run -q --locked -p helper-census -- --glossary-gate
 	python3 scripts/check-versions.py
 	python3 scripts/check-release-notes.py --self-test
 	python3 scripts/check-release-notes.py
@@ -184,7 +184,7 @@ check-spec-attribution: ## Reject attributing a first-party extension (the quad 
 	python3 scripts/check-spec-attribution.py --self-test
 
 check-i18n: ## Gate the zh-Hans translation: the glossary, then render it and run the prose gates + the SPARQL fence parser over the rendering (needs mdbook + the pinned mdbook-i18n-helpers).
-	python3 scripts/check-i18n-glossary.py
+	cargo run -q --locked -p helper-census -- --glossary-gate
 	python3 scripts/check-i18n-render.py --self-test
 
 changelog: ## Regenerate the deterministic CHANGELOG.md from conventional-commit history.

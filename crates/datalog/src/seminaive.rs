@@ -46,6 +46,13 @@
 //! delta itself is a contiguous [`RowId`] span, because the commit loop mints row ids
 //! densely in one sorted pass — so delta membership is a range compare, not a hash probe.
 //!
+//! Guard-free bodies with certified independent factors use the same physical kernels
+//! once per factor in Full mode. Borrowed mode tables classify a factor tuple New when
+//! any premise is in delta. A first-new-FACTOR decomposition (earlier factors Old,
+//! anchor New, later Full) partitions these tuples without constructing an unused
+//! Cartesian body relation. Each head projects its required bindings; exact witness
+//! frontiers retain the canonical proof under globally masked heights and sums.
+//!
 //! # Determinism
 //!
 //! Round candidates are keyed in a [`BTreeMap`] and winners are committed in lexical
@@ -72,7 +79,13 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod factors;
 use std::fmt;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 
 use rayon::prelude::*;
 
@@ -516,7 +529,10 @@ impl BudgetReport {
         }
     }
 
-    /// Candidate solutions enumerated across every round of every stratum.
+    /// Join, guard, negative-probe and head candidate admissions across all rounds,
+    /// including one refused reservation when a join-step ceiling is exceeded.
+    /// Saturates at u64::MAX; an unrepresentable refusal observation still returns
+    /// the typed JoinSteps exhaustion rather than accepting a truncated result.
     pub fn join_steps(self) -> u64 {
         self.join_steps
     }
@@ -648,20 +664,27 @@ impl BudgetResource {
     }
 }
 
-/// A per-rule allowance for one round's candidate enumeration.
+/// One shared round allowance, with a separate, single refusal observation.
 ///
-/// The governor charges the join-step limit in force ([`EvalOptions::max_join_steps`]).
-/// Each rule task in a round is handed the SAME allowance — the
-/// evaluation's remaining budget plus one — so a task that reaches it has proved the
-/// ceiling is passed while bounding one round's work to `rules × allowance`. Whether the
-/// round actually exceeded the ceiling is decided once, after the tasks are merged in
-/// program order, so the decision never depends on which task ran first.
-#[derive(Debug, Clone, Copy)]
+/// Reservations precede evaluator-owned candidate expansion. The final reservation
+/// records exhaustion without expanding its candidate. Parallel tasks share this
+/// ceiling, and their private buffers are folded in authored order before any commit.
+#[derive(Debug, Clone)]
 struct StepGovernor {
-    /// The most candidates this task may enumerate.
+    /// Remaining successful credits, including the full u64 range.
     allowance: u64,
     /// Candidates enumerated so far.
     consumed: u64,
+    /// One shared round-wide credit pool.
+    pool: Arc<StepPool>,
+}
+
+/// Successful credits and refusal are separate so the full-width ceiling cannot
+/// lose its final credit or silently truncate on an unrepresentable sentinel.
+#[derive(Debug)]
+struct StepPool {
+    used: AtomicU64,
+    refused: AtomicBool,
 }
 
 impl StepGovernor {
@@ -670,19 +693,54 @@ impl StepGovernor {
         Self {
             allowance,
             consumed: 0,
+            pool: Arc::new(StepPool {
+                used: AtomicU64::new(0),
+                refused: AtomicBool::new(false),
+            }),
         }
     }
 
     /// Whether the allowance is spent — the next candidate may NOT be enumerated.
     #[inline]
-    fn spent(self) -> bool {
-        self.consumed >= self.allowance
+    fn spent(&self) -> bool {
+        self.pool.refused.load(Ordering::Relaxed)
     }
 
-    /// Record one enumerated candidate.
+    /// Reserve a candidate; the single refusal sentinel is never expanded.
     #[inline]
-    fn charge(&mut self) {
-        self.consumed = self.consumed.saturating_add(1);
+    fn charge(&mut self) -> bool {
+        let reserved = self
+            .pool
+            .used
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                (used < self.allowance).then(|| used + 1)
+            });
+        if reserved.is_ok() {
+            self.consumed = self.consumed.saturating_add(1);
+            true
+        } else {
+            if !self.pool.refused.swap(true, Ordering::Relaxed) {
+                self.consumed = self.consumed.saturating_add(1);
+            }
+            false
+        }
+    }
+
+    /// Saturated public observation; refusal remains explicit at full width.
+    fn observed(&self) -> u64 {
+        self.pool
+            .used
+            .load(Ordering::Relaxed)
+            .saturating_add(u64::from(self.spent()))
+    }
+
+    /// A rule-local counter sharing the round's credit pool.
+    fn task(&self) -> Self {
+        Self {
+            allowance: self.allowance,
+            consumed: 0,
+            pool: Arc::clone(&self.pool),
+        }
     }
 }
 
@@ -878,6 +936,18 @@ pub fn render_capacity_refusal(
             report.limits.stored_facts,
             stored_fact_limit_origin(report),
         )),
+        BudgetResource::JoinSteps
+            if report.join_steps == u64::MAX && report.limits.join_steps == u64::MAX =>
+        {
+            Some(format!(
+                "evaluation exceeded the full-width join-step limit: a further candidate was \
+             refused after {} permitted steps ({}); the observation saturates at {}; \
+             reduce the rule work or input because this limit cannot be raised",
+                report.limits.join_steps,
+                join_step_limit_origin(report),
+                report.join_steps,
+            ))
+        }
         BudgetResource::JoinSteps => Some(format!(
             "evaluation exceeded the join-step limit: {} join steps observed, {} permitted \
              ({}); raise it with {knob}",
@@ -1304,6 +1374,22 @@ enum Scan {
     OldOnly,
 }
 
+/// One shared scan selection for uniform factor modes and semi-naive anchors.
+#[derive(Debug, Clone, Copy)]
+enum JoinScan {
+    Uniform(Scan),
+    DeltaPosition(usize),
+}
+
+impl JoinScan {
+    fn at(self, position: usize) -> Scan {
+        match self {
+            Self::Uniform(scan) => scan,
+            Self::DeltaPosition(anchor) => scan_for(position, anchor),
+        }
+    }
+}
+
 /// The scan mode for a positive atom at `position`, given the round's delta position.
 #[inline]
 fn scan_for(position: usize, delta_position: usize) -> Scan {
@@ -1655,7 +1741,7 @@ fn extend_atom<const SCAN: u8, const INDEX: u8>(
                 {
                     continue;
                 }
-                if governor.spent() {
+                if !governor.charge() {
                     break 'solutions;
                 }
                 let mut merged = solution.clone();
@@ -1672,7 +1758,6 @@ fn extend_atom<const SCAN: u8, const INDEX: u8>(
                     graph,
                     row,
                 });
-                governor.charge();
                 next.push(merged);
             }
         }
@@ -1920,8 +2005,8 @@ struct LeapfrogRun<'a> {
     plan: &'a RulePlan,
     /// The certified component being descended.
     cycle: &'a CyclicPlan,
-    /// The round's semi-naive delta position.
-    delta_position: usize,
+    /// Uniform factor mode or the round's semi-naive delta position.
+    scan: JoinScan,
     /// The accumulated store.
     rel: &'a RelationStore,
     /// The round's delta span.
@@ -1948,7 +2033,7 @@ impl LeapfrogRun<'_> {
                 solution.sources.truncate(original);
                 return false;
             };
-            let scan = scan_for(planned.positive_position(), self.delta_position);
+            let scan = self.scan.at(planned.positive_position());
             let mut rows = partition.select(Bound::Both(subject, object));
             let mut matched = None;
             while let Some((subject, object, row)) = rows.next() {
@@ -1985,8 +2070,7 @@ impl LeapfrogRun<'_> {
             return;
         }
         if variable_position == self.cycle.variable_slots().len() {
-            if self.append_sources(solution) {
-                governor.charge();
+            if governor.charge() && self.append_sources(solution) {
                 out.push(solution.clone());
                 solution
                     .sources
@@ -2005,7 +2089,7 @@ impl LeapfrogRun<'_> {
             if subject_slot != variable_slot && object_slot != variable_slot {
                 continue;
             }
-            let scan = scan_for(planned.positive_position(), self.delta_position);
+            let scan = self.scan.at(planned.positive_position());
             let Some(partition) = cycle_atom_partition(shape, self.rel) else {
                 return;
             };
@@ -2093,7 +2177,11 @@ fn join_body(
         // The empty conjunction is relational identity: one empty substitution, so an
         // unconditional or NAF-only rule fires exactly once. Its head is suppressed on the
         // following round by the store's own membership test.
-        vec![SlotSolution::empty(plan.variables().len())]
+        if governor.charge() {
+            vec![SlotSolution::empty(plan.variables().len())]
+        } else {
+            Vec::new()
+        }
     } else if leapfrog {
         join_positive_leapfrog(plan, snapshot, governor)
     } else {
@@ -2108,6 +2196,21 @@ struct JoinSnapshot<'a> {
     rel: &'a RelationStore,
     /// The rows this evaluation treats as new.
     delta: Delta,
+}
+
+impl JoinSnapshot<'_> {
+    /// Every position before the last requires an OldOnly suffix. When the
+    /// delta covers the entire frozen store, that suffix is provably empty;
+    /// visiting its earlier prefixes can produce no solution. Partial deltas
+    /// retain every position, including positions that become productive later.
+    fn delta_positions(self, positive_count: usize) -> std::ops::Range<usize> {
+        let first = if self.delta == Delta::all(self.rel.row_count()) {
+            positive_count.saturating_sub(1)
+        } else {
+            0
+        };
+        first..positive_count
+    }
 }
 
 /// Whether the atom `operator` can match a row of `snapshot`'s delta: some partition its
@@ -2149,7 +2252,7 @@ fn join_positive_binary(
 ) -> Vec<SlotSolution> {
     let operators = plan.operators();
     let mut all: Vec<SlotSolution> = Vec::new();
-    for delta_position in 0..operators.len() {
+    for delta_position in snapshot.delta_positions(operators.len()) {
         if !delta_can_match(&operators[delta_position], snapshot) {
             continue;
         }
@@ -2189,7 +2292,7 @@ fn join_positive_leapfrog(
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
     let mut all: Vec<SlotSolution> = Vec::new();
-    for delta_position in 0..plan.positive().len() {
+    for delta_position in snapshot.delta_positions(plan.positive().len()) {
         if !delta_can_match(plan.operator_at(delta_position), snapshot) {
             continue;
         }
@@ -2211,7 +2314,7 @@ fn join_positive_leapfrog(
                     LeapfrogRun {
                         plan,
                         cycle,
-                        delta_position,
+                        scan: JoinScan::DeltaPosition(delta_position),
                         rel: snapshot.rel,
                         delta: snapshot.delta,
                     },
@@ -2337,7 +2440,15 @@ impl NegatedAtom {
     /// A ground term the store never interned — a constant it never saw, or a surface a
     /// guard computed — constrains to zero rows, so the atom is not satisfied and the
     /// rule fires.
-    fn satisfied(&self, solution: &SlotSolution, rel: &RelationStore) -> bool {
+    fn satisfied(
+        &self,
+        solution: &SlotSolution,
+        rel: &RelationStore,
+        governor: &mut StepGovernor,
+    ) -> bool {
+        if !governor.charge() {
+            return false;
+        }
         let mut values = [None; ATOM_ARITY];
         for (position, arg) in self.args.iter().enumerate() {
             match arg.probe(solution, rel) {
@@ -2353,8 +2464,20 @@ impl NegatedAtom {
             (None, Some(object)) => Bound::Object(object),
             (None, None) => Bound::Any,
         };
-        rel.partitions(values[POSITION_PREDICATE], values[POSITION_GRAPH])
-            .any(|partition| partition.select(bound).any_remaining())
+        for (index, partition) in rel
+            .partitions(values[POSITION_PREDICATE], values[POSITION_GRAPH])
+            .enumerate()
+        {
+            // The first probe was reserved above; broad predicate/graph scans also
+            // reserve every further partition, including an empty selected index.
+            if index != 0 && !governor.charge() {
+                return false;
+            }
+            if partition.select(bound).any_remaining() {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -2477,9 +2600,12 @@ impl NegationRuntime {
 
     /// Whether the group HOLDS under `probe.solution`: some extension of its local
     /// variables matches every atom and passes every guard.
-    fn holds(&self, probe: GroupProbe<'_>) -> Result<bool, EvalError> {
+    fn holds(&self, probe: GroupProbe<'_>, governor: &mut StepGovernor) -> Result<bool, EvalError> {
+        if !governor.charge() {
+            return Ok(false);
+        }
         let mut locals: Vec<Option<LocalValue>> = vec![None; self.locals];
-        self.match_atom(0, probe, &mut locals)
+        self.match_atom(0, probe, &mut locals, governor)
     }
 
     /// The store probe value of `arg` under the current bindings.
@@ -2514,9 +2640,10 @@ impl NegationRuntime {
         k: usize,
         probe: GroupProbe<'_>,
         locals: &mut Vec<Option<LocalValue>>,
+        governor: &mut StepGovernor,
     ) -> Result<bool, EvalError> {
         let Some(atom) = self.atoms.get(k) else {
-            return self.match_guard(0, probe, locals);
+            return self.match_guard(0, probe, locals, governor);
         };
         let mut values = [ProbeValue::Free; ATOM_ARITY];
         for (position, arg) in atom.iter().enumerate() {
@@ -2538,17 +2665,19 @@ impl NegationRuntime {
             (None, Some(object)) => Bound::Object(object),
             (None, None) => Bound::Any,
         };
-        let partitions: Vec<PartitionRef<'_>> = probe
-            .rel
-            .partitions(
-                known(values[POSITION_PREDICATE]),
-                known(values[POSITION_GRAPH]),
-            )
-            .collect();
-        for partition in partitions {
+        for partition in probe.rel.partitions(
+            known(values[POSITION_PREDICATE]),
+            known(values[POSITION_GRAPH]),
+        ) {
+            if !governor.charge() {
+                return Ok(false);
+            }
             let (predicate, graph) = (partition.predicate(), partition.graph());
             let mut cursor = partition.select(bound);
             while let Some((subject, object, _row)) = cursor.next() {
+                if !governor.charge() {
+                    return Ok(false);
+                }
                 let matched = [subject, predicate, object, graph];
                 // Bind every free local position, requiring a local repeated inside
                 // the atom to agree with itself.
@@ -2569,7 +2698,7 @@ impl NegationRuntime {
                         }
                     }
                 }
-                let found = consistent && self.match_atom(k + 1, probe, locals)?;
+                let found = consistent && self.match_atom(k + 1, probe, locals, governor)?;
                 for local in newly {
                     locals[local] = None;
                 }
@@ -2587,10 +2716,14 @@ impl NegationRuntime {
         j: usize,
         probe: GroupProbe<'_>,
         locals: &mut Vec<Option<LocalValue>>,
+        governor: &mut StepGovernor,
     ) -> Result<bool, EvalError> {
         let Some(guard) = self.guards.get(j) else {
             return Ok(true);
         };
+        if !governor.charge() {
+            return Ok(false);
+        }
         let declared = &probe.clause.negations()[self.index].guards()[j];
         let site = GuardSite::Negation {
             negation: self.index,
@@ -2624,16 +2757,20 @@ impl NegationRuntime {
                     inputs: &inputs,
                     model: probe.rel,
                 },
+                governor,
             )?
         };
         for row in rows {
+            if governor.spent() {
+                return Ok(false);
+            }
             for (&local, surface) in guard.outputs.iter().zip(&row) {
                 locals[local] = Some(match probe.rel.term_id(surface) {
                     Some(id) => LocalValue::Interned(id),
                     None => LocalValue::Computed(surface.as_str().into()),
                 });
             }
-            let found = self.match_guard(j + 1, probe, locals)?;
+            let found = self.match_guard(j + 1, probe, locals, governor)?;
             for &local in &guard.outputs {
                 locals[local] = None;
             }
@@ -2655,6 +2792,7 @@ impl NegationRuntime {
 fn call_guard(
     guards: &dyn GuardEvaluator,
     call: &GuardCall<'_>,
+    governor: &mut StepGovernor,
 ) -> Result<Vec<Vec<String>>, EvalError> {
     let refuse = |message: String| EvalError::Guard {
         rule: call.rule,
@@ -2664,11 +2802,16 @@ fn call_guard(
     };
     let rows = guards.evaluate(call).map_err(refuse)?;
     let width = call.guard.outputs().len();
-    if let Some(row) = rows.iter().find(|row| row.len() != width) {
-        return Err(refuse(format!(
-            "the evaluator answered a row of {} values for {width} outputs",
-            row.len()
-        )));
+    for row in &rows {
+        if !governor.charge() {
+            return Ok(Vec::new());
+        }
+        if row.len() != width {
+            return Err(refuse(format!(
+                "the evaluator answered a row of {} values for {width} outputs",
+                row.len()
+            )));
+        }
     }
     Ok(rows)
 }
@@ -2689,6 +2832,8 @@ struct GuardRuntime {
 /// predicate's, which is now a term like any other and so may equally well be a slot.
 #[derive(Debug, Clone)]
 pub(crate) struct RuleRuntime {
+    /// Independent positive components, certified without opaque callbacks.
+    factors: Vec<factors::Factor>,
     /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
     /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
     /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
@@ -2705,7 +2850,8 @@ impl RuleRuntime {
     /// Lower one rule's static shapes.
     pub(crate) fn new(rule: &DlClause, plan: &RulePlan) -> Self {
         let variables = plan.variables();
-        Self {
+        let mut runtime = Self {
+            factors: Vec::new(),
             head: rule
                 .head_atoms()
                 .map(|atom| ArgShape::of_atom(atom, variables))
@@ -2739,7 +2885,9 @@ impl RuleRuntime {
                 .enumerate()
                 .map(|(index, negation)| NegationRuntime::new(index, negation, rule, variables))
                 .collect(),
-        }
+        };
+        runtime.factors = factors::certify(plan, &runtime);
+        runtime
     }
 }
 
@@ -2847,21 +2995,97 @@ impl Candidate {
     /// numeric prefix decides almost every real collision, and the allocating tail runs
     /// only on an exact numeric tie.
     fn preferred_over(&self, other: &Self, rel: &RelationStore) -> bool {
-        match (self.proof_height, self.sum_source_height)
-            .cmp(&(other.proof_height, other.sum_source_height))
-        {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-        let mine = self.source_facts(rel);
-        let theirs = other.source_facts(rel);
-        let mut mine_sorted = mine.clone();
-        mine_sorted.sort();
-        let mut theirs_sorted = theirs.clone();
-        theirs_sorted.sort();
-        (mine_sorted, self.rule, mine) < (theirs_sorted, other.rule, theirs)
+        witness_preference(
+            (self.proof_height, self.sum_source_height),
+            (other.proof_height, other.sum_source_height),
+            || source_preference(&self.sources, self.rule, &other.sources, other.rule, rel),
+        )
+        .is_lt()
     }
+}
+
+/// The canonical numeric prefix, resolving the lexical tail only on a tie.
+fn witness_preference(
+    mine: (u32, u64),
+    theirs: (u32, u64),
+    lexical: impl FnOnce() -> std::cmp::Ordering,
+) -> std::cmp::Ordering {
+    mine.cmp(&theirs).then_with(lexical)
+}
+
+/// The lexical tail of the canonical witness law, shared with projected frontiers.
+fn source_preference(
+    mine: &[SourceRow],
+    my_rule: usize,
+    theirs: &[SourceRow],
+    their_rule: usize,
+    rel: &RelationStore,
+) -> std::cmp::Ordering {
+    let mine: Vec<_> = mine.iter().map(|source| source.fact(rel)).collect();
+    let theirs: Vec<_> = theirs.iter().map(|source| source.fact(rel)).collect();
+    fact_preference(&mine, my_rule, &theirs, their_rule)
+}
+
+/// The lexical tail over owned surfaces, also valid after a store rebuild.
+fn fact_preference(
+    mine: &[Fact],
+    my_rule: usize,
+    theirs: &[Fact],
+    their_rule: usize,
+) -> std::cmp::Ordering {
+    let mut mine_sorted = mine.to_vec();
+    mine_sorted.sort();
+    let mut theirs_sorted = theirs.to_vec();
+    theirs_sorted.sort();
+    (mine_sorted, my_rule, mine).cmp(&(theirs_sorted, their_rule, theirs))
+}
+
+/// An assumed fact's best proof, retaining the otherwise unobservable sum needed
+/// across schedule groups. Owned facts survive the layer's retraction/rebuild.
+#[derive(Debug, Clone)]
+pub(crate) struct Confirmation {
+    derivation: Derivation,
+    sum_source_height: u64,
+}
+
+impl Confirmation {
+    /// The confirmed fact, independent of store row identities.
+    pub(crate) fn fact(&self) -> &Fact {
+        self.derivation.fact()
+    }
+
+    /// Keep the canonical proof across rounds and scheduled groups.
+    pub(crate) fn merge(&mut self, other: Self) {
+        if witness_preference(
+            (other.derivation.proof_height, other.sum_source_height),
+            (self.derivation.proof_height, self.sum_source_height),
+            || {
+                fact_preference(
+                    &other.derivation.sources,
+                    other.derivation.rule,
+                    &self.derivation.sources,
+                    self.derivation.rule,
+                )
+            },
+        )
+        .is_lt()
+        {
+            *self = other;
+        }
+    }
+
+    /// Commit only public provenance, after every group has competed.
+    pub(crate) fn into_derivation(self) -> Derivation {
+        self.derivation
+    }
+}
+
+/// Raw maximum and saturated sum of a witness's source heights.
+fn source_heights(sources: &[SourceRow], depth: &[u32]) -> (u32, u64) {
+    sources.iter().fold((0, 0u64), |(maximum, sum), source| {
+        let height = depth[source.row.index()];
+        (maximum.max(height), sum.saturating_add(u64::from(height)))
+    })
 }
 
 /// One round's candidate winners, keyed by head fact.
@@ -2874,6 +3098,8 @@ pub(crate) struct RoundBuffer<'r> {
     entries: BTreeMap<HeadKey<'r>, Candidate>,
     /// Candidate solutions enumerated by the task that produced this buffer.
     join_steps: u64,
+    /// A refused reservation; independent of saturated observable counts.
+    join_refused: bool,
     /// Whether some entry carries a term a guard computed and the store never held — a
     /// TERM-GENERATING round ([`EvalOptions`]).
     generates_terms: bool,
@@ -2883,7 +3109,7 @@ pub(crate) struct RoundBuffer<'r> {
     /// Rows already in the store that the snapshot marks as ASSUMED and a rule of this
     /// round derived again, each with the derivation that did — see
     /// [`RoundSnapshot::assumed`].
-    confirmed: Vec<(RowId, Derivation)>,
+    confirmed: BTreeMap<RowId, Confirmation>,
 }
 
 impl<'r> RoundBuffer<'r> {
@@ -2892,9 +3118,10 @@ impl<'r> RoundBuffer<'r> {
         Self {
             entries: BTreeMap::new(),
             join_steps: 0,
+            join_refused: false,
             generates_terms: false,
             generating_rules: BTreeSet::new(),
-            confirmed: Vec::new(),
+            confirmed: BTreeMap::new(),
         }
     }
 
@@ -2904,8 +3131,8 @@ impl<'r> RoundBuffer<'r> {
     }
 
     /// The assumed rows a rule of the round derived again, with the derivations.
-    pub(crate) fn confirmed(&self) -> &[(RowId, Derivation)] {
-        &self.confirmed
+    pub(crate) fn confirmed(&self) -> impl Iterator<Item = &Confirmation> {
+        self.confirmed.values()
     }
 
     /// Insert or quality-merge one candidate.
@@ -2929,7 +3156,15 @@ impl<'r> RoundBuffer<'r> {
     /// Fold a completed rule-local buffer in at the scheduling-erasing serial boundary.
     fn merge_from(&mut self, other: Self, rel: &RelationStore) {
         self.join_steps = self.join_steps.saturating_add(other.join_steps);
-        self.confirmed.extend(other.confirmed);
+        self.join_refused |= other.join_refused;
+        for (row, proof) in other.confirmed {
+            match self.confirmed.get_mut(&row) {
+                Some(existing) => existing.merge(proof),
+                None => {
+                    self.confirmed.insert(row, proof);
+                }
+            }
+        }
         for (key, candidate) in other.entries {
             self.insert(key, candidate, rel);
         }
@@ -3012,11 +3247,13 @@ fn evaluate_rule<'r>(
     entry: RuleEntry<'r>,
     snapshot: RoundSnapshot<'_>,
     strategy: JoinStrategy,
-    allowance: u64,
+    mut governor: StepGovernor,
     guards: &dyn GuardEvaluator,
 ) -> Result<RoundBuffer<'r>, EvalError> {
     let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
-    let mut governor = StepGovernor::new(allowance);
+    if runtime.factors.len() > 1 && matches!(strategy, JoinStrategy::Planned) {
+        return factors::evaluate(entry, snapshot, &mut governor);
+    }
     let mut solutions = join_body(
         plan,
         JoinSnapshot {
@@ -3053,6 +3290,7 @@ fn evaluate_rule<'r>(
                         inputs: &inputs,
                         model: rel,
                     },
+                    &mut governor,
                 )?
             };
             for row in rows {
@@ -3060,7 +3298,6 @@ fn evaluate_rule<'r>(
                 for (&slot, surface) in guard.outputs.iter().zip(&row) {
                     next.bind_surface(slot, surface, rel);
                 }
-                governor.charge();
                 extended.push(next);
             }
         }
@@ -3072,21 +3309,27 @@ fn evaluate_rule<'r>(
             !runtime
                 .negated
                 .iter()
-                .any(|atom| atom.satisfied(solution, rel))
+                .any(|atom| governor.spent() || atom.satisfied(solution, rel, &mut governor))
         });
     }
     if !runtime.negations.is_empty() {
         let mut kept = Vec::with_capacity(solutions.len());
         for solution in solutions {
+            if governor.spent() {
+                break;
+            }
             let mut blocked = false;
             for negation in &runtime.negations {
-                if negation.holds(GroupProbe {
-                    solution: &solution,
-                    rel,
-                    guards,
-                    rule: entry.index,
-                    clause: entry.rule,
-                })? {
+                if negation.holds(
+                    GroupProbe {
+                        solution: &solution,
+                        rel,
+                        guards,
+                        rule: entry.index,
+                        clause: entry.rule,
+                    },
+                    &mut governor,
+                )? {
                     blocked = true;
                     break;
                 }
@@ -3101,58 +3344,78 @@ fn evaluate_rule<'r>(
     let mut buffer = RoundBuffer::new();
     buffer.join_steps = governor.consumed;
     for solution in solutions {
-        let mut proof_height = 0u32;
-        let mut sum_source_height = 0u64;
-        for source in &solution.sources {
-            let height = snapshot.depth[source.row.index()];
-            proof_height = proof_height.max(height);
-            sum_source_height = sum_source_height.saturating_add(u64::from(height));
+        if governor.spent() {
+            break;
         }
-        for head in &runtime.head {
-            let key = HeadKey {
-                subject: head_term(&head[POSITION_SUBJECT], &solution),
-                predicate: head_term(&head[POSITION_PREDICATE], &solution),
-                object: head_term(&head[POSITION_OBJECT], &solution),
-                graph: head_term(&head[POSITION_GRAPH], &solution),
-            };
-            let key = intern_key(key, rel);
-            // A fact a prior round or stratum already derived is not a derivation: earlier
-            // wins, exactly as the reference fixpoint decides it. Every one of the four
-            // positions must already be interned for the quad to be present.
-            if let Some(row) = present_row(&key, rel) {
-                if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
-                    let [subject, predicate, object, graph] =
-                        key.terms().map(|term| term.surface(rel));
-                    buffer.confirmed.push((
-                        row,
-                        Derivation {
-                            fact: Fact {
-                                subject,
-                                predicate,
-                                object,
-                                graph,
-                            },
-                            rule: entry.index,
-                            sources: solution.sources.iter().map(|s| s.fact(rel)).collect(),
-                            proof_height: proof_height.saturating_add(1),
-                        },
-                    ));
-                }
-                continue;
+        for (position, head) in runtime.head.iter().enumerate() {
+            // The terminal positive/guard/identity row pays for its first head.
+            // Every additional conjunct owns another candidate/proof expansion.
+            if governor.spent() || (position != 0 && !governor.charge()) {
+                break;
             }
-            buffer.insert(
-                key,
-                Candidate {
-                    rule: entry.index,
-                    sources: solution.sources.clone(),
-                    proof_height: proof_height.saturating_add(1),
-                    sum_source_height,
-                },
-                rel,
-            );
+            emit_solution(&mut buffer, head, &solution, entry.index, snapshot);
         }
     }
+    buffer.join_steps = governor.consumed;
     Ok(buffer)
+}
+
+/// Emit one head using the shared ordinary and factorized provenance path.
+fn emit_solution<'r>(
+    buffer: &mut RoundBuffer<'r>,
+    head: &'r [ArgShape; ATOM_ARITY],
+    solution: &SlotSolution,
+    rule: usize,
+    snapshot: RoundSnapshot<'_>,
+) {
+    let rel = snapshot.rel;
+    let (proof_height, sum_source_height) = source_heights(&solution.sources, snapshot.depth);
+    let key = HeadKey {
+        subject: head_term(&head[POSITION_SUBJECT], solution),
+        predicate: head_term(&head[POSITION_PREDICATE], solution),
+        object: head_term(&head[POSITION_OBJECT], solution),
+        graph: head_term(&head[POSITION_GRAPH], solution),
+    };
+    let key = intern_key(key, rel);
+    // A fact a prior round or stratum already derived is not a derivation: earlier
+    // wins, exactly as the reference fixpoint decides it. Every one of the four
+    // positions must already be interned for the quad to be present.
+    if let Some(row) = present_row(&key, rel) {
+        if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
+            let [subject, predicate, object, graph] = key.terms().map(|term| term.surface(rel));
+            let confirmation = Confirmation {
+                derivation: Derivation {
+                    fact: Fact {
+                        subject,
+                        predicate,
+                        object,
+                        graph,
+                    },
+                    rule,
+                    sources: solution.sources.iter().map(|s| s.fact(rel)).collect(),
+                    proof_height: proof_height.saturating_add(1),
+                },
+                sum_source_height,
+            };
+            match buffer.confirmed.get_mut(&row) {
+                Some(existing) => existing.merge(confirmation),
+                None => {
+                    buffer.confirmed.insert(row, confirmation);
+                }
+            }
+        }
+        return;
+    }
+    buffer.insert(
+        key,
+        Candidate {
+            rule,
+            sources: solution.sources.clone(),
+            proof_height: proof_height.saturating_add(1),
+            sum_source_height,
+        },
+        rel,
+    );
 }
 
 /// The store row of the fact `key` names, if it is present.
@@ -3222,13 +3485,19 @@ pub(crate) fn evaluate_round<'r>(
     allowance: u64,
     guards: &dyn GuardEvaluator,
 ) -> Result<RoundBuffer<'r>, EvalError> {
+    let pool = StepGovernor::new(allowance);
     let guarded = entries.iter().any(|entry| entry.rule.is_guarded());
     let mut round = RoundBuffer::new();
     if guarded || !execution.should_parallelize(entries.len()) {
         for &entry in entries {
-            let buffer = evaluate_rule(entry, snapshot, strategy, allowance, guards)?;
+            let buffer = evaluate_rule(entry, snapshot, strategy, pool.task(), guards)?;
             round.merge_from(buffer, snapshot.rel);
+            if pool.spent() {
+                break;
+            }
         }
+        round.join_steps = pool.observed();
+        round.join_refused = pool.spent();
         return Ok(round);
     }
 
@@ -3239,12 +3508,14 @@ pub(crate) fn evaluate_round<'r>(
     // evaluator every task receives is the one that refuses every call.
     let buffers: Vec<Result<RoundBuffer<'r>, EvalError>> = entries
         .par_iter()
-        .map(|&entry| evaluate_rule(entry, snapshot, strategy, allowance, &NoGuards))
+        .map(|&entry| evaluate_rule(entry, snapshot, strategy, pool.task(), &NoGuards))
         .collect();
 
     for buffer in buffers {
         round.merge_from(buffer?, snapshot.rel);
     }
+    round.join_steps = pool.observed();
+    round.join_refused = pool.spent();
     Ok(round)
 }
 
@@ -3261,6 +3532,8 @@ pub(crate) struct FixpointState {
     pub(crate) derivations: Vec<Derivation>,
     /// Candidate solutions enumerated so far.
     pub(crate) join_steps: u64,
+    /// A refused reservation, including an observation past u64::MAX.
+    join_refused: bool,
     /// Term-generating rounds committed so far.
     pub(crate) term_generating_rounds: u64,
     /// The limits in force.
@@ -3281,6 +3554,7 @@ impl FixpointState {
             depth,
             derivations: Vec::new(),
             join_steps: 0,
+            join_refused: false,
             term_generating_rounds: 0,
             limits: Limits::of(&options, input_terms),
             input_terms,
@@ -3312,12 +3586,9 @@ impl FixpointState {
         }
     }
 
-    /// The join-step allowance one round's rule tasks each receive.
+    /// One round's shared remaining successful credits.
     pub(crate) fn allowance(&self) -> u64 {
-        self.limits
-            .join_steps
-            .saturating_sub(self.join_steps)
-            .saturating_add(1)
+        self.limits.join_steps.saturating_sub(self.join_steps)
     }
 
     /// Account for a completed round's work, commit its winners and check every ceiling.
@@ -3328,6 +3599,7 @@ impl FixpointState {
     /// single surface is materialised where the fact count alone proves it.
     pub(crate) fn absorb(&mut self, round: RoundBuffer<'_>) -> Result<(), EvalError> {
         self.join_steps = self.join_steps.saturating_add(round.join_steps);
+        self.join_refused |= round.join_refused;
         check_budget(self)?;
         if round.entries.is_empty() {
             return Ok(());
@@ -3504,7 +3776,7 @@ impl FixpointState {
 /// Whether any ceiling is already passed.
 pub(crate) fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
     let report = state.report();
-    if report.join_steps > report.limits.join_steps {
+    if state.join_refused || report.join_steps > report.limits.join_steps {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::JoinSteps,
             report,
@@ -3607,6 +3879,7 @@ fn run_stratum(
         )?;
         if round.is_empty() {
             state.join_steps = state.join_steps.saturating_add(round.join_steps);
+            state.join_refused |= round.join_refused;
             return check_budget(state); // stratum fixpoint
         }
 
@@ -4232,7 +4505,7 @@ mod tests {
     struct StopsAfter {
         /// Polls remaining before the signal fires. Saturates at zero, which is what makes
         /// it latch.
-        remaining: std::sync::atomic::AtomicU64,
+        remaining: AtomicU64,
     }
 
     impl StopSignal for StopsAfter {
@@ -4257,7 +4530,7 @@ mod tests {
     #[test]
     fn an_unfired_stop_signal_changes_no_answer() {
         let never = StopsAfter {
-            remaining: std::sync::atomic::AtomicU64::new(u64::MAX),
+            remaining: AtomicU64::new(u64::MAX),
         };
         for workload in synth_corpus::all() {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
@@ -4297,7 +4570,7 @@ mod tests {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
             // Fires at the FIRST round boundary, before any rule of any stratum has run.
             let immediate = StopsAfter {
-                remaining: std::sync::atomic::AtomicU64::new(0),
+                remaining: AtomicU64::new(0),
             };
             let error = evaluate_until(&exe, workload.edb(), Some(&immediate))
                 .expect_err("a signal that is already firing must stop the fixpoint");
@@ -4388,20 +4661,23 @@ mod tests {
 
     /// The leapfrog triejoin and the indexed binary fallback are two implementations of
     /// one contract, so they must agree everywhere — on the whole synthetic corpus and on
-    /// a certified triangle, which is the shape only the triejoin is chosen for.
+    /// a certified triangle and a connected hybrid plan, the triejoin shapes.
     #[test]
     fn leapfrog_and_binary_joins_agree() {
         let mut cyclic_seen = false;
-        for workload in synth_corpus::all().into_iter().chain([triangle_workload()]) {
+        for workload in synth_corpus::all()
+            .into_iter()
+            .chain([triangle_workload(), connected_hybrid_workload()])
+        {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
             let cyclic =
                 (0..exe.rule_count()).any(|index| exe.rule_entry(index).1.has_cyclic_subplan());
             cyclic_seen |= cyclic;
             assert_eq!(
                 cyclic,
-                workload.name == "triangle",
-                "{}: the triangle is the fixture that actually routes through the triejoin, \
-                 and it is the only one — if that changed, this test's coverage changed with it",
+                matches!(workload.name, "triangle" | "connected-hybrid"),
+                "{}: the triangle and hybrid fixtures must route through the triejoin; \
+                 the remaining fixtures must cover the binary path",
                 workload.name
             );
 
@@ -4494,6 +4770,140 @@ mod tests {
         }
     }
 
+    /// A selective seed, a disconnected type, a bridge and the triangle. The bridge
+    /// reaches every triangle Z, so the analytic answer stays the triangle's answer.
+    /// Two independent type witnesses also exercise canonical authored provenance.
+    fn connected_hybrid_workload() -> SynthWorkload {
+        let mut workload = triangle_workload();
+        let kind = "https://example.org/kind";
+        let entry = "https://example.org/entry";
+        let root = "https://example.org/root";
+        let seed = "https://example.org/Seed";
+        let other = "https://example.org/Other";
+        let mut body = vec![
+            ClauseAtom::positive(v("?V"), kind, iri(seed)),
+            ClauseAtom::positive(v("?U"), kind, iri(other)),
+            atom("?V", entry, "?Z"),
+        ];
+        body.extend_from_slice(workload.rules[0].body());
+        let head = workload.rules[0]
+            .head_atoms()
+            .next()
+            .expect("the triangle has one head")
+            .clone();
+        workload.rules = vec![DlClause::datalog(head, body)];
+        workload.triples.extend([
+            quad(&surface(root), kind, &surface(seed)),
+            quad(
+                &surface("https://example.org/other-a"),
+                kind,
+                &surface(other),
+            ),
+            quad(
+                &surface("https://example.org/other-b"),
+                kind,
+                &surface(other),
+            ),
+        ]);
+        for fact in &workload.expected {
+            workload
+                .triples
+                .push(quad(&surface(root), entry, &fact.object));
+        }
+        workload.name = "connected-hybrid";
+        workload
+    }
+
+    /// Physical group movement preserves both the analytic relation and the exact best
+    /// proof in authored body order, independently of store insertion coordinates.
+    #[test]
+    fn connected_hybrid_joins_preserve_the_analytic_facts_and_authored_proofs() {
+        let workload = connected_hybrid_workload();
+        let exe = compile(workload.rules.clone()).expect("the hybrid program compiles");
+        let plan = exe.rule_entry(0).1;
+        assert!(plan.has_cyclic_subplan());
+        assert_eq!(
+            plan.operators()
+                .iter()
+                .map(AtomOperator::positive_position)
+                .collect::<Vec<_>>(),
+            [0, 2, 3, 4, 5, 1],
+            "the fixture must exercise reordered groups"
+        );
+        let seeded: BTreeSet<Fact> = workload.edb().facts_sorted().into_iter().collect();
+        let expected_facts: Vec<Fact> = seeded.union(&workload.expected).cloned().collect();
+        let seed_fact = |subject: &str, predicate: &str, object: &str| {
+            seeded
+                .iter()
+                .find(|fact| {
+                    fact.subject == subject
+                        && fact.predicate == surface(predicate)
+                        && fact.object == object
+                })
+                .expect("every oracle premise is seeded")
+                .clone()
+        };
+        let root = surface("https://example.org/root");
+        let expected_proofs: Vec<Derivation> = workload
+            .expected
+            .iter()
+            .map(|fact| {
+                let q = seeded
+                    .iter()
+                    .find(|source| source.predicate == surface(Q) && source.object == fact.object)
+                    .expect("the circulant Q relation has exactly one predecessor")
+                    .clone();
+                Derivation {
+                    fact: fact.clone(),
+                    rule: 0,
+                    sources: vec![
+                        seed_fact(
+                            &root,
+                            "https://example.org/kind",
+                            &surface("https://example.org/Seed"),
+                        ),
+                        seed_fact(
+                            &surface("https://example.org/other-a"),
+                            "https://example.org/kind",
+                            &surface("https://example.org/Other"),
+                        ),
+                        seed_fact(&root, "https://example.org/entry", &fact.object),
+                        seed_fact(&fact.subject, P, &q.subject),
+                        q,
+                        seed_fact(&fact.object, R, &fact.subject),
+                    ],
+                    proof_height: 1,
+                }
+            })
+            .collect();
+        for seed in 0..8u64 {
+            let mut shuffled = workload.clone();
+            shuffled.triples = permute(&workload.triples, seed);
+            for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
+                let evaluation = evaluate_with(
+                    &exe,
+                    shuffled.edb(),
+                    None,
+                    &NoGuards,
+                    EvalOptions::default(),
+                    RoundExecution::Parallel,
+                    strategy,
+                )
+                .expect("the hybrid fixture stays inside every ceiling");
+                assert_eq!(
+                    evaluation.facts().facts_sorted(),
+                    expected_facts,
+                    "seed {seed}, {strategy:?}: analytic facts"
+                );
+                assert_eq!(
+                    evaluation.derivations(),
+                    expected_proofs,
+                    "seed {seed}, {strategy:?}: exact canonical authored proofs"
+                );
+            }
+        }
+    }
+
     /// The certified triangle's answer equals its analytic golden, so the differential
     /// test above is comparing two CORRECT joins rather than two identically wrong ones.
     #[test]
@@ -4552,6 +4962,439 @@ mod tests {
                 workload.name
             );
         }
+    }
+
+    /// Unequal rule cardinalities share one ceiling, including one refusal
+    /// observation, rather than each receiving a fresh copy of the budget.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn asymmetric_rules_share_exact_round_credits_at_every_worker_count() {
+        let mut edb = RelationStore::new();
+        let rules: Vec<_> = (1..=32)
+            .map(|count| {
+                let input = format!("https://example.org/input{count}");
+                for row in 0..count {
+                    edb.insert(
+                        &surface(&format!("https://example.org/s{row}")),
+                        &surface(&input),
+                        &surface("https://example.org/o"),
+                        RelationStore::DEFAULT_GRAPH,
+                    );
+                }
+                DlClause::datalog(
+                    atom("?s", &format!("https://example.org/output{count}"), "?o"),
+                    vec![atom("?s", &input, "?o")],
+                )
+            })
+            .collect();
+        let exe = compile(rules).expect("valid independent rules");
+        let expected = 32 * 33 / 2;
+        let mut reference = None;
+        for workers in [1, 4, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("test pool");
+            pool.install(|| {
+                let exact = evaluate_guarded(
+                    &exe,
+                    edb.clone(),
+                    &NoGuards,
+                    &EvalOptions::default().with_max_join_steps(expected),
+                    None,
+                )
+                .expect("exact credits");
+                assert_eq!(exact.budget().join_steps(), expected);
+                assert_eq!(exact.facts().row_count(), 2 * expected as usize);
+                let answer = (
+                    exact.facts().facts_sorted(),
+                    exact.derivations().to_vec(),
+                    exact.budget(),
+                );
+                if let Some(prior) = &reference {
+                    assert_eq!(&answer, prior);
+                } else {
+                    reference = Some(answer);
+                }
+                for ceiling in [0, 17, expected - 1] {
+                    let error = evaluate_guarded(
+                        &exe,
+                        edb.clone(),
+                        &NoGuards,
+                        &EvalOptions::default().with_max_join_steps(ceiling),
+                        None,
+                    )
+                    .expect_err("total refusal");
+                    let EvalError::BudgetExhausted { resource, report } = error else {
+                        panic!("{error:?}");
+                    };
+                    assert_eq!(resource, BudgetResource::JoinSteps);
+                    assert_eq!(report.join_steps(), ceiling + 1);
+                    assert_eq!(
+                        report.stored_facts(),
+                        expected as usize,
+                        "no refused round commits"
+                    );
+                }
+            });
+        }
+    }
+
+    /// Full-width counters retain their final successful credit and latch a typed
+    /// refusal even when its observation cannot be represented above u64::MAX.
+    #[test]
+    fn full_width_admission_never_silently_truncates() {
+        let mut governor = StepGovernor::new(u64::MAX);
+        governor.pool.used.store(u64::MAX - 1, Ordering::Relaxed);
+        assert!(governor.charge());
+        assert!(!governor.spent());
+        assert_eq!(governor.observed(), u64::MAX);
+        assert!(!governor.charge());
+        assert!(governor.spent());
+        assert_eq!(governor.observed(), u64::MAX);
+        assert!(!governor.task().charge());
+
+        let rule = DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")]);
+        let plan = RulePlan::for_rule(&rule);
+        let runtime = RuleRuntime::new(&rule, &plan);
+        let edb = store_of(&[
+            ("https://example.org/a", P, "https://example.org/o"),
+            ("https://example.org/b", P, "https://example.org/o"),
+        ]);
+        let mut state =
+            FixpointState::seeded(edb, EvalOptions::default().with_max_join_steps(u64::MAX));
+        state.join_steps = u64::MAX - 1;
+        let entry = RuleEntry {
+            index: 0,
+            rule: &rule,
+            plan: &plan,
+            runtime: &runtime,
+            delta: Delta::all(2),
+        };
+        let round = evaluate_round(
+            &[entry],
+            RoundSnapshot {
+                rel: &state.rel,
+                depth: &state.depth,
+                assumed: &[],
+            },
+            RoundExecution::Parallel,
+            JoinStrategy::Planned,
+            state.allowance(),
+            &NoGuards,
+        )
+        .expect("round buffer");
+        assert!(round.join_refused);
+        let error = state
+            .absorb(round)
+            .expect_err("overflowed observation is a total refusal");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("full-width join-step limit")
+                && rendered.contains("observation saturates"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("this limit cannot be raised"),
+            "{rendered}"
+        );
+        let EvalError::BudgetExhausted { resource, report } = error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(resource, BudgetResource::JoinSteps);
+        assert_eq!(report.join_steps(), u64::MAX);
+        assert_eq!(report.join_step_limit(), u64::MAX);
+        assert_eq!(state.rel.row_count(), 2);
+        assert_eq!(state.derivations, []);
+    }
+
+    /// A terminal body row covers its first head only. A broad conjunctive head
+    /// cannot multiply unmetered owned candidates and proofs.
+    #[test]
+    fn wide_conjunctive_heads_are_admitted_before_owned_expansion() {
+        use crate::clause::HeadDisjunct;
+        use crate::schedule::{Layer, NoHooks, Schedule, compile_scheduled, evaluate_scheduled};
+        let head: Vec<_> = (0..128)
+            .map(|index| atom("?s", &format!("https://example.org/head{index}"), "?o"))
+            .collect();
+        let rule = DlClause::new(
+            vec![HeadDisjunct::new(head)],
+            Vec::new(),
+            vec![atom("?s", P, "?o")],
+        );
+        let program = compile_scheduled(
+            vec![rule],
+            Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
+        )
+        .expect("valid conjunctive scheduled rule");
+        let edb = store_of(&[("https://example.org/s", P, "https://example.org/o")]);
+        let exact = evaluate_scheduled(
+            &program,
+            edb.clone(),
+            &NoGuards,
+            &mut NoHooks,
+            &EvalOptions::default().with_max_join_steps(128),
+            None,
+        )
+        .expect("exact conjunctive credits");
+        assert_eq!(exact.budget().join_steps(), 128);
+        assert_eq!(exact.facts().row_count(), 129);
+        for ceiling in [0, 1, 127] {
+            let error = evaluate_scheduled(
+                &program,
+                edb.clone(),
+                &NoGuards,
+                &mut NoHooks,
+                &EvalOptions::default().with_max_join_steps(ceiling),
+                None,
+            )
+            .expect_err("conjunctive total refusal");
+            let EvalError::BudgetExhausted { resource, report } = error else {
+                panic!("{error:?}");
+            };
+            assert_eq!(resource, BudgetResource::JoinSteps);
+            assert_eq!(report.join_steps(), ceiling + 1);
+            assert_eq!(report.stored_facts(), 1);
+        }
+    }
+
+    /// Negative existence probes must bound broad partition traversal even when
+    /// every addressed subject/object index is empty.
+    #[test]
+    fn negative_empty_partition_traversal_has_exact_admission_boundaries() {
+        use crate::schedule::{Layer, NoHooks, Schedule, compile_scheduled, evaluate_scheduled};
+        let mut edb = store_of(&[("https://example.org/a", P, "https://example.org/o")]);
+        for index in 0..1000 {
+            edb.insert(
+                &surface("https://example.org/b"),
+                &surface(&format!("https://example.org/other{index}")),
+                &surface("https://example.org/other-object"),
+                RelationStore::DEFAULT_GRAPH,
+            );
+        }
+        let subject = v("?s");
+        let predicate = v("?negative-predicate");
+        let object = iri("https://example.org/other-object");
+        let single = DlClause::datalog(
+            atom("?s", Q, "?o"),
+            vec![
+                atom("?s", P, "?o"),
+                ClauseAtom::negated_quad(
+                    subject.clone(),
+                    predicate.clone(),
+                    object.clone(),
+                    ClauseTerm::default_graph(),
+                ),
+            ],
+        );
+        let group = DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")])
+            .with_negations(vec![Negation::new(
+                vec![ClauseAtom::quad(
+                    subject,
+                    predicate,
+                    object,
+                    ClauseTerm::default_graph(),
+                )],
+                Vec::new(),
+            )]);
+        for (rule, credits) in [(single, 1002), (group, 1003)] {
+            let program = compile_scheduled(
+                vec![rule],
+                Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
+            )
+            .expect("scheduled negative predicate probe");
+            let exact = evaluate_scheduled(
+                &program,
+                edb.clone(),
+                &NoGuards,
+                &mut NoHooks,
+                &EvalOptions::default().with_max_join_steps(credits),
+                None,
+            )
+            .expect("exact traversal credits");
+            assert_eq!(exact.budget().join_steps(), credits);
+            assert_eq!(exact.facts().row_count(), 1002);
+            for ceiling in [0, 17, credits - 1] {
+                let error = evaluate_scheduled(
+                    &program,
+                    edb.clone(),
+                    &NoGuards,
+                    &mut NoHooks,
+                    &EvalOptions::default().with_max_join_steps(ceiling),
+                    None,
+                )
+                .expect_err("empty-index traversal refused");
+                let EvalError::BudgetExhausted { resource, report } = error else {
+                    panic!("{error:?}");
+                };
+                assert_eq!(resource, BudgetResource::JoinSteps);
+                assert_eq!(report.join_steps(), ceiling + 1);
+                assert_eq!(report.stored_facts(), 1001);
+            }
+        }
+    }
+
+    /// Consumer admission bounds a large callback Vec before cloning bindings and
+    /// computed surfaces. The caller's own eager Vec allocation is a separate seam.
+    #[test]
+    fn guard_rows_and_negative_callbacks_cannot_expand_past_shared_credits() {
+        use crate::guard::GuardReads;
+        struct Rows {
+            calls: AtomicU64,
+            count: usize,
+            keep: bool,
+        }
+        impl GuardEvaluator for Rows {
+            fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                Ok(if !self.keep {
+                    Vec::new()
+                } else {
+                    (0..self.count)
+                        .map(|row| {
+                            call.guard
+                                .outputs()
+                                .iter()
+                                .map(|_| surface(&format!("https://example.org/fresh{row}")))
+                                .collect()
+                        })
+                        .collect()
+                })
+            }
+        }
+        let edb = store_of(&[("https://example.org/s", P, "https://example.org/o")]);
+        let producer = DlClause::datalog(atom("?s", Q, "?fresh"), vec![atom("?s", P, "?o")])
+            .with_guards(vec![Guard::new(
+                "rows",
+                vec!["?s".into()],
+                vec!["?fresh".into()],
+                GuardReads::Bindings,
+            )]);
+        let exe = compile(vec![producer]).expect("valid producer");
+        let rows = Rows {
+            calls: AtomicU64::new(0),
+            count: 10000,
+            keep: true,
+        };
+        for limit in [0, 1, 17] {
+            rows.calls.store(0, Ordering::Relaxed);
+            let error = evaluate_guarded(
+                &exe,
+                edb.clone(),
+                &rows,
+                &EvalOptions::default().with_max_join_steps(limit),
+                None,
+            )
+            .expect_err("producer refused");
+            let EvalError::BudgetExhausted { resource, report } = error else {
+                panic!("{error:?}");
+            };
+            assert_eq!(resource, BudgetResource::JoinSteps);
+            assert_eq!(report.join_steps(), limit + 1);
+            assert_eq!(report.stored_facts(), 1);
+            assert_eq!(rows.calls.load(Ordering::Relaxed), u64::from(limit != 0));
+        }
+        let exact = evaluate_guarded(
+            &exe,
+            edb.clone(),
+            &rows,
+            &EvalOptions::default().with_max_join_steps(10001),
+            None,
+        )
+        .expect("exact producer boundary");
+        assert_eq!(exact.budget().join_steps(), 10001);
+        assert_eq!(exact.facts().row_count(), 10001);
+        assert!(matches!(
+            evaluate_guarded(
+                &exe,
+                edb.clone(),
+                &rows,
+                &EvalOptions::default().with_max_join_steps(10000),
+                None
+            ),
+            Err(EvalError::BudgetExhausted { .. })
+        ));
+        let mut negative_edb = edb;
+        for row in 0..100 {
+            negative_edb.insert(
+                &surface("https://example.org/s"),
+                &surface(R),
+                &surface(&format!("https://example.org/n{row}")),
+                RelationStore::DEFAULT_GRAPH,
+            );
+        }
+        let negative = DlClause::datalog(atom("?s", Q, "?o"), vec![atom("?s", P, "?o")])
+            .with_negations(vec![Negation::new(
+                vec![atom("?s", R, "?local")],
+                vec![Guard::new(
+                    "reject",
+                    vec!["?local".into()],
+                    vec![],
+                    GuardReads::Bindings,
+                )],
+            )]);
+        let exe = compile(vec![negative]).expect("valid negative traversal");
+        let multirow = Rows {
+            calls: AtomicU64::new(0),
+            count: 10000,
+            keep: true,
+        };
+        let error = evaluate_guarded(
+            &exe,
+            negative_edb.clone(),
+            &multirow,
+            &EvalOptions::default().with_max_join_steps(17),
+            None,
+        )
+        .expect_err("negative callback rows are admitted too");
+        let EvalError::BudgetExhausted { report, .. } = error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(report.join_steps(), 18);
+        assert_eq!(report.stored_facts(), 101);
+        assert_eq!(multirow.calls.load(Ordering::Relaxed), 1);
+        let reject = Rows {
+            calls: AtomicU64::new(0),
+            count: 0,
+            keep: false,
+        };
+        for limit in [0, 1, 17] {
+            reject.calls.store(0, Ordering::Relaxed);
+            let error = evaluate_guarded(
+                &exe,
+                negative_edb.clone(),
+                &reject,
+                &EvalOptions::default().with_max_join_steps(limit),
+                None,
+            )
+            .expect_err("negative traversal refused");
+            let EvalError::BudgetExhausted { report, .. } = error else {
+                panic!("{error:?}");
+            };
+            assert_eq!(report.join_steps(), limit + 1);
+            assert_eq!(report.stored_facts(), 101);
+            assert!(reject.calls.load(Ordering::Relaxed) <= limit / 2);
+        }
+        let exact = evaluate_guarded(
+            &exe,
+            negative_edb.clone(),
+            &reject,
+            &EvalOptions::default().with_max_join_steps(203),
+            None,
+        )
+        .expect("one positive, group and partition admission, and two per negative row");
+        assert_eq!(exact.budget().join_steps(), 203);
+        assert_eq!(exact.facts().row_count(), 102);
+        assert!(matches!(
+            evaluate_guarded(
+                &exe,
+                negative_edb,
+                &reject,
+                &EvalOptions::default().with_max_join_steps(202),
+                None
+            ),
+            Err(EvalError::BudgetExhausted { .. })
+        ));
     }
 
     // ── The required refusal tests ──────────────────────────────────────────────
@@ -4820,8 +5663,9 @@ mod tests {
     /// it, and one fewer refuses it.
     #[test]
     fn the_join_step_ceiling_is_a_distinguishable_error() {
-        // The candidates the run enumerates: the n² pair joins and the atom scans around them.
-        const JOIN_STEPS_OBSERVED: u64 = 1_212_200;
+        // The productive initial variant scans n first atoms and n² pairs.
+        // The other initial variant requires an empty OldOnly suffix and is skipped.
+        const JOIN_STEPS_OBSERVED: u64 = 1_211_100;
         // sink(?c, ?c) :- src(?x, ?c), src(?y, ?c). One head fact, n^2 candidates.
         let src = "https://example.org/src";
         let sink = "https://example.org/sink";
@@ -5233,6 +6077,26 @@ mod tests {
             );
         }
         assert_eq!(Delta::all(4), Delta { lo: 0, hi: 4 });
+    }
+
+    #[test]
+    fn only_a_delta_covering_the_whole_snapshot_eliminates_old_suffixes() {
+        let rel = store_of(&[("a", P, "b"), ("b", Q, "c"), ("c", R, "d")]);
+        let positions = |delta| JoinSnapshot { rel: &rel, delta }.delta_positions(3);
+        assert_eq!(positions(Delta::all(3)), 2..3);
+        // Later rounds keep the first and middle anchors, whose OldOnly suffixes
+        // can match older facts. A prefix delta is not the whole frozen store.
+        assert_eq!(positions(Delta { lo: 1, hi: 3 }), 0..3);
+        assert_eq!(positions(Delta { lo: 0, hi: 2 }), 0..3);
+        assert_eq!(positions(Delta { lo: 2, hi: 3 }), 0..3);
+        assert_eq!(
+            JoinSnapshot {
+                rel: &rel,
+                delta: Delta::all(3)
+            }
+            .delta_positions(0),
+            0..0
+        );
     }
 
     /// The scan-mode selector is the semi-naive position decomposition.

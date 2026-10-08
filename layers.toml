@@ -60,7 +60,7 @@ deps = []
 
 [[crate]]
 name = "helper-census"
-deps = ["purrdf-hash", "purrdf-lex", "purrdf-testkit"]
+deps = ["purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-testkit"]
 
 [[crate]]
 name = "purrdf-deflate"
