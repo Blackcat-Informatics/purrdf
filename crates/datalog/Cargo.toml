@@ -52,6 +52,7 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 purrdf-testkit = { workspace = true }
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 # Semi-naive join latency along the three axes a join's cost actually has: the
@@ -60,4 +61,10 @@ purrdf-testkit = { workspace = true }
 # evaluator previously had no bench of its own — the nearest measured it through a
 # regime's rule table. Report-only.
 name = "seminaive"
+harness = false
+
+# The same production evaluator and proof assertions execute natively and in Node
+# through the workspace wasm runner; no libtest runtime is assumed on wasm32.
+[[test]]
+name = "rules_runtime"
 harness = false

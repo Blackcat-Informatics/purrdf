@@ -123,3 +123,13 @@ harness = false
 [[bench]]
 name = "pack_input_alloc"
 harness = false
+
+# Native qualification tools are separate executable observers, never benchmarked
+# by the workspace test harness and never shipped as production commands.
+[[example]]
+name = "rules_campaign"
+test = false
+
+[[example]]
+name = "rules_alloc"
+test = false

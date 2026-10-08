@@ -340,50 +340,74 @@ fn atom_has_repeated_variable(atom: &ClauseAtom) -> bool {
     })
 }
 
-/// Deterministic sideways-information-passing order for an acyclic positive body.
+/// Static selectivity of one atom at the current binding frontier.
 ///
-/// With no store in hand, cardinalities cannot be consulted soundly — a plan must stay
-/// store-independent. The static information available at plan time is still worth a
-/// great deal: prefer atoms with more already-bound or constant positions, then more
-/// constants, then a repeated-variable equality, and finally the authored position.
-/// After an atom is chosen, all of its variables become bound for subsequent choices.
+/// A shared bound VARIABLE connects the atom to the current join; a shared constant
+/// does not. Connectivity takes precedence over known-position, constant and repeated-
+/// variable counts, so a selective disconnected atom cannot force a cross product while
+/// a connected atom remains. All four positions participate, including predicate/graph.
+fn atom_priority(atom: &ClauseAtom, bound: &BTreeSet<String>) -> (bool, usize, usize, usize) {
+    let connected = atom
+        .terms()
+        .into_iter()
+        .any(|term| matches!(term, ClauseTerm::Var(variable) if bound.contains(variable)));
+    let known = atom
+        .terms()
+        .into_iter()
+        .filter(|term| term_is_known(term, bound))
+        .count();
+    let constants = atom
+        .terms()
+        .into_iter()
+        .filter(|term| !term.is_var())
+        .count();
+    (
+        connected,
+        known,
+        constants,
+        usize::from(atom_has_repeated_variable(atom)),
+    )
+}
+
+/// The one binding-aware selection loop for ordinary atoms and certified join groups.
 ///
-/// The counts range over all FOUR positions, so an atom whose predicate is already bound —
-/// `prp-dom`'s `T(?x, ?p, ?y)` once `?p` is known — outranks one whose predicate is still
-/// free, which is exactly the ordering that keeps a variable-predicate rule addressing one
-/// partition instead of sweeping them.
-///
-/// Every component of the key is a plan-time integer and the last component is the
-/// authored position, which is unique — so the maximum is unique and the order is stable.
-fn sips_order(rule: &DlClause, positive: &[usize]) -> Vec<usize> {
-    let mut remaining: Vec<usize> = (0..positive.len()).collect();
+/// The priority includes a unique authored coordinate as its last component. Each choice
+/// extends the binding frontier before the next choice; no store history participates.
+fn binding_aware_order<T>(
+    mut remaining: Vec<T>,
+    priority: impl Fn(&T, &BTreeSet<String>) -> (bool, usize, usize, usize, usize),
+    bind: impl Fn(&T, &mut BTreeSet<String>),
+) -> Vec<T> {
     let mut bound = BTreeSet::new();
-    let mut order = Vec::with_capacity(positive.len());
+    let mut order = Vec::with_capacity(remaining.len());
     while !remaining.is_empty() {
-        let (slot, &positive_position) = remaining
+        let slot = remaining
             .iter()
             .enumerate()
-            .max_by_key(|&(_, &positive_position)| {
-                let atom = &rule.body()[positive[positive_position]];
-                let known = atom
-                    .terms()
-                    .into_iter()
-                    .filter(|term| term_is_known(term, &bound))
-                    .count();
-                let constants = atom
-                    .terms()
-                    .into_iter()
-                    .filter(|term| !term.is_var())
-                    .count();
-                let repeated = usize::from(atom_has_repeated_variable(atom));
-                (known, constants, repeated, usize::MAX - positive_position)
-            })
-            .expect("a non-empty remaining set has a best atom");
-        remaining.remove(slot);
-        order.push(positive_position);
-        bind_atom_variables(&rule.body()[positive[positive_position]], &mut bound);
+            .max_by_key(|&(_, item)| priority(item, &bound))
+            .expect("a non-empty remaining set has a best item")
+            .0;
+        let item = remaining.remove(slot);
+        bind(&item, &mut bound);
+        order.push(item);
     }
     order
+}
+
+/// Deterministic sideways-information-passing order for an acyclic positive body.
+///
+/// Connected atoms run first; ties retain the known/constant/repeated-variable preference
+/// and finally authored position. After a choice, all of its variables become bound.
+fn sips_order(rule: &DlClause, positive: &[usize]) -> Vec<usize> {
+    binding_aware_order(
+        (0..positive.len()).collect(),
+        |&position, bound| {
+            let (connected, known, constants, repeated) =
+                atom_priority(&rule.body()[positive[position]], bound);
+            (connected, known, constants, repeated, usize::MAX - position)
+        },
+        |&position, bound| bind_atom_variables(&rule.body()[positive[position]], bound),
+    )
 }
 
 // ── Lowered operators ───────────────────────────────────────────────────────────
@@ -715,6 +739,47 @@ pub enum JoinGroup {
     Binary(PlannedAtom),
     /// One certified cyclic component evaluated as a multiway leapfrog join.
     Leapfrog(CyclicPlan),
+}
+
+impl JoinGroup {
+    /// The group's atoms, in authored positive-body order.
+    fn atoms(&self) -> &[PlannedAtom] {
+        match self {
+            Self::Binary(atom) => std::slice::from_ref(atom),
+            Self::Leapfrog(plan) => plan.atoms(),
+        }
+    }
+}
+
+/// Apply the same binding frontier to binary atoms and whole certified cycles.
+///
+/// A group connects when ANY member shares a bound variable. Its best member supplies
+/// the remaining selectivity preferences, and its earliest authored atom breaks ties.
+/// Selecting a cycle binds all of its variables without changing its internal descent.
+fn sips_group_order(rule: &DlClause, groups: Vec<JoinGroup>) -> Vec<JoinGroup> {
+    binding_aware_order(
+        groups,
+        |group, bound| {
+            let atoms = group.atoms();
+            let (connected, known, constants, repeated) = atoms
+                .iter()
+                .map(|atom| atom_priority(&rule.body()[atom.body_index], bound))
+                .max()
+                .expect("a join group contains at least one atom");
+            (
+                connected,
+                known,
+                constants,
+                repeated,
+                usize::MAX - atoms[0].positive_position,
+            )
+        },
+        |group, bound| {
+            for atom in group.atoms() {
+                bind_atom_variables(&rule.body()[atom.body_index], bound);
+            }
+        },
+    )
 }
 
 /// A disjoint-set forest over variable nodes, with path halving and union by size.
@@ -1105,7 +1170,6 @@ impl RulePlan {
         // non-cycle atom stays a binary group at its own authored position.
         let mut cyclic: Vec<Option<CyclicPlan>> = cyclic.into_iter().map(Some).collect();
         let mut join_groups = Vec::new();
-        let mut execution_source_order = Vec::with_capacity(positive.len());
         for (positive_position, &body_index) in positive.iter().enumerate() {
             let atom = PlannedAtom {
                 body_index,
@@ -1114,18 +1178,18 @@ impl RulePlan {
             match component_of[atom.body_index] {
                 Some(component) => {
                     if let Some(plan) = cyclic[component].take() {
-                        execution_source_order
-                            .extend(plan.atoms.iter().map(|a| a.positive_position));
                         join_groups.push(JoinGroup::Leapfrog(plan));
                     }
                 }
-                None => {
-                    execution_source_order.push(atom.positive_position);
-                    join_groups.push(JoinGroup::Binary(atom));
-                }
+                None => join_groups.push(JoinGroup::Binary(atom)),
             }
         }
 
+        let join_groups = sips_group_order(rule, join_groups);
+        let execution_source_order: Vec<usize> = join_groups
+            .iter()
+            .flat_map(|group| group.atoms().iter().map(|atom| atom.positive_position))
+            .collect();
         let source_order_swaps = restore_body_order_swaps(&execution_source_order);
         let operators = lower_operators(rule, &positive, &execution_source_order, &slots);
         let operator_source_order_swaps = restore_body_order_swaps(&execution_source_order);
@@ -1541,6 +1605,106 @@ mod tests {
         assert_eq!(plan.operator_source_order_swaps(), [(0, 1)]);
     }
 
+    /// The connecting edge must run before another selective type atom. Even sharing
+    /// every constant (predicate, class and default graph) does not connect variables.
+    #[test]
+    fn plan_sips_connects_before_scanning_another_type() {
+        for other_class in ["https://example.org/A", "https://example.org/B"] {
+            let rule = DlClause::datalog(
+                atom("?v", S, "?s"),
+                vec![
+                    ClauseAtom::positive(v("?v"), P, ClauseTerm::iri("https://example.org/A")),
+                    ClauseAtom::positive(v("?s"), P, ClauseTerm::iri(other_class)),
+                    atom("?v", Q, "?s"),
+                ],
+            );
+            let plan = RulePlan::for_rule(&rule);
+            assert_eq!(
+                plan.operators()
+                    .iter()
+                    .map(AtomOperator::positive_position)
+                    .collect::<Vec<_>>(),
+                [0, 2, 1],
+                "class {other_class}: the edge connects the two type variables"
+            );
+            assert_eq!(plan.variables(), ["?v", "?s"]);
+            assert_eq!(plan.operator_at(2).index(), IndexChoice::Subject);
+            assert_eq!(plan.operator_at(1).index(), IndexChoice::Both);
+            assert_eq!(plan.operator_source_order_swaps(), [(1, 2)]);
+            assert!(!plan.has_cyclic_subplan());
+        }
+    }
+
+    /// Predicate and graph bindings connect an atom even when its subject/object remain
+    /// free and an independent atom has strictly more known constant positions.
+    #[test]
+    fn plan_sips_connects_through_predicate_and_graph_variables() {
+        for (position, connected) in [
+            (
+                POSITION_PREDICATE,
+                ClauseAtom::quad(v("?s"), v("?key"), v("?o"), ClauseTerm::DefaultGraph),
+            ),
+            (
+                POSITION_GRAPH,
+                ClauseAtom::quad(v("?s"), ClauseTerm::iri(Q), v("?o"), v("?key")),
+            ),
+        ] {
+            let rule = DlClause::datalog(
+                atom("?s", S, "?o"),
+                vec![
+                    ClauseAtom::positive(
+                        v("?key"),
+                        P,
+                        ClauseTerm::iri("https://example.org/Class"),
+                    ),
+                    ClauseAtom::positive(
+                        v("?independent"),
+                        P,
+                        ClauseTerm::iri("https://example.org/Class"),
+                    ),
+                    connected,
+                ],
+            );
+            let plan = RulePlan::for_rule(&rule);
+            assert_eq!(
+                plan.operators()
+                    .iter()
+                    .map(AtomOperator::positive_position)
+                    .collect::<Vec<_>>(),
+                [0, 2, 1],
+                "connection in position {position} outranks disconnected constants"
+            );
+            let shape = plan.operator_at(2).shape();
+            assert_eq!(shape.positions()[position], PositionPlan::Bound(0));
+            assert_eq!(plan.operator_at(2).index(), IndexChoice::Any);
+            assert_eq!(plan.variables(), ["?key", "?independent", "?s", "?o"]);
+        }
+    }
+
+    /// With no connected choice, the repeated-variable equality still outranks an
+    /// otherwise identical shape; the remaining equal shapes retain authored order.
+    #[test]
+    fn plan_sips_preserves_repetition_and_authored_ties() {
+        let rule = DlClause::datalog(
+            atom("?X", S, "?Y"),
+            vec![
+                atom("?X", P, "?Y"),
+                atom("?Z", Q, "?Z"),
+                atom("?W", R, "?U"),
+            ],
+        );
+        let plan = RulePlan::for_rule(&rule);
+        assert_eq!(
+            plan.operators()
+                .iter()
+                .map(AtomOperator::positive_position)
+                .collect::<Vec<_>>(),
+            [1, 0, 2]
+        );
+        assert_eq!(plan.operator_at(1).shape().equalities(), [(0, 2)]);
+        assert!(!plan.has_cyclic_subplan());
+    }
+
     /// Every subject/object term shape is selected statically, and a fully ground atom
     /// becomes a membership probe with both surfaces rendered once.
     #[test]
@@ -1855,6 +2019,58 @@ mod tests {
         assert_eq!(bridge.positive_position(), 3);
         assert_eq!(bridge.body_index(), 3);
         assert_eq!(plan.operators().len(), 4, "every positive atom is lowered");
+    }
+
+    /// Binary bridges and cycles share the binding frontier. Here the first cycle atom
+    /// has no bound variable; its later members connect through Z, so the WHOLE group
+    /// must outrank the independent type rather than testing only its first atom.
+    #[test]
+    fn hybrid_sips_connects_bridges_and_any_member_of_a_cycle() {
+        let mut body = vec![
+            ClauseAtom::positive(v("?V"), P, ClauseTerm::iri("https://example.org/A")),
+            ClauseAtom::positive(v("?U"), P, ClauseTerm::iri("https://example.org/B")),
+            atom("?V", S, "?Z"),
+        ];
+        body.extend(triangle_body());
+        let plan = RulePlan::for_rule(&triangle_rule(body));
+        assert!(plan.has_cyclic_subplan());
+        let groups = plan.join_groups();
+        assert_eq!(groups.len(), 4);
+        assert!(matches!(groups[0], JoinGroup::Binary(atom) if atom.positive_position() == 0));
+        assert!(matches!(groups[1], JoinGroup::Binary(atom) if atom.positive_position() == 2));
+        assert!(matches!(groups[3], JoinGroup::Binary(atom) if atom.positive_position() == 1));
+        let JoinGroup::Leapfrog(cycle) = &groups[2] else {
+            panic!("the connected cycle must precede the independent type");
+        };
+        assert_eq!(
+            cycle
+                .atoms()
+                .iter()
+                .map(|atom| (atom.body_index(), atom.positive_position()))
+                .collect::<Vec<_>>(),
+            [(3, 3), (4, 4), (5, 5)]
+        );
+        assert_eq!(cycle.variables(), ["?Z", "?X", "?Y"]);
+        assert_eq!(cycle.variable_slots(), [2, 3, 4]);
+        assert_eq!(plan.variables(), ["?V", "?U", "?Z", "?X", "?Y"]);
+        let order: Vec<usize> = plan
+            .operators()
+            .iter()
+            .map(AtomOperator::positive_position)
+            .collect();
+        assert_eq!(order, [0, 2, 3, 4, 5, 1]);
+        assert_eq!(plan.operator_at(2).index(), IndexChoice::Subject);
+        assert_eq!(plan.operator_at(3).index(), IndexChoice::Any);
+        assert_eq!(plan.operator_at(4).index(), IndexChoice::Both);
+        assert_eq!(
+            plan.operator_source_order_swaps(),
+            plan.hybrid_source_order_swaps()
+        );
+        let mut restored = order;
+        for &(left, right) in plan.hybrid_source_order_swaps() {
+            restored.swap(left, right);
+        }
+        assert_eq!(restored, [0, 1, 2, 3, 4, 5]);
     }
 
     /// An acyclic plan allocates no group sidecar, and asking for one is a hard error
