@@ -1574,7 +1574,9 @@ pub(crate) mod tests {
         // Resolve the actual SDK Cargo rather than a managed wrapper that may
         // inject configuration. These subprocesses query only; none compiles.
         let cargo = sdk_cargo();
-        let holder = purrdf_testkit::temp_dir!().unwrap();
+        // env_clear/CARGO_HOME do not disable Cargo's ancestor configuration
+        // discovery; keep the absence probe outside the developer's home tree.
+        let holder = purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
         let root = holder.path();
         let query = || {
             query_configuration(

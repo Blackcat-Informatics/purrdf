@@ -377,6 +377,12 @@ jobs:
         if: matrix.shard == 'lib'
         uses: ./.github/actions/binaryen-toolchain
 
+      - name: Provision the owned native profiling fixture parent
+        if: matrix.shard == 'integration-2'
+        run: |
+          sudo mkdir -p /opt/purrdf-native-profile-tests
+          sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
+
       - name: Run workspace tests (this shard; the six include the doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
         # vector path of each family this job requires; the distance, kNN and HNSW
@@ -1436,6 +1442,8 @@ jobs:
           sudo mkdir -p "$campaign"
           sudo chown -R "$(id -u):$(id -g)" "$campaign"
           date +%s%N > "$campaign/setup-start.txt"
+          sudo mkdir -p /opt/purrdf-native-profile-tests
+          sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
           mkdir -p "$campaign/resources"
           cp "$campaign/setup-start.txt" "$campaign/resources/setup-start.txt"
           df -h /opt > "$campaign/resources/setup-disk-before.txt"

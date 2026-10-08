@@ -42,6 +42,23 @@ Node; `make check`, `make test`, and `cargo test --workspace` require it. CI
 installs Node.js 24 explicitly. The oracle is mandatory and does not skip when
 Node is absent.
 
+The host-only native profiling safety and Cargo configuration tests require a writable, owned
+`/opt/purrdf-native-profile-tests` parent, independently of Cargo's target
+directory. Provision it once before `make check`, `make test`, workspace Cargo
+tests, or the `native_profile` integration target:
+
+```bash
+sudo mkdir -p /opt/purrdf-native-profile-tests
+sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
+```
+
+Tests create exclusive temporary children there and remove only their own
+children. An unavailable parent fails the tests; they do not change permissions
+or substitute another path. CI provisions it before the relevant native shard
+and before profiling measurements. The configuration absence probe also requires
+no ancestor Cargo configuration above that parent: clearing the environment and
+selecting an isolated `CARGO_HOME` do not disable Cargo's ancestor discovery.
+
 ```bash
 make doctor     # what this machine actually enforces (run when a gate prints SKIP)
 make metadata   # regenerate + verify generated artifacts (loss matrices, queries)

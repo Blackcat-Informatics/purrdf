@@ -33,6 +33,7 @@ cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.
 cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
 "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt""#;
 const RECLAMATION: &str = "\"$PURRDF_HOSTED_CONTROLLER\" hosted-reclaim \"$PROFILE_CASE\"";
+const FIXTURE_SETUP: &str = "sudo mkdir -p /opt/purrdf-native-profile-tests\nsudo chown \"$(id -u):$(id -g)\" /opt/purrdf-native-profile-tests";
 
 fn selection(case: &str) -> IoResult<(&str, bool)> {
     if case == "profile-before-capi" {
@@ -222,6 +223,35 @@ fn workflow_contract(text: &str) -> IoResult<()> {
         }
     }
     serial_workflow(jobs)?;
+    let steps = jobs
+        .pointer("/test-shard/steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("native shard steps missing"))?;
+    let execution = steps
+        .iter()
+        .position(|step| {
+            step.get("run").and_then(Value::as_str)
+                == Some("make test-shard SHARD=${{ matrix.shard }}")
+        })
+        .ok_or_else(|| invalid("native shard execution missing"))?;
+    let provision = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| {
+            step.get("run")
+                .and_then(Value::as_str)
+                .is_some_and(|run| run.trim() == FIXTURE_SETUP)
+        })
+        .collect::<Vec<_>>();
+    if provision.len() != 1
+        || provision[0].0 >= execution
+        || provision[0].1.get("if").and_then(Value::as_str)
+            != Some("matrix.shard == 'integration-2'")
+    {
+        return Err(invalid(
+            "one owned fixture parent setup must precede only the native integration-2 shard",
+        ));
+    }
     for job in [
         "native-profile-admission",
         "native-profile",
@@ -353,6 +383,40 @@ fn serial_workflow(jobs: &Value) -> IoResult<()> {
         .iter()
         .position(|step| step.get("id").and_then(Value::as_str) == Some("profile-setup"))
         .ok_or_else(|| invalid("shared setup missing"))?;
+    let fixture_setup = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| {
+            step.get("run")
+                .and_then(Value::as_str)
+                .is_some_and(|run| run.contains(FIXTURE_SETUP))
+        })
+        .collect::<Vec<_>>();
+    if fixture_setup.len() != 1
+        || fixture_setup[0].0 >= setup_index
+        || fixture_setup[0].1.get("if").is_some()
+    {
+        return Err(invalid(
+            "owned fixture parent setup must be inside shared setup before measurements",
+        ));
+    }
+    let fixture_run = fixture_setup[0]
+        .1
+        .get("run")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("fixture setup command missing"))?;
+    let start = fixture_run
+        .find("date +%s%N > \"$campaign/setup-start.txt\"")
+        .ok_or_else(|| invalid("fixture provisioning must follow the observed setup start"))?;
+    if start
+        >= fixture_run
+            .find(FIXTURE_SETUP)
+            .ok_or_else(|| invalid("fixture provisioning missing"))?
+    {
+        return Err(invalid(
+            "fixture provisioning must follow the observed setup start",
+        ));
+    }
     if steps[..=setup_index]
         .iter()
         .any(|step| step.pointer("/env/PROFILE_CASE").is_some())
@@ -984,6 +1048,51 @@ mod tests {
     fn actual_workflow_preserves_full_optional_inventory_and_failure_uploads() {
         let text = include_str!("../../../../.github/workflows/ci.yaml");
         workflow_contract(text).unwrap();
+        for job in ["test-shard", "native-profile"] {
+            for change in ["missing", "conditional", "late"] {
+                let mut workflow = purrdf_lex::yaml::read(text).unwrap();
+                let steps = workflow
+                    .pointer_mut(&format!("/jobs/{job}/steps"))
+                    .unwrap()
+                    .as_array_mut()
+                    .unwrap();
+                let position = steps
+                    .iter()
+                    .position(|step| {
+                        step.get("run")
+                            .and_then(Value::as_str)
+                            .is_some_and(|run| run.contains(FIXTURE_SETUP))
+                    })
+                    .unwrap();
+                match change {
+                    "missing" => {
+                        steps.remove(position);
+                    }
+                    "conditional" => {
+                        steps[position]
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("if", "matrix.shard == 'lib'");
+                    }
+                    "late" => {
+                        let provision = steps.remove(position);
+                        steps.push(provision);
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    workflow_contract(&purrdf_lex::yaml::write(&workflow)).is_err(),
+                    "{job}: {change}"
+                );
+            }
+        }
+        assert!(
+            workflow_contract(&text.replace(
+                "date +%s%N > \"$campaign/setup-start.txt\"\n          sudo mkdir",
+                "echo unobserved-setup\n          sudo mkdir",
+            ))
+            .is_err()
+        );
         assert!(
             workflow_contract(&text.replace(
                 "PROFILE_CASE: after-integration-4",
@@ -1141,7 +1250,8 @@ mod tests {
 
     #[test]
     fn uploaded_case_reclamation_preserves_proof_and_all_siblings() {
-        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let temporary =
+            purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
         let directory = temporary.path().join("case");
         retained_case(&directory);
         for name in ["source", "controller-target", "sibling"] {
@@ -1186,7 +1296,8 @@ mod tests {
             "changed-child",
             "wrong-lane",
         ] {
-            let temporary = purrdf_testkit::temp_dir!().unwrap();
+            let temporary =
+                purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
             let directory = temporary.path().join("case");
             retained_case(&directory);
             let path = directory.join("lib-warm-receipt.json");
@@ -1245,7 +1356,8 @@ mod tests {
 
     #[test]
     fn private_cache_boundaries_and_upload_outputs_are_mandatory() {
-        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let temporary =
+            purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
         let directory = temporary.path().join("case");
         retained_case(&directory);
         assert!(private_build_trees(&directory).is_ok());
@@ -1273,7 +1385,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_case_or_cache_never_reclaims_foreign_bytes() {
-        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let temporary =
+            purrdf_testkit::TempDir::new_in("/opt/purrdf-native-profile-tests").unwrap();
         let directory = temporary.path().join("case");
         retained_case(&directory);
         let foreign = temporary.path().join("foreign");
