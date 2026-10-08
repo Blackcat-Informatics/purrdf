@@ -287,9 +287,112 @@ fn independent_head_projects_without_cartesian_work() {
     }
 }
 
+fn recursive_factor_preserves_authored_proofs_and_typed_limits() {
+    use purrdf_datalog::guard::NoGuards;
+    use purrdf_datalog::seminaive::{BudgetResource, EvalError};
+
+    let reach = "https://example.org/reach";
+    let edge = "https://example.org/edge";
+    let condition = "https://example.org/condition";
+    let node = |index| format!("<https://example.org/node{index}>");
+    let program = compile(vec![DlClause::datalog(
+        ClauseAtom::positive(ClauseTerm::var("?x"), reach, ClauseTerm::var("?z")),
+        vec![
+            ClauseAtom::positive(ClauseTerm::var("?x"), reach, ClauseTerm::var("?y")),
+            ClauseAtom::positive(ClauseTerm::var("?y"), edge, ClauseTerm::var("?z")),
+            ClauseAtom::positive(
+                ClauseTerm::iri("https://example.org/enabled"),
+                condition,
+                ClauseTerm::iri("https://example.org/value"),
+            ),
+        ],
+    )])
+    .expect("recursive factor compiles");
+    let mut input = RelationStore::new();
+    input.insert(
+        "<https://example.org/enabled>",
+        &format!("<{condition}>"),
+        "<https://example.org/value>",
+        RelationStore::DEFAULT_GRAPH,
+    );
+    const N: usize = 16;
+    for index in 0..N - 1 {
+        for predicate in [reach, edge] {
+            input.insert(
+                &node(index),
+                &format!("<{predicate}>"),
+                &node(index + 1),
+                RelationStore::DEFAULT_GRAPH,
+            );
+        }
+    }
+    let run =
+        |options: &EvalOptions| evaluate_guarded(&program, input.clone(), &NoGuards, options, None);
+    let reference = run(&EvalOptions::default()).expect("default limits admit recursion");
+    assert_eq!(reference.derivations().len(), (N - 1) * (N - 2) / 2);
+    assert_eq!(
+        reference.facts().row_count(),
+        input.row_count() + reference.derivations().len()
+    );
+    for start in 0..N - 2 {
+        for end in start + 2..N {
+            let proof = reference
+                .derivations()
+                .iter()
+                .find(|proof| {
+                    proof.fact().subject == node(start) && proof.fact().object == node(end)
+                })
+                .expect("every inferred chain pair has a proof");
+            assert_eq!(proof.rule(), 0);
+            assert_eq!(proof.fact().predicate, format!("<{reach}>"));
+            assert_eq!(proof.fact().graph, RelationStore::DEFAULT_GRAPH);
+            let sources = proof.sources();
+            assert_eq!(sources.len(), 3);
+            for (source, subject, predicate, object) in [
+                (&sources[0], node(start), reach, node(end - 1)),
+                (&sources[1], node(end - 1), edge, node(end)),
+                (
+                    &sources[2],
+                    "<https://example.org/enabled>".into(),
+                    condition,
+                    "<https://example.org/value>".into(),
+                ),
+            ] {
+                assert_eq!(source.subject, subject);
+                assert_eq!(source.predicate, format!("<{predicate}>"));
+                assert_eq!(source.object, object);
+                assert_eq!(source.graph, RelationStore::DEFAULT_GRAPH);
+            }
+        }
+    }
+    let expected = reference.budget().join_steps();
+    let exact = run(&EvalOptions::default().with_max_join_steps(expected))
+        .expect("exact credits admit partial factor rounds");
+    assert_eq!(
+        exact.facts().facts_sorted(),
+        reference.facts().facts_sorted()
+    );
+    assert_eq!(exact.derivations(), reference.derivations());
+    assert_eq!(exact.budget().join_steps(), expected);
+    assert_eq!(
+        exact.budget().stored_facts(),
+        reference.budget().stored_facts()
+    );
+    for ceiling in [0, expected - 1] {
+        let error = run(&EvalOptions::default().with_max_join_steps(ceiling))
+            .expect_err("insufficient credits refuse without a partial result");
+        let EvalError::BudgetExhausted { resource, report } = error else {
+            panic!("{error:?}");
+        };
+        assert_eq!(resource, BudgetResource::JoinSteps);
+        assert_eq!(report.join_steps(), ceiling + 1);
+    }
+}
+
 purrdf_testkit::harness_main!(
     later_partial_delta_keeps_both_productive_anchors,
     original_guarded_pair_has_exact_connected_work_and_authored_proofs,
     connected_rule_restores_all_authored_premises,
-    independent_head_projects_without_cartesian_work
+    independent_head_projects_without_cartesian_work,
+    recursive_factor_preserves_authored_proofs_and_typed_limits
 );

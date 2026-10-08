@@ -1374,6 +1374,22 @@ enum Scan {
     OldOnly,
 }
 
+/// One shared scan selection for uniform factor modes and semi-naive anchors.
+#[derive(Debug, Clone, Copy)]
+enum JoinScan {
+    Uniform(Scan),
+    DeltaPosition(usize),
+}
+
+impl JoinScan {
+    fn at(self, position: usize) -> Scan {
+        match self {
+            Self::Uniform(scan) => scan,
+            Self::DeltaPosition(anchor) => scan_for(position, anchor),
+        }
+    }
+}
+
 /// The scan mode for a positive atom at `position`, given the round's delta position.
 #[inline]
 fn scan_for(position: usize, delta_position: usize) -> Scan {
@@ -1989,8 +2005,8 @@ struct LeapfrogRun<'a> {
     plan: &'a RulePlan,
     /// The certified component being descended.
     cycle: &'a CyclicPlan,
-    /// The round's semi-naive delta position.
-    delta_position: usize,
+    /// Uniform factor mode or the round's semi-naive delta position.
+    scan: JoinScan,
     /// The accumulated store.
     rel: &'a RelationStore,
     /// The round's delta span.
@@ -2017,7 +2033,7 @@ impl LeapfrogRun<'_> {
                 solution.sources.truncate(original);
                 return false;
             };
-            let scan = scan_for(planned.positive_position(), self.delta_position);
+            let scan = self.scan.at(planned.positive_position());
             let mut rows = partition.select(Bound::Both(subject, object));
             let mut matched = None;
             while let Some((subject, object, row)) = rows.next() {
@@ -2073,7 +2089,7 @@ impl LeapfrogRun<'_> {
             if subject_slot != variable_slot && object_slot != variable_slot {
                 continue;
             }
-            let scan = scan_for(planned.positive_position(), self.delta_position);
+            let scan = self.scan.at(planned.positive_position());
             let Some(partition) = cycle_atom_partition(shape, self.rel) else {
                 return;
             };
@@ -2298,7 +2314,7 @@ fn join_positive_leapfrog(
                     LeapfrogRun {
                         plan,
                         cycle,
-                        delta_position,
+                        scan: JoinScan::DeltaPosition(delta_position),
                         rel: snapshot.rel,
                         delta: snapshot.delta,
                     },

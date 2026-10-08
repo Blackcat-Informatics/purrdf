@@ -4,16 +4,18 @@
 //! Independent positive relations and exact projected witness frontiers.
 //!
 //! This is a private physical path through the ordinary join and emission kernels.
-//! It never collapses a callback's input multiplicity. Each factor is evaluated once
-//! against the frozen store; mode tables borrow those matches, and only the product
-//! actually named by a head is visited. Source coordinates always remain authored.
+//! It never collapses a callback's input multiplicity. Needed factor modes are matched
+//! against the frozen store; projection tables borrow the resulting relations, and
+//! only the product actually named by a head is visited. Partial rounds discover New
+//! first and build Old/Full context only for productive anchors. Source coordinates
+//! always remain authored.
 
 use super::{
     ATOM_ARITY, ArgShape, BTreeMap, BTreeSet, Delta, EvalError, GroupArg, GroupProbe, JoinGroup,
-    JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer, RoundSnapshot,
-    RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor, TermId, delta_can_match,
-    emit_solution, extend_slot_solutions, extend_solutions_leapfrog, source_heights,
-    source_preference,
+    JoinScan, JoinSnapshot, LeapfrogRun, NoGuards, PositionPlan, RelationStore, RoundBuffer,
+    RoundSnapshot, RuleEntry, RulePlan, RuleRuntime, Scan, SlotSolution, StepGovernor, TermId,
+    delta_can_match, emit_solution, extend_slot_solutions, extend_solutions_leapfrog,
+    source_heights, source_preference,
 };
 
 /// One component of the positive-variable incidence graph, including negative coupling.
@@ -154,13 +156,30 @@ fn full_matches(
     snapshot: RoundSnapshot<'_>,
     governor: &mut StepGovernor,
 ) -> Result<Vec<SlotSolution>, EvalError> {
+    factor_matches(
+        factor,
+        entry,
+        snapshot,
+        governor,
+        JoinScan::Uniform(Scan::Full),
+    )
+}
+
+/// Match one factor using the existing scan-aware binary and cyclic kernels.
+fn factor_matches(
+    factor: &Factor,
+    entry: RuleEntry<'_>,
+    snapshot: RoundSnapshot<'_>,
+    governor: &mut StepGovernor,
+    scan: JoinScan,
+) -> Result<Vec<SlotSolution>, EvalError> {
     let mut partial = vec![SlotSolution::empty(entry.plan.variables().len())];
     let binary = |position, partial: &[SlotSolution], governor: &mut StepGovernor| {
         extend_slot_solutions(
             entry.plan.operator_at(position),
             snapshot.rel,
             entry.delta,
-            Scan::Full,
+            scan.at(position),
             partial,
             governor,
         )
@@ -187,7 +206,7 @@ fn full_matches(
                     LeapfrogRun {
                         plan: entry.plan,
                         cycle,
-                        delta_position: usize::MAX,
+                        scan,
                         rel: snapshot.rel,
                         delta: entry.delta,
                     },
@@ -238,12 +257,85 @@ fn full_matches(
 /// A borrowed factor witness, with its content-derived numeric prefix.
 #[derive(Debug, Clone, Copy)]
 struct Witness<'a> {
-    /// The stored Full match; mode and projection tables never clone it.
+    /// The stored factor match; mode and projection tables never clone it.
     solution: &'a SlotSolution,
     /// Raw maximum source height, before the head's saturating increment.
     maximum: u32,
     /// Saturated sum of source heights.
     sum: u64,
+}
+
+/// Match only tuples containing a delta source, using disjoint last-new-atom anchors.
+fn new_matches(
+    factor: &Factor,
+    entry: RuleEntry<'_>,
+    snapshot: RoundSnapshot<'_>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<SlotSolution>, EvalError> {
+    let join = JoinSnapshot {
+        rel: snapshot.rel,
+        delta: entry.delta,
+    };
+    let mut matches = Vec::new();
+    for &position in &factor.positions {
+        if !delta_can_match(entry.plan.operator_at(position), join) {
+            continue;
+        }
+        matches.extend(factor_matches(
+            factor,
+            entry,
+            snapshot,
+            governor,
+            JoinScan::DeltaPosition(position),
+        )?);
+        if governor.spent() {
+            break;
+        }
+    }
+    Ok(matches)
+}
+
+/// Discover productive anchors before building the old/full context they actually need.
+fn partial_relations(
+    entry: RuleEntry<'_>,
+    snapshot: RoundSnapshot<'_>,
+    governor: &mut StepGovernor,
+) -> Result<Vec<Vec<SlotSolution>>, EvalError> {
+    let mut relations = Vec::with_capacity(entry.runtime.factors.len());
+    for factor in &entry.runtime.factors {
+        relations.push(new_matches(factor, entry, snapshot, governor)?);
+        if governor.spent() {
+            return Ok(Vec::new());
+        }
+    }
+    let productive: Vec<_> = relations
+        .iter()
+        .map(|matches| !matches.is_empty())
+        .collect();
+    if !productive.iter().any(|&active| active) {
+        return Ok(Vec::new());
+    }
+    for (position, factor) in entry.runtime.factors.iter().enumerate() {
+        if productive[..position].iter().any(|&active| active) {
+            // A preceding New anchor requires this factor Full. Reuse that owned
+            // relation for every mode instead of retaining a second New copy.
+            relations[position] = full_matches(factor, entry, snapshot, governor)?;
+        } else if productive[position + 1..].iter().any(|&active| active) {
+            // Only later anchors need this factor, so Full tuples are unnecessary:
+            // retain its discovered New tuples and match the disjoint Old context.
+            relations[position].extend(factor_matches(
+                factor,
+                entry,
+                snapshot,
+                governor,
+                JoinScan::Uniform(Scan::OldOnly),
+            )?);
+        }
+        if relations[position].is_empty() || governor.spent() {
+            return Ok(Vec::new());
+        }
+    }
+    Ok(relations)
 }
 
 /// Both prefix winners at a raw-height threshold.
@@ -314,7 +406,7 @@ impl<'a> Frontier<'a> {
     }
 }
 
-/// A projection table for Full, Old and New, all borrowing a single factor relation.
+/// Mode frontiers borrowing one frozen factor relation containing its needed modes.
 #[derive(Debug)]
 struct Projection<'a> {
     /// Any matching source tuple.
@@ -325,7 +417,7 @@ struct Projection<'a> {
     new: BTreeMap<Vec<TermId>, Frontier<'a>>,
 }
 
-/// Build all mode frontiers for one head's projection of one Full factor.
+/// Project one head's factor relation; callers consume only its required modes.
 fn project<'a>(
     matches: &'a [SlotSolution],
     slots: &[usize],
@@ -501,14 +593,23 @@ pub(super) fn evaluate<'r>(
         buffer.join_steps = governor.consumed;
         return Ok(buffer);
     }
-    let mut relations = Vec::with_capacity(entry.runtime.factors.len());
-    for factor in &entry.runtime.factors {
-        let matches = full_matches(factor, entry, snapshot, governor)?;
-        if matches.is_empty() || governor.spent() {
-            buffer.join_steps = governor.consumed;
-            return Ok(buffer);
+    let relations = if entry.delta == Delta::all(snapshot.rel.row_count()) {
+        let mut relations = Vec::with_capacity(entry.runtime.factors.len());
+        for factor in &entry.runtime.factors {
+            let matches = full_matches(factor, entry, snapshot, governor)?;
+            if matches.is_empty() || governor.spent() {
+                buffer.join_steps = governor.consumed;
+                return Ok(buffer);
+            }
+            relations.push(matches);
         }
-        relations.push(matches);
+        relations
+    } else {
+        partial_relations(entry, snapshot, governor)?
+    };
+    if relations.is_empty() {
+        buffer.join_steps = governor.consumed;
+        return Ok(buffer);
     }
     for head in &entry.runtime.head {
         let projections: Vec<_> = entry
@@ -799,6 +900,137 @@ mod tests {
         }
     }
 
+    /// A recursive component must join its delta, not rebuild the growing closure
+    /// merely because a separate ground precondition also occurs in the body.
+    #[test]
+    fn recursive_factor_with_ground_precondition_keeps_quadratic_work() {
+        let rule = DlClause::datalog(
+            atom("?x", A, "?z"),
+            vec![
+                atom("?x", A, "?y"),
+                atom("?y", B, "?z"),
+                ClauseAtom::positive(constant("enabled"), C, constant("value")),
+            ],
+        );
+        let exe = compile(vec![rule]).expect("positive recursion compiles");
+        for n in [32usize, 64, 128, 256] {
+            let mut input = vec![(
+                surface("enabled"),
+                format!("<{C}>"),
+                surface("value"),
+                RelationStore::DEFAULT_GRAPH.to_owned(),
+            )];
+            for position in 0..n - 1 {
+                for predicate in [A, B] {
+                    input.push((
+                        surface(&format!("node{position}")),
+                        format!("<{predicate}>"),
+                        surface(&format!("node{}", position + 1)),
+                        RelationStore::DEFAULT_GRAPH.to_owned(),
+                    ));
+                }
+            }
+            let run = |strategy| {
+                evaluate_with(
+                    &exe,
+                    seeded(&input),
+                    None,
+                    &NoGuards,
+                    EvalOptions::default(),
+                    RoundExecution::Sequential,
+                    strategy,
+                )
+                .expect("the complete chain fits unchanged default limits")
+            };
+            let planned = run(JoinStrategy::Planned);
+            let binary = run(JoinStrategy::ForcedBinary);
+            assert_eq!(
+                planned.facts().facts_sorted(),
+                binary.facts().facts_sorted()
+            );
+            assert_eq!(planned.derivations(), binary.derivations());
+            assert_eq!(planned.derivations().len(), (n - 1) * (n - 2) / 2);
+            assert!(
+                planned.budget().join_steps <= 4 * (n * n) as u64,
+                "recursive factor work must stay quadratic: n={n}, report={:?}",
+                planned.budget()
+            );
+        }
+    }
+
+    /// Partial-delta evaluation still reduces a large independent existential
+    /// dimension instead of returning to a cross-factor binary product.
+    #[test]
+    fn partial_delta_one_factor_heads_keep_additive_work_and_exact_witnesses() {
+        for reverse in [false, true] {
+            let mut body = vec![atom("?y", B, "?v"), atom("?x", A, "?u")];
+            if reverse {
+                body.reverse();
+            }
+            let rule = DlClause::datalog(
+                ClauseAtom::positive(ClauseTerm::var("?x"), Q, constant("result")),
+                body,
+            );
+            let plan = RulePlan::for_rule(&rule);
+            let runtime = RuleRuntime::new(&rule, &plan);
+            for n in [10usize, 100, 1000] {
+                let mut input = rows(n);
+                let old = input.len();
+                input.extend((0..n).map(|index| {
+                    (
+                        surface(&format!("new{index}")),
+                        format!("<{A}>"),
+                        surface("value"),
+                        RelationStore::DEFAULT_GRAPH.to_owned(),
+                    )
+                }));
+                let rel = seeded(&input);
+                let depth = vec![0; input.len()];
+                let snapshot = RoundSnapshot {
+                    rel: &rel,
+                    depth: &depth,
+                    assumed: &[],
+                };
+                let entry = RuleEntry {
+                    index: 0,
+                    rule: &rule,
+                    plan: &plan,
+                    runtime: &runtime,
+                    delta: Delta {
+                        lo: old,
+                        hi: input.len(),
+                    },
+                };
+                let mut governor = StepGovernor::new(u64::MAX);
+                let planned =
+                    super::evaluate(entry, snapshot, &mut governor).expect("partial factors match");
+                assert_eq!(planned.entries.len(), n);
+                assert!(
+                    governor.consumed <= 4 * n as u64,
+                    "unused existential products must remain additive"
+                );
+                if n == 1000 {
+                    // The small cases compare every exhaustive witness. This larger
+                    // growth control need not allocate a million oracle source frames.
+                    continue;
+                }
+                let binary = evaluate_rule(
+                    entry,
+                    snapshot,
+                    JoinStrategy::ForcedBinary,
+                    StepGovernor::new(u64::MAX),
+                    &NoGuards,
+                )
+                .expect("exhaustive partial join matches");
+                assert_eq!(planned.entries.len(), binary.entries.len());
+                for (key, candidate) in &planned.entries {
+                    let expected = binary.entries.get(key).expect("same projected fact");
+                    assert_eq!(candidate.source_facts(&rel), expected.source_facts(&rel));
+                }
+            }
+        }
+    }
+
     /// Stored Full relations and projected prefix entries grow additively. Mode
     /// frontiers retain borrowed source frames, not cloned Cartesian assignments.
     #[test]
@@ -922,6 +1154,248 @@ mod tests {
         }
     }
 
+    /// A certified cyclic factor supports uniform OldOnly and productive Delta
+    /// matching through the same cursors, including simultaneous factor anchors.
+    #[test]
+    fn partial_hybrid_factor_modes_preserve_exhaustive_witnesses() {
+        let independent = "https://example.org/independent";
+        let rule = DlClause::datalog(
+            atom("?x", Q, "?y"),
+            vec![
+                atom("?x", A, "?y"),
+                atom("?y", B, "?z"),
+                atom("?z", C, "?x"),
+                atom("?u", independent, "?v"),
+            ],
+        );
+        let plan = RulePlan::for_rule(&rule);
+        assert!(plan.has_cyclic_subplan());
+        let runtime = RuleRuntime::new(&rule, &plan);
+        assert_eq!(runtime.factors.len(), 2);
+        let mut input = Vec::new();
+        for index in 0..2 {
+            for (subject, predicate, object) in [
+                ("a", A, "b"),
+                ("b", B, "c"),
+                ("c", C, "a"),
+                ("u", independent, "v"),
+            ] {
+                input.push((
+                    surface(&format!("{subject}{index}")),
+                    format!("<{predicate}>"),
+                    surface(&format!("{object}{index}")),
+                    RelationStore::DEFAULT_GRAPH.to_owned(),
+                ));
+            }
+        }
+        for seed in 0..4 {
+            let shuffled = permute(&input, seed);
+            let rel = seeded(&shuffled);
+            let depth: Vec<_> = (0..input.len())
+                .map(|index| u32::try_from(index % 3).expect("three source heights"))
+                .collect();
+            let snapshot = RoundSnapshot {
+                rel: &rel,
+                depth: &depth,
+                assumed: &[],
+            };
+            for lo in 0..=input.len() {
+                for hi in lo..=input.len() {
+                    let entry = RuleEntry {
+                        index: 0,
+                        rule: &rule,
+                        plan: &plan,
+                        runtime: &runtime,
+                        delta: Delta { lo, hi },
+                    };
+                    let run = |strategy| {
+                        evaluate_rule(
+                            entry,
+                            snapshot,
+                            strategy,
+                            StepGovernor::new(u64::MAX),
+                            &NoGuards,
+                        )
+                        .expect("hybrid factor round matches")
+                    };
+                    let planned = run(JoinStrategy::Planned);
+                    let binary = run(JoinStrategy::ForcedBinary);
+                    assert_eq!(
+                        planned.entries, binary.entries,
+                        "seed={seed}, delta={lo}..{hi}"
+                    );
+                }
+            }
+        }
+
+        // The new cycle edge has no complete cyclic match. The large independent
+        // relation must not be rebuilt merely because its partition exists.
+        let mut input = vec![
+            (
+                surface("a"),
+                format!("<{A}>"),
+                surface("b"),
+                RelationStore::DEFAULT_GRAPH.to_owned(),
+            ),
+            (
+                surface("b"),
+                format!("<{B}>"),
+                surface("c"),
+                RelationStore::DEFAULT_GRAPH.to_owned(),
+            ),
+            (
+                surface("c"),
+                format!("<{C}>"),
+                surface("a"),
+                RelationStore::DEFAULT_GRAPH.to_owned(),
+            ),
+        ];
+        input.extend((0..1000).map(|index| {
+            (
+                surface(&format!("u{index}")),
+                format!("<{independent}>"),
+                surface("value"),
+                RelationStore::DEFAULT_GRAPH.to_owned(),
+            )
+        }));
+        let old = input.len();
+        input.push((
+            surface("unmatched"),
+            format!("<{A}>"),
+            surface("missing"),
+            RelationStore::DEFAULT_GRAPH.to_owned(),
+        ));
+        let rel = seeded(&input);
+        let depth = vec![0; input.len()];
+        let snapshot = RoundSnapshot {
+            rel: &rel,
+            depth: &depth,
+            assumed: &[],
+        };
+        let entry = RuleEntry {
+            index: 0,
+            rule: &rule,
+            plan: &plan,
+            runtime: &runtime,
+            delta: Delta {
+                lo: old,
+                hi: input.len(),
+            },
+        };
+        let mut governor = StepGovernor::new(u64::MAX);
+        let buffer = super::evaluate(entry, snapshot, &mut governor)
+            .expect("empty New factor refuses no query");
+        assert!(buffer.entries.is_empty());
+        assert!(
+            governor.consumed < 20,
+            "unproductive New must skip unrelated Full/Old matching"
+        );
+    }
+
+    /// Productive recursive partial rounds share exact credits across workers,
+    /// including the refused observation at zero and one below completion.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn partial_factor_rounds_preserve_exact_worker_budget_refusals() {
+        use crate::seminaive::{BudgetResource, EvalError};
+
+        let mut input = vec![(
+            surface("enabled"),
+            format!("<{C}>"),
+            surface("value"),
+            RelationStore::DEFAULT_GRAPH.to_owned(),
+        )];
+        let mut rules = Vec::new();
+        for index in 0..32 {
+            let predicate = format!("https://example.org/reach{index}");
+            rules.push(DlClause::datalog(
+                atom("?x", &predicate, "?z"),
+                vec![
+                    atom("?x", &predicate, "?y"),
+                    atom("?y", B, "?z"),
+                    ClauseAtom::positive(constant("enabled"), C, constant("value")),
+                ],
+            ));
+            for position in 0..7 {
+                input.push((
+                    surface(&format!("node{position}")),
+                    format!("<{predicate}>"),
+                    surface(&format!("node{}", position + 1)),
+                    RelationStore::DEFAULT_GRAPH.to_owned(),
+                ));
+            }
+        }
+        input.extend((0..7).map(|position| {
+            (
+                surface(&format!("node{position}")),
+                format!("<{B}>"),
+                surface(&format!("node{}", position + 1)),
+                RelationStore::DEFAULT_GRAPH.to_owned(),
+            )
+        }));
+        let exe = compile(rules).expect("independent recursive rules compile");
+        let run = |options, execution| {
+            evaluate_with(
+                &exe,
+                seeded(&input),
+                None,
+                &NoGuards,
+                options,
+                execution,
+                JoinStrategy::Planned,
+            )
+        };
+        let reference = run(EvalOptions::default(), RoundExecution::Sequential)
+            .expect("recursive reference completes");
+        let expected = reference.budget().join_steps();
+        let exact_reference = run(
+            EvalOptions::default().with_max_join_steps(expected),
+            RoundExecution::Sequential,
+        )
+        .expect("sequential exact credits complete");
+        let mut refused = Vec::new();
+        for workers in [1, 4, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("test worker pool");
+            pool.install(|| {
+                let exact = run(
+                    EvalOptions::default().with_max_join_steps(expected),
+                    RoundExecution::Parallel,
+                )
+                .expect("exact partial-round credits complete");
+                assert_eq!(
+                    exact.facts().facts_sorted(),
+                    reference.facts().facts_sorted()
+                );
+                assert_eq!(exact.derivations(), reference.derivations());
+                assert_eq!(exact.budget(), exact_reference.budget());
+                let reports: Vec<_> = [0, expected - 1]
+                    .into_iter()
+                    .map(|ceiling| {
+                        let error = run(
+                            EvalOptions::default().with_max_join_steps(ceiling),
+                            RoundExecution::Parallel,
+                        )
+                        .expect_err("insufficient partial-round credits refuse");
+                        let EvalError::BudgetExhausted { resource, report } = error else {
+                            panic!("{error:?}");
+                        };
+                        assert_eq!(resource, BudgetResource::JoinSteps);
+                        assert_eq!(report.join_steps(), ceiling + 1);
+                        report
+                    })
+                    .collect();
+                if refused.is_empty() {
+                    refused = reports;
+                } else {
+                    assert_eq!(reports, refused, "workers={workers}");
+                }
+            });
+        }
+    }
+
     /// Negative outer variables couple factors, while a conjunction's local variable
     /// does not. Ground negative predicates retain their existential truth value.
     #[test]
@@ -990,9 +1464,42 @@ mod tests {
             let plan = RulePlan::for_rule(&rule);
             let runtime = RuleRuntime::new(&rule, &plan);
             assert_eq!(runtime.factors.len(), if index < 2 { 2 } else { 3 });
-            let exe = compile(vec![rule]).expect("stratified negatives compile");
+            let exe = compile(vec![rule.clone()]).expect("stratified negatives compile");
             for seed in 0..4 {
                 let shuffled = permute(&input, seed);
+                let rel = seeded(&shuffled);
+                let depth = vec![0; shuffled.len()];
+                let snapshot = RoundSnapshot {
+                    rel: &rel,
+                    depth: &depth,
+                    assumed: &[],
+                };
+                for lo in 0..=shuffled.len() {
+                    for hi in lo..=shuffled.len() {
+                        let entry = RuleEntry {
+                            index: 0,
+                            rule: &rule,
+                            plan: &plan,
+                            runtime: &runtime,
+                            delta: Delta { lo, hi },
+                        };
+                        let run = |strategy| {
+                            evaluate_rule(
+                                entry,
+                                snapshot,
+                                strategy,
+                                StepGovernor::new(u64::MAX),
+                                &NoGuards,
+                            )
+                            .expect("negative factor round completes")
+                        };
+                        assert_eq!(
+                            run(JoinStrategy::Planned).entries,
+                            run(JoinStrategy::ForcedBinary).entries,
+                            "negative case={index}, seed={seed}, delta={lo}..{hi}"
+                        );
+                    }
+                }
                 let planned = evaluate_with(
                     &exe,
                     seeded(&shuffled),
@@ -1354,32 +1861,42 @@ mod tests {
                     depth: &depth,
                     assumed: &[],
                 };
-                let entry = RuleEntry {
-                    index: 0,
-                    rule: &rule,
-                    plan: &plan,
-                    runtime: &runtime,
-                    delta: Delta::all(input.len()),
-                };
-                let planned = evaluate_rule(
-                    entry,
-                    snapshot,
-                    JoinStrategy::Planned,
-                    StepGovernor::new(u64::MAX),
-                    &NoGuards,
-                )
-                .expect("factored round completes");
-                let binary = evaluate_rule(
-                    entry,
-                    snapshot,
-                    JoinStrategy::ForcedBinary,
-                    StepGovernor::new(u64::MAX),
-                    &NoGuards,
-                )
-                .expect("exhaustive round completes");
-                assert_eq!(planned.entries, binary.entries);
-                let winner = planned.entries.values().next().expect("one head fires");
-                assert_eq!(winner.source_facts(&rel)[1].subject, surface("b1"));
+                for lo in 0..=input.len() {
+                    for hi in lo..=input.len() {
+                        let delta = Delta { lo, hi };
+                        let entry = RuleEntry {
+                            index: 0,
+                            rule: &rule,
+                            plan: &plan,
+                            runtime: &runtime,
+                            delta,
+                        };
+                        let planned = evaluate_rule(
+                            entry,
+                            snapshot,
+                            JoinStrategy::Planned,
+                            StepGovernor::new(u64::MAX),
+                            &NoGuards,
+                        )
+                        .expect("factored round completes");
+                        let binary = evaluate_rule(
+                            entry,
+                            snapshot,
+                            JoinStrategy::ForcedBinary,
+                            StepGovernor::new(u64::MAX),
+                            &NoGuards,
+                        )
+                        .expect("exhaustive round completes");
+                        assert_eq!(
+                            planned.entries, binary.entries,
+                            "seed={seed}, heights={heights:?}, delta={lo}..{hi}"
+                        );
+                        if delta == Delta::all(input.len()) {
+                            let winner = planned.entries.values().next().expect("one head fires");
+                            assert_eq!(winner.source_facts(&rel)[1].subject, surface("b1"));
+                        }
+                    }
+                }
             }
         }
     }

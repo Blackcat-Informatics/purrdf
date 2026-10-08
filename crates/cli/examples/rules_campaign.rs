@@ -5,6 +5,8 @@
 //! binary, separate allocation-observer binary, new evidence directory. Every
 //! child uses unchanged rule defaults. Successful measurements are accepted only
 //! after exact facts and complete authored premise blocks have been validated.
+//! --recursive PRE_FIX_BINARY FIXED_BINARY NEW_DIRECTORY captures paired recursive
+//! default-limit outcomes without presuming whether the earlier binary refuses.
 
 #[cfg(target_os = "linux")]
 mod native {
@@ -18,6 +20,7 @@ mod native {
     use std::time::Instant;
 
     const NS: &str = "https://example.invalid/k#";
+    const RECURSIVE_NS: &str = "https://example.org/k#";
 
     #[derive(Clone, Copy)]
     struct Allocation {
@@ -61,7 +64,10 @@ mod native {
     }
 
     fn iri(name: &str) -> String {
-        format!("<{NS}{name}>")
+        iri_in(NS, name)
+    }
+    fn iri_in(namespace: &str, name: &str) -> String {
+        format!("<{namespace}{name}>")
     }
     fn triple(s: &str, p: &str, o: &str) -> String {
         format!("{s} {p} {o} .")
@@ -154,9 +160,17 @@ mod native {
 
     fn validate(dir: &Path, n: usize, kind: &str, two: bool) -> Result<(), Box<dyn Error>> {
         let (facts, proofs) = expected(n, kind, two);
+        validate_expected(dir, &facts, &proofs)
+    }
+
+    fn validate_expected(
+        dir: &Path,
+        facts: &BTreeSet<String>,
+        proofs: &BTreeSet<String>,
+    ) -> Result<(), Box<dyn Error>> {
         let output = fs::read_to_string(dir.join("output.nt"))?;
         let actual_facts: BTreeSet<_> = output.lines().map(str::to_owned).collect();
-        if output.lines().count() != facts.len() || actual_facts != facts {
+        if output.lines().count() != facts.len() || &actual_facts != facts {
             return Err("inferred fact mismatch or duplicate".into());
         }
         let proof_text = fs::read_to_string(dir.join("proof.txt"))?;
@@ -170,7 +184,7 @@ mod native {
             .skip(1)
             .map(|p| format!("derived {p}"))
             .collect();
-        if actual_proofs != proofs || proof_text.matches("derived ").count() != proofs.len() {
+        if &actual_proofs != proofs || proof_text.matches("derived ").count() != proofs.len() {
             return Err("complete authored proof mismatch".into());
         }
         if fs::read_to_string(dir.join("stderr.txt"))?
@@ -191,6 +205,20 @@ mod native {
         rules: &Path,
         observer: bool,
     ) -> Result<(u128, i64), Box<dyn Error>> {
+        let (status, elapsed, rss) = child_observed(binary, dir, input, rules, observer)?;
+        if !status.success() {
+            return Err(format!("{binary:?} failed: {status}").into());
+        }
+        Ok((elapsed, rss))
+    }
+
+    fn child_observed(
+        binary: &Path,
+        dir: &Path,
+        input: &Path,
+        rules: &Path,
+        observer: bool,
+    ) -> Result<(ExitStatus, u128, i64), Box<dyn Error>> {
         let args = vec![
             "rules".to_owned(),
             "--srl".to_owned(),
@@ -242,10 +270,7 @@ mod native {
             dir.join("status.txt"),
             format!("{status}\nelapsed_ns={elapsed}\nchild_peak_rss_kib={rss}\n"),
         )?;
-        if !status.success() {
-            return Err(format!("{binary:?} failed: {status}").into());
-        }
-        Ok((elapsed, rss))
+        Ok((status, elapsed, rss))
     }
 
     /// Run the Linux collector or its adversarial validator controls.
@@ -257,16 +282,26 @@ mod native {
             }
             return self_test(Path::new(&args[1]));
         }
+        let recursive = args.first().is_some_and(|arg| arg == "--recursive");
+        let args = if recursive { &args[1..] } else { &args[..] };
         if args.len() != 3 {
-            return Err(
-                "expected PRODUCTION_BINARY ALLOCATION_BINARY NEW_EVIDENCE_DIRECTORY".into(),
-            );
+            return Err(if recursive {
+                "expected --recursive PRE_FIX_BINARY FIXED_BINARY NEW_DIRECTORY"
+            } else {
+                "expected PRODUCTION_BINARY ALLOCATION_BINARY NEW_EVIDENCE_DIRECTORY"
+            }
+            .into());
         }
         let binary = Path::new(&args[0]).canonicalize()?;
         let observer = Path::new(&args[1]).canonicalize()?;
         let root = Path::new(&args[2]);
         fs::create_dir(root)?;
-        for (name, path) in [("production", &binary), ("observer", &observer)] {
+        let names = if recursive {
+            ["pre-fix", "fixed"]
+        } else {
+            ["production", "observer"]
+        };
+        for (name, path) in [(names[0], &binary), (names[1], &observer)] {
             fs::write(
                 root.join(format!("{name}.identity")),
                 format!(
@@ -327,6 +362,9 @@ mod native {
             "crates/datalog/tests/factor_allocation.rs",
         ] {
             fs::write(root.join(path.replace('/', "_")), fs::read(path)?)?;
+        }
+        if recursive {
+            return recursive_campaign(&binary, &observer, root);
         }
         let mut prior: std::collections::BTreeMap<&str, (u128, i64)> =
             std::collections::BTreeMap::new();
@@ -394,6 +432,136 @@ mod native {
         Ok(())
     }
 
+    fn recursive_expected(n: usize) -> (BTreeSet<String>, BTreeSet<String>) {
+        let iri = |name: &str| iri_in(RECURSIVE_NS, name);
+        let mut facts = BTreeSet::new();
+        let mut proofs = BTreeSet::new();
+        for start in 0..n - 2 {
+            for end in start + 2..n {
+                let conclusion = triple(
+                    &iri(&format!("node_{start}")),
+                    &iri("reach"),
+                    &iri(&format!("node_{end}")),
+                );
+                facts.insert(conclusion.clone());
+                let mut proof = format!("derived {conclusion}\n  rule _:srl-rule-0\n");
+                for premise in [
+                    triple(
+                        &iri(&format!("node_{start}")),
+                        &iri("reach"),
+                        &iri(&format!("node_{}", end - 1)),
+                    ),
+                    triple(
+                        &iri(&format!("node_{}", end - 1)),
+                        &iri("edge"),
+                        &iri(&format!("node_{end}")),
+                    ),
+                    triple(&iri("enabled"), &iri("condition"), &iri("value")),
+                ] {
+                    writeln!(proof, "  premise {premise}").unwrap();
+                }
+                proofs.insert(proof);
+            }
+        }
+        (facts, proofs)
+    }
+
+    fn recursive_campaign(pre_fix: &Path, fixed: &Path, root: &Path) -> Result<(), Box<dyn Error>> {
+        let namespace = RECURSIVE_NS;
+        let identities = [
+            purrdf_hash::blake3::hash(&fs::read(pre_fix)?),
+            purrdf_hash::blake3::hash(&fs::read(fixed)?),
+        ];
+        let rules = root.join("recursive.srl");
+        fs::write(
+            &rules,
+            format!(
+                "PREFIX k: <{namespace}>\nRULE {{ ?x k:reach ?z }} WHERE {{ ?x k:reach ?y . ?y k:edge ?z . k:enabled k:condition k:value . }}\n"
+            ),
+        )?;
+        let mut rows = String::from("binary\tnodes\tstatus\telapsed_ns\tpeak_rss_kib\taccepted\n");
+        for n in [32, 256] {
+            let input = root.join(format!("recursive-{n}.ttl"));
+            let mut text = format!("@prefix k: <{namespace}> .\nk:enabled k:condition k:value .\n");
+            for index in 0..n - 1 {
+                writeln!(
+                    text,
+                    "k:node_{index} k:reach k:node_{} ; k:edge k:node_{} .",
+                    index + 1,
+                    index + 1
+                )?;
+            }
+            fs::write(&input, text)?;
+            let source_identities = [
+                purrdf_hash::blake3::hash(&fs::read(&input)?),
+                purrdf_hash::blake3::hash(&fs::read(&rules)?),
+            ];
+            let (facts, proofs) = recursive_expected(n);
+            for (name, binary) in [("pre-fix", pre_fix), ("fixed", fixed)] {
+                let dir = root.join(format!("recursive-{n}-{name}"));
+                fs::create_dir(&dir)?;
+                let bind_sources = |phase: &str| -> Result<(), Box<dyn Error>> {
+                    for (source_name, path, identity) in [
+                        ("input", &input, source_identities[0]),
+                        ("rules", &rules, source_identities[1]),
+                    ] {
+                        let actual = purrdf_hash::blake3::hash(&fs::read(path)?);
+                        fs::write(
+                            dir.join(format!("{source_name}.identity-{phase}")),
+                            format!(
+                                "{}\n{}\n",
+                                path.display(),
+                                purrdf_hash::hex::encode(actual.as_bytes())
+                            ),
+                        )?;
+                        if actual != identity {
+                            return Err(format!(
+                                "recursive {source_name} bytes changed {phase} {name} n={n}"
+                            )
+                            .into());
+                        }
+                    }
+                    Ok(())
+                };
+                bind_sources("before")?;
+                let (status, elapsed, rss) = child_observed(binary, &dir, &input, &rules, false)?;
+                bind_sources("after")?;
+                let accepted = status.success();
+                if accepted {
+                    validate_expected(&dir, &facts, &proofs)?;
+                    fs::write(
+                        dir.join("validation.txt"),
+                        "PASS: complete recursive facts and authored proofs at unchanged default limits\n",
+                    )?;
+                } else {
+                    fs::write(
+                        dir.join("validation.txt"),
+                        "OBSERVED: unsuccessful child; diagnostics and partial artifacts retained, no output accepted\n",
+                    )?;
+                }
+                writeln!(rows, "{name}\t{n}\t{status}\t{elapsed}\t{rss}\t{accepted}")?;
+                fs::write(root.join("measurements.tsv"), &rows)?;
+                if !accepted && name == "fixed" {
+                    return Err(format!("fixed recursive child n={n} failed: {status}").into());
+                }
+            }
+        }
+        let after = [
+            purrdf_hash::blake3::hash(&fs::read(pre_fix)?),
+            purrdf_hash::blake3::hash(&fs::read(fixed)?),
+        ];
+        for (name, identity) in [("pre-fix", after[0]), ("fixed", after[1])] {
+            fs::write(
+                root.join(format!("{name}.identity-after")),
+                purrdf_hash::hex::encode(identity.as_bytes()),
+            )?;
+        }
+        if after != identities {
+            return Err("recursive campaign binary identity changed".into());
+        }
+        Ok(())
+    }
+
     fn self_test(root: &Path) -> Result<(), Box<dyn Error>> {
         let temp = purrdf_testkit::TempDir::with_prefix_in("rules-validator", root)?;
         let dir = temp.path();
@@ -452,6 +620,26 @@ mod native {
                 fs::write(dir.join("stdout.txt"), "unexpected")?;
                 assert!(validate(dir, 2, kind, two).is_err());
             }
+        }
+        let (facts, proofs) = recursive_expected(4);
+        assert_eq!(facts.len(), 3);
+        let mut output = String::new();
+        for fact in &facts {
+            writeln!(output, "{fact}")?;
+        }
+        let proof = proofs.into_iter().collect::<String>();
+        fs::write(dir.join("output.nt"), output)?;
+        fs::write(dir.join("proof.txt"), &proof)?;
+        fs::write(dir.join("stderr.txt"), "rules inferred 3\n")?;
+        fs::write(dir.join("stdout.txt"), "")?;
+        let (_, expected_proofs) = recursive_expected(4);
+        validate_expected(dir, &facts, &expected_proofs)?;
+        for corrupt in [
+            proof.replace("  premise ", "  omitted "),
+            format!("{proof}{proof}"),
+        ] {
+            fs::write(dir.join("proof.txt"), corrupt)?;
+            assert!(validate_expected(dir, &facts, &expected_proofs).is_err());
         }
         println!("rules campaign validator adversarial controls PASS");
         Ok(())
