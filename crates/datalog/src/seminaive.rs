@@ -4388,20 +4388,23 @@ mod tests {
 
     /// The leapfrog triejoin and the indexed binary fallback are two implementations of
     /// one contract, so they must agree everywhere — on the whole synthetic corpus and on
-    /// a certified triangle, which is the shape only the triejoin is chosen for.
+    /// a certified triangle and a connected hybrid plan, the triejoin shapes.
     #[test]
     fn leapfrog_and_binary_joins_agree() {
         let mut cyclic_seen = false;
-        for workload in synth_corpus::all().into_iter().chain([triangle_workload()]) {
+        for workload in synth_corpus::all()
+            .into_iter()
+            .chain([triangle_workload(), connected_hybrid_workload()])
+        {
             let exe = compile(workload.rules.clone()).expect("the corpus program compiles");
             let cyclic =
                 (0..exe.rule_count()).any(|index| exe.rule_entry(index).1.has_cyclic_subplan());
             cyclic_seen |= cyclic;
             assert_eq!(
                 cyclic,
-                workload.name == "triangle",
-                "{}: the triangle is the fixture that actually routes through the triejoin, \
-                 and it is the only one — if that changed, this test's coverage changed with it",
+                matches!(workload.name, "triangle" | "connected-hybrid"),
+                "{}: the triangle and hybrid fixtures must route through the triejoin; \
+                 the remaining fixtures must cover the binary path",
                 workload.name
             );
 
@@ -4491,6 +4494,140 @@ mod tests {
             triples,
             expected,
             expected_rows,
+        }
+    }
+
+    /// A selective seed, a disconnected type, a bridge and the triangle. The bridge
+    /// reaches every triangle Z, so the analytic answer stays the triangle's answer.
+    /// Two independent type witnesses also exercise canonical authored provenance.
+    fn connected_hybrid_workload() -> SynthWorkload {
+        let mut workload = triangle_workload();
+        let kind = "https://example.org/kind";
+        let entry = "https://example.org/entry";
+        let root = "https://example.org/root";
+        let seed = "https://example.org/Seed";
+        let other = "https://example.org/Other";
+        let mut body = vec![
+            ClauseAtom::positive(v("?V"), kind, iri(seed)),
+            ClauseAtom::positive(v("?U"), kind, iri(other)),
+            atom("?V", entry, "?Z"),
+        ];
+        body.extend_from_slice(workload.rules[0].body());
+        let head = workload.rules[0]
+            .head_atoms()
+            .next()
+            .expect("the triangle has one head")
+            .clone();
+        workload.rules = vec![DlClause::datalog(head, body)];
+        workload.triples.extend([
+            quad(&surface(root), kind, &surface(seed)),
+            quad(
+                &surface("https://example.org/other-a"),
+                kind,
+                &surface(other),
+            ),
+            quad(
+                &surface("https://example.org/other-b"),
+                kind,
+                &surface(other),
+            ),
+        ]);
+        for fact in &workload.expected {
+            workload
+                .triples
+                .push(quad(&surface(root), entry, &fact.object));
+        }
+        workload.name = "connected-hybrid";
+        workload
+    }
+
+    /// Physical group movement preserves both the analytic relation and the exact best
+    /// proof in authored body order, independently of store insertion coordinates.
+    #[test]
+    fn connected_hybrid_joins_preserve_the_analytic_facts_and_authored_proofs() {
+        let workload = connected_hybrid_workload();
+        let exe = compile(workload.rules.clone()).expect("the hybrid program compiles");
+        let plan = exe.rule_entry(0).1;
+        assert!(plan.has_cyclic_subplan());
+        assert_eq!(
+            plan.operators()
+                .iter()
+                .map(AtomOperator::positive_position)
+                .collect::<Vec<_>>(),
+            [0, 2, 3, 4, 5, 1],
+            "the fixture must exercise reordered groups"
+        );
+        let seeded: BTreeSet<Fact> = workload.edb().facts_sorted().into_iter().collect();
+        let expected_facts: Vec<Fact> = seeded.union(&workload.expected).cloned().collect();
+        let seed_fact = |subject: &str, predicate: &str, object: &str| {
+            seeded
+                .iter()
+                .find(|fact| {
+                    fact.subject == subject
+                        && fact.predicate == surface(predicate)
+                        && fact.object == object
+                })
+                .expect("every oracle premise is seeded")
+                .clone()
+        };
+        let root = surface("https://example.org/root");
+        let expected_proofs: Vec<Derivation> = workload
+            .expected
+            .iter()
+            .map(|fact| {
+                let q = seeded
+                    .iter()
+                    .find(|source| source.predicate == surface(Q) && source.object == fact.object)
+                    .expect("the circulant Q relation has exactly one predecessor")
+                    .clone();
+                Derivation {
+                    fact: fact.clone(),
+                    rule: 0,
+                    sources: vec![
+                        seed_fact(
+                            &root,
+                            "https://example.org/kind",
+                            &surface("https://example.org/Seed"),
+                        ),
+                        seed_fact(
+                            &surface("https://example.org/other-a"),
+                            "https://example.org/kind",
+                            &surface("https://example.org/Other"),
+                        ),
+                        seed_fact(&root, "https://example.org/entry", &fact.object),
+                        seed_fact(&fact.subject, P, &q.subject),
+                        q,
+                        seed_fact(&fact.object, R, &fact.subject),
+                    ],
+                    proof_height: 1,
+                }
+            })
+            .collect();
+        for seed in 0..8u64 {
+            let mut shuffled = workload.clone();
+            shuffled.triples = permute(&workload.triples, seed);
+            for strategy in [JoinStrategy::Planned, JoinStrategy::ForcedBinary] {
+                let evaluation = evaluate_with(
+                    &exe,
+                    shuffled.edb(),
+                    None,
+                    &NoGuards,
+                    EvalOptions::default(),
+                    RoundExecution::Parallel,
+                    strategy,
+                )
+                .expect("the hybrid fixture stays inside every ceiling");
+                assert_eq!(
+                    evaluation.facts().facts_sorted(),
+                    expected_facts,
+                    "seed {seed}, {strategy:?}: analytic facts"
+                );
+                assert_eq!(
+                    evaluation.derivations(),
+                    expected_proofs,
+                    "seed {seed}, {strategy:?}: exact canonical authored proofs"
+                );
+            }
         }
     }
 

@@ -794,7 +794,7 @@ mod tests {
 
     use super::*;
     use crate::clause::HeadDisjunct;
-    use crate::guard::{Guard, GuardCall, GuardReads};
+    use crate::guard::{Guard, GuardCall, GuardReads, GuardSite};
     use crate::seminaive::{
         BudgetResource, DEFAULT_MAX_TERM_GENERATING_ROUNDS, EvalOptions,
         GENERATED_TERM_BUDGET_FLOOR, compile, evaluate_guarded,
@@ -938,6 +938,113 @@ mod tests {
             "the filter dropped a"
         );
         assert_eq!(model.derivations().len(), 1);
+    }
+
+    /// Reordering ordinary and hybrid joins preserves guard-stage barriers and caller
+    /// thread context through BOTH public fixpoint entry points.
+    #[test]
+    fn connected_joins_keep_guard_stages_on_the_caller_thread() {
+        struct Trace {
+            caller: std::thread::ThreadId,
+            calls: std::cell::RefCell<Vec<(GuardSite, String, String)>>,
+        }
+        impl GuardEvaluator for Trace {
+            fn evaluate(&self, call: &GuardCall<'_>) -> Result<Vec<Vec<String>>, String> {
+                assert_eq!(std::thread::current().id(), self.caller);
+                assert_eq!(call.rule, 0);
+                self.calls.borrow_mut().push((
+                    call.site,
+                    call.inputs[0].to_owned(),
+                    call.inputs[1].to_owned(),
+                ));
+                Ok(vec![Vec::new()])
+            }
+        }
+
+        for cyclic in [false, true] {
+            let mut body = vec![
+                atom(v("?v"), "kind", iri("Vault")),
+                atom(v("?s"), "kind", iri("Spool")),
+                atom(v("?v"), "target", v("?s")),
+            ];
+            if cyclic {
+                body.extend([
+                    atom(v("?s"), "cycle-a", v("?m")),
+                    atom(v("?m"), "cycle-b", v("?n")),
+                    atom(v("?n"), "cycle-c", v("?s")),
+                ]);
+            }
+            let rule = DlClause::datalog(atom(v("?v"), "next", v("?s")), body).with_guards(vec![
+                Guard::filter("first", vec!["?v".to_owned(), "?s".to_owned()]),
+                Guard::filter("second", vec!["?v".to_owned(), "?s".to_owned()]),
+            ]);
+            let plan = RulePlan::for_rule(&rule);
+            assert_eq!(plan.has_cyclic_subplan(), cyclic);
+            assert_eq!(plan.operators()[0].positive_position(), 0);
+            assert_eq!(plan.operators()[1].positive_position(), 2);
+            for scheduled in [false, true] {
+                let trace = Trace {
+                    caller: std::thread::current().id(),
+                    calls: std::cell::RefCell::new(Vec::new()),
+                };
+                let edb = store(&[
+                    ("va", "kind", &surface("Vault")),
+                    ("vb", "kind", &surface("Vault")),
+                    ("sa", "kind", &surface("Spool")),
+                    ("sb", "kind", &surface("Spool")),
+                    ("va", "target", &surface("sa")),
+                    ("vb", "target", &surface("sb")),
+                    ("sa", "cycle-a", &surface("ma")),
+                    ("ma", "cycle-b", &surface("na")),
+                    ("na", "cycle-c", &surface("sa")),
+                    ("sb", "cycle-a", &surface("mb")),
+                    ("mb", "cycle-b", &surface("nb")),
+                    ("nb", "cycle-c", &surface("sb")),
+                ]);
+                let options = EvalOptions::default();
+                let evaluation = if scheduled {
+                    let program = compile_scheduled(
+                        vec![rule.clone()],
+                        Schedule::new(vec![Layer::new(vec![vec![0]], Vec::new())]),
+                    )
+                    .expect("the guarded hybrid rule compiles under the schedule");
+                    evaluate_scheduled(&program, edb, &trace, &mut NoHooks, &options, None)
+                } else {
+                    let program =
+                        compile(vec![rule.clone()]).expect("the binding-reading guards stratify");
+                    evaluate_guarded(&program, edb, &trace, &options, None)
+                }
+                .expect("the connected guarded fixture evaluates");
+                assert_eq!(evaluation.derivations().len(), 2);
+                assert!(has(evaluation.facts(), "va", "next", &surface("sa")));
+                assert!(has(evaluation.facts(), "vb", "next", &surface("sb")));
+                let calls = trace.calls.borrow();
+                assert_eq!(calls.len(), 4, "cyclic {cyclic}, scheduled {scheduled}");
+                assert_eq!(
+                    calls.iter().map(|call| call.0).collect::<Vec<_>>(),
+                    [
+                        GuardSite::Body(0),
+                        GuardSite::Body(0),
+                        GuardSite::Body(1),
+                        GuardSite::Body(1),
+                    ],
+                    "every row reaches the first guard before any reaches the second"
+                );
+                let inputs = |call: &(GuardSite, String, String)| (call.1.clone(), call.2.clone());
+                let first: Vec<_> = calls[..2].iter().map(inputs).collect();
+                let second: Vec<_> = calls[2..].iter().map(inputs).collect();
+                assert_eq!(first, second, "both stages visit the same rows in order");
+                let mut rows = first;
+                rows.sort();
+                assert_eq!(
+                    rows,
+                    [
+                        (surface("va"), surface("sa")),
+                        (surface("vb"), surface("sb"))
+                    ]
+                );
+            }
+        }
     }
 
     /// A guard that could not decide aborts the run by name; it is never read as "no".
