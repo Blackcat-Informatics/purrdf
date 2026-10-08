@@ -1,0 +1,65 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 1m 37s
+     Running tests/exists_sep0007.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-eval/d5c4f2d375aec867/out/exists_sep0007-d5c4f2d375aec867)
+
+running 25 tests
+test exists_bare_subselect_inner ... ok
+test exists_bare_values_inner ... ok
+test exists_bind_fresh_variable_evaluates ... ok
+test exists_blank_node_outer_binding_correlates ... ok
+test exists_graph_iri_name_with_correlated_body ... ok
+test exists_correlated_graph_variable_e2e ... ok
+test exists_having_sees_only_the_subselect_scope ... ok
+test exists_optional_beside_a_bgp_answers_per_spec ... ok
+test exists_nested_not_exists_correlates ... ok
+test exists_optional_padding_answers_per_spec ... ok
+test exists_over_distinct_subselect ... ok
+test exists_over_limit_one_subselect ... ok
+test exists_over_group_by_subselect_correlates ... ok
+test exists_over_offset_subselect_commits_per_row ... ok
+test exists_over_order_by_subselect ... ok
+test exists_property_function_inner_sees_outer_binding ... ok
+test exists_quoted_triple_outer_binding_correlates ... ok
+test exists_sep_count_example_answers ... ok
+test exists_sep_disconnected_variable_example ... ok
+test exists_sep_minus_example_answers ... ok
+test exists_unprojected_outer_variable_stays_unseen ... ok
+test exists_triple_nesting_alternating_polarity ... ok
+test matrix_is_complete ... ok
+test not_exists_optional_padding_does_not_fabricate ... ok
+test not_exists_nested_not_exists_correlates ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/prebound_grouping.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-eval/37027735cec0e7fc/out/prebound_grouping-37027735cec0e7fc)
+
+running 11 tests
+test a_group_keyed_by_the_pre_bound_variable_is_unchanged ... ok
+test a_pre_bound_variable_survives_an_explicit_group_by_another_key ... ok
+test a_prepared_execution_honours_its_declared_pre_bound_names ... ok
+test a_projected_pre_bound_variable_survives_an_implicit_group ... ok
+test a_select_expression_reads_the_pre_bound_value_above_the_group ... ok
+test a_minus_subtracts_with_the_bound_value_on_both_sides ... ok
+test a_sub_select_assigning_the_pre_bound_name_unprojected_binds_its_own_variable ... ok
+test a_where_of_a_lone_sub_select_carries_the_bound_column ... ok
+test an_assignment_of_the_pre_bound_name_out_of_its_scope_answers_by_join ... ok
+test an_assignment_answers_alike_beside_an_unrelated_sibling ... ok
+test an_unprojected_sub_select_inside_exists_binds_its_own_variable ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rdflib_contextual.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-eval/d5f0dc348460eb34/out/rdflib_contextual-d5f0dc348460eb34)
+
+running 9 tests
+test configured_relations_receive_the_context_in_the_existing_call_home ... ok
+test contextual_application_keeps_one_optional_condition_and_rhs ... ok
+test contextual_representation_scales_with_nodes_and_context_width ... ok
+test contextual_service_uses_serializable_protocol_algebra_and_shared_source ... ok
+test governed_publication_preserves_duplicate_columns_and_certified_rows ... ok
+test initial_terms_keep_rdf12_identity_and_hygienic_aliases ... ok
+test production_entry_executes_nested_exists_on_an_admitted_stack ... ok
+test successful_optional_rhs_is_invoked_once_per_duplicate_driver ... ok
+test contextual_matrix ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

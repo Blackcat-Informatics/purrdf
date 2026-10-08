@@ -1,0 +1,29 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/baseline-dedup-normalized-final.s	2026-10-08 08:51:10.516870091 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/candidate-dedup-normalized-final.s	2026-10-08 08:51:10.517870074 -0600
+@@ -1789,7 +1789,7 @@
+ 	ud2
+ .LBBID_294:
+ .LtmpID:
+-	movq	core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#1}>::{closure#0}>@GOTPCREL(%rip), %rax
++	movq	core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#1}>::{closure#0}>@GOTPCREL(%rip), %rax
+ 	movq	%r13, %rdi
+ 	movq	%r12, %rsi
+ 	vzeroupper
+@@ -1837,7 +1837,7 @@
+ 	callq	__rustc::__rust_dealloc
+ .LBBID_302:
+ 	leaq	112(%rsp), %rdi
+-	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#0}>>
++	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#0}>>
+ 	leaq	216(%rsp), %rdi
+ .LBBID_303:
+ 	callq	core::ptr::drop_glue::<alloc::vec::Vec<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>>
+@@ -1865,7 +1865,7 @@
+ 	movq	%rax, (%rsp)
+ 	callq	core::ptr::drop_glue::<alloc::vec::in_place_drop::InPlaceDstDataSrcBufDrop<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+ 	leaq	112(%rsp), %rdi
+-	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#2}>>
++	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#2}>>
+ 	movq	8(%rsp), %rax
+ 	lock		decq	(%rax)
+ 	jne	.LBBID_336

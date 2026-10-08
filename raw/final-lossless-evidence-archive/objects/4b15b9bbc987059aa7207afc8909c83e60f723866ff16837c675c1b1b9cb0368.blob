@@ -1,0 +1,56 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shapes)
+    Finished `release` profile [optimized] target(s) in 8m 59s
+     Running tests/blank_focus_relation_prebinding.rs (/opt/.cargo/slots/10d1255bdd2ffab0/2/build/release/build/purrdf-shapes/92ed7c4b688f1189/out/blank_focus_relation_prebinding-92ed7c4b688f1189)
+
+running 3 tests
+test a_blank_focus_node_reaches_a_relation_bound_in_a_sub_select ... ok
+test a_blank_focus_node_reaches_a_relation_bound_in_an_optional_arm ... ok
+test a_blank_focus_node_reaches_a_relation_bound_in_an_exists_below_the_core ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/exists_relation_prebinding.rs (/opt/.cargo/slots/10d1255bdd2ffab0/2/build/release/build/purrdf-shapes/a2cf48bab69b3acc/out/exists_relation_prebinding-a2cf48bab69b3acc)
+
+running 8 tests
+test exists_over_a_free_capable_relation ... ok
+test exists_over_a_bound_only_relation ... ok
+test not_exists_over_a_free_capable_relation ... ok
+test not_exists_over_a_bound_only_relation ... ok
+test a_filter_of_this_beneath_the_seed ... ok
+test a_bind_of_this_over_a_bound_only_relation ... ok
+test a_bind_of_this_over_a_free_capable_relation ... ok
+test not_exists_with_the_call_after_an_atom ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/prebinding_above_hidden_columns.rs (/opt/.cargo/slots/10d1255bdd2ffab0/2/build/release/build/purrdf-shapes/aa8cc2e46708b20e/out/prebinding_above_hidden_columns-aa8cc2e46708b20e)
+
+running 13 tests
+test a_filter_above_a_sub_select_dropping_this_reads_the_focus_node ... ok
+test a_bind_above_a_sub_select_dropping_this_reads_the_focus_node ... ok
+test having_at_the_top_level_reads_the_focus_node_in_a_select_validator ... ok
+test having_in_a_sub_select_reads_the_focus_node ... ok
+test an_order_by_after_group_by_reads_the_focus_node ... ok
+test having_exists_matches_the_focus_node ... ok
+test having_at_the_top_level_reads_the_focus_node ... ok
+test having_in_a_sub_select_dropping_this_reads_the_focus_node ... ok
+test an_optional_condition_reads_the_focus_node ... ok
+test an_exists_body_expression_reads_the_focus_node_and_the_filtered_row ... ok
+test an_order_by_beneath_the_seed_reads_the_focus_node ... ok
+test a_select_expression_after_group_by_reads_the_focus_node ... ok
+test unfold_reads_the_focus_node_above_and_beneath ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/prebinding_lanes.rs (/opt/.cargo/slots/10d1255bdd2ffab0/2/build/release/build/purrdf-shapes/9926b0c4f0ea6df1/out/prebinding_lanes-9926b0c4f0ea6df1)
+
+running 3 tests
+test a_prepared_execution_answers_alike_across_runs_and_its_memo ... ok
+test sh_expression_holds_value_to_the_rule_this_is_held_to ... ok
+test every_pre_binding_lane_answers_every_query_shape_alike ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

@@ -1,0 +1,46 @@
+863c75e2c1e13001bcbe025820d257bd0ee49c4f
+42cce1fededb04e9a7283bfa589b61e1ca34203c
+rustc 1.100.0-nightly (4b6d04e70 2026-09-13)
+binary: rustc
+commit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad
+commit-date: 2026-09-13
+host: x86_64-unknown-linux-gnu
+release: 1.100.0-nightly
+LLVM version: 23.1.1
+crates/purrdf/src/reasoning.rs
+crates/rdf/src/projections/dataset_description.rs
+crates/shapes/src/prebinding.rs
+crates/shapes/src/srl/reads.rs
+crates/slice/src/ownership.rs
+crates/sparql-algebra/src/algebra.rs
+crates/sparql-algebra/src/owned.rs
+crates/sparql-algebra/src/parser.rs
+crates/sparql-algebra/src/parser/machine.rs
+crates/sparql-algebra/src/parser/triples.rs
+crates/sparql-algebra/src/retained_size.rs
+crates/sparql-algebra/src/serialize.rs
+crates/sparql-algebra/src/traits.rs
+crates/sparql-algebra/src/validate.rs
+crates/sparql-algebra/src/walk.rs
+crates/sparql-algebra/tests/iterative_traits.rs
+crates/sparql-eval/src/basic_profile.rs
+crates/sparql-eval/src/bgp.rs
+crates/sparql-eval/src/binop.rs
+crates/sparql-eval/src/blank_scope.rs
+crates/sparql-eval/src/cdt_agg.rs
+crates/sparql-eval/src/construct.rs
+crates/sparql-eval/src/engine.rs
+crates/sparql-eval/src/eval.rs
+crates/sparql-eval/src/expr.rs
+crates/sparql-eval/src/governor/soundness.rs
+crates/sparql-eval/src/lib.rs
+crates/sparql-eval/src/modifier.rs
+crates/sparql-eval/src/prebind_memo.rs
+crates/sparql-eval/src/property_fn_eval.rs
+crates/sparql-eval/src/property_fn_plan.rs
+crates/sparql-eval/src/remote.rs
+crates/sparql-eval/src/service_endpoints.rs
+crates/sparql-eval/src/substitute.rs
+crates/sparql-eval/src/rdflib.rs
+crates/sparql-eval/tests/fixtures/contextual-mappings.json
+crates/sparql-eval/tests/rdflib_contextual.rs

@@ -1,0 +1,123 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-inline-cost-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_algebra-2f54bfeaed8b20be.purrdf_sparql_algebra.1f9a9904874edf46-cgu.0.rcgu.o.rcgu.ll:55005
+; core::ptr::drop_glue::<core::array::iter::IntoIter<purrdf_sparql_algebra::algebra::GraphPattern, 0>>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtB4_5array4iter8IntoIterNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternKj0_EEB19_(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %0) unnamed_addr #0 personality ptr @rust_eh_personality !guid !9407 {
+  %2 = load i64, ptr %0, align 8, !alias.scope !9408, !noundef !1058
+  %3 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  %4 = load i64, ptr %3, align 8, !alias.scope !9408, !noundef !1058
+  %5 = icmp eq i64 %4, %2
+  br i1 %5, label %.loopexit, label %.lr.ph
+
+.lr.ph:                                           ; preds = %1
+  %6 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  %7 = sub nuw i64 %4, %2
+  %8 = getelementptr inbounds nuw [144 x i8], ptr %6, i64 %2
+  br label %11
+
+9:                                                ; preds = %11
+  %10 = icmp eq i64 %14, %7
+  br i1 %10, label %.loopexit, label %11
+
+11:                                               ; preds = %.lr.ph, %9
+  %12 = phi i64 [ 0, %.lr.ph ], [ %14, %9 ]
+  %13 = getelementptr inbounds nuw [144 x i8], ptr %8, i64 %12
+  %14 = add nuw nsw i64 %12, 1
+; invoke core::ptr::drop_glue::<purrdf_sparql_algebra::algebra::GraphPattern>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternEBF_(ptr noalias nofree noundef align 8 dereferenceable(144) %13)
+          to label %9 unwind label %18, !inline_history !9415
+
+15:                                               ; preds = %.lr.ph9
+  %16 = add i64 %21, 1
+  %17 = icmp eq i64 %16, %7
+  br i1 %17, label %._crit_edge, label %.lr.ph9
+
+18:                                               ; preds = %11
+  %19 = landingpad { ptr, i32 }
+          cleanup
+  %20 = icmp eq i64 %14, %7
+  br i1 %20, label %._crit_edge, label %.lr.ph9
+
+.lr.ph9:                                          ; preds = %18, %15
+  %21 = phi i64 [ %16, %15 ], [ %14, %18 ]
+  %22 = getelementptr inbounds nuw [144 x i8], ptr %8, i64 %21
+; invoke core::ptr::drop_glue::<purrdf_sparql_algebra::algebra::GraphPattern>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternEBF_(ptr noalias nofree noundef align 8 dereferenceable(144) %22) #44
+          to label %15 unwind label %23, !inline_history !9415
+
+._crit_edge:                                      ; preds = %15, %18
+  resume { ptr, i32 } %19
+
+23:                                               ; preds = %.lr.ph9
+  %24 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #46, !inline_history !9415
+  unreachable
+
+.loopexit:                                        ; preds = %9, %1
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtB4_5array4iter8IntoIterNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternKj0_EEB19_:
+.Lfunc_begin111:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception81
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%rbx
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	(%rdi), %r15
+	movq	8(%rdi), %rax
+	cmpq	%r15, %rax
+	je	.LBB111_9
+	leaq	(%r15,%r15,8), %rcx
+	notq	%r15
+	addq	%rax, %r15
+	shlq	$4, %rcx
+	leaq	160(%rcx,%rdi), %rbx
+	.p2align	4
+.LBB111_3:
+	leaq	-144(%rbx), %rdi
+.Ltmp1919:
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternEBF_
+.Ltmp1920:
+	addq	$144, %rbx
+	addq	$-1, %r15
+	jb	.LBB111_3
+.LBB111_9:
+	popq	%rbx
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB111_4:
+	.cfi_def_cfa_offset 32
+.Ltmp1921:
+	movq	%rax, %r14
+	testq	%r15, %r15
+	je	.LBB111_7
+	.p2align	4
+.LBB111_5:
+.Ltmp1922:
+	movq	%rbx, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternEBF_
+.Ltmp1923:
+	addq	$144, %rbx
+	decq	%r15
+	jne	.LBB111_5
+.LBB111_7:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB111_8:
+.Ltmp1924:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end111:

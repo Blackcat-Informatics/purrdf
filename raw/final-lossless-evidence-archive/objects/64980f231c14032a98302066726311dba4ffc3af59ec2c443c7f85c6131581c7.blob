@@ -1,0 +1,2730 @@
+{
+  "oracle_version": "7.6.0",
+  "oracle_files": [
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py",
+      "sha256": "5b11d35dac2c6f608b8676056a13d786e526ec660aa494c081e01797165792fc"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py",
+      "sha256": "991944f756398773c4ddf0da0bf5a3c2285f2a67140c9976a8a806ba5d8402be"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/sparql.py",
+      "sha256": "938b13a453cf85f42b559bbf303c06d9710801fbc39dfcb87ff79fb87b15a55f"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/algebra.py",
+      "sha256": "22441c48e62b22c40ec17a1ffaf5360b7b08cfb971cfe8ad59a599e8766d81b3"
+    }
+  ],
+  "historical_input_sha256": "d0bcf8694213d7d0ecfad3559ade011959b6201397f8abf2f77dbd4e3d003007",
+  "triples": [
+    [
+      "a",
+      "p",
+      "o1"
+    ],
+    [
+      "a",
+      "p",
+      "o2"
+    ],
+    [
+      "b",
+      "p",
+      "o3"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "queries-01",
+      "query": "SELECT ?value WHERE { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-02",
+      "query": "SELECT (COUNT(*) AS ?value) WHERE { ?s <http://example.org/p> ?o BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-03",
+      "query": "SELECT ?value WHERE { { SELECT (<http://example.org/b> AS ?this) WHERE {} } ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-04",
+      "query": "SELECT ?this WHERE { BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-05",
+      "query": "SELECT (<http://example.org/b> AS ?this) WHERE {}",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-06",
+      "query": "SELECT ?value WHERE { ?x <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER(?this = <http://example.org/b>) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-07",
+      "query": "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1425: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-08",
+      "query": "SELECT (STR(?this) AS ?t) WHERE { BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "t"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "http://example.org/b",
+              null,
+              null
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "t"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-09",
+      "query": "SELECT (COUNT(*) AS ?this) WHERE { ?s <http://example.org/p> ?o }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-10",
+      "query": "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-11",
+      "query": "SELECT ?value WHERE { BIND(<http://example.org/b> AS ?fresh) ?fresh <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-12",
+      "query": "SELECT ?value WHERE { VALUES ?this { <http://example.org/b> } ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-13",
+      "query": "SELECT ?value WHERE { VALUES (?this) { (<http://example.org/a>) (<http://example.org/b>) } ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-14",
+      "query": "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value } ORDER BY ?this",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-15",
+      "query": "SELECT ?value WHERE { { VALUES (?this) { (<http://example.org/a>) } ?this <http://example.org/p> ?value } BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1467: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-16",
+      "query": "SELECT ?value ?this WHERE { ?s <http://example.org/p> ?value OPTIONAL { ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-17",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value MINUS { ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-18",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value FILTER EXISTS { ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-19",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?this <http://example.org/p> ?value } GROUP BY ?this",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-20",
+      "query": "SELECT * WHERE { ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-21",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/b> AS ?fresh) } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "queries-22",
+      "query": "SELECT ?value ?this WHERE { { ?s <http://example.org/p> ?value } UNION { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-23",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value BIND(?value AS ?this) } ORDER BY ?this",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "queries-24",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value BIND(?value AS ?this) } ORDER BY DESC(?this)",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-01",
+      "query": "SELECT ?this ?value WHERE { { SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) } } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1455: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-02",
+      "query": "SELECT ?value WHERE { { SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) } } FILTER(?this = <http://example.org/z>) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1449: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-03",
+      "query": "CONSTRUCT { ?this <http://example.org/r> ?value } WHERE { ?x <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "CONSTRUCT",
+        "triples": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/r"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/r"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/r"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "CONSTRUCT",
+        "triples": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-04",
+      "query": "SELECT ?this WHERE { ?this <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) BIND(<http://example.org/w> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1418: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-05",
+      "query": "SELECT ?value WHERE { ?x <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/b> AS ?this) } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "unmodelled-06",
+      "query": "SELECT ?value ?this WHERE { ?s <http://example.org/p> ?value OPTIONAL { ?this <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1469: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-07",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-08",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "unmodelled-09",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-10",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "unmodelled-11",
+      "query": "SELECT ?value ?this WHERE { ?this <http://example.org/p> ?value { BIND(<http://example.org/b> AS ?this) } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-12",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) } GROUP BY ?this",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "unmodelled-13",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "ordered-01",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value BIND(?value AS ?this) } ORDER BY ?this",
+      "ordered": true,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "ordered-02",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value BIND(?value AS ?this) } ORDER BY DESC(?this)",
+      "ordered": true,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "ordered-03",
+      "query": "SELECT ?value ?this WHERE { ?s <http://example.org/p> ?value BIND(?value AS ?this) } ORDER BY DESC(STR(?this))",
+      "ordered": true,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "ordered-04",
+      "query": "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value } ORDER BY DESC(?value)",
+      "ordered": true,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "without-initial-triple-collision",
+      "query": "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) }",
+      "ordered": false,
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1425: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "without-initial-repeat",
+      "query": "SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) BIND(<http://example.org/w> AS ?this) }",
+      "ordered": false,
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1420: BIND target ?this is already in scope in the group graph pattern"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "without-initial-select-collision",
+      "query": "SELECT (<http://example.org/z> AS ?this) ?value WHERE { ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1416: SELECT expression target ?this is already in scope"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "without-initial-group-collision",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?this <http://example.org/p> ?value } GROUP BY (<http://example.org/z> AS ?this)",
+      "ordered": false,
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1441: GROUP BY target ?this is already in scope in the WHERE clause or an earlier GROUP BY condition"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "empty-explicit-group",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/absent> ?o } GROUP BY ?this",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": []
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "empty-implicit-group",
+      "query": "SELECT (COUNT(*) AS ?this) WHERE { ?s <http://example.org/absent> ?o }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "empty-subselect-init-fallback",
+      "query": "SELECT ?this WHERE { { SELECT ?absent WHERE {} } BIND(?this AS ?fresh) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": []
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "not-exists-override",
+      "query": "SELECT ?value WHERE { ?s <http://example.org/p> ?value FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "optional-minus-exists",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/b> AS ?this) MINUS { ?this <http://example.org/p> ?value } FILTER NOT EXISTS { BIND(<http://example.org/z> AS ?this) ?this <http://example.org/p> ?value } } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "error_type": "ValueError",
+        "error": "query evaluation error: error native-sparql-query-parse: SPARQL syntax error at byte 1486: BIND target ?this inside EXISTS is already in scope on the row being filtered"
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "nested-group-star-select",
+      "query": "SELECT * WHERE { { SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) } } FILTER(?this=<http://example.org/z>) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "error-retains-old",
+      "query": "SELECT ?this WHERE { BIND((1/0) AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "bind-bound-check",
+      "query": "SELECT ?this ?bound WHERE { { SELECT ?absent WHERE {} } BIND(BOUND(?this) AS ?bound) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "bound",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "true",
+              "http://www.w3.org/2001/XMLSchema#boolean",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "bound",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "true",
+              "http://www.w3.org/2001/XMLSchema#boolean",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "ask-assignment",
+      "query": "ASK { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "ASK",
+        "answer": true
+      },
+      "base_compat": {
+        "type": "ASK",
+        "answer": false
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "describe-assignment",
+      "query": "DESCRIBE ?this WHERE { BIND(<http://example.org/b> AS ?this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "DESCRIBE",
+        "triples": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/p"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "DESCRIBE",
+        "triples": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "private-name-collision",
+      "query": "SELECT ?this ?__purrdf_rdflib_rebound_this WHERE { BIND(<http://example.org/z> AS ?this) BIND(?this AS ?__purrdf_rdflib_rebound_this) }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "__purrdf_rdflib_rebound_this",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "__purrdf_rdflib_rebound_this",
+          "this"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    },
+    {
+      "name": "duplicate-driver-optional",
+      "query": "SELECT ?this ?value WHERE { VALUES ?value { <http://example.org/o1> <http://example.org/o1> } OPTIONAL { BIND(<http://example.org/b> AS ?this) } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "matches_oracle": true
+    },
+    {
+      "name": "nonlazy-right-duplicates",
+      "query": "SELECT ?this ?value WHERE { { SELECT ?value WHERE { VALUES ?value { <http://example.org/o1> } } LIMIT 1 } { VALUES ?value { <http://example.org/o1> <http://example.org/o1> } BIND(<http://example.org/b> AS ?this) } }",
+      "ordered": false,
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ]
+        ]
+      },
+      "base_compat": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      },
+      "matches_oracle": false
+    }
+  ],
+  "base_identity": {
+    "head": "18489a91cb452b1773c60b469d4c30dc33a9a4a4",
+    "tree": "5d150fa4076cc75e293b517f79dd080b6ea807ed",
+    "installed_files": [
+      {
+        "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/purrdf_native.abi3.so",
+        "sha256": "1fbe83ff12fbcb7d7825ee5e814ece84642cba1951fdbf2f58ddae33ea59c9ab"
+      },
+      {
+        "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/__init__.py",
+        "sha256": "5c6db38682513f4d6d10815c8c65f22a68b03e208e92fae3e54fa02ffc8c945f"
+      },
+      {
+        "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py",
+        "sha256": "64631c4a1f85161785379bf09bfbe29c248ff9465f6c8ac7d3a56650ae4407e3"
+      },
+      {
+        "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py",
+        "sha256": "5b11d35dac2c6f608b8676056a13d786e526ec660aa494c081e01797165792fc"
+      }
+    ],
+    "oracle_version": "7.6.0"
+  }
+}

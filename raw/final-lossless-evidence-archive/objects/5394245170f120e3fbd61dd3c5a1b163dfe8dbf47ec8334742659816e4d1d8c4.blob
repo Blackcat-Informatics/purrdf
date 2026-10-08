@@ -1,0 +1,24 @@
+--- .worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/baseline-graph-callees.txt	2026-10-08 08:37:44.755929003 -0600
++++ .worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/candidate-graph-callees.txt	2026-10-08 08:37:44.757928970 -0600
+@@ -3,8 +3,8 @@
+       1 ; call <purrdf_core::ir::dataset::RdfDataset>::probe_plan
+       2 ; call <purrdf_sparql_eval::governor::lift::Lift>::at
+       3 ; call <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::new
+-      8 ; call __rustc::__rust_dealloc
+-      9 ; call core::panicking::panic_in_cleanup
++      9 ; call __rustc::__rust_dealloc
++     10 ; call core::panicking::panic_in_cleanup
+       2 ; call core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+       2 ; call core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+       2 ; call core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+@@ -27,8 +27,9 @@
+       2 ; invoke core::panicking::panic_bounds_check
+       1 ; invoke core::panicking::panic_fmt
+       2 ; invoke core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
++      1 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Evaluated<purrdf_core::ir::term::TermId>>
+       2 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Lift>
+-      3 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
++      4 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+      13 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::VarSchema>
+       3 ; invoke purrdf_sparql_eval::eval::eval_evaluated_with::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::eval::eval_evaluated<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+       3 ; invoke purrdf_sparql_eval::eval::syntactic_schema

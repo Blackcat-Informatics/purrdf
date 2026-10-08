@@ -1,0 +1,1 @@
+uv pip install --python bindings/python/.venv/bin/python --no-deps --reinstall /opt/purrdf-454-current-qualification-20261008/final-lower-python-1/wheel/purrdf-3.0.1-cp313-abi3-linux_x86_64.whl 

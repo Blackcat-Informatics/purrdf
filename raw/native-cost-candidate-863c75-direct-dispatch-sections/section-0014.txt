@@ -1,0 +1,44 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-direct-dispatch-ir/qualification_454_native_cost.purrdf_core-c1792174a43b914e.purrdf_core.ce843a9727c25724-cgu.0.rcgu.o.rcgu.ll:63295
+; <purrdf_core::model::RdfLiteral>::validate_components
+define { ptr, i64 } @_RNvMNtCshJhwfSmZINs_11purrdf_core5modelNtB2_10RdfLiteral19validate_components(ptr noalias nofree noundef nonnull readonly captures(none) %0, i64 noundef %1, ptr noalias nofree noundef readonly captures(address, read_provenance) %2, i64 %3, i8 noundef range(i8 0, 3) %4) unnamed_addr #3 !guid !8969 {
+  %6 = alloca [32 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+; call <purrdf_core::model::RdfLiteral>::diagnose_components
+  call fastcc void @_RNvMNtCshJhwfSmZINs_11purrdf_core5modelNtB2_10RdfLiteral19diagnose_components.llvm.14224902191769225807(ptr noalias nofree noundef align 8 captures(none) dereferenceable(32) %6, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %0, i64 noundef %1, ptr noalias nofree noundef readonly captures(address, read_provenance) %2, i64 %3, i8 noundef %4)
+  %7 = load ptr, ptr %6, align 8, !noundef !884
+  %8 = icmp eq ptr %7, null
+  %9 = getelementptr inbounds nuw i8, ptr %6, i64 16
+  %10 = load ptr, ptr %9, align 8, !nonnull !884
+  %11 = getelementptr inbounds nuw i8, ptr %6, i64 24
+  %12 = load i64, ptr %11, align 8
+  %13 = select i1 %8, i64 undef, i64 %12
+  %14 = select i1 %8, ptr null, ptr %10
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  %15 = insertvalue { ptr, i64 } poison, ptr %14, 0
+  %16 = insertvalue { ptr, i64 } %15, i64 %13, 1
+  ret { ptr, i64 } %16
+}
+
+ASSEMBLY
+_RNvMNtCshJhwfSmZINs_11purrdf_core5modelNtB2_10RdfLiteral19validate_components:
+.Lfunc_begin214:
+	.cfi_startproc
+	subq	$40, %rsp
+	.cfi_def_cfa_offset 48
+	movl	%r8d, %r9d
+	movq	%rcx, %r8
+	movq	%rdx, %rcx
+	movq	%rsi, %rdx
+	movq	%rdi, %rsi
+	leaq	8(%rsp), %rdi
+	callq	_RNvMNtCshJhwfSmZINs_11purrdf_core5modelNtB2_10RdfLiteral19diagnose_components.llvm.14224902191769225807
+	movq	8(%rsp), %rax
+	movq	32(%rsp), %rdx
+	testq	%rax, %rax
+	je	.LBB214_2
+	movq	24(%rsp), %rax
+.LBB214_2:
+	addq	$40, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end214:

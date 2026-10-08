@@ -1,0 +1,12 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:536:17
+    |
+536 |                 assert_eq!(result.solutions().unwrap().1, expected)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert_eq!(result.solutions().unwrap().1, expected);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: could not compile `purrdf-sparql-eval` (test "rdflib_contextual") due to 1 previous error

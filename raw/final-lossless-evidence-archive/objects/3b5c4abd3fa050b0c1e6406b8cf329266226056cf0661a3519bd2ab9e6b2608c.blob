@@ -1,0 +1,4 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 18.92s

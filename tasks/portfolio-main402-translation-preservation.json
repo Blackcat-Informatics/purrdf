@@ -1,0 +1,10 @@
+{
+  "contextual": {
+    "lost_exact_translation_triples": []
+  },
+  "main": {
+    "lost_exact_translation_triples": []
+  },
+  "retained_new_obsolete_count": 2,
+  "reason": "Main now has twelve unpublished members; old eleven-member msgids preserved obsolete, current main twelve-member translations retained active."
+}

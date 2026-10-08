@@ -1,0 +1,26 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 07s
+     Running tests/prepared_execution.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-eval/795fd828522368d1/out/prepared_execution-795fd828522368d1)
+
+running 17 tests
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test re_running_a_prepared_execution_costs_23_allocations ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

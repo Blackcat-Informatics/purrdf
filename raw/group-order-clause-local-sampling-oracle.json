@@ -1,0 +1,270 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "group-projection-aggregate-plain-order-unbound",
+      "query": "SELECT (COUNT(*) AS ?n) (?x AS ?this) WHERE { VALUES (?x ?y) { (1 2) (2 1) } } GROUP BY ?x ORDER BY ?y",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-projection-aggregate-plain-order-bound",
+      "query": "SELECT (COUNT(*) AS ?n) (?x AS ?this) WHERE { VALUES (?x ?y) { (1 2) (2 1) } } GROUP BY ?x ORDER BY ?y",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-having-plain-order-unbound",
+      "query": "SELECT (COUNT(*) AS ?n) (?x AS ?this) WHERE { VALUES (?x ?y) { (1 2) (2 1) } } GROUP BY ?x HAVING(?x > 0) ORDER BY ?y",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-having-plain-order-bound",
+      "query": "SELECT (COUNT(*) AS ?n) (?x AS ?this) WHERE { VALUES (?x ?y) { (1 2) (2 1) } } GROUP BY ?x HAVING(?x > 0) ORDER BY ?y",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-order-own-aggregate-samples-unbound",
+      "query": "SELECT (COUNT(*) AS ?n) (?x AS ?this) WHERE { VALUES (?x ?y) { (1 2) (2 1) } } GROUP BY ?x ORDER BY (COUNT(*) + ?y)",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-order-own-aggregate-samples-bound",
+      "query": "SELECT (COUNT(*) AS ?n) (?x AS ?this) WHERE { VALUES (?x ?y) { (1 2) (2 1) } } GROUP BY ?x ORDER BY (COUNT(*) + ?y)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

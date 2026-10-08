@@ -1,0 +1,4 @@
+make book-po-update exit0
+catalog regeneration cmp exit0
+msgfmt --check-format --statistics exit0
+fuzzy entry search: no matches

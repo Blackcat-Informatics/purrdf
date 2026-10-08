@@ -1,0 +1,4 @@
+PASS: 16 artifact hashes; 13 original inputs; 2 generated inputs; exact source checkout/tree, compiler before/after, generated-only status, complete original-source digest with generated doc, actual checked passed report, seven configs x111sites, existing owning merge_reports/write_doc/doc_checks no-build replay.
+Compiler: rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+Generated doc SHA256 3c784dad3f527122585b82525033b0db032fbc482bd389baa835a833cdb6994c
+Only admitted source application remains pending root; local compiler measurement was not run or substituted.

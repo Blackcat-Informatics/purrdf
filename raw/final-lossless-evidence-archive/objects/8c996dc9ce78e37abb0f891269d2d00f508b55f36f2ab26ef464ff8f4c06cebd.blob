@@ -1,0 +1,92 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error: function call inside of `map_or`
+   --> crates/sparql-algebra/tests/iterative_traits.rs:888:57
+    |
+888 |                       right: Child::new(condition.clone().map_or(right.clone(), |expr| {
+    |  _________________________________________________________^
+889 | |                         GraphPattern::Filter {
+890 | |                             inner: Child::new(right),
+891 | |                             expr,
+892 | |                         }
+893 | |                     })),
+    | |______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+    = note: `-D clippy::or-fun-call` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+help: try
+    |
+888 ~                     right: Child::new(condition.clone().map_or_else(|| right.clone(), |expr| {
+889 +                         GraphPattern::Filter {
+890 +                             inner: Child::new(right),
+891 +                             expr,
+892 +                         }
+893 ~                     })),
+    |
+
+error: could not compile `purrdf-sparql-algebra` (test "iterative_traits") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: this `if` guard returns a bool literal and is followed by another
+   --> crates/sparql-eval/src/governor/soundness.rs:443:13
+    |
+443 | /             if visit(PatternPart::Child(left, ChildEdge::MONOTONE))
+444 | |                 || visit(PatternPart::Child(
+445 | |                     right,
+446 | |                     if policy.optional.is_some() {
+...   |
+455 | |             false
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_bool
+    = note: `-D clippy::needless-bool` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_bool)]`
+help: you can reduce it to
+    |
+443 ~             visit(PatternPart::Child(left, ChildEdge::MONOTONE)) || visit(PatternPart::Child(
+444 +                     right,
+445 +                     if policy.optional.is_some() {
+446 +                         ChildEdge::OPAQUE
+447 +                     } else {
+448 +                         ChildEdge::MONOTONE_BAG
+449 +                     },
+450 +                 ))
+    |
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/modifier.rs:250:10
+    |
+250 |     seq: SolutionSeq<I>,
+    |          ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+250 |     seq: &SolutionSeq<I>,
+    |          +
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/modifier.rs:1924:21
+     |
+1924 |     let mut states: DetHashMap<Solution<D::Id>, (usize, Vec<ContextualLane<D::Id>>)> =
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/modifier.rs:1826:14
+     |
+1826 |         ctx: &mut EvalCtx<'_, D>,
+     |              ^----^^^^^^^^^^^^^^
+     |               |
+     |               help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+     = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 4 previous errors

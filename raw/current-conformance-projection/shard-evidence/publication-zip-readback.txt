@@ -1,0 +1,1 @@
+Four raw ZIP digests verified against API; sole member NAME.json equals retained extracted bytes, all four full comparisons0.

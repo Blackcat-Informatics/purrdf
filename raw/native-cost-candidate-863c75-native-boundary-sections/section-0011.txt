@@ -1,0 +1,135 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-native-boundary-ir/qualification_454_native_cost.gimli-68d0cb78dba1c589.gimli.291de70d2b297ea7-cgu.0.rcgu.o.rcgu.ll:1761
+; <alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>>::push
+define void @_RNvMsv_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB19_8InternalE4pushB1w_(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(16) %0, i64 noundef %1, ptr noalias nofree noundef readonly align 8 captures(none) dead_on_return dereferenceable(112) %2, ptr noundef nonnull %3, i64 noundef %4) unnamed_addr #0 personality ptr @rust_eh_personality !guid !263 {
+  %6 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  %7 = load i64, ptr %6, align 8, !noundef !49
+  %8 = add i64 %7, -1
+  %9 = icmp eq i64 %4, %8
+  br i1 %9, label %15, label %10, !prof !57
+
+10:                                               ; preds = %15, %5
+  %11 = phi ptr [ @anon.886c1caabaaea59b9677b076c74ddc9f.1548, %5 ], [ @anon.886c1caabaaea59b9677b076c74ddc9f.1546.llvm.14355606994395624983, %15 ]
+  %12 = phi i64 [ 48, %5 ], [ 32, %15 ]
+  %13 = phi ptr [ @anon.886c1caabaaea59b9677b076c74ddc9f.1549, %5 ], [ @anon.886c1caabaaea59b9677b076c74ddc9f.1550, %15 ]
+; invoke core::panicking::panic
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %11, i64 noundef %12, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(24) %13) #23
+          to label %14 unwind label %32
+
+14:                                               ; preds = %10
+  unreachable
+
+15:                                               ; preds = %5
+  %16 = load ptr, ptr %0, align 8, !nonnull !49, !noundef !49
+  %17 = getelementptr inbounds nuw i8, ptr %16, i64 1330
+  %18 = load i16, ptr %17, align 2, !noundef !49
+  %19 = icmp ult i16 %18, 11
+  br i1 %19, label %20, label %10, !prof !57
+
+20:                                               ; preds = %15
+  %21 = zext nneg i16 %18 to i64
+  %22 = add nuw nsw i16 %18, 1
+  store i16 %22, ptr %17, align 2
+  %23 = getelementptr inbounds nuw i8, ptr %16, i64 1240
+  %24 = getelementptr inbounds nuw [8 x i8], ptr %23, i64 %21
+  store i64 %1, ptr %24, align 8
+  %25 = getelementptr inbounds nuw [112 x i8], ptr %16, i64 %21
+  tail call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(112) %25, ptr noundef nonnull align 8 dereferenceable(112) %2, i64 112, i1 false)
+  %26 = add nuw nsw i64 %21, 1
+  %27 = getelementptr inbounds nuw i8, ptr %16, i64 1336
+  %28 = getelementptr inbounds nuw [8 x i8], ptr %27, i64 %26
+  store ptr %3, ptr %28, align 8
+  %29 = getelementptr inbounds nuw i8, ptr %3, i64 1232
+  store ptr %16, ptr %29, align 8, !noalias !264
+  %30 = trunc nuw nsw i64 %26 to i16
+  %31 = getelementptr inbounds nuw i8, ptr %3, i64 1328
+  store i16 %30, ptr %31, align 8, !noalias !264
+  ret void
+
+32:                                               ; preds = %10
+  %33 = landingpad { ptr, i32 }
+          cleanup
+  %34 = load i64, ptr %2, align 8, !range !50, !alias.scope !267, !noundef !49
+  %35 = icmp eq i64 %34, 0
+  br i1 %35, label %38, label %36
+
+36:                                               ; preds = %32
+  %37 = getelementptr inbounds nuw i8, ptr %2, i64 8
+; call <alloc::raw_vec::RawVecInner>::deallocate
+  tail call void @_RNvMs3_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner10deallocateCs3wRyrdzSNKt_5gimli(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(24) %37, i64 noundef 8, i64 noundef 16)
+  br label %38
+
+38:                                               ; preds = %36, %32
+  resume { ptr, i32 } %33
+}
+
+ASSEMBLY
+_RNvMsv_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB19_8InternalE4pushB1w_:
+.Lfunc_begin24:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception12
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r14
+	pushq	%rbx
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	movq	%rdx, %rbx
+	movq	8(%rdi), %rax
+	decq	%rax
+	cmpq	%rax, %r8
+	jne	.LBB24_1
+	movq	(%rdi), %rdx
+	movzwl	1330(%rdx), %eax
+	cmpq	$10, %rax
+	ja	.LBB24_5
+	leal	1(%rax), %edi
+	movw	%di, 1330(%rdx)
+	movq	%rsi, 1240(%rdx,%rax,8)
+	imulq	$112, %rax, %rsi
+	vmovups	(%rbx), %zmm0
+	vmovups	48(%rbx), %zmm1
+	vmovups	%zmm1, 48(%rdx,%rsi)
+	vmovups	%zmm0, (%rdx,%rsi)
+	movq	%rcx, 1344(%rdx,%rax,8)
+	incq	%rax
+	movq	%rdx, 1232(%rcx)
+	movw	%ax, 1328(%rcx)
+	popq	%rbx
+	popq	%r14
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	vzeroupper
+	retq
+.LBB24_1:
+	.cfi_def_cfa %rbp, 16
+	leaq	.Lanon.886c1caabaaea59b9677b076c74ddc9f.1549(%rip), %rdx
+	movl	$48, %esi
+	leaq	.Lanon.886c1caabaaea59b9677b076c74ddc9f.1548(%rip), %rdi
+	jmp	.LBB24_2
+.LBB24_5:
+	leaq	.Lanon.886c1caabaaea59b9677b076c74ddc9f.1550(%rip), %rdx
+	movl	$32, %esi
+	leaq	anon.886c1caabaaea59b9677b076c74ddc9f.1546.llvm.14355606994395624983(%rip), %rdi
+.LBB24_2:
+.Ltmp46:
+	callq	*_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip)
+.Ltmp47:
+	ud2
+.LBB24_7:
+.Ltmp48:
+	movq	%rax, %r14
+	cmpq	$0, (%rbx)
+	je	.LBB24_9
+	addq	$8, %rbx
+	movl	$8, %esi
+	movl	$16, %edx
+	movq	%rbx, %rdi
+	callq	*_RNvMs3_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner10deallocateCs3wRyrdzSNKt_5gimli@GOTPCREL(%rip)
+.LBB24_9:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end24:

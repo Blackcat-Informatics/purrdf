@@ -1,0 +1,5 @@
+5ade0a6d37b298357e9434dc1f454eecd50b28f6d9768d9a6907defc3a064f7e  /opt/purrdf-454-current-qualification-20261008/final-lower-python-1/wheel/purrdf-3.0.1-cp313-abi3-linux_x86_64.whl
+06275d43821c8351f89f88071af043ce4c4645fe3adcf2126b2f28f031cafc01  bindings/python/uv.lock
+e1b3923cf2191650b0d8be76ac6c9f7e461d611f2f9d14d4d9fe89c0f1525eff  bindings/python/tests/test_contextual_mappings.py
+2e0a1204ed0823e5e740ddc58ce2725fc7228256c8fb2a3bee5a7bd2ae046cef  bindings/python/tests/test_solution_row_protocol.py
+010f98981f4bf8219be0084497717400cb10b0d03a3b16bfd1e83cb2dfba0a95  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/tasks/portfolio-python-wheel-identity.py

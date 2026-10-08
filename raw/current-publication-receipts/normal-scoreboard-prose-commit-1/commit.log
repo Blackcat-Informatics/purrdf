@@ -1,0 +1,4 @@
+Running as unit: purrdf-454-normal-scoreboard-prose-commit-20261008.scope; invocation ID: ed404c333e9e4ca1a95ebf9032b9446a
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the staged index against df2cec88b0f8 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/454-rdflib-shim-algebra-level-reassignment 08e7cd585] Align Python scoreboard with qualified conformance results
+ 1 file changed, 1 insertion(+), 1 deletion(-)

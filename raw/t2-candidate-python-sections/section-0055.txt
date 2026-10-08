@@ -1,0 +1,20 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-python-ir/purrdf_native.ll:621145
+; <<purrdf_sparql_eval::eval::EvalCtx>::pattern_is_parallel_safe::{closure#0} as core::ops::function::FnOnce<(&purrdf_sparql_algebra::algebra::GraphPattern,)>>::call_once::{shim:vtable#0}
+define internal noundef range(i8 0, 3) i8 @_RNSNvYNCNvMs6_NtCskntrVAOPBeX_18purrdf_sparql_eval4evalNtBc_7EvalCtx24pattern_is_parallel_safe0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternEE9call_once6vtableCseY6IX0djbTh_13purrdf_native(ptr nofree noundef readonly captures(none) %_1, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %0) unnamed_addr #3 personality ptr @rust_eh_personality !guid !100283 {
+start:
+  %1 = load ptr, ptr %_1, align 8, !nonnull !3914, !align !3915, !noundef !3914
+  %_6.i.i = load ptr, ptr %1, align 8, !noalias !100284, !nonnull !3914, !noundef !3914
+  %_3.i.i = getelementptr inbounds nuw i8, ptr %_6.i.i, i64 16
+; call purrdf_sparql_eval::eval::placeholder_unsafe
+  %_0.i.i = tail call noundef range(i8 0, 3) i8 @_RNvNtCskntrVAOPBeX_18purrdf_sparql_eval4eval18placeholder_unsafe(ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(32) %_3.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %0), !noalias !100290
+  ret i8 %_0.i.i
+}
+
+ASSEMBLY
+_RNSNvYNCNvMs6_NtCskntrVAOPBeX_18purrdf_sparql_eval4evalNtBc_7EvalCtx24pattern_is_parallel_safe0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternEE9call_once6vtableCseY6IX0djbTh_13purrdf_native:
+	.cfi_startproc
+	movq	(%rdi), %rax
+	movq	(%rax), %rdi
+	addq	$16, %rdi
+	jmpq	*_RNvNtCskntrVAOPBeX_18purrdf_sparql_eval4eval18placeholder_unsafe@GOTPCREL(%rip)
+.Lfunc_end2485:

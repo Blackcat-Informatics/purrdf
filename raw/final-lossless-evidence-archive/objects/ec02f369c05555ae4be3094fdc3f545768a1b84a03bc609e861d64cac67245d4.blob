@@ -1,0 +1,8 @@
+ActiveState=active
+SubState=running
+InvocationID=c20a1cee4a12497cb8ef93623fddf0f9
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-mint-replay-rust-20261008.scope
+MemoryCurrent=1247305728
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

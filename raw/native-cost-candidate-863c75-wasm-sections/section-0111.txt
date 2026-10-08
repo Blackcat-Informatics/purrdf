@@ -1,0 +1,735 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-8d88597f61c9805d.purrdf_sparql_eval.3390c597aa620bea-cgu.0.rcgu.o.rcgu.ll:330805
+; purrdf_sparql_eval::modifier::eval_graph_var::<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#3}
+define internal fastcc noundef nonnull ptr @_RNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8modifier14eval_graph_varNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtB6_4eval11RowConsumerB13_EEs1_0B6_(ptr %0, i32 %1, ptr noundef nonnull %2) unnamed_addr #1 !guid !60898 {
+  %4 = alloca [28 x i8], align 4
+  %5 = alloca [28 x i8], align 4
+  %6 = alloca [4 x i8], align 4
+  store ptr %2, ptr %6, align 4
+  call void @llvm.lifetime.start.p0(ptr nonnull %5)
+  %7 = getelementptr i8, ptr %2, i32 12
+  %8 = load ptr, ptr %7, align 4, !nonnull !1617, !noundef !1617
+  %9 = getelementptr i8, ptr %2, i32 16
+  %10 = load i32, ptr %9, align 4, !noundef !1617
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !60899)
+  %11 = shl nuw nsw i32 %10, 3
+  %12 = icmp eq i32 %10, 0
+  br i1 %12, label %.loopexit, label %13
+
+13:                                               ; preds = %3
+; call <dlmalloc::dlmalloc::Dlmalloc<dlmalloc::sys::System>>::malloc
+  %14 = tail call fastcc noundef ptr @_RNvMs0_NtCsdvL56Lvsrr_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCs51WbWHd1ipx_18purrdf_alloc_probe.llvm.18113153652620469488(i32 noundef range(i32 1, 0) %11) #74, !noalias !60902
+  %15 = icmp eq ptr %14, null
+  br i1 %15, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread, label %16
+
+16:                                               ; preds = %13
+  %17 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902, !noundef !1617
+  %18 = tail call i64 @llvm.uadd.sat.i64(i64 %17, i64 1)
+  store i64 %18, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902
+  %19 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902, !noundef !1617
+  %20 = zext nneg i32 %11 to i64
+  %21 = tail call i64 @llvm.uadd.sat.i64(i64 %19, i64 %20)
+  store i64 %21, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902
+  %22 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902, !noundef !1617
+  %23 = tail call i64 @llvm.sadd.sat.i64(i64 %22, i64 %20)
+  store i64 %23, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902
+  %24 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902, !noundef !1617
+  %25 = icmp sgt i64 %23, %24
+  br i1 %25, label %26, label %.preheader18
+
+26:                                               ; preds = %16
+  store i64 %23, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !60902
+  br label %.preheader18
+
+.preheader18:                                     ; preds = %26, %16
+  br label %27
+
+27:                                               ; preds = %.preheader18, %30
+  %28 = load atomic i64, ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488 acquire, align 8, !noalias !60902
+  %29 = icmp slt i64 %28, 0
+  br i1 %29, label %30, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+
+30:                                               ; preds = %27
+  %31 = add nsw i64 %28, 1
+  %32 = cmpxchg weak ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488, i64 %28, i64 %31 acq_rel acquire, align 8, !noalias !60908
+  %33 = extractvalue { i64, i1 } %32, 1
+  br i1 %33, label %34, label %27
+
+34:                                               ; preds = %30
+  %35 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS, i64 1 monotonic, align 8, !noalias !60902
+  %36 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES, i64 %20 monotonic, align 8, !noalias !60902
+  %37 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES, i64 %20 monotonic, align 8, !noalias !60902
+  %38 = tail call i64 @llvm.sadd.sat.i64(i64 %37, i64 %20)
+  %39 = load atomic i64, ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES monotonic, align 8, !noalias !60902
+  br label %40
+
+40:                                               ; preds = %43, %34
+  %41 = phi i64 [ %39, %34 ], [ %46, %43 ]
+  %42 = icmp sgt i64 %38, %41
+  br i1 %42, label %43, label %47
+
+43:                                               ; preds = %40
+  %44 = cmpxchg weak ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES, i64 %41, i64 %38 monotonic monotonic, align 8, !noalias !60911
+  %45 = extractvalue { i64, i1 } %44, 1
+  %46 = extractvalue { i64, i1 } %44, 0
+  br i1 %45, label %47, label %40
+
+47:                                               ; preds = %43, %40
+  %48 = atomicrmw sub ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488, i64 1 release, align 8, !noalias !60902
+  br label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread: ; preds = %13
+; call alloc::raw_vec::handle_error
+  tail call void @_RNvNtCsiymUexJS71D_5alloc7raw_vec12handle_error(i32 noundef 4, i32 %11) #75, !noalias !60914
+  unreachable
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit:  ; preds = %27, %47
+  %49 = getelementptr inbounds nuw [8 x i8], ptr %8, i32 %10
+  br label %50
+
+50:                                               ; preds = %63, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+  %51 = phi ptr [ %65, %63 ], [ %8, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit ]
+  %52 = phi i32 [ %54, %63 ], [ %10, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit ]
+  %53 = phi i32 [ %64, %63 ], [ 0, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit ]
+  %54 = add nsw i32 %52, -1
+  %55 = icmp eq ptr %51, %49
+  br i1 %55, label %.loopexit, label %56
+
+56:                                               ; preds = %50
+  %57 = load ptr, ptr %51, align 4, !alias.scope !60899, !noalias !60915, !nonnull !1617, !noundef !1617
+  %58 = getelementptr i8, ptr %51, i32 4
+  %59 = load i32, ptr %58, align 4, !alias.scope !60899, !noalias !60915
+  %60 = atomicrmw add ptr %57, i32 1 monotonic, align 4, !noalias !60914
+  %61 = icmp slt i32 %60, 0
+  br i1 %61, label %62, label %63
+
+62:                                               ; preds = %56
+  tail call void @llvm.trap()
+  unreachable
+
+63:                                               ; preds = %56
+  %64 = add nuw nsw i32 %53, 1
+  %65 = getelementptr inbounds nuw i8, ptr %51, i32 8
+  %66 = getelementptr inbounds nuw [8 x i8], ptr %14, i32 %53
+  store ptr %57, ptr %66, align 4, !noalias !60914
+  %67 = getelementptr inbounds nuw i8, ptr %66, i32 4
+  store i32 %59, ptr %67, align 4, !noalias !60914
+  %68 = icmp eq i32 %54, 0
+  br i1 %68, label %.loopexit, label %50
+
+.loopexit:                                        ; preds = %63, %50, %3
+  %69 = phi ptr [ inttoptr (i32 4 to ptr), %3 ], [ %14, %50 ], [ %14, %63 ]
+  %70 = getelementptr inbounds nuw i8, ptr %2, i32 20
+  %71 = getelementptr inbounds nuw i8, ptr %5, i32 12
+; call <hashbrown::map::HashMap<purrdf_sparql_algebra::ast::Variable, usize, purrdf_hash::fixed::FixedState> as core::clone::Clone>::clone
+  call fastcc void @_RNvXNtCshgG2ZZwXuBU_9hashbrown3mapINtB2_7HashMapNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariablejNtNtCs8m8EVYgTrnF_11purrdf_hash5fixed10FixedStateENtNtCsb6ASFGx6cXz_4core5clone5Clone5cloneCs4qtSUp8yRUQ_18purrdf_sparql_eval.llvm.1838742593045173733(ptr noalias nofree noundef align 4 captures(none) dereferenceable(16) %71, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) %70) #74
+  store i32 %10, ptr %5, align 4
+  %72 = getelementptr inbounds nuw i8, ptr %5, i32 4
+  store ptr %69, ptr %72, align 4
+  %73 = getelementptr inbounds nuw i8, ptr %5, i32 8
+  store i32 %10, ptr %73, align 4
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %0) ]
+  %74 = atomicrmw add ptr %0, i32 1 monotonic, align 4
+  %75 = icmp slt i32 %74, 0
+  br i1 %75, label %118, label %76
+
+76:                                               ; preds = %.loopexit
+; call <purrdf_sparql_eval::solution::VarSchema>::push
+  %77 = call noundef i32 @_RNvMNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8solutionNtB2_9VarSchema4push(ptr noalias nofree noundef nonnull align 4 dereferenceable(28) %5, ptr noundef nonnull %0, i32 noundef %1) #74
+  call void @llvm.lifetime.start.p0(ptr nonnull %4)
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(28) %4, ptr noundef nonnull align 4 dereferenceable(28) %5, i32 28, i1 false)
+; call <dlmalloc::dlmalloc::Dlmalloc<dlmalloc::sys::System>>::malloc
+  %78 = call fastcc noundef ptr @_RNvMs0_NtCsdvL56Lvsrr_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCs51WbWHd1ipx_18purrdf_alloc_probe.llvm.18113153652620469488(i32 noundef range(i32 1, 0) 36) #74
+  %79 = icmp eq ptr %78, null
+  br i1 %79, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5.thread, label %80
+
+80:                                               ; preds = %76
+  %81 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noundef !1617
+  %82 = call i64 @llvm.uadd.sat.i64(i64 %81, i64 1)
+  store i64 %82, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8
+  %83 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noundef !1617
+  %84 = call i64 @llvm.uadd.sat.i64(i64 %83, i64 36)
+  store i64 %84, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8
+  %85 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noundef !1617
+  %86 = call i64 @llvm.sadd.sat.i64(i64 %85, i64 36)
+  store i64 %86, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8
+  %87 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noundef !1617
+  %88 = icmp sgt i64 %86, %87
+  br i1 %88, label %89, label %.preheader
+
+89:                                               ; preds = %80
+  store i64 %86, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8
+  br label %.preheader
+
+.preheader:                                       ; preds = %89, %80
+  br label %90
+
+90:                                               ; preds = %.preheader, %93
+  %91 = load atomic i64, ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488 acquire, align 8
+  %92 = icmp slt i64 %91, 0
+  br i1 %92, label %93, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5
+
+93:                                               ; preds = %90
+  %94 = add nsw i64 %91, 1
+  %95 = cmpxchg weak ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488, i64 %91, i64 %94 acq_rel acquire, align 8, !noalias !60916
+  %96 = extractvalue { i64, i1 } %95, 1
+  br i1 %96, label %97, label %90
+
+97:                                               ; preds = %93
+  %98 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS, i64 1 monotonic, align 8
+  %99 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES, i64 36 monotonic, align 8
+  %100 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES, i64 36 monotonic, align 8
+  %101 = call i64 @llvm.sadd.sat.i64(i64 %100, i64 36)
+  %102 = load atomic i64, ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES monotonic, align 8
+  br label %103
+
+103:                                              ; preds = %106, %97
+  %104 = phi i64 [ %102, %97 ], [ %109, %106 ]
+  %105 = icmp sgt i64 %101, %104
+  br i1 %105, label %106, label %110
+
+106:                                              ; preds = %103
+  %107 = cmpxchg weak ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES, i64 %104, i64 %101 monotonic monotonic, align 8, !noalias !60919
+  %108 = extractvalue { i64, i1 } %107, 1
+  %109 = extractvalue { i64, i1 } %107, 0
+  br i1 %108, label %110, label %103
+
+110:                                              ; preds = %106, %103
+  %111 = atomicrmw sub ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488, i64 1 release, align 8
+  br label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5.thread: ; preds = %76
+; call alloc::alloc::handle_alloc_error
+  call void @_RNvNtCsiymUexJS71D_5alloc5alloc18handle_alloc_error(i32 noundef 4, i32 noundef 36) #75
+  unreachable
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5: ; preds = %90, %110
+  store i32 1, ptr %78, align 4
+  %112 = getelementptr inbounds nuw i8, ptr %78, i32 4
+  store i32 1, ptr %112, align 4
+  %113 = getelementptr inbounds nuw i8, ptr %78, i32 8
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(28) %113, ptr noundef nonnull align 4 dereferenceable(28) %4, i32 28, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  call void @llvm.lifetime.end.p0(ptr nonnull %5)
+  %114 = atomicrmw sub ptr %2, i32 1 release, align 4, !noalias !60922
+  %115 = icmp eq i32 %114, 1
+  br i1 %115, label %116, label %117
+
+116:                                              ; preds = %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5
+  fence acquire
+; call <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+  call void @_RNvMsn_NtCsiymUexJS71D_5alloc4syncINtB5_3ArcNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8solution9VarSchemaE9drop_slowBK_(ptr noalias nofree noundef nonnull readonly align 4 dereferenceable(4) %6) #73
+  br label %117
+
+117:                                              ; preds = %116, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit5
+  ret ptr %78
+
+118:                                              ; preds = %.loopexit
+  tail call void @llvm.trap()
+  unreachable
+}
+
+ASSEMBLY
+_RNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8modifier14eval_graph_varNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtB6_4eval11RowConsumerB13_EEs1_0B6_:
+.Lfunc_begin727:
+	.functype	_RNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8modifier14eval_graph_varNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtB6_4eval11RowConsumerB13_EEs1_0B6_ (i32, i32, i32) -> (i32)
+	.local  	i32, i32, i32, i32, i32, i64, i64, i64, i32, i32, i32, i32, i32
+	global.get	__stack_pointer
+	i32.const	64
+	i32.sub 
+	local.tee	3
+	global.set	__stack_pointer
+	local.get	3
+	local.get	2
+	i32.store	0
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	local.get	2
+	i32.const	16
+	i32.add 
+	i32.load	0
+	local.tee	4
+	br_if   	0
+	i32.const	4
+	local.set	5
+	br      	1
+.LBB727_2:
+	end_block
+	local.get	2
+	i32.const	12
+	i32.add 
+	i32.load	0
+	local.set	6
+	local.get	4
+	i32.const	3
+	i32.shl 
+	local.tee	7
+	call	_RNvMs0_NtCsdvL56Lvsrr_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCs51WbWHd1ipx_18purrdf_alloc_probe.llvm.18113153652620469488
+	local.tee	5
+	i32.eqz
+	br_if   	1
+	i32.const	0
+	i64.const	-1
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i64.const	1
+	i64.add 
+	local.tee	8
+	local.get	8
+	i64.eqz
+	i64.select
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i32.const	0
+	i64.const	-1
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	local.tee	8
+	local.get	7
+	i64.extend_i32_u
+	local.tee	9
+	i64.add 
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.lt_u
+	i64.select
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i32.const	0
+	i64.const	9223372036854775807
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	local.tee	8
+	local.get	9
+	i64.add 
+	local.tee	10
+	local.get	9
+	i64.const	0
+	i64.lt_s
+	local.get	10
+	local.get	8
+	i64.lt_s
+	i32.xor 
+	i64.select
+	local.tee	8
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	block   	
+	local.get	8
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i64.le_s
+	br_if   	0
+	i32.const	0
+	local.get	8
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+.LBB727_5:
+	end_block
+	block   	
+	loop    	
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.tee	8
+	i64.const	-1
+	i64.gt_s
+	br_if   	1
+	i32.const	0
+	local.get	8
+	i64.const	1
+	i64.add 
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.eq  
+	i64.select
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.get	10
+	local.get	8
+	i64.ne  
+	br_if   	0
+	end_loop
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS
+	i64.const	1
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES
+	local.get	9
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES
+	local.tee	10
+	local.get	9
+	i64.add 
+	local.tee	8
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES
+	i64.const	9223372036854775807
+	local.get	8
+	local.get	9
+	i64.const	0
+	i64.lt_s
+	local.get	8
+	local.get	10
+	i64.lt_s
+	i32.xor 
+	i64.select
+	local.set	9
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.set	8
+.LBB727_8:
+	block   	
+	loop    	
+	local.get	9
+	local.get	8
+	i64.le_s
+	br_if   	1
+	i32.const	0
+	local.get	9
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.eq  
+	i64.select
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.get	10
+	local.get	8
+	i64.ne  
+	local.set	7
+	local.get	10
+	local.set	8
+	local.get	7
+	br_if   	0
+.LBB727_10:
+	end_loop
+	end_block
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	i64.const	-1
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+.LBB727_11:
+	end_block
+	local.get	4
+	i32.const	3
+	i32.shl 
+	local.set	11
+	i32.const	0
+	local.set	7
+	local.get	4
+	local.set	12
+.LBB727_12:
+	loop    	
+	local.get	11
+	local.get	7
+	i32.eq  
+	br_if   	1
+	local.get	6
+	i32.const	4
+	i32.add 
+	i32.load	0
+	local.set	13
+	local.get	6
+	i32.load	0
+	local.tee	14
+	local.get	14
+	i32.load	0
+	local.tee	15
+	i32.const	1
+	i32.add 
+	i32.store	0
+	local.get	15
+	i32.const	-1
+	i32.le_s
+	br_if   	3
+	local.get	5
+	local.get	7
+	i32.add 
+	local.tee	15
+	local.get	14
+	i32.store	0
+	local.get	15
+	i32.const	4
+	i32.add 
+	local.get	13
+	i32.store	0
+	local.get	7
+	i32.const	8
+	i32.add 
+	local.set	7
+	local.get	6
+	i32.const	8
+	i32.add 
+	local.set	6
+	local.get	12
+	i32.const	-1
+	i32.add 
+	local.tee	12
+	br_if   	0
+.LBB727_15:
+	end_loop
+	end_block
+	local.get	3
+	i32.const	4
+	i32.add 
+	i32.const	12
+	i32.add 
+	local.get	2
+	i32.const	20
+	i32.add 
+	call	_RNvXNtCshgG2ZZwXuBU_9hashbrown3mapINtB2_7HashMapNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariablejNtNtCs8m8EVYgTrnF_11purrdf_hash5fixed10FixedStateENtNtCsb6ASFGx6cXz_4core5clone5Clone5cloneCs4qtSUp8yRUQ_18purrdf_sparql_eval.llvm.1838742593045173733
+	local.get	0
+	local.get	0
+	i32.load	0
+	local.tee	7
+	i32.const	1
+	i32.add 
+	i32.store	0
+	local.get	3
+	local.get	4
+	i32.store	12
+	local.get	3
+	local.get	5
+	i32.store	8
+	local.get	3
+	local.get	4
+	i32.store	4
+	local.get	7
+	i32.const	0
+	i32.lt_s
+	br_if   	1
+	local.get	3
+	i32.const	4
+	i32.add 
+	local.get	0
+	local.get	1
+	call	_RNvMNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8solutionNtB2_9VarSchema4push
+	drop
+	local.get	3
+	local.get	3
+	i32.load	28
+	i32.store	56
+	local.get	3
+	local.get	3
+	i64.load	20:p2align=2
+	i64.store	48
+	local.get	3
+	local.get	3
+	i64.load	12:p2align=2
+	i64.store	40
+	local.get	3
+	local.get	3
+	i64.load	4:p2align=2
+	i64.store	32
+	i32.const	36
+	call	_RNvMs0_NtCsdvL56Lvsrr_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCs51WbWHd1ipx_18purrdf_alloc_probe.llvm.18113153652620469488
+	local.tee	6
+	i32.eqz
+	br_if   	2
+	i32.const	0
+	i64.const	-1
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i64.const	1
+	i64.add 
+	local.tee	8
+	local.get	8
+	i64.eqz
+	i64.select
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i32.const	0
+	i64.const	-1
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	local.tee	8
+	i64.const	36
+	i64.add 
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.lt_u
+	i64.select
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i32.const	0
+	i64.const	9223372036854775807
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	local.tee	8
+	i64.const	36
+	i64.add 
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.lt_s
+	i64.select
+	local.tee	8
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	block   	
+	local.get	8
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i64.le_s
+	br_if   	0
+	i32.const	0
+	local.get	8
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+.LBB727_19:
+	end_block
+	block   	
+	loop    	
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.tee	8
+	i64.const	-1
+	i64.gt_s
+	br_if   	1
+	i32.const	0
+	local.get	8
+	i64.const	1
+	i64.add 
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.eq  
+	i64.select
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.get	10
+	local.get	8
+	i64.ne  
+	br_if   	0
+	end_loop
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS
+	i64.const	1
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES
+	i64.const	36
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES
+	local.tee	10
+	i64.const	36
+	i64.add 
+	local.tee	8
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES
+	i64.const	9223372036854775807
+	local.get	8
+	local.get	8
+	local.get	10
+	i64.lt_s
+	i64.select
+	local.set	9
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.set	8
+.LBB727_22:
+	block   	
+	loop    	
+	local.get	9
+	local.get	8
+	i64.le_s
+	br_if   	1
+	i32.const	0
+	local.get	9
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.tee	10
+	local.get	10
+	local.get	8
+	i64.eq  
+	i64.select
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.get	10
+	local.get	8
+	i64.ne  
+	local.set	7
+	local.get	10
+	local.set	8
+	local.get	7
+	br_if   	0
+.LBB727_24:
+	end_loop
+	end_block
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	i64.const	-1
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+.LBB727_25:
+	end_block
+	local.get	6
+	i64.const	4294967297
+	i64.store	0:p2align=2
+	local.get	6
+	local.get	3
+	i64.load	32
+	i64.store	8:p2align=2
+	local.get	6
+	local.get	3
+	i64.load	40
+	i64.store	16:p2align=2
+	local.get	6
+	local.get	3
+	i64.load	48
+	i64.store	24:p2align=2
+	local.get	6
+	local.get	3
+	i32.load	56
+	i32.store	32
+	local.get	2
+	local.get	2
+	i32.load	0
+	local.tee	7
+	i32.const	-1
+	i32.add 
+	i32.store	0
+	block   	
+	local.get	7
+	i32.const	1
+	i32.ne  
+	br_if   	0
+	local.get	3
+	call	_RNvMsn_NtCsiymUexJS71D_5alloc4syncINtB5_3ArcNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8solution9VarSchemaE9drop_slowBK_
+.LBB727_27:
+	end_block
+	local.get	3
+	i32.const	64
+	i32.add 
+	global.set	__stack_pointer
+	local.get	6
+	return
+.LBB727_28:
+	end_block
+	i32.const	4
+	local.get	7
+	call	_RNvNtCsiymUexJS71D_5alloc7raw_vec12handle_error
+.LBB727_29:
+	end_block
+	unreachable
+.LBB727_30:
+	end_block
+	i32.const	4
+	i32.const	36
+	call	_RNvNtCsiymUexJS71D_5alloc5alloc18handle_alloc_error
+	unreachable
+	end_function
+.Lfunc_end727:

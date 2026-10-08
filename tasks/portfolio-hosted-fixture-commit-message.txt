@@ -1,0 +1,4 @@
+Complete contextual application policy fixtures
+
+Supply the explicit dataset policy in the three structural visitor fixtures.
+Preserve raw application shapes and validate the actual library/test closure.

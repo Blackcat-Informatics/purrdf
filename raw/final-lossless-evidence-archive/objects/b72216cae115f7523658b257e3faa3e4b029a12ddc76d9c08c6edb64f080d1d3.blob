@@ -1,0 +1,296 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-inline-cost-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_algebra-2f54bfeaed8b20be.purrdf_sparql_algebra.1f9a9904874edf46-cgu.0.rcgu.o.rcgu.ll:178124
+; <purrdf_lex::walk::WorkList<purrdf_lex::walk::Tok<purrdf_sparql_algebra::walk::NodeRef, purrdf_sparql_algebra::traits::Leaf>, 48>>::reverse_top
+define internal fastcc void @_RNvMs_NtCs2JuOC9RsS5R_10purrdf_lex4walkINtB4_8WorkListINtB4_3TokNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra4walk7NodeRefNtNtB14_6traits4LeafEKj30_E11reverse_topB14_(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(1184) %0, i64 noundef %1) unnamed_addr #0 personality ptr @rust_eh_personality !guid !30053 {
+  %3 = alloca [24 x i8], align 8
+  %4 = alloca [24 x i8], align 8
+  %5 = alloca [24 x i8], align 8
+  %6 = getelementptr inbounds nuw i8, ptr %0, i64 1176
+  %7 = load i64, ptr %6, align 8, !noundef !1058
+  %8 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  %9 = load i64, ptr %8, align 8, !noundef !1058
+  %10 = icmp ult i64 %9, 384307168202282326
+  tail call void @llvm.assume(i1 %10)
+  %11 = add i64 %9, %7
+  %12 = sub i64 %11, %1
+  %13 = add i64 %12, 1
+  %14 = icmp ult i64 %13, %11
+  br i1 %14, label %15, label %.loopexit
+
+15:                                               ; preds = %2
+  %16 = getelementptr inbounds nuw i8, ptr %0, i64 24
+  %17 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  br label %18
+
+.loopexit:                                        ; preds = %56, %2
+  ret void
+
+18:                                               ; preds = %56, %15
+  %19 = phi i64 [ %13, %15 ], [ %57, %56 ]
+  %20 = phi i64 [ %11, %15 ], [ %22, %56 ]
+  %21 = phi i64 [ %12, %15 ], [ %19, %56 ]
+  %22 = add i64 %20, -1
+  %23 = icmp ult i64 %20, 49
+  br i1 %23, label %26, label %24
+
+24:                                               ; preds = %18
+  %25 = icmp ugt i64 %21, 47
+  br i1 %25, label %33, label %28
+
+26:                                               ; preds = %18
+  %27 = icmp ult i64 %21, 48
+  br i1 %27, label %60, label %59
+
+28:                                               ; preds = %24
+  %29 = getelementptr inbounds nuw [24 x i8], ptr %16, i64 %21
+  %30 = load i8, ptr %29, align 8
+  %31 = getelementptr inbounds nuw i8, ptr %29, i64 1
+  store i8 -1, ptr %29, align 8
+  %32 = icmp eq i8 %30, -1
+  br i1 %32, label %43, label %39, !prof !1154
+
+33:                                               ; preds = %24
+  %34 = load ptr, ptr %17, align 8, !nonnull !1058, !noundef !1058
+  %35 = load i64, ptr %8, align 8, !noundef !1058
+  %36 = add i64 %21, -48
+  %37 = add i64 %20, -49
+  %38 = icmp ult i64 %36, %35
+  br i1 %38, label %49, label %51
+
+39:                                               ; preds = %28
+  %40 = add i64 %20, -49
+  %41 = load i64, ptr %8, align 8, !noundef !1058
+  %42 = icmp ult i64 %40, %41
+  br i1 %42, label %44, label %48
+
+43:                                               ; preds = %28
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.11e6520e54d94dc868ac851900fc33ed.530, i64 noundef 41, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.11e6520e54d94dc868ac851900fc33ed.531) #45
+  unreachable
+
+44:                                               ; preds = %39
+  %45 = load ptr, ptr %17, align 8, !nonnull !1058, !noundef !1058
+  %46 = getelementptr inbounds nuw [24 x i8], ptr %45, i64 %40
+  call void @llvm.lifetime.start.p0(ptr nonnull %5)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %5, ptr noundef nonnull align 8 dereferenceable(24) %46, i64 24, i1 false)
+  store i8 %30, ptr %46, align 8
+  %47 = getelementptr inbounds nuw i8, ptr %46, i64 1
+  tail call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 1 dereferenceable(23) %47, ptr noundef nonnull align 1 dereferenceable(23) %31, i64 23, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %29, ptr noundef nonnull align 8 dereferenceable(24) %5, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %5)
+  br label %56
+
+48:                                               ; preds = %39
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %40, i64 noundef %41, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.11e6520e54d94dc868ac851900fc33ed.532) #45
+  unreachable
+
+49:                                               ; preds = %33
+  %50 = icmp ult i64 %37, %35
+  br i1 %50, label %52, label %55
+
+51:                                               ; preds = %33
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %36, i64 noundef %35, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.11e6520e54d94dc868ac851900fc33ed.533) #45
+  unreachable
+
+52:                                               ; preds = %49
+  %53 = getelementptr inbounds nuw [24 x i8], ptr %34, i64 %36
+  %54 = getelementptr inbounds nuw [24 x i8], ptr %34, i64 %37
+  call void @llvm.lifetime.start.p0(ptr nonnull %3)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %3, ptr noundef nonnull align 8 dereferenceable(24) %53, i64 24, i1 false)
+  tail call void @llvm.memmove.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %53, ptr noundef nonnull align 8 dereferenceable(24) %54, i64 24, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %54, ptr noundef nonnull align 8 dereferenceable(24) %3, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %3)
+  br label %56
+
+55:                                               ; preds = %49
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %37, i64 noundef %35, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.11e6520e54d94dc868ac851900fc33ed.533) #45
+  unreachable
+
+56:                                               ; preds = %60, %52, %44
+  %57 = add nuw i64 %19, 1
+  %58 = icmp ult i64 %57, %22
+  br i1 %58, label %18, label %.loopexit
+
+59:                                               ; preds = %26
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %21, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.11e6520e54d94dc868ac851900fc33ed.534) #45
+  unreachable
+
+60:                                               ; preds = %26
+  %61 = getelementptr inbounds nuw [24 x i8], ptr %16, i64 %21
+  %62 = getelementptr [24 x i8], ptr %0, i64 %20
+  call void @llvm.lifetime.start.p0(ptr nonnull %4)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %4, ptr noundef nonnull align 8 dereferenceable(24) %61, i64 24, i1 false)
+  tail call void @llvm.memmove.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %61, ptr noundef nonnull align 8 dereferenceable(24) %62, i64 24, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %62, ptr noundef nonnull align 8 dereferenceable(24) %4, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  br label %56
+}
+
+ASSEMBLY
+_RNvMs_NtCs2JuOC9RsS5R_10purrdf_lex4walkINtB4_8WorkListINtB4_3TokNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra4walk7NodeRefNtNtB14_6traits4LeafEKj30_E11reverse_topB14_:
+.Lfunc_begin364:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r12
+	.cfi_def_cfa_offset 40
+	pushq	%rbx
+	.cfi_def_cfa_offset 48
+	subq	$32, %rsp
+	.cfi_def_cfa_offset 80
+	.cfi_offset %rbx, -48
+	.cfi_offset %r12, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	1176(%rdi), %rcx
+	movq	16(%rdi), %rdx
+	leaq	(%rdx,%rcx), %rax
+	movq	%rax, %r8
+	subq	%rsi, %r8
+	incq	%r8
+	cmpq	%rax, %r8
+	jae	.LBB364_14
+	leaq	(,%rdx,8), %rax
+	movq	%rdx, %r8
+	subq	%rsi, %r8
+	shlq	$3, %rsi
+	leaq	(%rax,%rax,2), %r9
+	leaq	(,%rcx,8), %rax
+	leaq	(%rax,%rax,2), %r11
+	leaq	(%rsi,%rsi,2), %rax
+	leaq	24(%rdi,%r9), %r10
+	leaq	(%rdi,%r9), %r15
+	movq	%r11, %rbx
+	subq	%rax, %rbx
+	leaq	25(%rbx), %r14
+	addq	$-1152, %rbx
+	jmp	.LBB364_2
+	.p2align	4
+.LBB364_6:
+	movq	8(%rdi), %rsi
+	leaq	-25(%r10,%r14), %rax
+	addq	%r9, %rsi
+	movq	-1160(%r11,%rsi), %r12
+	movq	%r12, 16(%rsp)
+	vmovups	-1176(%r11,%rsi), %xmm0
+	vmovaps	%xmm0, (%rsp)
+	movb	%bpl, -1176(%r11,%rsi)
+	movq	16(%rax), %r12
+	movq	%r12, -1160(%r11,%rsi)
+	vmovups	1(%rax), %xmm0
+	vmovups	%xmm0, -1175(%r11,%rsi)
+	vmovaps	(%rsp), %xmm0
+	movq	16(%rsp), %rsi
+	movq	%rsi, 16(%rax)
+	vmovups	%xmm0, (%rax)
+.LBB364_13:
+	leaq	-1(%rcx,%rdx), %rax
+	leaq	2(%rcx,%r8), %rsi
+	incq	%r8
+	addq	$24, %r14
+	addq	$24, %rbx
+	addq	$-24, %r11
+	decq	%rdx
+	cmpq	%rax, %rsi
+	jae	.LBB364_14
+.LBB364_2:
+	leaq	(%rcx,%r8), %rax
+	leaq	(%rcx,%rdx), %rsi
+	cmpq	$49, %rsi
+	jae	.LBB364_3
+	cmpq	$48, %rax
+	jae	.LBB364_18
+	vmovups	-25(%r10,%r14), %xmm0
+	movq	-9(%r10,%r14), %rax
+	vmovups	(%r15,%r11), %xmm2
+	movq	%rax, 16(%rsp)
+	movq	16(%r15,%r11), %rax
+	vmovaps	%xmm0, (%rsp)
+	vmovups	%xmm2, -25(%r10,%r14)
+	vmovaps	(%rsp), %xmm1
+	movq	%rax, -9(%r10,%r14)
+	movq	16(%rsp), %rax
+	movq	%rax, 16(%r15,%r11)
+	vmovups	%xmm1, (%r15,%r11)
+	jmp	.LBB364_13
+	.p2align	4
+.LBB364_3:
+	cmpq	$47, %rax
+	jbe	.LBB364_4
+	movq	16(%rdi), %rsi
+	leaq	-48(%rcx,%r8), %rax
+	cmpq	%rsi, %rax
+	jae	.LBB364_10
+	leaq	-49(%rcx,%rdx), %rax
+	cmpq	%rsi, %rax
+	jae	.LBB364_10
+	movq	8(%rdi), %rax
+	addq	%r9, %rax
+	movq	16(%rbx,%rax), %rsi
+	movq	%rsi, 16(%rsp)
+	vmovups	(%rbx,%rax), %xmm0
+	vmovaps	%xmm0, (%rsp)
+	vmovups	-1176(%r11,%rax), %xmm0
+	movq	-1160(%r11,%rax), %rsi
+	movq	%rsi, 16(%rbx,%rax)
+	vmovups	%xmm0, (%rbx,%rax)
+	movq	16(%rsp), %rsi
+	movq	%rsi, -1160(%r11,%rax)
+	vmovaps	(%rsp), %xmm0
+	vmovups	%xmm0, -1176(%r11,%rax)
+	jmp	.LBB364_13
+	.p2align	4
+.LBB364_4:
+	movzbl	-25(%r10,%r14), %ebp
+	movb	$-1, -25(%r10,%r14)
+	cmpb	$-1, %bpl
+	je	.LBB364_17
+	movq	16(%rdi), %rsi
+	leaq	-49(%rcx,%rdx), %rax
+	cmpq	%rsi, %rax
+	jb	.LBB364_6
+	leaq	.Lanon.11e6520e54d94dc868ac851900fc33ed.532(%rip), %rdx
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check@GOTPCREL(%rip), %rcx
+	movq	%rax, %rdi
+	callq	*%rcx
+.LBB364_14:
+	addq	$32, %rsp
+	.cfi_def_cfa_offset 48
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB364_17:
+	.cfi_def_cfa_offset 80
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed@GOTPCREL(%rip), %rax
+	leaq	.Lanon.11e6520e54d94dc868ac851900fc33ed.530(%rip), %rdi
+	leaq	.Lanon.11e6520e54d94dc868ac851900fc33ed.531(%rip), %rdx
+	movl	$41, %esi
+	callq	*%rax
+.LBB364_18:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check@GOTPCREL(%rip), %rcx
+	leaq	.Lanon.11e6520e54d94dc868ac851900fc33ed.534(%rip), %rdx
+	movl	$48, %esi
+	movq	%rax, %rdi
+	callq	*%rcx
+.LBB364_10:
+	leaq	.Lanon.11e6520e54d94dc868ac851900fc33ed.533(%rip), %rdx
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check@GOTPCREL(%rip), %rcx
+	movq	%rax, %rdi
+	callq	*%rcx
+.Lfunc_end364:

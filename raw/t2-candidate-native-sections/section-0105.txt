@@ -1,0 +1,105 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_algebra-2f54bfeaed8b20be.purrdf_sparql_algebra.1f9a9904874edf46-cgu.0.rcgu.o.rcgu.ll:254199
+; <purrdf_sparql_algebra::algebra::GraphPattern as core::clone::Clone>::clone
+define void @_RNvXs4_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([144 x i8]) align 8 captures(none) dereferenceable(144) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1) unnamed_addr #0 personality ptr @rust_eh_personality !guid !44019 {
+  %3 = alloca [144 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %3)
+; call purrdf_sparql_algebra::owned::clone_tree::<false, <purrdf_sparql_algebra::algebra::GraphPattern as core::clone::Clone>::clone>
+  call fastcc void @_RINvNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra5owned10clone_treeKb0_NvYNtNtB4_7algebra12GraphPatternNtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneEB4_.llvm.3719748217336137286(ptr noalias nofree noundef align 8 captures(none) dereferenceable(144) %3, i64 noundef 0, ptr noundef %1)
+  %4 = load i32, ptr %3, align 8, !range !10374, !noundef !1058
+  %5 = icmp samesign ult i32 %4, 31
+  br i1 %5, label %7, label %6, !prof !3807
+
+6:                                                ; preds = %2
+; invoke core::panicking::panic_fmt
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt(ptr noundef nonnull @anon.11e6520e54d94dc868ac851900fc33ed.1020.llvm.3719748217336137286, ptr noundef nonnull inttoptr (i64 147 to ptr), ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.11e6520e54d94dc868ac851900fc33ed.1022.llvm.3719748217336137286) #43
+          to label %12 unwind label %8
+
+7:                                                ; preds = %2
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(144) %0, ptr noundef nonnull align 8 dereferenceable(144) %3, i64 144, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %3)
+  ret void
+
+8:                                                ; preds = %6
+  %9 = landingpad { ptr, i32 }
+          cleanup
+  %10 = load i32, ptr %3, align 8, !range !10374, !noundef !1058
+  %11 = icmp samesign ult i32 %10, 31
+  br i1 %11, label %13, label %14
+
+12:                                               ; preds = %6
+  unreachable
+
+13:                                               ; preds = %14, %8
+  resume { ptr, i32 } %9
+
+14:                                               ; preds = %8
+; invoke core::ptr::drop_glue::<purrdf_sparql_algebra::owned::Owned>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra5owned5OwnedEBF_.llvm.3719748217336137286(ptr noalias nofree noundef align 8 dereferenceable(144) %3) #44
+          to label %13 unwind label %15
+
+15:                                               ; preds = %14
+  %16 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #46
+  unreachable
+}
+
+ASSEMBLY
+_RNvXs4_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone:
+.Lfunc_begin481:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception292
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$144, %rsp
+	.cfi_def_cfa_offset 160
+	.cfi_offset %rbx, -16
+	movq	%rsi, %rdx
+	movq	%rdi, %rbx
+	movq	%rsp, %rdi
+	xorl	%esi, %esi
+	callq	_RINvNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra5owned10clone_treeKb0_NvYNtNtB4_7algebra12GraphPatternNtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneEB4_.llvm.3719748217336137286
+	cmpl	$31, (%rsp)
+	jae	.LBB481_1
+	vmovups	(%rsp), %zmm0
+	vmovups	80(%rsp), %zmm2
+	vmovups	64(%rsp), %zmm1
+	movq	%rbx, %rax
+	vmovups	%zmm2, 80(%rbx)
+	vmovups	%zmm1, 64(%rbx)
+	vmovups	%zmm0, (%rbx)
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB481_1:
+	.cfi_def_cfa_offset 160
+.Ltmp11020:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt@GOTPCREL(%rip), %rax
+	leaq	anon.11e6520e54d94dc868ac851900fc33ed.1020.llvm.3719748217336137286(%rip), %rdi
+	leaq	anon.11e6520e54d94dc868ac851900fc33ed.1022.llvm.3719748217336137286(%rip), %rdx
+	movl	$147, %esi
+	callq	*%rax
+.Ltmp11021:
+	ud2
+.LBB481_4:
+.Ltmp11022:
+	cmpl	$31, (%rsp)
+	movq	%rax, %rbx
+	jb	.LBB481_6
+.Ltmp11023:
+	movq	%rsp, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra5owned5OwnedEBF_.llvm.3719748217336137286
+.Ltmp11024:
+.LBB481_6:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB481_7:
+.Ltmp11025:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end481:

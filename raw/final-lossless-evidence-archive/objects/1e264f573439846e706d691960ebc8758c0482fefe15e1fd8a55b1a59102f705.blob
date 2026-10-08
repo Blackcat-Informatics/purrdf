@@ -1,0 +1,225 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 05s
+     Running tests/correlated_positive_regions.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/a39cdaf1bc55f13e/out/correlated_positive_regions-a39cdaf1bc55f13e)
+
+running 3 tests
+test copied_positive_schedule_fuel_cuts_remain_complete_binding_lower_bounds ... ok
+test copied_lateral_union_keeps_native_bindings_and_source_columns ... ok
+test correlated_and_uncorrelated_exists_copies_preserve_their_row_scopes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/exists_sep0007.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/9108c3e6af57ea0e/out/exists_sep0007-9108c3e6af57ea0e)
+
+running 25 tests
+test exists_having_sees_only_the_subselect_scope ... ok
+test exists_bind_fresh_variable_evaluates ... ok
+test exists_graph_iri_name_with_correlated_body ... ok
+test exists_bare_values_inner ... ok
+test exists_bare_subselect_inner ... ok
+test exists_blank_node_outer_binding_correlates ... ok
+test exists_nested_not_exists_correlates ... ok
+test exists_correlated_graph_variable_e2e ... ok
+test exists_optional_beside_a_bgp_answers_per_spec ... ok
+test exists_optional_padding_answers_per_spec ... ok
+test exists_over_distinct_subselect ... ok
+test exists_over_offset_subselect_commits_per_row ... ok
+test exists_over_limit_one_subselect ... ok
+test exists_over_group_by_subselect_correlates ... ok
+test exists_over_order_by_subselect ... ok
+test exists_property_function_inner_sees_outer_binding ... ok
+test matrix_is_complete ... ok
+test exists_sep_minus_example_answers ... ok
+test exists_sep_count_example_answers ... ok
+test exists_sep_disconnected_variable_example ... ok
+test exists_quoted_triple_outer_binding_correlates ... ok
+test exists_unprojected_outer_variable_stays_unseen ... ok
+test exists_triple_nesting_alternating_polarity ... ok
+test not_exists_nested_not_exists_correlates ... ok
+test not_exists_optional_padding_does_not_fabricate ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/governed_query.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/ff41f05bfcbe270c/out/governed_query-ff41f05bfcbe270c)
+
+running 27 tests
+test ac1_query_governors_accepts_every_governor_and_reaches_evaluation ... ok
+test ac2_trip_is_neither_complete_nor_error ... ok
+test admission_refuses_an_estimated_ceiling_breach_before_evaluating ... ok
+test ac2_ask_with_a_nonempty_certain_set_keeps_the_trip_and_carries_true ... ok
+test answer_cap_boundary_is_inclusive ... ok
+test a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters ... ok
+test a_fallible_federated_view_composes_page_and_remote_evidence ... ok
+test budget_trip_can_never_masquerade_as_an_empty_complete_result ... ok
+test a_withheld_bound_names_the_barrier_that_withheld_it ... ok
+test bookkeeping_cell_limit_retains_saturated_forecast_refusal ... ok
+test bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer ... ok
+test an_earlier_fuel_trip_cannot_bypass_the_answer_cap_on_any_result_sequence ... ok
+test d6_precedence_order ... ok
+test every_complete_outcome_has_complete_evidence ... ok
+test construct_blank_reservations_obey_scratch_bytes_after_where_completes ... ok
+test ledger_attributes_lateral_rhs_work_to_the_rhs_nodes ... ok
+test explain_reports_a_deterministic_per_node_ledger ... ok
+test metered_governors_measure_an_execution_without_bounding_it ... ok
+test ledger_attributes_nested_lateral_rhs_rows_to_the_true_output ... ok
+test cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound ... ok
+test prepared_plans_do_not_share_a_budget_across_runs ... ok
+test public_blank_node_filter_cannot_forge_an_upper_bound ... ok
+test the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary ... ok
+test the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundary ... ok
+test stop_only_governors_checkpoint_inside_large_bgp_path_and_expression_loops ... ok
+test answer_cap_stops_the_scan_rather_than_materializing_everything ... ok
+test plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/governor_correctness.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/6eb994d846bb5046/out/governor_correctness-6eb994d846bb5046)
+
+running 9 tests
+test an_early_where_trip_is_sound_for_ask_construct_and_describe ... ok
+test every_non_select_result_form_matches_the_ungoverned_oracle ... ok
+test an_ungoverned_run_keeps_the_fork_it_always_had ... ok
+test a_governed_union_reports_one_outcome_however_it_is_scheduled ... ok
+test filter_exists_fuel_is_invariant_under_worker_count ... ok
+test possible_answers_always_contain_the_ungoverned_answers ... ok
+test certain_answers_are_always_a_subset_of_the_ungoverned_answers ... ok
+test certified_prefix_is_stable_across_budget_increases ... ok
+test a_larger_budget_never_yields_fewer_certain_answers ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+     Running tests/graph_constant_membership.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/0e3513b839ca789f/out/graph_constant_membership-0e3513b839ca789f)
+
+running 3 tests
+test delta_snapshot_addresses_only_named_graphs ... ok
+test composite_view_addresses_only_named_graphs ... ok
+test frozen_dataset_addresses_only_named_graphs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/graph_scope_admission.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/8ac8ee3488f6413e/out/graph_scope_admission-8ac8ee3488f6413e)
+
+running 1 test
+test a_graph_name_that_names_no_graph_is_priced_as_an_empty_scope ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/graph_var_narrowing.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/d9bda27a3c1d3fc7/out/graph_var_narrowing-d9bda27a3c1d3fc7)
+
+running 8 tests
+test graph_var_materializes_only_the_pages_that_own_a_named_graph ... ok
+test graph_var_binds_every_named_graph_including_empty_and_side_table_only ... ok
+test a_row_free_graph_costs_no_data_probe_yet_still_enumerates ... ok
+test graph_var_whole_graph_scan_agrees_across_backends ... ok
+test retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var ... ok
+test a_result_whose_every_graph_was_row_free_still_carries_the_right_columns ... ok
+test graph_var_answers_from_a_graph_whose_only_rows_are_statement_layer_rows ... ok
+test graph_var_keeps_evaluating_shapes_that_answer_without_any_row ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lateral_e2e.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/c2f5f9b86a2dc696/out/lateral_e2e-c2f5f9b86a2dc696)
+
+running 20 tests
+test lateral_minus_rhs_disjoint_domain_not_flipped ... ok
+test lateral_bind_rhs_shared_var ... ok
+test lateral_bnode_bound_variable_in_a_filter ... ok
+test lateral_literal_bound_variable_is_injected ... ok
+test exists_inside_lateral_rhs_correlates ... ok
+test lateral_graph_rhs_is_scoped_per_row ... ok
+test lateral_optional_rhs_pads_labelless_subject ... ok
+test lateral_inside_exists_pattern_evaluates ... ok
+test lateral_rhs_schema_union_is_stable ... ok
+test lateral_shared_variable_is_injected_as_constant ... ok
+test lateral_predicate_position_is_injected ... ok
+test lateral_path_rhs_is_correlated ... ok
+test lateral_subselect_nonprojected_var_is_not_correlated ... ok
+test lateral_subselect_star_is_top_1_per_group ... ok
+test lateral_values_rhs_joins_per_row ... ok
+test lateral_triple_term_bound_variable_in_a_filter ... ok
+test nested_lateral_reenters_the_substitution_guard ... ok
+test lateral_truncation_commits_per_left_row ... ok
+test lateral_union_rhs_substitutes_both_branches ... ok
+test lateral_spine_parses_at_any_length_and_evaluates_where_the_stack_holds_it ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/numeric_governance.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/90722ac62c2f5320/out/numeric_governance-90722ac62c2f5320)
+
+running 11 tests
+test machine_word_numbers_charge_no_tower_work ... ok
+test a_non_default_division_policy_is_charged ... ok
+test a_products_growing_scale_is_charged_for_fuel ... ok
+test sum_and_avg_are_charged_for_their_chain ... ok
+test statistical_aggregates_are_charged ... ok
+test a_tower_operand_meeting_a_double_is_charged ... ok
+test unary_functions_and_casts_are_charged ... ok
+test a_comparison_that_aligns_is_charged ... ok
+test extremes_and_sorts_are_charged_for_their_comparisons ... ok
+test a_products_growing_scale_is_charged_for_memory_before_it_allocates ... ok
+test a_long_column_of_big_integers_sums_at_a_linear_cost ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/numeric_parallel_determinism.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/a75bbcf70ed198f2/out/numeric_parallel_determinism-a75bbcf70ed198f2)
+
+running 10 tests
+test inclusive_fuel_boundary_keeps_full_values_and_all_dimensions ... ok
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+test a_scratch_ceiling_trips_at_one_row ... ok
+test per_group_counts_trip_at_one_group ... ok
+test a_filter_over_exact_values_trips_at_one_row ... ok
+test an_optional_filter_over_exact_values_trips_at_one_row ... ok
+test a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip ... ok
+test per_group_statistical_aggregates_over_exact_values_trip_at_one_group ... ok
+test per_group_sums_over_exact_values_trip_at_one_group ... ok
+test a_projection_over_exact_values_trips_at_one_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+     Running tests/prepared_parameters.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/2cff1e30a4af4d84/out/prepared_parameters-2cff1e30a4af4d84)
+
+running 12 tests
+test a_declared_parameter_must_be_bound_and_the_refusal_names_it ... ok
+test a_blank_node_the_dataset_does_not_hold_is_still_bound_into_the_call ... ok
+test a_call_is_admitted_against_what_its_evaluation_hands_it ... ok
+test a_filter_exists_over_the_core_invokes_its_call_with_the_declared_parameter_bound ... ok
+test a_call_after_a_data_atom_is_invoked_with_its_declared_parameter_bound ... ok
+test a_call_in_an_optional_arm_is_bound_on_every_lane ... ok
+test a_declared_parameter_reaches_an_optional_arm_and_its_neighbours_still_run ... ok
+test inspecting_a_borrowed_request_preserves_bound_parameters_and_rewrite_identity ... ok
+test the_declaration_is_part_of_the_plan_identity ... ok
+test declaring_nothing_still_runs_and_one_execution_answers_many_bindings ... ok
+test the_declaration_is_what_admits_a_call_whose_argument_the_text_leaves_free ... ok
+test a_parameter_bound_to_a_dataset_blank_node_reaches_the_call_bound ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/rdflib_contextual.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/54eb80303644b53f/out/rdflib_contextual-54eb80303644b53f)
+
+running 22 tests
+test contextual_dataset_requirement_is_part_of_algebra_identity ... ok
+test configured_relations_receive_the_context_in_the_existing_call_home ... ok
+test contextual_group_filters_preserve_callback_order_and_errors ... ok
+test contextual_blank_identity_is_shared_by_label_and_fresh_without_a_label ... ok
+test contextual_custom_updates_preserve_order_errors_and_numeric_admission ... ok
+test contextual_query_preserves_caller_division_policy ... ok
+test contextual_filter_group_boundary_and_visited_graph_errors ... ok
+test contextual_service_uses_serializable_protocol_algebra_and_shared_source ... ok
+test contextual_nested_exists_retains_enclosing_names ... ok
+test contextual_exists_through_local_projection ... ok
+test governed_publication_preserves_duplicate_columns_and_certified_rows ... ok
+test initial_terms_keep_rdf12_identity_and_hygienic_aliases ... ok
+test ordinary_transformation_admission_rejects_contextual_applications ... ok
+test contextual_application_keeps_one_optional_condition_and_rhs ... ok
+test successful_optional_rhs_is_invoked_once_per_duplicate_driver ... ok
+test contextual_representation_scales_with_nodes_and_context_width ... ok
+test production_entry_executes_nested_exists_on_an_admitted_stack ... ok
+test governed_ask_settles_only_a_witness_and_stops_after_accepted_filters ... ok
+test contextual_matrix ... ok
+test contextual_exact_aggregate_continuations_preserve_policy_and_cutoffs ... ok
+test grouped_continuation_withholds_incomplete_accumulators_at_every_fuel_cutoff ... ok
+test contextual_nested_numeric_groups_keep_ordered_worker_refusals ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.20s
+

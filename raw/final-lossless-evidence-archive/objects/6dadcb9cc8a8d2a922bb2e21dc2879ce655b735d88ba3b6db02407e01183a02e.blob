@@ -1,0 +1,21 @@
+{
+  "main": {
+    "entries": 3039,
+    "lost_exact_translation_triples": []
+  },
+  "contextual": {
+    "entries": 3048,
+    "lost_exact_translation_triples": []
+  },
+  "merged": {
+    "entries": 3050,
+    "lost_exact_translation_triples": []
+  },
+  "generated": {
+    "entries": 3050,
+    "active": 3040,
+    "obsolete": 10,
+    "fuzzy_active": 0,
+    "empty_active": 0
+  }
+}

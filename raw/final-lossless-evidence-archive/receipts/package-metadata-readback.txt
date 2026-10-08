@@ -1,0 +1,5 @@
+/opt/purrdf-454-evidence-package.GD9kNHfZ/path-map.tsv: OK
+/opt/purrdf-454-evidence-package.GD9kNHfZ/stored-objects.sha256: OK
+/opt/purrdf-454-evidence-package.GD9kNHfZ/rendered-members.txt: OK
+/opt/purrdf-454-evidence-package.GD9kNHfZ/rendered-modes-sizes.tsv: OK
+/opt/purrdf-454-evidence-package.GD9kNHfZ/RECONSTRUCTION.md: OK

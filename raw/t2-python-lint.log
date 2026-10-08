@@ -1,0 +1,302 @@
+I001 [*] Import block is un-sorted or un-formatted
+  --> python/src/purrdf/compat/rdflib/graph.py:16:1
+   |
+14 |   """
+15 |
+16 | / from __future__ import annotations
+17 | |
+18 | | import builtins
+19 | | import io
+20 | | import random
+21 | | import re
+22 | | from collections.abc import Iterable, Iterator
+23 | | from pathlib import Path
+24 | | from typing import IO, TYPE_CHECKING, Any, Literal as TypingLiteral, overload
+25 | | from urllib.parse import urljoin, urlparse
+26 | |
+27 | | import purrdf
+28 | |
+29 | | from .namespace import RDF, NamespaceManager
+30 | | from .parser import FileInputSource, StringInputSource
+31 | | from .query import Result, ResultRow
+32 | | from .term import (
+33 | |     BNode,
+34 | |     Identifier,
+35 | |     Literal,
+36 | |     URIRef,
+37 | |     Variable,
+38 | |     from_native,
+39 | |     to_native,
+40 | | )
+   | |_^
+41 |
+42 |   if TYPE_CHECKING:
+   |
+help: Organize imports
+   |
+23 | from pathlib import Path
+   - from typing import IO, TYPE_CHECKING, Any, Literal as TypingLiteral, overload
+24 + from typing import IO, TYPE_CHECKING, Any, overload
+25 + from typing import Literal as TypingLiteral
+26 | from urllib.parse import urljoin, urlparse
+   |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N802`)
+   --> python/src/purrdf/compat/rdflib/graph.py:395:16
+    |
+393 |         self._add_quad(s, p, o, self._graph_name)
+394 |
+395 |     def addN(  # noqa: N802 - RDFLib API name
+    |                ^^^^^^^^^^^^
+396 |         self, quads: Iterable[tuple[Identifier, Identifier, Identifier, object]]
+397 |     ) -> None:
+    |
+help: Remove unused `noqa` directive
+    |
+394 |
+    -     def addN(  # noqa: N802 - RDFLib API name
+395 +     def addN(
+396 |         self, quads: Iterable[tuple[Identifier, Identifier, Identifier, object]]
+    |
+
+RET501 [*] Do not explicitly `return None` in function if it is the only possible return value
+   --> python/src/purrdf/compat/rdflib/graph.py:885:9
+    |
+883 |     def close(self, commit_pending_transaction: bool = False) -> None:
+884 |         """Close the backing store (no-op for the in-memory native store)."""
+885 |         return None
+    |         ^^^^^^^^^^^
+886 |
+887 |     def commit(self) -> Graph:
+    |
+help: Remove explicit `return None`
+    |
+884 |         """Close the backing store (no-op for the in-memory native store)."""
+    -         return None
+885 +         return
+886 |
+    |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+   --> python/src/purrdf/compat/rdflib/graph.py:915:39
+    |
+913 |         self,
+914 |         source: object | None = None,
+915 |         publicID: str | None = None,  # noqa: N803 - RDFLib API name
+    |                                       ^^^^^^^^^^^^
+916 |         format: str | None = None,
+917 |         location: str | None = None,
+    |
+help: Remove unused `noqa` directive
+    |
+914 |         source: object | None = None,
+    -         publicID: str | None = None,  # noqa: N803 - RDFLib API name
+915 +         publicID: str | None = None,
+916 |         format: str | None = None,
+    |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1109:61
+     |
+1107 |         query_object: str,
+1108 |         *,
+1109 |         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+     |                                                             ^^^^^^^^^^^^
+1110 |         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+1111 |         base: str | None = None,
+     |
+help: Remove unused `noqa` directive
+     |
+1108 |         *,
+     -         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+1109 +         initBindings: dict[str, Identifier] | None = None,
+1110 |         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+     |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1110:51
+     |
+1108 |         *,
+1109 |         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+1110 |         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+     |                                                   ^^^^^^^^^^^^
+1111 |         base: str | None = None,
+1112 |         extension_namespaces: list[str] | None = None,
+     |
+help: Remove unused `noqa` directive
+     |
+1109 |         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+     -         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+1110 +         initNs: dict[str, object] | None = None,
+1111 |         base: str | None = None,
+     |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1190:61
+     |
+1188 |         update_object: str,
+1189 |         *,
+1190 |         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+     |                                                             ^^^^^^^^^^^^
+1191 |         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+1192 |         extension_namespaces: list[str] | None = None,
+     |
+help: Remove unused `noqa` directive
+     |
+1189 |         *,
+     -         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+1190 +         initBindings: dict[str, Identifier] | None = None,
+1191 |         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+     |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1191:51
+     |
+1189 |         *,
+1190 |         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+1191 |         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+     |                                                   ^^^^^^^^^^^^
+1192 |         extension_namespaces: list[str] | None = None,
+1193 |         standpoint_predicates: tuple[str, str] | None = None,
+     |
+help: Remove unused `noqa` directive
+     |
+1190 |         initBindings: dict[str, Identifier] | None = None,  # noqa: N803 - RDFLib API
+     -         initNs: dict[str, object] | None = None,  # noqa: N803 - RDFLib API
+1191 +         initNs: dict[str, object] | None = None,
+1192 |         extension_namespaces: list[str] | None = None,
+     |
+
+PYI034 `__iadd__` methods in classes like `Graph` usually return `self` at runtime
+    --> python/src/purrdf/compat/rdflib/graph.py:1258:9
+     |
+1256 |     # ── set algebra ───────────────────────────────────────────────────────────────
+1257 |
+1258 |     def __iadd__(self, other: Iterable[_Triple]) -> Graph:
+     |         ^^^^^^^^
+1259 |         """Add every triple from ``other`` (the ``+=`` operator)."""
+1260 |         for triple in other:
+     |
+help: Use `Self` as return type
+
+PYI034 `__isub__` methods in classes like `Graph` usually return `self` at runtime
+    --> python/src/purrdf/compat/rdflib/graph.py:1264:9
+     |
+1262 |         return self
+1263 |
+1264 |     def __isub__(self, other: Iterable[_Pattern]) -> Graph:
+     |         ^^^^^^^^
+1265 |         """Remove every triple in ``other`` (the ``-=`` operator)."""
+1266 |         for triple in other:
+     |
+help: Use `Self` as return type
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1423:39
+     |
+1421 |         self,
+1422 |         source: object | None = None,
+1423 |         publicID: str | None = None,  # noqa: N803 - RDFLib API name
+     |                                       ^^^^^^^^^^^^
+1424 |         format: str | None = None,
+1425 |         location: str | None = None,
+     |
+help: Remove unused `noqa` directive
+     |
+1422 |         source: object | None = None,
+     -         publicID: str | None = None,  # noqa: N803 - RDFLib API name
+1423 +         publicID: str | None = None,
+1424 |         format: str | None = None,
+     |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N803`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1607:39
+     |
+1605 |         self,
+1606 |         source: object | None = None,
+1607 |         publicID: str | None = None,  # noqa: N803 - RDFLib API name
+     |                                       ^^^^^^^^^^^^
+1608 |         format: str | None = None,
+1609 |         location: str | None = None,
+     |
+help: Remove unused `noqa` directive
+     |
+1606 |         source: object | None = None,
+     -         publicID: str | None = None,  # noqa: N803 - RDFLib API name
+1607 +         publicID: str | None = None,
+1608 |         format: str | None = None,
+     |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N802`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1696:33
+     |
+1694 |         self._list = items
+1695 |
+1696 |     def toPython(self) -> Seq:  # noqa: N802 - RDFLib API name
+     |                                 ^^^^^^^^^^^^
+1697 |         """Return self (RDFLib parity)."""
+1698 |         return self
+     |
+help: Remove unused `noqa` directive
+     |
+1695 |
+     -     def toPython(self) -> Seq:  # noqa: N802 - RDFLib API name
+1696 +     def toPython(self) -> Seq:
+1697 |         """Return self (RDFLib parity)."""
+     |
+
+RUF100 [*] Unused `noqa` directive (non-enabled: `N802`)
+    --> python/src/purrdf/compat/rdflib/graph.py:1756:16
+     |
+1754 |         return self
+1755 |
+1756 |     def addN(  # noqa: N802 - RDFLib API name
+     |                ^^^^^^^^^^^^
+1757 |         self, quads: Iterable[tuple[Identifier, Identifier, Identifier, object]]
+1758 |     ) -> BatchAddGraph:
+     |
+help: Remove unused `noqa` directive
+     |
+1755 |
+     -     def addN(  # noqa: N802 - RDFLib API name
+1756 +     def addN(
+1757 |         self, quads: Iterable[tuple[Identifier, Identifier, Identifier, object]]
+     |
+
+PYI034 `__enter__` methods in classes like `BatchAddGraph` usually return `self` at runtime
+    --> python/src/purrdf/compat/rdflib/graph.py:1767:9
+     |
+1765 |         return self
+1766 |
+1767 |     def __enter__(self) -> BatchAddGraph:
+     |         ^^^^^^^^^
+1768 |         """Enter the batch context (resets the buffer)."""
+1769 |         self.reset()
+     |
+help: Use `Self` as return type
+
+I001 [*] Import block is un-sorted or un-formatted
+  --> tests/test_contextual_mappings.py:6:1
+   |
+ 4 |   """Contextual mapping parity through the actual compatibility consumers."""
+ 5 |
+ 6 | / from collections import Counter
+ 7 | | import json
+ 8 | | from pathlib import Path
+ 9 | |
+10 | | import pytest
+   | |_____________^
+11 |
+12 |   EX = "http://example.org/"
+   |
+help: Organize imports
+  |
+5 |
+6 + import json
+7 | from collections import Counter
+  - import json
+8 | from pathlib import Path
+  |
+
+Found 16 errors.
+[*] 13 fixable with the `--fix` option (3 hidden fixes can be enabled with the `--unsafe-fixes` option).

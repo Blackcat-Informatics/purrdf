@@ -1,0 +1,102 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-candidate-python-ir/purrdf_native.ll:1040134
+; <alloc::vec::Vec<purrdf_sparql_algebra::algebra::GraphPattern> as core::fmt::Debug>::fmt
+define internal noundef zeroext i1 @_RNvXsr_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternENtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmtCseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %self, ptr noalias nofree noundef align 8 dereferenceable(24) %f) unnamed_addr #1 personality ptr @rust_eh_personality !guid !168242 {
+start:
+  %entry.i.i = alloca [8 x i8], align 8
+  %_5.i = alloca [16 x i8], align 8
+  %0 = getelementptr inbounds nuw i8, ptr %self, i64 8
+  %_7 = load ptr, ptr %0, align 8, !nonnull !3923, !noundef !3923
+  %1 = getelementptr inbounds nuw i8, ptr %self, i64 16
+  %_6 = load i64, ptr %1, align 8, !noundef !3923
+  call void @llvm.lifetime.start.p0(ptr nonnull %_5.i), !noalias !168243
+; call <core::fmt::Formatter>::debug_list
+  call void @_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter10debug_list(ptr noalias nofree noundef nonnull sret([16 x i8]) align 8 captures(address) dereferenceable(16) %_5.i, ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %f), !noalias !168247
+  %_11.idx.i = mul nuw nsw i64 %_6, 144
+  %_11.i = getelementptr inbounds nuw i8, ptr %_7, i64 %_11.idx.i
+  %_6.i5.i.i = icmp eq i64 %_6, 0
+  br i1 %_6.i5.i.i, label %_RNvXsr_NtCs2k2z8Zem4rB_4core3fmtSNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtB5_5Debug3fmtCseY6IX0djbTh_13purrdf_native.exit, label %bb5.i.i
+
+bb5.i.i:                                          ; preds = %start, %bb5.i.i
+  %iter.sroa.0.06.i.i = phi ptr [ %_16.i.i.i, %bb5.i.i ], [ %_7, %start ]
+  %_16.i.i.i = getelementptr inbounds nuw i8, ptr %iter.sroa.0.06.i.i, i64 144
+  call void @llvm.lifetime.start.p0(ptr nonnull %entry.i.i), !noalias !168248
+  store ptr %iter.sroa.0.06.i.i, ptr %entry.i.i, align 8, !noalias !168248, !captures !5027
+; call <core::fmt::builders::DebugList>::entry
+  %_9.i.i = call noundef nonnull align 8 ptr @_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %_5.i, ptr noundef nonnull %entry.i.i, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(32) @vtable.1D)
+  call void @llvm.lifetime.end.p0(ptr nonnull %entry.i.i), !noalias !168248
+  %_6.i.i.i = icmp eq ptr %_16.i.i.i, %_11.i
+  br i1 %_6.i.i.i, label %_RNvXsr_NtCs2k2z8Zem4rB_4core3fmtSNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtB5_5Debug3fmtCseY6IX0djbTh_13purrdf_native.exit, label %bb5.i.i
+
+_RNvXsr_NtCs2k2z8Zem4rB_4core3fmtSNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtB5_5Debug3fmtCseY6IX0djbTh_13purrdf_native.exit: ; preds = %bb5.i.i, %start
+; call <core::fmt::builders::DebugList>::finish
+  %_0.i = call noundef zeroext i1 @_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList6finish(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %_5.i)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_5.i), !noalias !168243
+  ret i1 %_0.i
+}
+
+ASSEMBLY
+_RNvXsr_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternENtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmtCseY6IX0djbTh_13purrdf_native:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 80
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter10debug_list@GOTPCREL(%rip), %rax
+	movq	8(%rdi), %r12
+	movq	16(%rdi), %rbx
+	leaq	8(%rsp), %rdi
+	callq	*%rax
+	testq	%rbx, %rbx
+	je	.LBB3783_3
+	movq	_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry@GOTPCREL(%rip), %rbp
+	shlq	$4, %rbx
+	leaq	8(%rsp), %r14
+	movq	%rsp, %r15
+	leaq	(%rbx,%rbx,8), %r13
+	leaq	.Lvtable.1D(%rip), %rbx
+	.p2align	4
+.LBB3783_2:
+	movq	%r12, (%rsp)
+	addq	$144, %r12
+	movq	%r14, %rdi
+	movq	%r15, %rsi
+	movq	%rbx, %rdx
+	callq	*%rbp
+	addq	$-144, %r13
+	jne	.LBB3783_2
+.LBB3783_3:
+	movq	_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList6finish@GOTPCREL(%rip), %rax
+	leaq	8(%rsp), %rdi
+	callq	*%rax
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end3783:

@@ -1,0 +1,117 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-ir/qualification_454_native_cost.purrdf_sparql_eval-0ecc65cc8c2d1ea3.purrdf_sparql_eval.85e4f8f062a88157-cgu.0.rcgu.o.rcgu.ll:446589
+; purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset>::{closure#3}
+define internal fastcc { i32, i32 } @_RNCINvNtCsbuIrFgshI6V_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEs1_0B6_(ptr noundef nonnull align 8 %0, ptr noundef nonnull align 8 %1, ptr noalias nofree noundef nonnull align 8 captures(address) dead_on_return dereferenceable(80) %2) unnamed_addr #1 personality ptr @rust_eh_personality !guid !54985 {
+  %4 = alloca [80 x i8], align 8
+; invoke purrdf_sparql_eval::scratch::language_tags_well_formed
+  %5 = invoke noundef zeroext i1 @_RNvNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch25language_tags_well_formed(ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(80) %2)
+          to label %6 unwind label %13, !noalias !54986
+
+6:                                                ; preds = %3
+  br i1 %5, label %8, label %7
+
+7:                                                ; preds = %6
+; call core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+  tail call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCstkel86B4QG_11purrdf_core2ir4term9TermValueECsbuIrFgshI6V_18purrdf_sparql_eval.llvm.13574939950688124013(ptr noalias nofree noundef nonnull align 8 dereferenceable(80) %2), !noalias !54986
+  br label %17
+
+8:                                                ; preds = %6
+  call void @llvm.lifetime.start.p0(ptr nonnull %4), !noalias !54989
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(80) %4, ptr noundef nonnull align 8 dereferenceable(80) %2, i64 80, i1 false), !noalias !54986
+; call <purrdf_sparql_eval::scratch::ScratchInterner>::intern_value::<purrdf_core::ir::dataset::RdfDataset>
+  %9 = call fastcc { i32, i32 } @_RINvMs1_NtCsbuIrFgshI6V_18purrdf_sparql_eval7scratchNtB6_15ScratchInterner12intern_valueNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEB8_(ptr noalias nofree noundef nonnull align 8 dereferenceable(112) %1, ptr noundef nonnull align 8 %0, ptr noalias nofree noundef align 8 captures(address) dereferenceable(80) %4)
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !noalias !54989
+  %10 = extractvalue { i32, i32 } %9, 0
+  %11 = extractvalue { i32, i32 } %9, 1
+  br label %17
+
+12:                                               ; preds = %13
+  resume { ptr, i32 } %14
+
+13:                                               ; preds = %3
+  %14 = landingpad { ptr, i32 }
+          cleanup
+; invoke core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCstkel86B4QG_11purrdf_core2ir4term9TermValueECsbuIrFgshI6V_18purrdf_sparql_eval.llvm.13574939950688124013(ptr noalias nofree noundef nonnull align 8 dereferenceable(80) %2) #86
+          to label %12 unwind label %15, !noalias !54986
+
+15:                                               ; preds = %13
+  %16 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #87, !noalias !54986
+  unreachable
+
+17:                                               ; preds = %8, %7
+  %18 = phi i32 [ %11, %8 ], [ undef, %7 ]
+  %19 = phi i32 [ %10, %8 ], [ 2, %7 ]
+  %20 = insertvalue { i32, i32 } poison, i32 %19, 0
+  %21 = insertvalue { i32, i32 } %20, i32 %18, 1
+  ret { i32, i32 } %21
+}
+
+ASSEMBLY
+_RNCINvNtCsbuIrFgshI6V_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEs1_0B6_:
+.Lfunc_begin1133:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception732
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%rbx
+	.cfi_def_cfa_offset 32
+	subq	$80, %rsp
+	.cfi_def_cfa_offset 112
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	%rdx, %rbx
+	movq	%rsi, %r15
+	movq	%rdi, %r14
+.Ltmp18832:
+	movq	_RNvNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch25language_tags_well_formed@GOTPCREL(%rip), %rax
+	movq	%rdx, %rdi
+	callq	*%rax
+.Ltmp18833:
+	testb	%al, %al
+	je	.LBB1133_2
+	vmovups	16(%rbx), %zmm1
+	vmovups	(%rbx), %zmm0
+	movq	%rsp, %rdx
+	movq	%r15, %rdi
+	movq	%r14, %rsi
+	vmovups	%zmm1, 16(%rsp)
+	vmovups	%zmm0, (%rsp)
+	vzeroupper
+	callq	_RINvMs1_NtCsbuIrFgshI6V_18purrdf_sparql_eval7scratchNtB6_15ScratchInterner12intern_valueNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEB8_
+	jmp	.LBB1133_7
+.LBB1133_2:
+	movq	%rbx, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCstkel86B4QG_11purrdf_core2ir4term9TermValueECsbuIrFgshI6V_18purrdf_sparql_eval.llvm.13574939950688124013
+	movl	$2, %eax
+.LBB1133_7:
+	addq	$80, %rsp
+	.cfi_def_cfa_offset 32
+	popq	%rbx
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1133_3:
+	.cfi_def_cfa_offset 112
+.Ltmp18834:
+	movq	%rax, %r14
+.Ltmp18835:
+	movq	%rbx, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCstkel86B4QG_11purrdf_core2ir4term9TermValueECsbuIrFgshI6V_18purrdf_sparql_eval.llvm.13574939950688124013
+.Ltmp18836:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB1133_5:
+.Ltmp18837:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end1133:

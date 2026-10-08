@@ -1,0 +1,62 @@
+      2 @<alloc::sync::Arc<dyn core::error::Error + core::marker::Sync + core::marker::Send>>::drop_slow
+      4 @<alloc::sync::Arc<dyn purrdf_sparql_eval::user_fn::UserFunctionAdmission>>::drop_slow
+      3 @<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow
+      2 @<alloc::sync::Arc<purrdf_sparql_eval::engine::PreparedQuery>>::drop_slow
+      2 @<alloc::vec::Vec<alloc::string::String> as core::clone::Clone>::clone
+      1 @<purrdf_core::ir::mutable::MutableDataset>::freeze
+      1 @<purrdf_sparql_eval::engine::AdmittedSubstitutions>::requested
+      1 @<purrdf_sparql_eval::engine::NativeSparqlEngine>::prepare_request
+      1 @<purrdf_sparql_eval::engine::NativeSparqlEngine>::query_prepared_admitted::<purrdf_core::ir::dataset::RdfDataset, purrdf_core::dataset_view::NoopReservation<!>>
+      2 @<pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::hasattr::inner
+      1 @<pyo3::instance::Py<_> as core::ops::drop::Drop>::drop::drop_slow
+      2 @<pyo3::internal::state::AttachGuard as core::ops::drop::Drop>::drop
+      2 @<pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+      1 @<std::sys::sync::mutex::futex::Mutex>::lock_contended
+      1 @<std::sys::sync::mutex::futex::Mutex>::wake
+      7 @_Py_DecRef
+      3 @_Py_IncRef
+     34 @__rustc::__rust_dealloc
+      1 @__rustc::__rust_no_alloc_shim_is_unstable_v2
+      1 @alloc::alloc::handle_alloc_error
+      1 @alloc_016e71ba2f68cc7172262ae988bb360c, i64 noundef 10, ptr noundef nonnull %_26.i.i.i.i.i.i.i.i)
+      1 @alloc_0e5f90e3dc675d538220deef7d17e145, ptr noundef nonnull %args.i.i.i.i.i.i)
+      1 @alloc_592fabd2ffa0e5a6b6713c88c8b00c99, ptr noundef nonnull %args.i58.i.i.i.i.i)
+      1 @alloc_6f6b49b405cc516c15819f32fccb7974, i64 noundef 12, ptr noundef nonnull %_26.i.i.i.i.1.i.i.i.i)
+      1 @anon.4895d20928f7255621bf668e37519d0a.4, i64 120), i64 64, i1 false), !noalias !126429
+      2 @anon.4895d20928f7255621bf668e37519d0a.4, i64 8), i64 80, i1 false), !noalias !126429
+     16 @core::panicking::panic_in_cleanup
+      4 @core::ptr::drop_glue::<
+      1 @core::ptr::drop_glue::<<purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<
+      8 @core::ptr::drop_glue::<alloc::vec::Vec<
+      1 @core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+      4 @core::ptr::drop_glue::<core::option::Option<alloc::vec::Vec<alloc::string::String>>>
+      1 @core::ptr::drop_glue::<core::option::Option<purrdf_sparql_eval::property_fn::PropertyFunctionRegistry>>
+      2 @core::ptr::drop_glue::<core::option::Option<purrdf_sparql_results::model::ProvenanceNamespace>>
+      1 @core::ptr::drop_glue::<core::result::Result<purrdf_core::backend::SparqlResult, purrdf_core::diagnostic::RdfDiagnostic>>
+      9 @core::ptr::drop_glue::<hashbrown::raw::RawTable<
+      4 @core::ptr::drop_glue::<purrdf_core::diagnostic::RdfDiagnostic>
+      3 @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+      1 @core::ptr::drop_glue::<purrdf_sparql_algebra::parser::ParserOptions>
+      1 @core::ptr::drop_glue::<purrdf_sparql_eval::engine::AdmittedSubstitutions>
+      3 @core::ptr::drop_glue::<purrdf_sparql_eval::engine::NativeSparqlEngine>
+      2 @core::ptr::drop_glue::<purrdf_sparql_eval::extension_env::ExtensionEnv>
+      2 @core::ptr::drop_glue::<purrdf_sparql_eval::user_fn::RefusalPublication>
+      2 @core::ptr::drop_glue::<purrdf_sparql_eval::user_fn::UserFunctionRefusal>
+      2 @core::ptr::drop_glue::<pyo3::err::PyErr>
+      8 @llvm.assume
+     69 @llvm.experimental.noalias.scope.decl
+     82 @llvm.lifetime.end.p0
+     53 @llvm.lifetime.start.p0
+     54 @llvm.memcpy.p0.p0.i64
+      2 @llvm.memset.p0.i64
+      1 @purrdf_native::py_store::env::division_policy
+      1 @purrdf_native::py_store::env::extension_env
+      1 @purrdf_native::py_store::presentation::presented_value_error
+      1 @purrdf_native::py_store::presentation::refusal_value_error
+      1 @purrdf_native::py_store::quad_store::collect_substitutions
+      1 @purrdf_native::py_store::query::build_engine
+      1 @purrdf_native::py_store::query::build_relations
+      1 @purrdf_native::py_store::query::collect_relations
+      1 @purrdf_native::py_store::query::materialize_results
+      1 @purrdf_native::xpath_regex::selection
+      1 @purrdf_validate::query::statistical_aggregates

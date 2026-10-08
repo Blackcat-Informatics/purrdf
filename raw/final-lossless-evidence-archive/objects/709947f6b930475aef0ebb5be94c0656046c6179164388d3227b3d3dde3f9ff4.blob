@@ -1,0 +1,51 @@
+1:<purrdf_native::py_store::quad_store::PyQuadStore>::query:
+7:	.cfi_def_cfa_offset 16
+9:	.cfi_def_cfa_offset 24
+11:	.cfi_def_cfa_offset 32
+13:	.cfi_def_cfa_offset 40
+15:	.cfi_def_cfa_offset 48
+17:	.cfi_def_cfa_offset 56
+18:	subq	$2824, %rsp
+19:	.cfi_def_cfa_offset 2880
+241:	callq	purrdf_native::py_store::query::collect_relations
+405:	callq	core::ptr::drop_glue::<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>
+445:	callq	core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+477:	callq	purrdf_native::py_store::query::materialize_results
+600:	callq	core::ptr::drop_glue::<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>
+884:	.cfi_def_cfa_offset 56
+886:	.cfi_def_cfa_offset 48
+888:	.cfi_def_cfa_offset 40
+890:	.cfi_def_cfa_offset 32
+892:	.cfi_def_cfa_offset 24
+894:	.cfi_def_cfa_offset 16
+896:	.cfi_def_cfa_offset 8
+900:	.cfi_def_cfa_offset 2880
+909:	callq	purrdf_native::py_store::query::build_relations
+979:	movq	purrdf_validate::query::statistical_aggregates@GOTPCREL(%rip), %rax
+1031:	callq	purrdf_native::py_store::query::build_engine
+1192:	subq	$8, %rsp
+1883:	callq	core::ptr::drop_glue::<alloc::vec::Vec<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>>
+1969:	callq	core::ptr::drop_glue::<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>
+2015:	callq	core::ptr::drop_glue::<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>
+2045:	callq	core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+2083:	callq	core::ptr::drop_glue::<alloc::vec::Vec<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>>
+2101:	callq	core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+2171:<purrdf_native::py_store::quad_store::PyQuadStore>::__pymethod_query__:
+2177:	.cfi_def_cfa_offset 16
+2179:	.cfi_def_cfa_offset 24
+2181:	.cfi_def_cfa_offset 32
+2183:	.cfi_def_cfa_offset 40
+2185:	.cfi_def_cfa_offset 48
+2187:	.cfi_def_cfa_offset 56
+2188:	subq	$680, %rsp
+2189:	.cfi_def_cfa_offset 736
+2202:	subq	$8, %rsp
+2954:	subq	$8, %rsp
+3007:	.cfi_def_cfa_offset 56
+3009:	.cfi_def_cfa_offset 48
+3011:	.cfi_def_cfa_offset 40
+3013:	.cfi_def_cfa_offset 32
+3015:	.cfi_def_cfa_offset 24
+3017:	.cfi_def_cfa_offset 16
+3019:	.cfi_def_cfa_offset 8
+3023:	.cfi_def_cfa_offset 736

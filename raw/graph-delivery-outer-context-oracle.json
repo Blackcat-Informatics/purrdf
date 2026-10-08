@@ -1,0 +1,92 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "quads": [
+    [
+      "a",
+      "p",
+      "o1",
+      "g1"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "graph-outer-filter-context-unbound",
+      "dataset": "named",
+      "query": "SELECT ?driver WHERE { GRAPH <http://example.org/g1> { VALUES ?driver {1 2 3} } FILTER EXISTS { <http://example.org/a> <http://example.org/p> <http://example.org/o1> } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "driver"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "graph-outer-filter-context-bound",
+      "dataset": "named",
+      "query": "SELECT ?driver WHERE { GRAPH <http://example.org/g1> { VALUES ?driver {1 2 3} } FILTER EXISTS { <http://example.org/a> <http://example.org/p> <http://example.org/o1> } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "driver"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "graph-outer-bind-aggregate-context-unbound",
+      "dataset": "named",
+      "query": "SELECT (SUM(?flag) AS ?this) WHERE { GRAPH <http://example.org/g1> { VALUES ?driver {1 2 3} } BIND(IF(EXISTS { <http://example.org/a> <http://example.org/p> <http://example.org/o1> },1,0) AS ?flag) }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-outer-bind-aggregate-context-bound",
+      "dataset": "named",
+      "query": "SELECT (SUM(?flag) AS ?this) WHERE { GRAPH <http://example.org/g1> { VALUES ?driver {1 2 3} } BIND(IF(EXISTS { <http://example.org/a> <http://example.org/p> <http://example.org/o1> },1,0) AS ?flag) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

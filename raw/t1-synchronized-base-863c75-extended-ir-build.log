@@ -1,0 +1,710 @@
+       Fresh purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/hash)
+       Fresh typenum v1.20.1
+       Fresh purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/lex)
+       Fresh hybrid-array v0.4.15
+       Fresh block-buffer v0.12.1
+       Fresh crossbeam-utils v0.8.21
+       Fresh crypto-common v0.2.2
+       Fresh purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/iri)
+       Fresh purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/xsd)
+       Fresh regex-syntax v0.8.11
+       Fresh const-oid v0.10.2
+       Fresh cfg-if v1.0.4
+       Fresh purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/rdf-events)
+       Fresh digest v0.11.3
+       Fresh purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/cdt)
+       Fresh regex-automata v0.4.14
+warning: use of deprecated constant `core::usize::MAX`: replaced by the `MAX` associated constant on this type
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.14/src/nfa/thompson/pikevm.rs:1241:51
+     |
+1241 |             input.haystack().len() < core::usize::MAX,
+     |                                                   ^^^
+     |
+     = note: `-D deprecated` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(deprecated)]`
+     = note: the `deprecated` lint ignores `-D warnings`
+
+warning: use of deprecated constant `core::usize::MAX`: replaced by the `MAX` associated constant on this type
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.14/src/nfa/thompson/pikevm.rs:1416:51
+     |
+1416 |             input.haystack().len() < core::usize::MAX,
+     |                                                   ^^^
+
+warning: use of deprecated constant `core::i32::MAX`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.14/src/util/primitives.rs:151:46
+    |
+151 |         SmallIndex::new_unchecked(core::i32::MAX as usize - 1);
+    |                                              ^^^
+
+       Fresh crossbeam-epoch v0.9.18
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/lib.rs:66:7
+   |
+66 | #[cfg(crossbeam_loom)]
+   |       ^^^^^^^^^^^^^^
+   |
+   = help: expected names are: `docsrs`, `feature`, and `test` and 34 more
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `-D unexpected-cfgs` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unexpected_cfgs)]`
+   = note: the `unexpected_cfgs` lint ignores `-D warnings`
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/lib.rs:69:7
+   |
+69 | #[cfg(crossbeam_loom)]
+   |       ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/lib.rs:91:11
+   |
+91 | #[cfg(not(crossbeam_loom))]
+   |           ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs:1675:21
+     |
+1675 | #[cfg(all(test, not(crossbeam_loom)))]
+     |                     ^^^^^^^^^^^^^^
+     |
+     = help: consider using a Cargo feature instead
+     = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+              [lints.rust]
+              unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+     = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs:350:15
+    |
+350 |     #[cfg(not(crossbeam_loom))]
+    |               ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs:358:11
+    |
+358 |     #[cfg(crossbeam_loom)]
+    |           ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/collector.rs:112:21
+    |
+112 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/deferred.rs:90:21
+   |
+90 | #[cfg(all(test, not(crossbeam_loom)))]
+   |                     ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:56:15
+   |
+56 | #[cfg(not(any(crossbeam_sanitize, miri)))]
+   |               ^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:59:11
+   |
+59 | #[cfg(any(crossbeam_sanitize, miri))]
+   |           ^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:300:15
+    |
+300 | #[cfg(not(any(crossbeam_sanitize, miri)))] // `crossbeam_sanitize` and `miri` reduce the size of `Local`
+    |               ^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:557:21
+    |
+557 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:202:29
+    |
+202 |         let steps = if cfg!(crossbeam_sanitize) {
+    |                             ^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/mod.rs:5:11
+  |
+5 | #[cfg(not(crossbeam_loom))]
+  |           ^^^^^^^^^^^^^^
+  |
+  = help: consider using a Cargo feature instead
+  = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+           [lints.rust]
+           unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+  = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/list.rs:298:21
+    |
+298 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/queue.rs:217:21
+    |
+217 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:10:11
+   |
+10 | #[cfg(not(crossbeam_loom))]
+   |           ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:64:21
+   |
+64 | #[cfg(all(test, not(crossbeam_loom)))]
+   |                     ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:14:15
+   |
+14 |     #[cfg(not(crossbeam_loom))]
+   |               ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:22:11
+   |
+22 |     #[cfg(crossbeam_loom)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: use of deprecated associated function `core::num::<impl usize>::max_value`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:203:20
+    |
+203 |             usize::max_value()
+    |                    ^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+    = note: the `deprecated` lint ignores `-D warnings`
+
+warning: `regex-automata` (lib) generated 3 warnings
+warning: `crossbeam-epoch` (lib) generated 21 warnings
+       Fresh cpufeatures v0.3.0
+       Fresh sha2 v0.11.0
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.11.0/src/sha256.rs:55:17
+   |
+55 |                 cpufeatures::new!(shani_cpuid, "sha", "sse2", "ssse3", "sse4.1");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D deprecated` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(deprecated)]`
+   = note: the `deprecated` lint ignores `-D warnings`
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.11.0/src/sha512.rs:50:17
+   |
+50 |                 cpufeatures::new!(avx2_cpuid, "avx2");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `sha2` (lib) generated 2 warnings
+       Fresh regex v1.12.4
+       Fresh crossbeam-deque v0.8.6
+       Fresh libc v0.2.186
+warning: unused import: `linux::can::*`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/mod.rs:184:17
+    |
+184 |         pub use linux::can::*;
+    |                 ^^^^^^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+    = note: the `unused_imports` lint ignores `-D warnings`
+
+warning: `#[repr(..)]` attribute is specified more than once
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/macros.rs:229:16
+    |
+229 |           #[repr(C)]
+    |                  ^
+    |
+   ::: /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/unix/linux_like/linux/gnu/mod.rs:409:1
+    |
+409 | / s_no_extra_traits! {
+410 | |     // linux/if_ether.h
+411 | |
+412 | |     #[repr(C, packed)]
+    | |            ^
+...   |
+441 | | }
+    | |_- in this macro invocation
+    |
+    = note: for consistency, only specify the representation once
+    = note: `-D repeated-reprs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(repeated_reprs)]`
+    = note: the `repeated_reprs` lint ignores `-D warnings`
+    = note: this warning originates in the macro `s_no_extra_traits` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+       Fresh purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/deflate)
+warning: `libc` (lib) generated 2 warnings
+       Fresh hashbrown v0.17.1
+       Fresh purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/rdf-core)
+       Fresh rayon-core v1.13.0
+       Fresh either v1.16.0
+       Fresh rayon v1.12.0
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/blocks.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `-D unused-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(unused_imports)]`
+  = note: the `unused_imports` lint ignores `-D warnings`
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/chain.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/chunks.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/cloned.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/copied.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::iter::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/empty.rs:1:5
+  |
+1 | use crate::iter::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/enumerate.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/filter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/filter_map.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/find.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/find_first_last/mod.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flat_map.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flat_map_iter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flatten.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flatten_iter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/fold.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/fold_chunks.rs:4:5
+  |
+4 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/fold_chunks_with.rs:4:5
+  |
+4 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/inspect.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/interleave.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/interleave_shortest.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/intersperse.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/len.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/map.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/map_with.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/multizip.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::iter::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/once.rs:1:5
+  |
+1 | use crate::iter::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/panic_fuse.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/positions.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/repeat.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/rev.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip.rs:2:5
+  |
+2 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip_any.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip_any_while.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/splitter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/step_by.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take_any.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take_any_while.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/unzip.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/update.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/while_some.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/zip.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/zip_eq.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/find_first_last/mod.rs:187:22
+    |
+187 |                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    |                      ^^^^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+    = note: the `deprecated` lint ignores `-D warnings`
+help: replace the use of the deprecated method
+    |
+187 -                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+187 +                     .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/par_bridge.rs:113:14
+    |
+113 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| c.checked_sub(1));
+    |              ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+113 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| c.checked_sub(1));
+113 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |c| c.checked_sub(1));
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip_any.rs:105:7
+    |
+105 |     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |       ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+105 -     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+105 +     u.try_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take_any.rs:105:7
+    |
+105 |     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |       ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+105 -     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+105 +     u.try_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |
+
+       Fresh purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/sparql-results)
+warning: `rayon` (lib) generated 48 warnings
+       Fresh getrandom v0.3.4
+       Fresh purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/stack)
+       Fresh purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/sparql-algebra)
+       Fresh purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/alloc-probe)
+       Fresh purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/sparql-eval)
+       Dirty qualification-454-native-cost v0.0.0 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-ir-probe): the file `src/main.rs` has changed (1791337918.067938609s, 19m 16s after last build at 1791336762.921034822s)
+   Compiling qualification-454-native-cost v0.0.0 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-ir-probe)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_BIN_NAME=qualification-454-native-cost CARGO_CRATE_NAME=qualification_454_native_cost CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-ir-probe CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-ir-probe/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='' CARGO_PKG_HOMEPAGE='' CARGO_PKG_LICENSE='' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=qualification-454-native-cost CARGO_PKG_README='' CARGO_PKG_REPOSITORY='' CARGO_PKG_RUST_VERSION='' CARGO_PKG_VERSION=0.0.0 CARGO_PKG_VERSION_MAJOR=0 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=0 CARGO_PKG_VERSION_PRE='' CARGO_PRIMARY_PACKAGE=1 KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name qualification_454_native_cost --edition=2024 src/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C opt-level=3 -C lto=thin -C codegen-units=1 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=f32f0756aa5e17bb --out-dir /opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/qualification-454-native-cost/90a95a377902a98a/out -C strip=symbols -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/block-buffer/63c14211a2f64665/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/cfg-if/d6245f52613fe189/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/const-oid/54492c0306ca3fc9/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/cpufeatures/4258644a325acc3d/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/crossbeam-deque/93d30a7510cf5fc9/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/crossbeam-epoch/ad063c15d61b9722/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/crossbeam-utils/3398d3c3b6a8a230/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/crypto-common/5e8219885f7c7956/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/digest/892d680a14231941/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/either/c1f4fed680ab4c99/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/getrandom/02847c150d95d421/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/hashbrown/6e536cf7fc5f3281/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/hybrid-array/bcba3bdbc3054aab/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/libc/6e7a8dc801cd2659/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-cdt/08d5333f686317ff/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-core/32683637d40f7445/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-deflate/e885d78244c638e8/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-events/c67a2fa29335ec2e/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-hash/be7b2f006533ba0e/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-iri/c80c339f87131602/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-lex/4d65966ba93aad2e/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-sparql-algebra/402482970920ebe5/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-sparql-results/a69b52304c99e4ef/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-stack/3da83cd6887f15ca/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-xsd/0caeafe1cfc9d751/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/rayon-core/85598031e85a4450/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/rayon/7c5a56d8ebead9e9/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/regex-automata/443ceb1c47427307/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/regex-syntax/6125fa51d0bc5933/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/regex/9b7ccd536124b49b/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/sha2/7be89f6912dcebc6/out -L dependency=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/typenum/94bfc3dc4df9ec4e/out --extern purrdf_alloc_probe=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-alloc-probe/e272dd6a3ac4ebf8/out/libpurrdf_alloc_probe-e272dd6a3ac4ebf8.rlib --extern purrdf_alloc_probe=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-alloc-probe/e272dd6a3ac4ebf8/out/libpurrdf_alloc_probe-e272dd6a3ac4ebf8.rmeta --extern purrdf_core=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-core/32683637d40f7445/out/libpurrdf_core-32683637d40f7445.rlib --extern purrdf_core=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-core/32683637d40f7445/out/libpurrdf_core-32683637d40f7445.rmeta --extern purrdf_sparql_algebra=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-sparql-algebra/402482970920ebe5/out/libpurrdf_sparql_algebra-402482970920ebe5.rlib --extern purrdf_sparql_algebra=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-sparql-algebra/402482970920ebe5/out/libpurrdf_sparql_algebra-402482970920ebe5.rmeta --extern purrdf_sparql_eval=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-sparql-eval/0ecc65cc8c2d1ea3/out/libpurrdf_sparql_eval-0ecc65cc8c2d1ea3.rlib --extern purrdf_sparql_eval=/opt/.cargo/slots/b11c4eccb0eb98a3/0/build/release/build/purrdf-sparql-eval/0ecc65cc8c2d1ea3/out/libpurrdf_sparql_eval-0ecc65cc8c2d1ea3.rmeta --emit=llvm-ir,asm -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+    Finished `release` profile [optimized] target(s) in 32.93s

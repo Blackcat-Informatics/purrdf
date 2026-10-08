@@ -1,0 +1,38 @@
+﻿2026-10-08T19:18:51.6603793Z Current runner version: '2.337.0'
+2026-10-08T19:18:51.6628622Z ##[group]Runner Image Provisioner
+2026-10-08T19:18:51.6629505Z Hosted Compute Agent
+2026-10-08T19:18:51.6630582Z Version: 20261002.596
+2026-10-08T19:18:51.6631352Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-08T19:18:51.6632139Z Build Date: 2026-10-02T22:28:27Z
+2026-10-08T19:18:51.6632884Z Worker ID: {fac55642-642b-4de2-9c31-bc7d1f05d0bd}
+2026-10-08T19:18:51.6633634Z Region: eastus
+2026-10-08T19:18:51.6634235Z Cloud: Azure
+2026-10-08T19:18:51.6634758Z ##[endgroup]
+2026-10-08T19:18:51.6636454Z ##[group]Operating System
+2026-10-08T19:18:51.6637147Z Ubuntu
+2026-10-08T19:18:51.6637675Z 24.04.5
+2026-10-08T19:18:51.6638243Z LTS
+2026-10-08T19:18:51.6638756Z ##[endgroup]
+2026-10-08T19:18:51.6639359Z ##[group]Runner Image
+2026-10-08T19:18:51.6639963Z Image: ubuntu-24.04
+2026-10-08T19:18:51.6640763Z Version: 20261004.327.1
+2026-10-08T19:18:51.6642062Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-08T19:18:51.6643685Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-08T19:18:51.6645081Z ##[endgroup]
+2026-10-08T19:18:51.6646169Z ##[group]GITHUB_TOKEN Permissions
+2026-10-08T19:18:51.6648391Z Contents: read
+2026-10-08T19:18:51.6649025Z Metadata: read
+2026-10-08T19:18:51.6649648Z ##[endgroup]
+2026-10-08T19:18:51.6652064Z Secret source: Actions
+2026-10-08T19:18:51.6653107Z Cache mode: write
+2026-10-08T19:18:51.6654044Z Prepare workflow directory
+2026-10-08T19:18:51.6984142Z Prepare all required actions
+2026-10-08T19:18:51.7087185Z Complete job name: test
+2026-10-08T19:18:51.8079565Z ##[group]Run test "$MATRIX_RESULT" = success
+2026-10-08T19:18:51.8080867Z [36;1mtest "$MATRIX_RESULT" = success[0m
+2026-10-08T19:18:51.8847052Z shell: /usr/bin/bash -e {0}
+2026-10-08T19:18:51.8848275Z env:
+2026-10-08T19:18:51.8848917Z   MATRIX_RESULT: cancelled
+2026-10-08T19:18:51.8849649Z ##[endgroup]
+2026-10-08T19:18:51.9081595Z ##[error]Process completed with exit code 1.
+2026-10-08T19:18:51.9249351Z Cleaning up orphan processes

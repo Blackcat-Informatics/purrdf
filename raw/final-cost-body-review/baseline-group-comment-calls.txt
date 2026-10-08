@@ -1,0 +1,78 @@
+      3 ; call <alloc::sync::Arc<purrdf_sparql_eval::row_checkpoint::ExactDeferral>>::drop_slow
+      3 ; call <alloc::sync::Arc<purrdf_sparql_eval::row_checkpoint::ForkShared>>::drop_slow
+      2 ; call <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      1 ; call <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::new
+      2 ; call __rustc::__rust_alloc
+     29 ; call __rustc::__rust_dealloc
+     17 ; call core::panicking::panic_in_cleanup
+      1 ; call core::ptr::drop_glue::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)>
+      2 ; call core::ptr::drop_glue::<alloc::vec::Vec<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)>>
+      9 ; call core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+      4 ; call core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (usize, alloc::vec::Vec<usize>)>, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#2}>>
+      1 ; call core::ptr::drop_glue::<purrdf_sparql_eval::solution::VarSchema>
+      1 ; call core::ptr::drop_glue::<std::collections::hash::map::HashMap<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (usize, alloc::vec::Vec<usize>), purrdf_hash::fixed::FixedState>>
+      1 ; call core::slice::sort::shared::smallsort::insertion_sort_shift_left::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+      4 ; invoke <alloc::raw_vec::RawVec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>::grow_one
+      1 ; invoke <alloc::raw_vec::RawVec<purrdf_sparql_eval::row_checkpoint::WorkerLedger>>::grow_one
+      1 ; invoke <alloc::raw_vec::RawVec<usize>>::grow_one
+      2 ; invoke <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+      3 ; invoke <alloc::sync::Arc<purrdf_sparql_eval::governor::GovernorState>>::drop_slow
+      3 ; invoke <alloc::sync::Arc<purrdf_sparql_eval::scratch::ScratchInterner>>::drop_slow
+      7 ; invoke <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      1 ; invoke <alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>::push_mut
+      2 ; invoke <hashbrown::raw::RawTable<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (usize, alloc::vec::Vec<usize>))>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (usize, alloc::vec::Vec<usize>), purrdf_hash::fixed::FixedState>::{closure#0}>
+      1 ; invoke <hashbrown::raw::RawTable<usize>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::reserve_ghosts::{closure#0}>
+      1 ; invoke <purrdf_core::small::IntoIter<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger); 1]> as core::iter::traits::iterator::Iterator>::unzip::<purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger, purrdf_core::small::SmallVec<[purrdf_sparql_eval::witness::RelationWitness; 1]>, purrdf_core::small::SmallVec<[purrdf_sparql_eval::row_checkpoint::ItemLedger; 1]>>
+      1 ; invoke <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
+      1 ; invoke <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::from_elem
+      3 ; invoke <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::grow
+      1 ; invoke <purrdf_sparql_eval::agg_fn::AggregateRegistry>::resolve
+      1 ; invoke <purrdf_sparql_eval::eval::EvalCtx>::absorb_worker_witnesses::<purrdf_core::small::SmallVec<[purrdf_sparql_eval::witness::RelationWitness; 1]>>
+      2 ; invoke <purrdf_sparql_eval::eval::EvalCtx>::charge_scratch_growth
+      1 ; invoke <purrdf_sparql_eval::eval::EvalCtx>::loop_snapshot
+      1 ; invoke <purrdf_sparql_eval::governor::GovernorState>::admit_transient
+      6 ; invoke <purrdf_sparql_eval::governor::GovernorState>::trip
+      1 ; invoke <purrdf_sparql_eval::governor::lift::Lift>::absorb::<purrdf_core::ir::term::TermId>
+      1 ; invoke <purrdf_sparql_eval::governor::lift::Lift>::at
+      1 ; invoke <purrdf_sparql_eval::governor::lift::Lift>::finish::<purrdf_core::ir::term::TermId>
+      1 ; invoke <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::barred_at
+      2 ; invoke <purrdf_sparql_eval::plan::PlanShape>::program
+      1 ; invoke <purrdf_sparql_eval::row_checkpoint::ItemLedger>::commit_into::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::parallel::MintedRow, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, purrdf_core::small::SmallVec<[purrdf_sparql_eval::row_checkpoint::ItemLedger; 1]>, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#8}>
+      1 ; invoke <purrdf_sparql_eval::row_checkpoint::ItemLedger>::for_items::<purrdf_core::ir::dataset::RdfDataset>
+      6 ; invoke <purrdf_sparql_eval::scratch::ScratchInterner>::count_worker_mint
+      1 ; invoke <purrdf_sparql_eval::solution::VarSchema>::index_of
+      2 ; invoke <purrdf_sparql_eval::solution::VarSchema>::push
+      2 ; invoke <purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>::link::<purrdf_core::ir::dataset::RdfDataset>
+      2 ; invoke <purrdf_sparql_eval::vm::compile::ExprProgram>::recompile
+      1 ; invoke <std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>::initialize::<<std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>::get_or_init<<std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>::try_insert::{closure#0}>::{closure#0}, !>
+      4 ; invoke alloc::alloc::handle_alloc_error
+      6 ; invoke alloc::raw_vec::handle_error
+      6 ; invoke core::panicking::panic_bounds_check
+      1 ; invoke core::panicking::panic_fmt
+      2 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>>
+      6 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>>
+      2 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_eval::row_checkpoint::WorkerLedger>>
+      5 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>
+      3 ; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<(u64, purrdf_core::ir::term::TermValue)>>
+      9 ; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<purrdf_sparql_eval::parallel::MintedRow>>
+      3 ; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<purrdf_sparql_eval::row_checkpoint::WorkerLedger>>
+      2 ; invoke core::ptr::drop_glue::<purrdf_core::small::IntoIter<[purrdf_sparql_eval::row_checkpoint::ItemLedger; 1]>>
+      2 ; invoke core::ptr::drop_glue::<purrdf_core::small::SmallVec<[purrdf_sparql_eval::row_checkpoint::ItemLedger; 1]>>
+      2 ; invoke core::ptr::drop_glue::<purrdf_core::small::SmallVec<[purrdf_sparql_eval::witness::RelationWitness; 1]>>
+      6 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::row_checkpoint::WorkerLedger>
+      3 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+      3 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::VarSchema>
+      4 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::vm::compile::ExprProgram>
+      2 ; invoke core::slice::copy_from_slice_impl::len_mismatch_fail
+      5 ; invoke core::slice::index::slice_index_fail
+      1 ; invoke core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+      1 ; invoke purrdf_sparql_eval::eval::eval_evaluated_with::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::eval::eval_evaluated<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+      2 ; invoke purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset>
+      2 ; invoke purrdf_sparql_eval::parallel::expression_re_enters_evaluation
+      1 ; invoke purrdf_sparql_eval::parallel::par_blocks_try_map_init::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>
+      1 ; invoke purrdf_sparql_eval::parallel::par_chunk_try_map_init::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger), purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#5}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#6}, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#7}>
+      4 ; invoke purrdf_sparql_eval::parallel::reaches_unsafe_builtin
+      3 ; invoke purrdf_sparql_eval::parallel::reintern_portable_row::<purrdf_core::ir::dataset::RdfDataset>
+      2 ; invoke purrdf_sparql_eval::parallel::reserve_concatenated_rows::<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, [usize; 1]>
+      1 ; invoke purrdf_sparql_eval::scratch::value_bytes
+      2 ; invoke purrdf_sparql_eval::vm::attached_position

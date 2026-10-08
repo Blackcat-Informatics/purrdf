@@ -1,0 +1,3 @@
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.40s
+     Running `/opt/purrdf-454-current-qualification-20261008/target/debug/helper-census --glossary-gate --self-test`
+OK: 69 glossary rows, 43 rejections, 24 K tokens, 1716 production-path self-tests

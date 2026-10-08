@@ -1,0 +1,96 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-python-ir/purrdf_native.ll:621103
+; <<purrdf_native::py_store::quad_store::PyQuadStore>::query_entailment_governed::{closure#0}::{closure#0}::{closure#1} as core::ops::function::FnOnce<(&purrdf_core::ir::dataset::RdfDataset,)>>::call_once::{shim:vtable#0}
+define internal void @_RNSNvYNCNCNCNvMsb_NtNtCseY6IX0djbTh_13purrdf_native8py_store10quad_storeNtBg_11PyQuadStore25query_entailment_governed00s_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir7dataset10RdfDatasetEE9call_once6vtableBk_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([96 x i8]) align 8 captures(none) dereferenceable(96) initializes((0, 32)) %_0, ptr nofree noundef readonly captures(none) %_1, ptr noundef nonnull align 8 %0) unnamed_addr #3 personality ptr @rust_eh_personality !guid !100272 {
+start:
+  %_4.i.i = alloca [24 x i8], align 8
+  %_3.i.i = alloca [72 x i8], align 8
+  %1 = load ptr, ptr %_1, align 8, !nonnull !3914, !align !3915, !noundef !3914
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !100273)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !100276)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_3.i.i), !noalias !100279
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i.i), !noalias !100279
+  %2 = getelementptr i8, ptr %1, i64 8
+  %_5.val.i.i = load ptr, ptr %2, align 8, !noalias !100279, !nonnull !3914, !noundef !3914
+  %3 = getelementptr i8, ptr %1, i64 16
+  %_5.val1.i.i = load i64, ptr %3, align 8, !noalias !100279, !noundef !3914
+; call <(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation) as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>
+  call fastcc void @_RINvXNvMNtCsc70TAahYccp_5alloc5sliceSp9to_vec_inTNtNtB8_6string6StringNtNtNtCseY6IX0djbTh_13purrdf_native8py_store5query12RelationSpecNtNtB1c_11attestation11AttestationENtB3_10ConvertVec6to_vecNtNtB8_5alloc6GlobalEB1c_(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(24) %_4.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_5.val.i.i, i64 noundef %_5.val1.i.i) #76, !noalias !100279
+; call purrdf_native::py_store::query::registry_over
+  call fastcc void @_RNvNtNtCseY6IX0djbTh_13purrdf_native8py_store5query13registry_over(ptr noalias nofree noundef align 8 captures(none) dereferenceable(72) %_3.i.i, ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %_4.i.i, ptr noundef nonnull align 8 %0), !noalias !100279
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i), !noalias !100279
+  %4 = load ptr, ptr %_3.i.i, align 8, !noalias !100279, !noundef !3914
+  %5 = icmp eq ptr %4, null
+  br i1 %5, label %bb5.i.i, label %bb6.i.i
+
+bb5.i.i:                                          ; preds = %start
+  %6 = getelementptr inbounds nuw i8, ptr %_3.i.i, i64 8
+  %_9.sroa.4.0._0.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %_9.sroa.4.0._0.sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(24) %6, i64 24, i1 false), !noalias !100281
+  br label %_RNvYNCNCNCNvMsb_NtNtCseY6IX0djbTh_13purrdf_native8py_store10quad_storeNtBe_11PyQuadStore25query_entailment_governed00s_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir7dataset10RdfDatasetEE9call_onceBi_.exit
+
+bb6.i.i:                                          ; preds = %start
+  %7 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(72) %7, ptr noundef nonnull align 8 dereferenceable(72) %_3.i.i, i64 72, i1 false), !noalias !100281
+  br label %_RNvYNCNCNCNvMsb_NtNtCseY6IX0djbTh_13purrdf_native8py_store10quad_storeNtBe_11PyQuadStore25query_entailment_governed00s_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir7dataset10RdfDatasetEE9call_onceBi_.exit
+
+_RNvYNCNCNCNvMsb_NtNtCseY6IX0djbTh_13purrdf_native8py_store10quad_storeNtBe_11PyQuadStore25query_entailment_governed00s_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir7dataset10RdfDatasetEE9call_onceBi_.exit: ; preds = %bb5.i.i, %bb6.i.i
+  %.sink.i.i = phi i64 [ -9223372036854775794, %bb5.i.i ], [ -1, %bb6.i.i ]
+  store i64 %.sink.i.i, ptr %_0, align 8, !alias.scope !100282, !noalias !100281
+  call void @llvm.lifetime.end.p0(ptr nonnull %_3.i.i), !noalias !100279
+  ret void
+}
+
+ASSEMBLY
+_RNSNvYNCNCNCNvMsb_NtNtCseY6IX0djbTh_13purrdf_native8py_store10quad_storeNtBg_11PyQuadStore25query_entailment_governed00s_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir7dataset10RdfDatasetEE9call_once6vtableBk_:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%rbx
+	.cfi_def_cfa_offset 32
+	subq	$96, %rsp
+	.cfi_def_cfa_offset 128
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	(%rsi), %rax
+	movq	%rdx, %r14
+	leaq	72(%rsp), %r15
+	movq	%rdi, %rbx
+	movq	%r15, %rdi
+	movq	8(%rax), %rsi
+	movq	16(%rax), %rdx
+	callq	_RINvXNvMNtCsc70TAahYccp_5alloc5sliceSp9to_vec_inTNtNtB8_6string6StringNtNtNtCseY6IX0djbTh_13purrdf_native8py_store5query12RelationSpecNtNtB1c_11attestation11AttestationENtB3_10ConvertVec6to_vecNtNtB8_5alloc6GlobalEB1c_
+	movq	%rsp, %rdi
+	movq	%r15, %rsi
+	movq	%r14, %rdx
+	callq	_RNvNtNtCseY6IX0djbTh_13purrdf_native8py_store5query13registry_over
+	cmpq	$0, (%rsp)
+	je	.LBB2484_1
+	vmovups	(%rsp), %zmm0
+	movq	64(%rsp), %rax
+	movq	%rax, 72(%rbx)
+	movq	$-1, %rax
+	vmovups	%zmm0, 8(%rbx)
+	jmp	.LBB2484_3
+.LBB2484_1:
+	vmovups	8(%rsp), %xmm0
+	movq	24(%rsp), %rax
+	movq	%rax, 24(%rbx)
+	movabsq	$-9223372036854775794, %rax
+	vmovups	%xmm0, 8(%rbx)
+.LBB2484_3:
+	movq	%rax, (%rbx)
+	movq	%rbx, %rax
+	addq	$96, %rsp
+	.cfi_def_cfa_offset 32
+	popq	%rbx
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.Lfunc_end2484:

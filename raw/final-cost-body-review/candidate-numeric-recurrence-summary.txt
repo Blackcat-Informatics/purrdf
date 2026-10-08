@@ -1,0 +1,247 @@
+1:define { i64, i64 } @purrdf_sparql_eval::modifier::aggregate_numeric_cost(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %0, ptr noalias nofree noundef nonnull readonly align 8 captures(address) %1, i64 noundef range(i64 0, 115292150460684698) %2, i64 %3) unnamed_addr #0 personality ptr @rust_eh_personality !guid !109790 {
+2:  %5 = alloca [40 x i8], align 8
+3:  %6 = alloca [40 x i8], align 8
+4:  %7 = alloca [24 x i8], align 8
+5:  %8 = alloca [40 x i8], align 8
+6:  %9 = alloca [32 x i8], align 8
+7:  %10 = alloca [32 x i8], align 8
+8:  %11 = alloca [80 x i8], align 16
+9:  %12 = alloca [40 x i8], align 8
+13:  %16 = icmp eq i64 %2, 0
+17:  %18 = getelementptr inbounds nuw i8, ptr %20, i64 80
+18:  %19 = icmp eq ptr %18, %15
+22:  %20 = phi ptr [ %18, %17 ], [ %1, %4 ]
+26:  %24 = icmp ne i64 %21, -9223372036854775806
+27:  tail call void @llvm.assume(i1 %24)
+28:  %25 = icmp slt i64 %21, 0
+29:  %26 = icmp samesign ult i64 %23, 20
+35:  %29 = icmp eq i64 %28, 2
+48:  %33 = phi i1 [ false, %30 ], [ true, %._crit_edge ]
+50:  %35 = icmp eq i64 %34, 0
+51:  %36 = icmp eq i64 %13, 18
+57:  %40 = icmp eq i64 %39, 0
+62:  %43 = phi i1 [ false, %38 ], [ true, %30 ], [ false, %32 ]
+65:  %45 = icmp eq i64 %2, 0
+80:  %.sroa.060.0 = phi i64 [ %.sroa.075.0, %182 ], [ undef, %.preheader ]
+81:  %.sroa.862.0 = phi i64 [ %.sroa.676.0, %182 ], [ undef, %.preheader ]
+82:  %.sroa.1065.0 = phi i64 [ %.sroa.977.0, %182 ], [ undef, %.preheader ]
+83:  %.sroa.1268.0 = phi i32 [ %.sroa.13.0, %182 ], [ undef, %.preheader ]
+84:  %.sroa.1471.0 = phi i32 [ %.sroa.15.0.copyload, %182 ], [ undef, %.preheader ]
+85:  %48 = phi i1 [ true, %182 ], [ false, %.preheader ]
+86:  %49 = phi i64 [ %184, %182 ], [ 0, %.preheader ]
+87:  %50 = phi i64 [ %183, %182 ], [ 0, %.preheader ]
+88:  %51 = phi i64 [ %101, %182 ], [ 0, %.preheader ]
+89:  %52 = phi i64 [ %102, %182 ], [ 0, %.preheader ]
+90:  %53 = phi i64 [ %99, %182 ], [ 0, %.preheader ]
+91:  %54 = phi ptr [ %57, %182 ], [ %1, %.preheader ]
+92:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109797)
+93:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109800)
+97:  %56 = phi ptr [ %57, %96 ], [ %54, %47 ]
+98:  %57 = getelementptr inbounds nuw i8, ptr %56, i64 80
+99:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109803)
+100:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109806)
+101:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109808)
+102:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109811)
+103:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109813)
+104:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109816)
+106:  %59 = icmp ne i64 %58, -9223372036854775806
+107:  tail call void @llvm.assume(i1 %59)
+108:  %60 = icmp sgt i64 %58, -1
+111:  %63 = icmp eq i64 %62, -1
+120:  %70 = icmp samesign ult i64 %69, 33
+134:  %82 = icmp ne i256 %81, 0
+136:  %84 = icmp eq i32 %83, 0
+140:  %85 = add i64 %69, -33
+143:  %87 = tail call noundef i8 @<purrdf_xsd::datatype::XsdDatatype>::from_local(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %86, i64 noundef %85), !alias.scope !109822, !noalias !109825
+144:  %88 = icmp eq i8 %87, -1
+163:  %97 = icmp eq ptr %57, %15
+172:  %99 = tail call i64 @llvm.uadd.sat.i64(i64 %53, i64 1)
+173:  %100 = tail call i64 @llvm.usub.sat.i64(i64 %.sroa.676.0.copyload, i64 %.sroa.977.0.copyload)
+174:  %101 = tail call i64 @llvm.umax.i64(i64 %100, i64 %51)
+175:  %102 = tail call i64 @llvm.umax.i64(i64 %.sroa.977.0.copyload, i64 %52)
+179:  %104 = add i64 %99, -1
+180:  %105 = icmp eq i64 %104, 0
+184:  %107 = icmp ne i64 %99, 1
+185:  tail call void @llvm.assume(i1 %107)
+186:  %108 = icmp ugt i64 %104, 9999999999
+190:  %112 = icmp samesign ugt i64 %111, 99999
+199:  %117 = phi i32 [ %115, %113 ], [ %110, %106 ]
+200:  %118 = phi i64 [ %114, %113 ], [ %111, %106 ]
+202:  %120 = add nuw nsw i32 %119, 393206
+203:  %121 = add nuw nsw i32 %119, 524188
+205:  %123 = add nuw nsw i32 %119, 916504
+206:  %124 = add nuw nsw i32 %119, 514288
+210:  %128 = add nuw nsw i32 %127, %117
+211:  %129 = icmp samesign ult i32 %128, 20
+212:  tail call void @llvm.assume(i1 %129)
+213:  %130 = add nuw nsw i32 %128, 1
+215:  %132 = tail call i64 @llvm.uadd.sat.i64(i64 %101, i64 %131)
+216:  %133 = tail call i64 @llvm.uadd.sat.i64(i64 %132, i64 %102)
+219:  %136 = icmp ne i64 %135, 0
+221:  %138 = add nuw nsw i64 %134, %137
+222:  %139 = icmp ult i64 %.sroa.862.0, 39
+223:  %140 = icmp ult i64 %.sroa.1065.0, 19
+229:  tail call void @core::num::imp::int_log10::panic_for_nonpositive_argument(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.e5162873a9a3251d11c4df37a70e4654.1110) #93, !noalias !109830
+233:  %144 = icmp ult i64 %.sroa.676.0.copyload, 39
+234:  %145 = icmp ult i64 %.sroa.977.0.copyload, 19
+239:  %148 = icmp ult i64 %.sroa.1065.0, %.sroa.977.0.copyload
+245:  %152 = add nuw nsw i64 %151, 1
+246:  %153 = tail call i64 @llvm.uadd.sat.i64(i64 %.sroa.075.0.copyload, i64 %152)
+252:  %157 = add nuw nsw i64 %156, 1
+253:  %158 = tail call i64 @llvm.uadd.sat.i64(i64 %.sroa.060.0, i64 %157)
+257:  %160 = phi i64 [ %158, %154 ], [ %153, %149 ]
+258:  %161 = phi i64 [ %.sroa.075.0.copyload, %154 ], [ %153, %149 ]
+259:  %162 = phi i64 [ %158, %154 ], [ %.sroa.060.0, %149 ]
+261:  %164 = icmp ugt i64 %160, 4611686018427387903
+268:  %167 = phi i64 [ -1, %165 ], [ %163, %159 ]
+269:  %168 = tail call i64 @llvm.umax.i64(i64 %162, i64 %161)
+270:  %169 = tail call i64 @llvm.uadd.sat.i64(i64 %168, i64 1)
+272:  %171 = icmp ugt i64 %169, 4611686018427387903
+279:  %173 = phi i64 [ -1, %172 ], [ %170, %166 ]
+280:  %174 = tail call i64 @llvm.uadd.sat.i64(i64 %160, i64 %169)
+281:  %175 = tail call i64 @llvm.uadd.sat.i64(i64 %167, i64 %173)
+282:  %176 = tail call i64 @llvm.uadd.sat.i64(i64 %49, i64 %174)
+283:  %177 = tail call i64 @llvm.umax.i64(i64 %50, i64 %175)
+287:  %179 = icmp ult i64 %133, 39
+288:  %180 = icmp ult i64 %52, 19
+293:  %.sroa.075.0 = phi i64 [ %.sroa.075.0.copyload, %98 ], [ %138, %178 ], [ %138, %<purrdf_xsd::exact::cost::Shape>::add_cost (.exit) ]
+294:  %.sroa.676.0 = phi i64 [ %.sroa.676.0.copyload, %98 ], [ %133, %178 ], [ %133, %<purrdf_xsd::exact::cost::Shape>::add_cost (.exit) ]
+295:  %.sroa.977.0 = phi i64 [ %.sroa.977.0.copyload, %98 ], [ %102, %178 ], [ %102, %<purrdf_xsd::exact::cost::Shape>::add_cost (.exit) ]
+296:  %.sroa.13.0 = phi i32 [ %.sroa.13.0.copyload, %98 ], [ -1, %178 ], [ -1, %<purrdf_xsd::exact::cost::Shape>::add_cost (.exit) ]
+297:  %183 = phi i64 [ %50, %98 ], [ %50, %178 ], [ %177, %<purrdf_xsd::exact::cost::Shape>::add_cost (.exit) ]
+298:  %184 = phi i64 [ %49, %98 ], [ %49, %178 ], [ %176, %<purrdf_xsd::exact::cost::Shape>::add_cost (.exit) ]
+301:  %185 = icmp eq ptr %57, %15
+318:  %190 = phi ptr [ %191, %230 ], [ %1, %188 ]
+319:  %191 = getelementptr inbounds nuw i8, ptr %190, i64 80
+320:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109837)
+321:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109840)
+322:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109843)
+324:  %193 = icmp ne i64 %192, -9223372036854775806
+325:  tail call void @llvm.assume(i1 %193)
+326:  %194 = icmp sgt i64 %192, -1
+329:  %197 = icmp eq i64 %196, -1
+338:  %204 = icmp samesign ult i64 %203, 33
+352:  %216 = icmp ne i256 %215, 0
+354:  %218 = icmp eq i32 %217, 0
+358:  %219 = add i64 %203, -33
+361:  %221 = tail call noundef i8 @<purrdf_xsd::datatype::XsdDatatype>::from_local(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %220, i64 noundef %219), !alias.scope !109857, !noalias !109860
+362:  %222 = icmp eq i8 %221, -1
+381:  %231 = icmp eq ptr %191, %15
+385:  %233 = tail call noundef dereferenceable_or_null(128) ptr @malloc(i64 noundef range(i64 1, 0) 128) #92, !noalias !109861
+386:  %234 = icmp eq ptr %233, null
+390:  %236 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @purrdf_alloc_probe::THREAD_ALLOCATIONS::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601))
+392:  %238 = tail call i64 @llvm.uadd.sat.i64(i64 %237, i64 1)
+394:  %239 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @purrdf_alloc_probe::THREAD_REQUESTED_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601))
+396:  %241 = tail call i64 @llvm.uadd.sat.i64(i64 %240, i64 128)
+398:  %242 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601))
+400:  %244 = tail call i64 @llvm.sadd.sat.i64(i64 %243, i64 128)
+402:  %245 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @purrdf_alloc_probe::THREAD_PEAK_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601))
+404:  %247 = icmp sgt i64 %244, %246
+416:  %251 = icmp slt i64 %250, 0
+420:  %253 = add nsw i64 %250, 1
+426:  %257 = atomicrmw add ptr @purrdf_alloc_probe::PROCESS_ALLOCATIONS, i64 1 monotonic, align 8, !noalias !109861
+427:  %258 = atomicrmw add ptr @purrdf_alloc_probe::PROCESS_REQUESTED_BYTES, i64 128 monotonic, align 8, !noalias !109861
+428:  %259 = atomicrmw add ptr @purrdf_alloc_probe::PROCESS_LIVE_BYTES, i64 128 monotonic, align 8, !noalias !109861
+429:  %260 = tail call i64 @llvm.sadd.sat.i64(i64 %259, i64 128)
+434:  %263 = phi i64 [ %261, %256 ], [ %268, %265 ]
+435:  %264 = icmp sgt i64 %260, %263
+450:  tail call void @alloc::raw_vec::handle_error(i64 noundef 8, i64 128) #93, !noalias !109834
+461:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109864)
+462:  tail call void @llvm.experimental.noalias.scope.decl(metadata !109867)
+465:  %275 = icmp eq ptr %191, %15
+469:  %276 = phi ptr [ %331, %330 ], [ %233, %__rustc::__rust_alloc (.exit) ]
+470:  %277 = phi i64 [ %333, %330 ], [ 1, %__rustc::__rust_alloc (.exit) ]
+471:  %278 = phi ptr [ %281, %330 ], [ %191, %__rustc::__rust_alloc (.exit) ]
+475:  %280 = phi ptr [ %281, %321 ], [ %278, %.preheader88 ]
+476:  %281 = getelementptr inbounds nuw i8, ptr %280, i64 80
+478:  %283 = icmp ne i64 %282, -9223372036854775806
+479:  tail call void @llvm.assume(i1 %283)
+480:  %284 = icmp sgt i64 %282, -1
+483:  %287 = icmp eq i64 %286, -1
+496:  %298 = icmp samesign ult i64 %297, 33
+510:  %310 = icmp ne i256 %309, 0
+512:  %312 = icmp eq i32 %311, 0
+516:  %313 = add i64 %297, -33
+519:  %315 = tail call noundef i8 @<purrdf_xsd::datatype::XsdDatatype>::from_local(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %314, i64 noundef %313), !alias.scope !109888, !noalias !109834
+520:  %316 = icmp eq i8 %315, -1
+538:  %322 = icmp eq ptr %281, %15
+542:  %324 = icmp samesign ult i64 %277, 288230376151711744
+543:  tail call void @llvm.assume(i1 %324)
+545:  %326 = icmp eq i64 %277, %325
+558:  %331 = phi ptr [ %329, %328 ], [ %276, %323 ]
+561:  %333 = add nuw nsw i64 %277, 1
+563:  %334 = icmp eq ptr %281, %15
+577:  %340 = phi { ptr, i32 } [ %336, %335 ], [ %338, %337 ]
+579:  %342 = icmp eq i64 %341, 0
+586:  tail call void @__rustc::__rust_dealloc(ptr noundef nonnull %344, i64 noundef %345, i64 noundef range(i64 1, -9223372036854775807) 8) #92, !noalias !109834
+590:  %346 = phi i64 [ %277, %321 ], [ 1, %__rustc::__rust_alloc (.exit) ], [ %333, %330 ]
+591:  %347 = phi ptr [ %276, %321 ], [ %233, %__rustc::__rust_alloc (.exit) ], [ %331, %330 ]
+597:  %350 = phi { ptr, i32 } [ %340, %339 ], [ %394, %393 ], [ %340, %343 ], [ %452, %454 ], [ %452, %451 ]
+598:  resume { ptr, i32 } %350
+601:  %351 = phi i64 [ %348, %.loopexit ], [ 0, %230 ]
+602:  %352 = phi ptr [ %347, %.loopexit ], [ inttoptr (i64 8 to ptr), %230 ]
+603:  %353 = phi i64 [ %346, %.loopexit ], [ 0, %230 ]
+611:  %.sroa.12.0 = phi i32 [ %.sroa.1471.0, %187 ], [ %.sroa.15.0.copyload, %186 ]
+612:  %.sroa.11.0 = phi i32 [ %.sroa.1268.0, %187 ], [ %.sroa.13.0, %186 ]
+613:  %.sroa.1031.0 = phi i64 [ %.sroa.1065.0, %187 ], [ %.sroa.977.0, %186 ]
+614:  %.sroa.926.0 = phi i64 [ %.sroa.862.0, %187 ], [ %.sroa.676.0, %186 ]
+615:  %.sroa.023.0 = phi i64 [ %.sroa.060.0, %187 ], [ %.sroa.075.0, %186 ]
+616:  %356 = phi i64 [ %49, %187 ], [ %184, %186 ]
+617:  %357 = phi i64 [ %50, %187 ], [ %183, %186 ]
+618:  %358 = icmp ult i64 %.sroa.926.0, 39
+619:  %359 = icmp ult i64 %.sroa.1031.0, 19
+625:  %363 = icmp eq i64 %362, 0
+626:  %364 = icmp eq i64 %13, 18
+629:  %367 = icmp eq i64 %366, 0
+650:  %375 = icmp ult i64 %.sroa.1031.0, %.sroa.926.0
+654:  %377 = icmp eq i64 %.sroa.1031.0, 0
+658:  %379 = tail call i64 @llvm.uadd.sat.i64(i64 %.sroa.1031.0, i64 2)
+662:  %381 = tail call i64 @llvm.uadd.sat.i64(i64 %.sroa.926.0, i64 1)
+666:  %383 = phi i64 [ %379, %378 ], [ %381, %380 ], [ %.sroa.926.0, %376 ]
+667:  %384 = tail call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %.sroa.023.0, i64 9)
+672:  %387 = icmp slt i32 %.sroa.11.0, 0
+673:  %388 = tail call i64 @llvm.uadd.sat.i64(i64 %383, i64 1)
+676:  %391 = tail call i64 @llvm.uadd.sat.i64(i64 %390, i64 %389)
+677:  %392 = tail call i64 @llvm.uadd.sat.i64(i64 %391, i64 1)
+723:  %407 = icmp ugt i64 %405, 4611686018427387903
+730:  %410 = phi i64 [ -1, %408 ], [ %406, %404 ]
+731:  %411 = tail call i64 @llvm.uadd.sat.i64(i64 %.sroa.1031.0, i64 %410)
+735:  %413 = phi i64 [ %411, %409 ], [ %13, %397 ]
+736:  %414 = tail call i64 @llvm.usub.sat.i64(i64 %.sroa.926.0, i64 %.sroa.1031.0)
+738:  %416 = tail call i64 @llvm.uadd.sat.i64(i64 %414, i64 %415)
+739:  %417 = tail call i64 @llvm.uadd.sat.i64(i64 %416, i64 1)
+740:  %418 = tail call i64 @llvm.uadd.sat.i64(i64 %417, i64 %413)
+743:  %421 = icmp ne i64 %420, 0
+745:  %423 = add nuw nsw i64 %419, %422
+746:  %424 = icmp ult i64 %413, %418
+750:  %426 = icmp eq i64 %413, 0
+754:  %428 = tail call i64 @llvm.uadd.sat.i64(i64 %413, i64 2)
+758:  %430 = tail call i64 @llvm.uadd.sat.i64(i64 %418, i64 1)
+762:  %432 = phi i64 [ %428, %427 ], [ %430, %429 ], [ %418, %425 ]
+763:  %433 = tail call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %423, i64 9)
+768:  %436 = tail call i64 @llvm.uadd.sat.i64(i64 %432, i64 1)
+770:  %438 = tail call i64 @llvm.uadd.sat.i64(i64 %437, i64 %436)
+771:  %439 = tail call i64 @llvm.uadd.sat.i64(i64 %438, i64 1)
+772:  %440 = tail call i64 @llvm.uadd.sat.i64(i64 %401, i64 %439)
+773:  %441 = tail call i64 @llvm.umax.i64(i64 %402, i64 %438)
+785:  %.pn87 = phi i64 [ -1, %382 ], [ %392, %386 ], [ %440, %435 ], [ -1, %431 ]
+786:  %.pn85 = phi i64 [ -1, %382 ], [ %391, %386 ], [ %441, %435 ], [ -1, %431 ]
+787:  %444 = tail call i64 @llvm.uadd.sat.i64(i64 %356, i64 %.pn87)
+788:  %445 = tail call i64 @llvm.umax.i64(i64 %357, i64 %.pn85)
+792:  %447 = phi i64 [ 0, %38 ], [ %457, %__rustc::__rust_dealloc (.exit) ], [ %444, %<purrdf_xsd::exact::cost::Shape>::render_cost (.exit) ], [ 0, %._crit_edge ], [ 0, %30 ], [ %457, %456 ], [ %49, %187 ], [ 0, %46 ], [ %356, %361 ]
+793:  %448 = phi i64 [ 0, %38 ], [ %458, %__rustc::__rust_dealloc (.exit) ], [ %445, %<purrdf_xsd::exact::cost::Shape>::render_cost (.exit) ], [ 0, %._crit_edge ], [ 0, %30 ], [ %458, %456 ], [ %50, %187 ], [ 0, %46 ], [ %357, %361 ]
+801:  %453 = icmp eq i64 %351, 0
+806:  call void @llvm.assume(i1 true) [ "nonnull"(ptr %352) ]
+808:  tail call void @__rustc::__rust_dealloc(ptr noundef nonnull %352, i64 noundef %455, i64 noundef range(i64 1, -9223372036854775807) 8) #92
+814:  %459 = icmp eq i64 %351, 0
+819:  %462 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601))
+821:  %464 = tail call i64 @llvm.umin.i64(i64 %461, i64 9223372036854775807)
+822:  %465 = tail call i64 @llvm.ssub.sat.i64(i64 %463, i64 %464)
+824:  %466 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601))
+826:  %468 = icmp slt i64 %465, %467
+838:  %472 = icmp slt i64 %471, 0
+842:  %474 = add nsw i64 %471, 1
+849:  %479 = tail call i64 @llvm.ssub.sat.i64(i64 %478, i64 %464)
+854:  %482 = phi i64 [ %480, %477 ], [ %487, %484 ]
+855:  %483 = icmp slt i64 %479, %482
+869:  tail call void @free(ptr noundef nonnull %352) #92

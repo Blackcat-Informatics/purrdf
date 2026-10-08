@@ -1,0 +1,3 @@
+Align Python scoreboard with qualified conformance results
+
+Refresh the restated Python pass count from the current generated matrix while preserving the four ledgered expected failures.

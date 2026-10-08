@@ -1,0 +1,21 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/prior-application-call-inventory.txt	2026-10-08 10:07:10.703296236 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/current-application-call-inventory.txt	2026-10-08 10:07:10.706296188 -0600
+@@ -6,8 +6,7 @@
+       1 <alloc::sync::Arc<std::collections::hash::map::HashMap<usize, purrdf_sparql_eval::expr::SubstitutionSource, purrdf_hash::fixed::FixedState>>>::drop_slow
+       1 <alloc::vec::Vec<alloc::sync::Arc<std::collections::hash::map::HashMap<usize, purrdf_sparql_eval::expr::SubstitutionSource, purrdf_hash::fixed::FixedState>>>>::push_mut
+       1 <hashbrown::map::HashMap<usize, purrdf_sparql_eval::deferred_exists::Deferred, purrdf_hash::fixed::FixedState>>::get::<usize>
+-      1 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
+-      1 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
++      1 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::from_elem
+       1 <purrdf_sparql_eval::deferred_exists::DeferredLateral as core::clone::Clone>::clone
+       1 <purrdf_sparql_eval::deferred_exists::SubstitutionEnv>::layers
+       1 <purrdf_sparql_eval::deferred_exists::SubstitutionEnv>::then
+@@ -25,7 +24,7 @@
+       1 <purrdf_sparql_eval::solution::VarSchema>::push
+       1 <purrdf_sparql_eval::solution::VarSchema>::union
+       3 __rustc::__rust_alloc
+-     11 __rustc::__rust_dealloc
++     10 __rustc::__rust_dealloc
+       1 alloc::boxed::box_new_uninit
+       3 alloc::raw_vec::handle_error
+       2 core::panicking::panic_bounds_check

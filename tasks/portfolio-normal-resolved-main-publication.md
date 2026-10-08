@@ -1,0 +1,11 @@
+# Normal signed resolved-main merge commit and branch push
+
+VERDICT: PASS for admitted normal commit/signature/source identity and ordinary branch push/readback. No whole hosted, issue/PR, archive or final-merge claim.
+
+Actual commit session51298 terminal0 observed via tools.write_stdin, ordinary git commit -F exact proposed message with configured signing and existing normal hooks, no escape. Scope purrdf-454-normal-resolved-main-commit-20261008.scope invocationd8524f09779440a9b450d666146f4bf1 captured active64GiB/SwapMax0; raw SDK/private existing target/build/tmp/jobs8/libtest8/inherited wrapper. Normal ratchet PASS two new host-only test paths, no legacy growth. Hook stdout/log retained; no fake installed pre-push gate claimed.
+
+Commit ed14f23ead7a303a18b9ef610f1e6caeb4483a35 records EXACT qualified tree72fa2c1ff03b00b4052bccf17895a091805785cf with parentsfd963c2636096f41c1d42cfc0dad9da950e62ef6 and df2cec88b0f8e05e05ef3d01d14714474be6bbb1. git verify-commit exited0; good signature G and configured full fingerprintAF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11 confirmed. Required tree/parents/signature/clean-index/unstaged/MERGE_HEAD absence validation exited0; source status only separate untrackedStage. Scope terminal inactive/dead/lane FREE.
+
+Only after commit verification, ordinary git push origin paudley/454-rdflib-shim-algebra-level-reassignment (no force) actual session72543 terminal0. Actual remote readback git ls-remote --heads exact branch equals ed14f23ead7a303a18b9ef610f1e6caeb4483a35; validation0. Remote advanced cee1c41b2 to ed14f23ea. No PR/issue forge post, evidence copy, cleanup or protected integration.
+
+Complete attributable raw evidence /opt/purrdf-454-current-qualification-20261008/normal-resolved-main-commit-1: commit.log/.exit, committed-identity.txt, signature-verification.log, identity-validation.exit, source-status.txt, live-scope-limits.txt/terminal-scope.txt, push.log/.exit, remote-head-readback.txt/remote-head-validation.exit. Full independent analytical cost PASS and current owning qualification remain bound to identical source tree after commitment. Final hosted/current-PR feedback, whole completion/gap audit and selectedStage archival/ghprsq prerequisites remain unrun.

@@ -1,0 +1,6 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 863c75e2c1e1 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/454-rdflib-shim-algebra-level-reassignment e72660e87] fix(sparql): compile contextual mappings through native algebra
+ 37 files changed, 5357 insertions(+), 276 deletions(-)
+ create mode 100644 crates/sparql-eval/src/rdflib.rs
+ create mode 100644 crates/sparql-eval/tests/fixtures/contextual-mappings.json
+ create mode 100644 crates/sparql-eval/tests/rdflib_contextual.rs

@@ -1,0 +1,6 @@
+tar: Removing leading `/' from member names
+tar: Removing leading `/' from member names
+tar: Removing leading `../' from member names
+tar: Removing leading `../' from member names
+tar: ../escape.txt: Member name contains '..'
+tar: Exiting with failure status due to previous errors

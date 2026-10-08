@@ -1,0 +1,285 @@
+{
+  "oracle_version": "7.6.0",
+  "fixture": [
+    [
+      "a",
+      "p",
+      "o1"
+    ],
+    [
+      "a",
+      "p",
+      "o2"
+    ],
+    [
+      "b",
+      "p",
+      "o3"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "optional-success-count-call-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>(1) AS ?call) } }",
+      "initial": {},
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "call",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 3
+      }
+    },
+    {
+      "name": "optional-success-count-call-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>(1) AS ?call) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "call",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 3
+      }
+    },
+    {
+      "name": "optional-success-count-this-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>(1) AS ?this) } }",
+      "initial": {},
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 3
+      }
+    },
+    {
+      "name": "optional-success-count-this-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>(1) AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 3
+      }
+    }
+  ],
+  "disposition": "The zero-argument callback cases in graph-values-group-volatile-oracle.json executed zero calls and establish no successful volatile RHS law. A second attempt using ?value also executed zero calls because that outer variable is forgotten before Extend expression evaluation. The independent source diagnosis is reviews/volatile-oracle-root-cause.md. These literal-argument cases replace both attempts for the success criterion; the 26 noncallback boundary answers in the old receipt remain applicable."
+}

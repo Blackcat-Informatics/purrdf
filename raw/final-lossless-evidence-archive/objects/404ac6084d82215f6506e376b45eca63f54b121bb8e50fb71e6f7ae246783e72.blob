@@ -1,0 +1,29 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 31.07s
+     Running tests/rdflib_contextual.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-eval/d5f0dc348460eb34/out/rdflib_contextual-d5f0dc348460eb34)
+
+running 21 tests
+test contextual_dataset_requirement_is_part_of_algebra_identity ... ok
+test ordinary_transformation_admission_rejects_contextual_applications ... ok
+test contextual_group_filters_preserve_callback_order_and_errors ... ok
+test contextual_service_uses_serializable_protocol_algebra_and_shared_source ... ok
+test contextual_query_preserves_caller_division_policy ... ok
+test configured_relations_receive_the_context_in_the_existing_call_home ... ok
+test successful_optional_rhs_is_invoked_once_per_duplicate_driver ... ok
+test initial_terms_keep_rdf12_identity_and_hygienic_aliases ... ok
+test contextual_blank_identity_is_shared_by_label_and_fresh_without_a_label ... ok
+test contextual_custom_updates_preserve_order_errors_and_numeric_admission ... ok
+test contextual_filter_group_boundary_and_visited_graph_errors ... ok
+test contextual_nested_exists_retains_enclosing_names ... ok
+test governed_publication_preserves_duplicate_columns_and_certified_rows ... ok
+test contextual_exists_through_local_projection ... ok
+test contextual_application_keeps_one_optional_condition_and_rhs ... ok
+test contextual_representation_scales_with_nodes_and_context_width ... ok
+test production_entry_executes_nested_exists_on_an_admitted_stack ... ok
+test governed_ask_settles_only_a_witness_and_stops_after_accepted_filters ... ok
+test contextual_matrix ... ok
+test contextual_exact_aggregate_continuations_preserve_policy_and_cutoffs ... ok
+test grouped_continuation_withholds_incomplete_accumulators_at_every_fuel_cutoff ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

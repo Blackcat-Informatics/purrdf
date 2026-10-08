@@ -1,0 +1,36 @@
+diff --git crates/purrdf/src/reasoning.rs crates/purrdf/src/reasoning.rs
+index 914c88a85..9ff4ae978 100644
+--- crates/purrdf/src/reasoning.rs
++++ crates/purrdf/src/reasoning.rs
+@@ -1914,6 +1914,7 @@ mod tests {
+             panic!("ASK fixture")
+         };
+         let policy = Box::new(ApplicationPolicy {
++            dataset_required: false,
+             row_pipeline: false,
+             reduced_adjacent: false,
+             group_domain: None,
+diff --git crates/rdf/src/projections/dataset_description.rs crates/rdf/src/projections/dataset_description.rs
+index f1c60fe98..6a5f7228a 100644
+--- crates/rdf/src/projections/dataset_description.rs
++++ crates/rdf/src/projections/dataset_description.rs
+@@ -858,6 +858,7 @@ mod tests {
+             left: Child::new(left),
+             right: Child::new(right),
+             policy: Box::new(ApplicationPolicy {
++                dataset_required: false,
+                 row_pipeline: false,
+                 reduced_adjacent: false,
+                 group_domain: None,
+diff --git crates/slice/src/ownership.rs crates/slice/src/ownership.rs
+index 41929af15..11ccf013b 100644
+--- crates/slice/src/ownership.rs
++++ crates/slice/src/ownership.rs
+@@ -1149,6 +1149,7 @@ mod rdf_fact_tests {
+                 "ASK { FILTER EXISTS { GRAPH <https://example.org/graph> { <https://example.org/right> <https://example.org/p> <https://example.org/o> } } }",
+             )),
+             policy: Box::new(ApplicationPolicy {
++                dataset_required: false,
+                 row_pipeline: false,
+                 reduced_adjacent: false,
+                 group_domain: None,

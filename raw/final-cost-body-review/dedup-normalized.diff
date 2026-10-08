@@ -1,0 +1,324 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/baseline-dedup-normalized.ll	2026-10-08 08:50:25.061632201 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/candidate-dedup-normalized.ll	2026-10-08 08:50:25.063632168 -0600
+@@ -1,4 +1,4 @@
+-define void @purrdf_sparql_eval::modifier::eval_dedup::<purrdf_core::ir::dataset::RdfDataset>(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([112 x i8]) align 16 captures(none) dereferenceable(112) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %2, ptr noalias nofree noundef align 16 dereferenceable(1248) %3) unnamed_addr #10 personality ptr @rust_eh_personality !guid !META {
++define void @purrdf_sparql_eval::modifier::eval_dedup_with::<purrdf_core::ir::dataset::RdfDataset, false>(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([112 x i8]) align 16 captures(none) dereferenceable(112) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %2, ptr noalias nofree noundef align 16 dereferenceable(1248) %3) unnamed_addr #8 personality ptr @rust_eh_personality !guid !META {
+   %5 = alloca [24 x i8], align 8
+   %6 = alloca [40 x i8], align 8
+   %7 = alloca [24 x i8], align 8
+@@ -103,7 +103,7 @@
+ __rustc::__rust_dealloc (.exit): ; preds = %49, %67
+   %69 = icmp ne i64 %40, 0
+   tail call void @llvm.assume(i1 %69), !noalias !META
+-  tail call void @free(ptr noundef nonnull %38) #88, !noalias !META
++  tail call void @free(ptr noundef nonnull %38) #92, !noalias !META
+   br label %70
+ 
+ 70:                                               ; preds = %__rustc::__rust_dealloc (.exit), %30
+@@ -165,7 +165,7 @@
+   br label %__rustc::__rust_dealloc (.exit66)
+ 
+ __rustc::__rust_dealloc (.exit66): ; preds = %85, %103
+-  tail call void @free(ptr noundef nonnull %75) #88, !noalias !META
++  tail call void @free(ptr noundef nonnull %75) #92, !noalias !META
+   br label %105
+ 
+ 105:                                              ; preds = %__rustc::__rust_dealloc (.exit66), %70
+@@ -182,7 +182,7 @@
+ 112:                                              ; preds = %109
+   fence acquire
+ ; call <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+-  call void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %106) #87
++  call void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %106) #91
+   br label %1363
+ 
+ 113:                                              ; preds = %27
+@@ -236,7 +236,7 @@
+   tail call void @llvm.assume(i1 %126)
+   call void @llvm.lifetime.start.p0(ptr nonnull %12), !noalias !META
+ ; invoke <hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>
+-  invoke fastcc void @<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(32) %12, i64 noundef 48, i64 noundef range(i64 0, 230584300921369396) %125, i1 noundef zeroext true) #91
++  invoke fastcc void @<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(32) %12, i64 noundef 48, i64 noundef range(i64 0, 230584300921369396) %125, i1 noundef zeroext true) #87
+           to label %129 unwind label %127
+ 
+ 127:                                              ; preds = %123
+@@ -492,7 +492,7 @@
+   %302 = shl i64 %152, 3
+   %303 = add i64 %302, -8
+ ; call __rustc::__rust_dealloc
+-  call void @__rustc::__rust_dealloc(ptr noundef nonnull %160, i64 noundef %303, i64 noundef range(i64 1, -9223372036854775807) 4) #88, !noalias !META
++  call void @__rustc::__rust_dealloc(ptr noundef nonnull %160, i64 noundef %303, i64 noundef range(i64 1, -9223372036854775807) 4) #92, !noalias !META
+   br label %154
+ 
+ .loopexit119:                                     ; preds = %.preheader118.prol.loopexit, %295, %155
+@@ -693,7 +693,7 @@
+ __rustc::__rust_dealloc (.exit67): ; preds = %413, %431
+   %433 = icmp ne i64 %406, 0
+   call void @llvm.assume(i1 %433), !noalias !META
+-  call void @free(ptr noundef nonnull %160) #88, !noalias !META
++  call void @free(ptr noundef nonnull %160) #92, !noalias !META
+   br label %1273
+ 
+ .loopexit115:                                     ; preds = %.loopexit111, %.loopexit109
+@@ -703,7 +703,7 @@
+ 
+ 436:                                              ; preds = %.loopexit115
+ ; invoke <hashbrown::raw::RawTable<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize, purrdf_hash::fixed::FixedState>::{closure#0}>
+-  %437 = invoke { i64, i64 } @<hashbrown::raw::RawTable<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize, purrdf_hash::fixed::FixedState>::{closure#0}>(ptr noalias nofree noundef nonnull align 8 dereferenceable(32) %17, i64 noundef 1, ptr nonnull poison, i1 noundef zeroext true) #87
++  %437 = invoke { i64, i64 } @<hashbrown::raw::RawTable<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize, purrdf_hash::fixed::FixedState>::{closure#0}>(ptr noalias nofree noundef nonnull align 8 dereferenceable(32) %17, i64 noundef 1, ptr nonnull poison, i1 noundef zeroext true) #91
+           to label %438 unwind label %298, !noalias !META
+ 
+ 438:                                              ; preds = %436
+@@ -789,7 +789,7 @@
+ __rustc::__rust_dealloc (.exit68): ; preds = %466, %484
+   %486 = icmp ne i64 %459, 0
+   call void @llvm.assume(i1 %486), !noalias !META
+-  call void @free(ptr noundef nonnull %457) #88, !noalias !META
++  call void @free(ptr noundef nonnull %457) #92, !noalias !META
+   br label %487
+ 
+ 487:                                              ; preds = %__rustc::__rust_dealloc (.exit68), %449
+@@ -852,7 +852,7 @@
+   br label %__rustc::__rust_dealloc (.exit69)
+ 
+ __rustc::__rust_dealloc (.exit69): ; preds = %500, %518
+-  call void @free(ptr noundef nonnull %131) #88, !noalias !META
++  call void @free(ptr noundef nonnull %131) #92, !noalias !META
+   br label %520
+ 
+ 520:                                              ; preds = %__rustc::__rust_dealloc (.exit69), %.loopexit103
+@@ -1042,7 +1042,7 @@
+ __rustc::__rust_dealloc (.exit70): ; preds = %618, %636
+   %638 = icmp ne i64 %611, 0
+   call void @llvm.assume(i1 %638), !noalias !META
+-  call void @free(ptr noundef nonnull %609) #88, !noalias !META
++  call void @free(ptr noundef nonnull %609) #92, !noalias !META
+   br label %639
+ 
+ 639:                                              ; preds = %__rustc::__rust_dealloc (.exit70), %.loopexit85
+@@ -1105,7 +1105,7 @@
+   br label %__rustc::__rust_dealloc (.exit71)
+ 
+ __rustc::__rust_dealloc (.exit71): ; preds = %651, %669
+-  call void @free(ptr noundef nonnull %539) #88, !noalias !META
++  call void @free(ptr noundef nonnull %539) #92, !noalias !META
+   br label %1025
+ 
+ 671:                                              ; preds = %__rustc::__rust_alloc (.exit.thread)
+@@ -1170,7 +1170,7 @@
+ __rustc::__rust_dealloc (.exit72): ; preds = %685, %703
+   %705 = icmp ne i64 %676, 0
+   call void @llvm.assume(i1 %705), !noalias !META
+-  call void @free(ptr noundef nonnull %710) #88, !noalias !META
++  call void @free(ptr noundef nonnull %710) #92, !noalias !META
+   br label %930
+ 
+ 706:                                              ; preds = %.loopexit101
+@@ -1190,7 +1190,7 @@
+   br i1 %716, label %__rustc::__rust_alloc (.exit), label %717
+ 
+ 717:                                              ; preds = %715
+-  %718 = call noundef ptr @malloc(i64 noundef range(i64 1, 0) %713) #88, !noalias !META
++  %718 = call noundef ptr @malloc(i64 noundef range(i64 1, 0) %713) #92, !noalias !META
+   %719 = icmp eq ptr %718, null
+   br i1 %719, label %__rustc::__rust_alloc (.exit.thread), label %720
+ 
+@@ -1257,7 +1257,7 @@
+ __rustc::__rust_alloc (.exit.thread): ; preds = %717, %706
+   %757 = phi i64 [ 8, %717 ], [ 0, %706 ]
+ ; invoke alloc::raw_vec::handle_error
+-  invoke void @alloc::raw_vec::handle_error(i64 noundef %757, i64 %713) #90
++  invoke void @alloc::raw_vec::handle_error(i64 noundef %757, i64 %713) #93
+           to label %758 unwind label %671, !noalias !META
+ 
+ 758:                                              ; preds = %__rustc::__rust_alloc (.exit.thread)
+@@ -1350,8 +1350,8 @@
+   br i1 %806, label %817, label %808
+ 
+ 807:                                              ; preds = %923, %920
+-; call core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#0}>>
+-  call fastcc void @core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#0}>>(ptr noalias nofree noundef nonnull align 8 dereferenceable(64) %8) #89, !noalias !META
++; call core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#0}>>
++  call fastcc void @core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#0}>>(ptr noalias nofree noundef nonnull align 8 dereferenceable(64) %8) #89, !noalias !META
+ ; call core::ptr::drop_glue::<alloc::vec::Vec<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>>
+   call fastcc void @core::ptr::drop_glue::<alloc::vec::Vec<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>>(ptr noalias nofree noundef align 8 dereferenceable(24) %10) #89, !noalias !META
+   br label %1296
+@@ -1470,7 +1470,7 @@
+ __rustc::__rust_dealloc (.exit73): ; preds = %859, %877
+   %879 = icmp ne i64 %852, 0
+   call void @llvm.assume(i1 %879), !noalias !META
+-  call void @free(ptr noundef nonnull %850) #88, !noalias !META
++  call void @free(ptr noundef nonnull %850) #92, !noalias !META
+   br label %880
+ 
+ 880:                                              ; preds = %__rustc::__rust_dealloc (.exit73), %.loopexit93
+@@ -1533,7 +1533,7 @@
+ 
+ __rustc::__rust_dealloc (.exit74): ; preds = %892, %910
+   call void @llvm.assume(i1 true) [ "nonnull"(ptr %539) ], !noalias !META
+-  call void @free(ptr noundef nonnull %539) #88, !noalias !META
++  call void @free(ptr noundef nonnull %539) #92, !noalias !META
+   br label %1026
+ 
+ 912:                                              ; preds = %928, %808
+@@ -1566,7 +1566,7 @@
+   %924 = shl i64 %805, 3
+   %925 = add i64 %924, -8
+ ; call __rustc::__rust_dealloc
+-  call void @__rustc::__rust_dealloc(ptr noundef nonnull %812, i64 noundef %925, i64 noundef range(i64 1, -9223372036854775807) 4) #88, !noalias !META
++  call void @__rustc::__rust_dealloc(ptr noundef nonnull %812, i64 noundef %925, i64 noundef range(i64 1, -9223372036854775807) 4) #92, !noalias !META
+   br label %807
+ 
+ 926:                                              ; preds = %808
+@@ -1678,7 +1678,7 @@
+ __rustc::__rust_dealloc (.exit75): ; preds = %972, %990
+   %992 = icmp ne i64 %965, 0
+   call void @llvm.assume(i1 %992), !noalias !META
+-  call void @free(ptr noundef nonnull %963) #88, !noalias !META
++  call void @free(ptr noundef nonnull %963) #92, !noalias !META
+   br label %993
+ 
+ 993:                                              ; preds = %__rustc::__rust_dealloc (.exit75), %.loopexit89
+@@ -1741,7 +1741,7 @@
+   br label %__rustc::__rust_dealloc (.exit76)
+ 
+ __rustc::__rust_dealloc (.exit76): ; preds = %1005, %1023
+-  call void @free(ptr noundef nonnull %539) #88, !noalias !META
++  call void @free(ptr noundef nonnull %539) #92, !noalias !META
+   br label %1296
+ 
+ 1025:                                             ; preds = %__rustc::__rust_dealloc (.exit71), %.loopexit87
+@@ -1766,8 +1766,8 @@
+   br i1 %1033, label %1035, label %1034, !prof !META
+ 
+ 1034:                                             ; preds = %1032
+-; invoke core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#1}>::{closure#0}>
+-  invoke void @core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#1}>::{closure#0}>(ptr noalias nofree noundef nonnull align 8 %1028, i64 noundef range(i64 0, 192153584101141163) %1030, ptr noalias nofree nonnull align 8 poison) #87
++; invoke core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#1}>::{closure#0}>
++  invoke void @core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#1}>::{closure#0}>(ptr noalias nofree noundef nonnull align 8 %1028, i64 noundef range(i64 0, 192153584101141163) %1030, ptr noalias nofree nonnull align 8 poison) #91
+           to label %1086 unwind label %1234, !noalias !META
+ 
+ 1035:                                             ; preds = %1032
+@@ -2064,7 +2064,7 @@
+ __rustc::__rust_dealloc (.exit77): ; preds = %1163, %1181
+   %1183 = icmp ne i64 %1156, 0
+   call void @llvm.assume(i1 %1183), !noalias !META
+-  call void @free(ptr noundef nonnull %1154) #88, !noalias !META
++  call void @free(ptr noundef nonnull %1154) #92, !noalias !META
+   br label %1184
+ 
+ 1184:                                             ; preds = %__rustc::__rust_dealloc (.exit77), %1145
+@@ -2076,8 +2076,8 @@
+           cleanup
+ ; call core::ptr::drop_glue::<alloc::vec::in_place_drop::InPlaceDstDataSrcBufDrop<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+   call fastcc void @core::ptr::drop_glue::<alloc::vec::in_place_drop::InPlaceDstDataSrcBufDrop<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>(ptr noalias nofree noundef align 8 dereferenceable(24) %5) #89, !noalias !META
+-; call core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#2}>>
+-  call fastcc void @core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#2}>>(ptr noalias nofree noundef nonnull align 8 dereferenceable(32) %13) #89, !noalias !META
++; call core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#2}>>
++  call fastcc void @core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#2}>>(ptr noalias nofree noundef nonnull align 8 dereferenceable(32) %13) #89, !noalias !META
+   %1188 = atomicrmw sub ptr %1090, i64 1 release, align 8, !noalias !META
+   %1189 = icmp eq i64 %1188, 1
+   br i1 %1189, label %1231, label %1364
+@@ -2148,20 +2148,20 @@
+ 
+ __rustc::__rust_dealloc (.exit78): ; preds = %1206, %1224
+   call void @llvm.assume(i1 true) [ "nonnull"(ptr %1088) ], !noalias !META
+-  call void @free(ptr noundef nonnull %1088) #88, !noalias !META
++  call void @free(ptr noundef nonnull %1088) #92, !noalias !META
+   br label %1305
+ 
+ 1226:                                             ; preds = %1194
+   %1227 = icmp ule i64 %1191, %1098
+   call void @llvm.assume(i1 %1227)
+ ; call <purrdf_alloc_probe::CountingAllocator as core::alloc::global::GlobalAlloc>::realloc
+-  %_0.i = call noalias noundef align 8 ptr @<purrdf_alloc_probe::CountingAllocator as core::alloc::global::GlobalAlloc>::realloc(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @qualification_454_native_cost::GLOBAL (LLVMID), ptr noundef nonnull %1088, i64 noundef 8, i64 noundef %1098, i64 noundef %1191) #88, !noalias !META
++  %_0.i = call noalias noundef align 8 ptr @<purrdf_alloc_probe::CountingAllocator as core::alloc::global::GlobalAlloc>::realloc(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @qualification_454_native_cost::GLOBAL (LLVMID), ptr noundef nonnull %1088, i64 noundef 8, i64 noundef %1098, i64 noundef %1191) #92, !noalias !META
+   %1228 = icmp eq ptr %_0.i, null
+   br i1 %1228, label %1229, label %1305, !prof !META
+ 
+ 1229:                                             ; preds = %1226
+ ; invoke alloc::alloc::handle_ALLOCrror
+-  invoke void @alloc::alloc::handle_ALLOCrror(i64 noundef 8, i64 noundef %1191) #90
++  invoke void @alloc::alloc::handle_ALLOCrror(i64 noundef 8, i64 noundef %1191) #93
+           to label %1230 unwind label %1186, !noalias !META
+ 
+ 1230:                                             ; preds = %1229
+@@ -2170,14 +2170,14 @@
+ 1231:                                             ; preds = %1186
+   fence acquire
+ ; invoke <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+-  invoke void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %14) #87
++  invoke void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %14) #91
+           to label %1364 unwind label %1232, !noalias !META
+ 
+ 1232:                                             ; preds = %1303, %1231
+   %1233 = landingpad { ptr, i32 }
+           filter [0 x ptr] zeroinitializer
+ ; call core::panicking::panic_in_cleanup
+-  call void @core::panicking::panic_in_cleanup() #86, !noalias !META
++  call void @core::panicking::panic_in_cleanup() #90, !noalias !META
+   unreachable
+ 
+ 1234:                                             ; preds = %1034
+@@ -2287,7 +2287,7 @@
+ 1303:                                             ; preds = %1296
+   fence acquire
+ ; invoke <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+-  invoke void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %1299) #87
++  invoke void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %1299) #91
+           to label %1295 unwind label %1232, !noalias !META
+ 
+ 1304:                                             ; preds = %1295
+@@ -2392,7 +2392,7 @@
+ __rustc::__rust_dealloc (.exit79): ; preds = %1332, %1350
+   %1352 = icmp ne i64 %1323, 0
+   call void @llvm.assume(i1 %1352), !noalias !META
+-  call void @free(ptr noundef nonnull %1321) #88, !noalias !META
++  call void @free(ptr noundef nonnull %1321) #92, !noalias !META
+   br label %1353
+ 
+ 1353:                                             ; preds = %__rustc::__rust_dealloc (.exit79), %1315
+@@ -2410,7 +2410,7 @@
+ 1360:                                             ; preds = %1357
+   fence acquire
+ ; call <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+-  call void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %1354) #87
++  call void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %1354) #91
+   br label %1361
+ 
+ 1361:                                             ; preds = %1360, %1357, %1353
+@@ -2491,7 +2491,7 @@
+ __rustc::__rust_dealloc (.exit80): ; preds = %1382, %1400
+   %1402 = icmp ne i64 %1373, 0
+   call void @llvm.assume(i1 %1402), !noalias !META
+-  call void @free(ptr noundef nonnull %1371) #88, !noalias !META
++  call void @free(ptr noundef nonnull %1371) #92, !noalias !META
+   br label %1403
+ 
+ 1403:                                             ; preds = %__rustc::__rust_dealloc (.exit80), %1364
+@@ -2553,7 +2553,7 @@
+   br label %__rustc::__rust_dealloc (.exit81)
+ 
+ __rustc::__rust_dealloc (.exit81): ; preds = %1418, %1436
+-  call void @free(ptr noundef nonnull %1408) #88, !noalias !META
++  call void @free(ptr noundef nonnull %1408) #92, !noalias !META
+   br label %1438
+ 
+ 1438:                                             ; preds = %__rustc::__rust_dealloc (.exit81), %1403
+@@ -2571,14 +2571,14 @@
+ 1445:                                             ; preds = %1442
+   fence acquire
+ ; invoke <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+-  invoke void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %1439) #87
++  invoke void @<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(8) %1439) #91
+           to label %1448 unwind label %1446
+ 
+ 1446:                                             ; preds = %1450, %1445
+   %1447 = landingpad { ptr, i32 }
+           filter [0 x ptr] zeroinitializer
+ ; call core::panicking::panic_in_cleanup
+-  call void @core::panicking::panic_in_cleanup() #86
++  call void @core::panicking::panic_in_cleanup() #90
+   unreachable
+ 
+ 1448:                                             ; preds = %1450, %1445, %1442, %1438

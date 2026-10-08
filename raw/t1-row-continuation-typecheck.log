@@ -1,0 +1,55 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/alloc-probe)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error[E0425]: cannot find value `stateful` in this scope
+    --> crates/sparql-eval/src/governor/soundness.rs:2008:39
+     |
+2008 |                 has_stateful_builtin: stateful
+     |                                       ^^^^^^^^ not found in this scope
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/binop.rs:604:17
+    |
+604 |                 purrdf_sparql_algebra::Expression::Literal(literal.clone()),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+604 -                 purrdf_sparql_algebra::Expression::Literal(literal.clone()),
+604 +                 Expression::Literal(literal.clone()),
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/binop.rs:797:78
+    |
+797 |         if M::DECLARED && ctx.row_ceiling().is_some_and(|ceiling| emitted >= ceiling) {
+    |                                                                   -------    ^^^^^^^ expected `u64`, found `usize`
+    |                                                                   |
+    |                                                                   expected because this is `u64`
+    |
+help: you can convert a `usize` to a `u64` and panic if the converted value doesn't fit
+    |
+797 |         if M::DECLARED && ctx.row_ceiling().is_some_and(|ceiling| emitted >= ceiling.try_into().unwrap()) {
+    |                                                                                     ++++++++++++++++++++
+
+error: unused variable: `node`
+   --> crates/sparql-eval/src/binop.rs:566:5
+    |
+566 |     node: &GraphPattern,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_node`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+error: unused variable: `policy`
+   --> crates/sparql-eval/src/blank_scope.rs:377:52
+    |
+377 |                 GraphPattern::Apply { left, right, policy } => {
+    |                                                    ^^^^^^ help: try ignoring the field: `policy: _`
+
+Some errors have detailed explanations: E0308, E0425.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 5 previous errors

@@ -1,0 +1,14 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-ir/qualification_454_native_cost.purrdf_sparql_eval-bf425426783cf5de.purrdf_sparql_eval.1e4be50d5a1c0ebd-cgu.0.rcgu.o.rcgu.ll:552287
+; <purrdf_sparql_eval::binop::eval_application_yielding<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}::{closure#0} as core::ops::function::FnOnce<(&purrdf_sparql_eval::solution::SolutionSeq, &mut purrdf_sparql_eval::eval::EvalCtx)>>::call_once::{shim:vtable#0}
+define internal void @_RNSNvYNCNCINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetQINtNtBd_4eval11RowConsumerB1i_EE00INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtBd_8solution11SolutionSeqQNtB2g_7EvalCtxEE9call_once6vtableBd_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([96 x i8]) align 8 captures(none) dereferenceable(96) %0, ptr nofree noundef nonnull readonly captures(none) %1, ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(32) %2, ptr noalias nofree noundef align 16 dereferenceable(944) %3) unnamed_addr #1 personality ptr @rust_eh_personality !guid !67954 {
+; call purrdf_sparql_eval::binop::eval_application_yielding::<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}::{closure#0}
+  tail call void @_RNCNCINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetQINtNtB8_4eval11RowConsumerB1d_EE00B8_(ptr noalias nofree noundef nonnull sret([96 x i8]) align 8 captures(none) dereferenceable(96) %0, ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(48) %1, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(32) %2, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %3) #84
+  ret void
+}
+
+ASSEMBLY
+_RNSNvYNCNCINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetQINtNtBd_4eval11RowConsumerB1i_EE00INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtNtBd_8solution11SolutionSeqQNtB2g_7EvalCtxEE9call_once6vtableBd_:
+.Lfunc_begin1297:
+	.cfi_startproc
+	jmp	_RNCNCINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetQINtNtB8_4eval11RowConsumerB1d_EE00B8_
+.Lfunc_end1297:

@@ -1,0 +1,11 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/prior-graph-call-inventory.txt	2026-10-08 10:07:10.710296125 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/current-graph-call-inventory.txt	2026-10-08 10:07:10.713296077 -0600
+@@ -7,7 +7,7 @@
+       1 <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan
+       2 <purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri
+       1 <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value
+-      1 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
++      2 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
+       3 <purrdf_sparql_eval::governor::lift::Lift>::absorb::<purrdf_core::ir::term::TermId>
+       2 <purrdf_sparql_eval::governor::lift::Lift>::at
+       3 <purrdf_sparql_eval::governor::lift::Lift>::withheld::<purrdf_core::ir::term::TermId>

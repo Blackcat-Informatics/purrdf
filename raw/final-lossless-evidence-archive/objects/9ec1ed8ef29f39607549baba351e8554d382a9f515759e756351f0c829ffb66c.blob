@@ -1,0 +1,3 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/operator-aggregate-delivery-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 8 primary oracle answers, preserving ordered rows and RDF terms

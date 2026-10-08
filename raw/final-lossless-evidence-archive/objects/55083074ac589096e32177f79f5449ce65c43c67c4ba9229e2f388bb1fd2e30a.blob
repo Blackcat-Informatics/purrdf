@@ -1,0 +1,38 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 57.28s
+     Running tests/rdflib_contextual.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-eval/0c7b169ea6698b57/out/rdflib_contextual-0c7b169ea6698b57)
+
+running 5 tests
+optional levels=16 nodes=1544 bytes=191945
+test successful_optional_rhs_is_invoked_once_per_duplicate_driver ... ok
+test contextual_service_uses_serializable_protocol_algebra_and_shared_source ... ok
+test configured_relations_receive_the_context_in_the_existing_call_home ... ok
+optional levels=32 nodes=3064 bytes=380057
+optional levels=64 nodes=6104 bytes=756281
+optional levels=128 nodes=12184 bytes=1508729
+test contextual_application_keeps_one_optional_condition_and_rhs ... ok
+156 oracle cases passed; 10 failures
+
+thread 'contextual_matrix' (2534691) panicked at crates/sparql-eval/tests/rdflib_contextual.rs:197:5:
+group-star-alias-unbound: columns ["this"], expected ["this", "value"]
+group-star-alias-bound: columns ["this"], expected ["this", "value"]
+group-star-empty-unbound: columns ["this"], expected ["this", "value"]
+group-star-empty-bound: columns ["this"], expected ["this", "value"]
+group-star-count-unbound: columns ["this", "__purrdf_agg_0"], expected ["this", "value"]
+group-star-count-bound: columns ["this", "__purrdf_agg_0"], expected ["this", "value"]
+optional-success-count-call-unbound: got [[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o1"]],[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o2"]],[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/b"],["iri","http://example.org/o3"]]], expected [[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o1"]],[["literal","2","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o2"]],[["literal","3","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/b"],["iri","http://example.org/o3"]]]
+optional-success-count-call-bound: got [[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o1"]],[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o2"]],[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/b"],["iri","http://example.org/o3"]]], expected [[["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o1"]],[["literal","2","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/a"],["iri","http://example.org/o2"]],[["literal","3","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/b"],["iri","http://example.org/o3"]]]
+optional-success-count-this-unbound: got [[["iri","http://example.org/a"],["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/o1"]],[["iri","http://example.org/a"],["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/o2"]],[["iri","http://example.org/b"],["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/o3"]]], expected [[["iri","http://example.org/a"],["literal","1","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/o1"]],[["iri","http://example.org/a"],["literal","2","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/o2"]],[["iri","http://example.org/b"],["literal","3","http://www.w3.org/2001/XMLSchema#integer",null],["iri","http://example.org/o3"]]]
+graph-variable-inner-graph-assignment-unbound: got [[["iri","http://example.org/g2"],["iri","http://example.org/a"],["iri","http://example.org/o1"]],[["iri","http://example.org/g2"],["iri","http://example.org/a"],["iri","http://example.org/o3"]],[["iri","http://example.org/g2"],["iri","http://example.org/b"],["iri","http://example.org/o2"]]], expected [[["iri","http://example.org/g2"],["iri","http://example.org/a"],["iri","http://example.org/o3"]]]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test contextual_matrix ... FAILED
+
+failures:
+
+failures:
+    contextual_matrix
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test rdflib_contextual`

@@ -1,0 +1,4 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 18s
+  Executable unittests src/lib.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-algebra/bba2d8cd7c2ac774/out/purrdf_sparql_algebra-bba2d8cd7c2ac774)
+  Executable unittests src/lib.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)

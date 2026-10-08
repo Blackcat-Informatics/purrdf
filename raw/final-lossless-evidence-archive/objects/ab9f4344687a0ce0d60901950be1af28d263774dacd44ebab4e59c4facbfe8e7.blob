@@ -1,0 +1,3 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-t3-base-probe/target -> /opt/.cargo/target/native-cost-t3-base-probe-092527e6
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-t3-candidate-probe/target -> /opt/.cargo/target/native-cost-t3-candidate-probe-d4892fcd
+owned Stage inventory binary removed; native proof binaries/IR/source/receipts retained

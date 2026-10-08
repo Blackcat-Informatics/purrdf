@@ -1,0 +1,11 @@
+--- /dev/fd/63	2026-10-08 11:22:35.940969048 -0600
++++ /dev/fd/62	2026-10-08 11:22:35.940969048 -0600
+@@ -2514,7 +2514,7 @@
+   %1241 = getelementptr inbounds nuw i8, ptr %16, i64 24
+   store ptr @<usize as core::fmt::Debug>::fmt, ptr %1241, align 8
+ ; invoke core::panicking::panic_fmt
+-  invoke void @core::panicking::panic_fmt(ptr noundef nonnull @anon.HASH.2158, ptr noundef nonnull %16, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.289) #ATTR
++  invoke void @core::panicking::panic_fmt(ptr noundef nonnull @anon.HASH.2159, ptr noundef nonnull %16, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.289) #ATTR
+           to label %1242 unwind label %1167
+ 
+ 1242:                                             ; preds = %1238

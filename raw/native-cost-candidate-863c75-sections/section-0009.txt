@@ -1,0 +1,161 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-ir/qualification_454_native_cost.gimli-68d0cb78dba1c589.gimli.291de70d2b297ea7-cgu.0.rcgu.o.rcgu.ll:1511
+; <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::split_leaf_data
+define void @_RNvMsU_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_4LeafENtB1m_2KVE15split_leaf_dataB1J_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([120 x i8]) align 8 captures(none) dereferenceable(120) %0, ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %1, ptr noalias nofree noundef writeonly align 8 captures(none) dereferenceable(1336) initializes((1330, 1332)) %2) unnamed_addr #0 personality ptr @rust_eh_personality !guid !227 {
+  %4 = alloca [112 x i8], align 8
+  %5 = load ptr, ptr %1, align 8, !nonnull !49, !noundef !49
+  %6 = getelementptr inbounds nuw i8, ptr %5, i64 1330
+  %7 = load i16, ptr %6, align 2, !noundef !49
+  %8 = zext i16 %7 to i64
+  %9 = getelementptr inbounds nuw i8, ptr %1, i64 16
+  %10 = load i64, ptr %9, align 8, !noundef !49
+  %11 = xor i64 %10, -1
+  %12 = add i64 %11, %8
+  %13 = getelementptr inbounds nuw i8, ptr %2, i64 1330
+  %14 = trunc i64 %12 to i16
+  store i16 %14, ptr %13, align 2
+  %15 = getelementptr inbounds nuw i8, ptr %5, i64 1240
+  %16 = getelementptr inbounds nuw [8 x i8], ptr %15, i64 %10
+  %17 = load i64, ptr %16, align 8, !noundef !49
+  call void @llvm.lifetime.start.p0(ptr nonnull %4)
+  %18 = getelementptr inbounds nuw [112 x i8], ptr %5, i64 %10
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(112) %4, ptr noundef nonnull align 8 dereferenceable(112) %18, i64 112, i1 false)
+  %19 = icmp ult i64 %12, 12
+  br i1 %19, label %27, label %20, !prof !87
+
+20:                                               ; preds = %3
+; invoke core::slice::index::slice_index_fail
+  invoke void @_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail(i64 noundef 0, i64 noundef %12, i64 noundef 11, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.886c1caabaaea59b9677b076c74ddc9f.1122) #23
+          to label %36 unwind label %21
+
+21:                                               ; preds = %20
+  %22 = landingpad { ptr, i32 }
+          cleanup
+  %23 = load i64, ptr %4, align 8, !range !50, !alias.scope !228, !noundef !49
+  %24 = icmp eq i64 %23, 0
+  br i1 %24, label %37, label %25
+
+25:                                               ; preds = %21
+  %26 = getelementptr inbounds nuw i8, ptr %4, i64 8
+; call <alloc::raw_vec::RawVecInner>::deallocate
+  call void @_RNvMs3_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner10deallocateCs3wRyrdzSNKt_5gimli(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(24) %26, i64 noundef 8, i64 noundef 16)
+  br label %37
+
+27:                                               ; preds = %3
+  %28 = add i64 %10, 1
+  %29 = getelementptr inbounds nuw [8 x i8], ptr %15, i64 %28
+  %30 = getelementptr inbounds nuw i8, ptr %2, i64 1240
+  %31 = shl nuw nsw i64 %12, 3
+  tail call void @llvm.memcpy.p0.p0.i64(ptr nonnull align 8 %30, ptr nonnull readonly align 8 %29, i64 %31, i1 false), !alias.scope !233
+  %32 = getelementptr inbounds nuw [112 x i8], ptr %5, i64 %28
+  %33 = mul nuw nsw i64 %12, 112
+  tail call void @llvm.memcpy.p0.p0.i64(ptr nonnull align 8 %2, ptr nonnull readonly align 8 %32, i64 %33, i1 false), !alias.scope !237
+  %34 = trunc i64 %10 to i16
+  store i16 %34, ptr %6, align 2
+  %35 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(112) %35, ptr noundef nonnull align 8 dereferenceable(112) %4, i64 112, i1 false)
+  store i64 %17, ptr %0, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  ret void
+
+36:                                               ; preds = %20
+  unreachable
+
+37:                                               ; preds = %25, %21
+  resume { ptr, i32 } %22
+}
+
+ASSEMBLY
+_RNvMsU_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_4LeafENtB1m_2KVE15split_leaf_dataB1J_:
+.Lfunc_begin19:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception10
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r15
+	pushq	%r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%rbx
+	subq	$120, %rsp
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	movq	(%rsi), %r12
+	movq	16(%rsi), %r13
+	movzwl	1330(%r12), %eax
+	movq	%r13, %r14
+	notq	%r14
+	addq	%rax, %r14
+	movw	%r14w, 1330(%rdx)
+	movq	1240(%r12,%r13,8), %rcx
+	imulq	$112, %r13, %rax
+	vmovups	(%r12,%rax), %zmm0
+	vmovups	48(%r12,%rax), %zmm1
+	vmovups	%zmm1, -112(%rbp)
+	vmovups	%zmm0, -160(%rbp)
+	cmpq	$12, %r14
+	jae	.LBB19_1
+	movq	%rdx, %r15
+	movq	%rdi, %rbx
+	leaq	1240(%r12), %rax
+	leaq	(%rax,%r13,8), %rsi
+	addq	$8, %rsi
+	leaq	1240(%rdx), %rdi
+	leaq	(,%r14,8), %rdx
+	movq	%rcx, -48(%rbp)
+	vzeroupper
+	callq	*memcpy@GOTPCREL(%rip)
+	leaq	1(%r13), %rax
+	imulq	$112, %rax, %rsi
+	addq	%r12, %rsi
+	imulq	$112, %r14, %rdx
+	movq	%r15, %rdi
+	callq	*memcpy@GOTPCREL(%rip)
+	movw	%r13w, 1330(%r12)
+	vmovups	-160(%rbp), %zmm0
+	vmovups	-112(%rbp), %zmm1
+	vmovups	%zmm0, 8(%rbx)
+	vmovups	%zmm1, 56(%rbx)
+	movq	-48(%rbp), %rax
+	movq	%rax, (%rbx)
+	movq	%rbx, %rax
+	addq	$120, %rsp
+	popq	%rbx
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	vzeroupper
+	retq
+.LBB19_1:
+	.cfi_def_cfa %rbp, 16
+.Ltmp40:
+	leaq	.Lanon.886c1caabaaea59b9677b076c74ddc9f.1122(%rip), %rcx
+	movl	$11, %edx
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	vzeroupper
+	callq	*_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip)
+.Ltmp41:
+	ud2
+.LBB19_3:
+.Ltmp42:
+	movq	%rax, %rbx
+	cmpq	$0, -160(%rbp)
+	je	.LBB19_5
+	leaq	-152(%rbp), %rdi
+	movl	$8, %esi
+	movl	$16, %edx
+	callq	*_RNvMs3_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner10deallocateCs3wRyrdzSNKt_5gimli@GOTPCREL(%rip)
+.LBB19_5:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end19:

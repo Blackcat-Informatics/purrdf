@@ -1,0 +1,17 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 43.80s
+     Running unittests src/lib.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/0f1f025a3a622dc8/out/purrdf_sparql_eval-0f1f025a3a622dc8)
+
+running 9 tests
+test row_checkpoint::tests::batched_numeric_charges_match_separate_charges_at_every_refusal_boundary ... ok
+test row_checkpoint::tests::compact_marks_preserve_absence_zero_and_upper_refusal_checkpoints ... ok
+test row_checkpoint::tests::bookkeeping_ledgers_do_not_allocate_shared_stopping_state ... ok
+test row_checkpoint::tests::unchanged_growth_is_omitted_without_losing_charge_marks_or_item_boundaries ... ok
+test row_checkpoint::tests::identity_commits_reuse_the_scheduler_output_without_replay ... ok
+test row_checkpoint::tests::unrepresentable_checkpoint_is_an_actionable_invariant_failure - should panic ... ok
+test row_checkpoint::tests::shared_spend_saturates_so_other_workers_cannot_miss_an_overflow ... ok
+test row_checkpoint::tests::forked_admission_and_expression_work_reach_the_signal_exactly_once ... ok
+test row_checkpoint::tests::heavy_rows_bound_fork_work_and_retained_prefix_continuation_separately ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1405 filtered out; finished in 0.01s
+

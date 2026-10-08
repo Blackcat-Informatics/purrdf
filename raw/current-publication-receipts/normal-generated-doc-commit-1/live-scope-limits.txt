@@ -1,0 +1,7 @@
+ActiveState=active
+SubState=running
+InvocationID=7d78284238534706a43e800a43b68121
+MemoryCurrent=739786752
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

@@ -1,0 +1,88 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-python-ir/purrdf_native.ll:400121
+; pyo3::impl_::trampoline::fastcall_cfunction_with_keywords::<<purrdf_native::shacl::validate::MakeDef>::_PYO3_DEF::Def>
+define internal noundef ptr @_RINvNtNtCsi6I77QypjQC_4pyo35impl_10trampoline32fastcall_cfunction_with_keywordsNtNvMs1_NtCseY6IX0djbTh_13purrdf_native5shaclNtNtB1n_8validate7MakeDef9__PYO3_DEF3DefEB1p_(ptr noundef %slf, ptr noundef %args, i64 noundef %nargs, ptr noundef %kwnames) unnamed_addr #0 personality ptr @rust_eh_personality !guid !68569 {
+start:
+  %_10 = alloca [40 x i8], align 8
+  %_9 = alloca [8 x i8], align 8
+  %_8 = alloca [8 x i8], align 8
+  %_7 = alloca [8 x i8], align 8
+  %_6 = alloca [8 x i8], align 8
+  %_5 = alloca [8 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_5)
+  store ptr %slf, ptr %_5, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_6)
+  store ptr %args, ptr %_6, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_7)
+  store i64 %nargs, ptr %_7, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_8)
+  store ptr %kwnames, ptr %_8, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9)
+  store ptr @_RNvNtCseY6IX0djbTh_13purrdf_native5shacl21___pyfunction_validate, ptr %_9, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_10)
+  store ptr %_9, ptr %_10, align 8
+  %0 = getelementptr inbounds nuw i8, ptr %_10, i64 8
+  store ptr %_5, ptr %0, align 8
+  %1 = getelementptr inbounds nuw i8, ptr %_10, i64 16
+  store ptr %_6, ptr %1, align 8
+  %2 = getelementptr inbounds nuw i8, ptr %_10, i64 24
+  store ptr %_7, ptr %2, align 8
+  %3 = getelementptr inbounds nuw i8, ptr %_10, i64 32
+  store ptr %_8, ptr %3, align 8
+; invoke pyo3::impl_::trampoline::trampoline::<pyo3::impl_::trampoline::fastcall_cfunction_with_keywords::inner::{closure#0}, *mut pyo3_ffi::object::PyObject>
+  %_0 = invoke fastcc noundef ptr @_RINvNtNtCsi6I77QypjQC_4pyo35impl_10trampoline10trampolineNCNvNtB2_32fastcall_cfunction_with_keywords5inner0ONtNtCs1WkigHU66yn_8pyo3_ffi6object8PyObjectECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(40) %_10)
+          to label %bb1 unwind label %terminate
+
+terminate:                                        ; preds = %start
+  %4 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_cannot_unwind
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking19panic_cannot_unwind() #75
+  unreachable
+
+bb1:                                              ; preds = %start
+  call void @llvm.lifetime.end.p0(ptr nonnull %_10)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_8)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_7)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_6)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_5)
+  ret ptr %_0
+}
+
+ASSEMBLY
+_RINvNtNtCsi6I77QypjQC_4pyo35impl_10trampoline32fastcall_cfunction_with_keywordsNtNvMs1_NtCseY6IX0djbTh_13purrdf_native5shaclNtNtB1n_8validate7MakeDef9__PYO3_DEF3DefEB1p_:
+.Lfunc_begin956:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception956
+	subq	$88, %rsp
+	.cfi_def_cfa_offset 96
+	movq	_RNvNtCseY6IX0djbTh_13purrdf_native5shacl21___pyfunction_validate@GOTPCREL(%rip), %rax
+	movq	%rcx, 32(%rsp)
+	leaq	40(%rsp), %rcx
+	movq	%rdx, 24(%rsp)
+	leaq	8(%rsp), %rdx
+	movq	%rdi, 8(%rsp)
+	movq	%rsi, 16(%rsp)
+	movq	%rcx, 48(%rsp)
+	leaq	16(%rsp), %rcx
+	movq	%rdx, 56(%rsp)
+	leaq	24(%rsp), %rdx
+	movq	%rcx, 64(%rsp)
+	leaq	32(%rsp), %rcx
+	movq	%rdx, 72(%rsp)
+	movq	%rcx, 80(%rsp)
+	movq	%rax, 40(%rsp)
+.Ltmp22250:
+	leaq	48(%rsp), %rdi
+	callq	_RINvNtNtCsi6I77QypjQC_4pyo35impl_10trampoline10trampolineNCNvNtB2_32fastcall_cfunction_with_keywords5inner0ONtNtCs1WkigHU66yn_8pyo3_ffi6object8PyObjectECseY6IX0djbTh_13purrdf_native
+.Ltmp22251:
+	addq	$88, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1648_2:
+	.cfi_def_cfa_offset 96
+.Ltmp22252:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking19panic_cannot_unwind@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end1648:

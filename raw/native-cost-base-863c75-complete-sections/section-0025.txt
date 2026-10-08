@@ -1,0 +1,18 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-ir/qualification_454_native_cost.purrdf_sparql_algebra-402482970920ebe5.purrdf_sparql_algebra.c486a7030e123a0e-cgu.0.rcgu.o.rcgu.ll:241630
+; <purrdf_sparql_algebra::algebra::GraphPattern as core::cmp::PartialEq>::eq
+define noundef zeroext i1 @_RNvXs5_NtCsgS6oKbel3DS_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCs2k2z8Zem4rB_4core3cmp9PartialEq2eq(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1) unnamed_addr #0 !guid !42002 {
+; call purrdf_sparql_algebra::traits::nodes_eq
+  %3 = tail call fastcc noundef zeroext i1 @_RNvNtCsgS6oKbel3DS_21purrdf_sparql_algebra6traits8nodes_eq.llvm.6331895882241856336(i64 noundef 0, ptr noundef %0, i64 noundef 0, ptr noundef %1)
+  ret i1 %3
+}
+
+ASSEMBLY
+_RNvXs5_NtCsgS6oKbel3DS_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCs2k2z8Zem4rB_4core3cmp9PartialEq2eq:
+.Lfunc_begin465:
+	.cfi_startproc
+	movq	%rsi, %rcx
+	movq	%rdi, %rsi
+	xorl	%edi, %edi
+	xorl	%edx, %edx
+	jmp	_RNvNtCsgS6oKbel3DS_21purrdf_sparql_algebra6traits8nodes_eq.llvm.6331895882241856336
+.Lfunc_end465:

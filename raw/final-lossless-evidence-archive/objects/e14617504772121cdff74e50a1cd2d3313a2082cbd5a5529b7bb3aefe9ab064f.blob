@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo check --locked --jobs 8 --verbose -p purrdf-sparql-eval -p purrdf-python 

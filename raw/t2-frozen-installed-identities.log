@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import hashlib, pathlib, rdflib, purrdf.purrdf_native as native; p=pathlib.Path(native.__file__); print("module",p); print("module_sha256",hashlib.sha256(p.read_bytes()).hexdigest()); print("oracle",rdflib.__version__,rdflib.__file__); print("lock_sha256",hashlib.sha256(pathlib.Path("uv.lock").read_bytes()).hexdigest())
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ImportError: cannot import name 'purrdf_native' from 'rdf' (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/__init__.py)

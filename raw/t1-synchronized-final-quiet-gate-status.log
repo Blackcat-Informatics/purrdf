@@ -1,0 +1,4 @@
+cargo fmt --all -- --check: exit 0
+CARGO_BUILD_JOBS=2 cargo run -q --locked -p helper-census -- --no-features: exit 0
+git diff --check: exit 0
+prior session61975 chained final non-Rust-ratchet process: exit 0

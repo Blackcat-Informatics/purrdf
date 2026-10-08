@@ -1,0 +1,101 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "quads": [
+    [
+      "a",
+      "p",
+      "o1",
+      "g1"
+    ],
+    [
+      "b",
+      "p",
+      "o2",
+      "g1"
+    ],
+    [
+      "a",
+      "p",
+      "o3",
+      "g2"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "bound-graph-empty-projection",
+      "dataset": "named",
+      "query": "SELECT ?g WHERE { GRAPH ?g { SELECT ?missing WHERE {} } }",
+      "initial": {
+        "g": "http://example.org/g1"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "unbound-graph-empty-projection",
+      "dataset": "named",
+      "query": "SELECT ?g WHERE { GRAPH ?g { SELECT ?missing WHERE {} } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "relational-filter-forgets-context-unbound",
+      "dataset": "empty",
+      "query": "SELECT ?x ?z WHERE { VALUES ?x { 1 } { BIND(0 AS ?z) FILTER(?x = 1) } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "z"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "relational-filter-forgets-context-bound",
+      "dataset": "empty",
+      "query": "SELECT ?x ?z WHERE { VALUES ?x { 1 } { BIND(0 AS ?z) FILTER(?x = 1) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "z"
+        ],
+        "rows": []
+      }
+    }
+  ]
+}

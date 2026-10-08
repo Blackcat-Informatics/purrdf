@@ -1,0 +1,147 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "successive-bind-volatile-row-order",
+      "query": "SELECT ?a ?b WHERE { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?a) BIND(<http://example.org/counter>(1) AS ?b) }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "a",
+          "b"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "4",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "5",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "6",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "repeated-target-volatile-row-order-unbound",
+      "query": "SELECT ?x WHERE { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?x) BIND(<http://example.org/counter>(1) AS ?x) }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "4",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "6",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "repeated-target-volatile-row-order-bound",
+      "query": "SELECT ?x WHERE { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?x) BIND(<http://example.org/counter>(1) AS ?x) }",
+      "initial": {
+        "x": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "4",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "6",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    }
+  ]
+}

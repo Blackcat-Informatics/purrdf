@@ -1,0 +1,14 @@
+315:; invoke <pyo3::internal::state::SuspendAttach>::new
+316:  %45 = invoke { i64, ptr } @<pyo3::internal::state::SuspendAttach>::new()
+1634:; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+1635:  call fastcc void @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>(ptr noalias nofree noundef readonly align 8 dereferenceable(168) %40), !noalias !126383
+1639:; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+1640:  call fastcc void @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>(ptr noalias nofree noundef readonly align 8 dereferenceable(168) %40) #79, !noalias !126383
+1681:; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+1682:  call fastcc void @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>(ptr noalias nofree noundef readonly align 8 dereferenceable(168) %40) #79, !noalias !126383
+1692:; invoke <pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+1693:  invoke void @<pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %_guard.i.i.i.i)
+1700:; invoke <pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+1701:  invoke void @<pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %_guard.i.i.i.i)
+1765:; invoke purrdf_native::py_store::query::materialize_results
+1766:  invoke fastcc void @purrdf_native::py_store::query::materialize_results(ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(56) %_0, ptr noalias nofree noundef align 8 captures(address) dereferenceable(56) %result.i.i.i)

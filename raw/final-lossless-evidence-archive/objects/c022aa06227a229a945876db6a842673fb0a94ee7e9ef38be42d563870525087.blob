@@ -1,0 +1,76 @@
+	.att_syntax
+	.file	"rayon.4020ef774bb95614-cgu.0"
+	.section	.text._RNvXsg_NtCs5vm1QLunqIW_5rayon5rangejNtNtB5_7private19IndexedRangeInteger3len,"ax",@progbits
+	.globl	_RNvXsg_NtCs5vm1QLunqIW_5rayon5rangejNtNtB5_7private19IndexedRangeInteger3len
+	.prefalign	4, .Lfunc_end0, nop
+	.type	_RNvXsg_NtCs5vm1QLunqIW_5rayon5rangejNtNtB5_7private19IndexedRangeInteger3len,@function
+_RNvXsg_NtCs5vm1QLunqIW_5rayon5rangejNtNtB5_7private19IndexedRangeInteger3len:
+	.cfi_startproc
+	movq	8(%rdi), %rcx
+	xorl	%eax, %eax
+	subq	(%rdi), %rcx
+	cmovaeq	%rcx, %rax
+	retq
+.Lfunc_end0:
+	.size	_RNvXsg_NtCs5vm1QLunqIW_5rayon5rangejNtNtB5_7private19IndexedRangeInteger3len, .Lfunc_end0-_RNvXsg_NtCs5vm1QLunqIW_5rayon5rangejNtNtB5_7private19IndexedRangeInteger3len
+	.cfi_endproc
+
+	.section	.text._RNvXsh_NtCs5vm1QLunqIW_5rayon5rangeINtB5_12IterProducerjENtNtNtB7_4iter8plumbing8Producer8split_at,"ax",@progbits
+	.globl	_RNvXsh_NtCs5vm1QLunqIW_5rayon5rangeINtB5_12IterProducerjENtNtNtB7_4iter8plumbing8Producer8split_at
+	.prefalign	4, .Lfunc_end1, nop
+	.type	_RNvXsh_NtCs5vm1QLunqIW_5rayon5rangeINtB5_12IterProducerjENtNtNtB7_4iter8plumbing8Producer8split_at,@function
+_RNvXsh_NtCs5vm1QLunqIW_5rayon5rangeINtB5_12IterProducerjENtNtNtB7_4iter8plumbing8Producer8split_at:
+	.cfi_startproc
+	xorl	%eax, %eax
+	movq	%rdx, %r8
+	subq	%rsi, %r8
+	cmovaeq	%r8, %rax
+	cmpq	%rax, %rcx
+	ja	.LBB1_2
+	addq	%rsi, %rcx
+	movq	%rsi, (%rdi)
+	movq	%rdi, %rax
+	movq	%rcx, 8(%rdi)
+	movq	%rcx, 16(%rdi)
+	movq	%rdx, 24(%rdi)
+	retq
+.LBB1_2:
+	pushq	%rax
+	.cfi_def_cfa_offset 16
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip), %rax
+	leaq	anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129(%rip), %rdi
+	leaq	anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129(%rip), %rdx
+	movl	$43, %esi
+	callq	*%rax
+.Lfunc_end1:
+	.size	_RNvXsh_NtCs5vm1QLunqIW_5rayon5rangeINtB5_12IterProducerjENtNtNtB7_4iter8plumbing8Producer8split_at, .Lfunc_end1-_RNvXsh_NtCs5vm1QLunqIW_5rayon5rangeINtB5_12IterProducerjENtNtNtB7_4iter8plumbing8Producer8split_at
+	.cfi_endproc
+
+	.hidden	anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129
+	.type	anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129,@object
+	.section	.rodata.anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129,"a",@progbits
+	.globl	anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129
+anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129:
+	.ascii	"assertion failed: index <= self.range.len()"
+	.size	anon.fdd815ce619c83327115886f1bdb092d.8.llvm.448137101165543129, 43
+
+	.hidden	anon.fdd815ce619c83327115886f1bdb092d.9.llvm.448137101165543129
+	.type	anon.fdd815ce619c83327115886f1bdb092d.9.llvm.448137101165543129,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+	.globl	anon.fdd815ce619c83327115886f1bdb092d.9.llvm.448137101165543129
+anon.fdd815ce619c83327115886f1bdb092d.9.llvm.448137101165543129:
+	.asciz	"/kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/range.rs"
+	.size	anon.fdd815ce619c83327115886f1bdb092d.9.llvm.448137101165543129, 86
+
+	.hidden	anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129
+	.type	anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129,@object
+	.section	.data.rel.ro.anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129,"aw",@progbits
+	.globl	anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129
+	.p2align	3, 0x0
+anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129:
+	.quad	anon.fdd815ce619c83327115886f1bdb092d.9.llvm.448137101165543129
+	.asciz	"U\000\000\000\000\000\000\000\036\001\000\000\001\000\000"
+	.size	anon.fdd815ce619c83327115886f1bdb092d.13.llvm.448137101165543129, 24
+
+	.ident	"rustc version 1.100.0-nightly (4b6d04e70 2026-09-13)"
+	.section	".note.GNU-stack","",@progbits

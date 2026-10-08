@@ -1,0 +1,2820 @@
+	.att_syntax
+	.file	"crossbeam_epoch.d2edcdccb06617d-cgu.0"
+	.section	.text.unlikely._RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848
+	.globl	_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end0, nop
+	.type	_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848,@function
+_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848:
+.Lfunc_begin0:
+	.cfi_startproc
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 32
+	leaq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848(%rip), %rax
+	movq	%rax, (%rsp)
+	movl	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848+8(%rip), %eax
+	testl	%eax, %eax
+	jne	.LBB0_1
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB0_1:
+	.cfi_def_cfa_offset 32
+	movq	%rsp, %rax
+	movq	%rax, 8(%rsp)
+	movq	_RNvMs0_NtNtNtNtCs7jcFBdfocI9_3std3sys4sync4once5futexNtB5_4Once4call@GOTPCREL(%rip), %rax
+	leaq	8(%rsp), %rcx
+	leaq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848+8(%rip), %rdi
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848(%rip), %r8
+	leaq	16(%rsp), %rdx
+	xorl	%esi, %esi
+	movq	%rcx, 16(%rsp)
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848(%rip), %rcx
+	callq	*%rax
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end0:
+	.size	_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848, .Lfunc_end0-_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync4list4ListNtNtBI_8internal5LocalEEBI_,"ax",@progbits
+	.prefalign	4, .Lfunc_end1, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync4list4ListNtNtBI_8internal5LocalEEBI_,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync4list4ListNtNtBI_8internal5LocalEEBI_:
+.Lfunc_begin1:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%rbx
+	.cfi_def_cfa_offset 32
+	subq	$16, %rsp
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	(%rdi), %rdi
+	andq	$-8, %rdi
+	je	.LBB1_4
+	movq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED@GOTPCREL(%rip), %rbx
+	movq	_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize@GOTPCREL(%rip), %r14
+	.p2align	4
+.LBB1_2:
+	movq	(%rdi), %r15
+	movl	%r15d, %eax
+	andl	$7, %eax
+	movq	%rax, 8(%rsp)
+	cmpq	$1, %rax
+	jne	.LBB1_5
+	movq	%rbx, %rsi
+	callq	*%r14
+	andq	$-8, %r15
+	movq	%r15, %rdi
+	jne	.LBB1_2
+.LBB1_4:
+	addq	$16, %rsp
+	.cfi_def_cfa_offset 32
+	popq	%rbx
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1_5:
+	.cfi_def_cfa_offset 48
+	movq	_RINvNtCs2k2z8Zem4rB_4core9panicking13assert_failedjjEB4_@GOTPCREL(%rip), %rax
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.16(%rip), %rdx
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.18(%rip), %r9
+	leaq	8(%rsp), %rsi
+	xorl	%edi, %edi
+	xorl	%ecx, %ecx
+	callq	*%rax
+.Lfunc_end1:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync4list4ListNtNtBI_8internal5LocalEEBI_, .Lfunc_end1-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync4list4ListNtNtBI_8internal5LocalEEBI_
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_,"ax",@progbits
+	.prefalign	4, .Lfunc_end2, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_:
+.Lfunc_begin2:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$2104, %rsp
+	.cfi_def_cfa_offset 2160
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	(%rdi), %rcx
+	movq	%rdi, %rbx
+	movabsq	$-9223372036854775808, %r13
+	movq	%rcx, %rdi
+	andq	$-8, %rdi
+	movq	2064(%rdi), %rdx
+	movq	%rdx, %r12
+	andq	$-8, %r12
+	je	.LBB2_4
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %r14
+	leaq	8(%rsp), %r15
+	jmp	.LBB2_2
+	.p2align	4
+.LBB2_3:
+	movq	(%rbx), %rcx
+	movq	%rcx, %rdi
+	andq	$-8, %rdi
+	movq	2064(%rdi), %rdx
+	movq	%rdx, %r12
+	andq	$-8, %r12
+	je	.LBB2_4
+.LBB2_2:
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rdx, (%rbx)
+	jne	.LBB2_3
+	movq	128(%rbx), %rax
+	cmpq	%rax, %rcx
+	jne	.LBB2_15
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rdx, 128(%rbx)
+.LBB2_15:
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	$-2072, %rcx
+	addq	%rcx, %rax
+	cmovoq	%r13, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB2_17
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB2_17:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB2_23
+	leaq	1(%rax), %rcx
+	lock		cmpxchgq	%rcx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB2_17
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-2072, %rcx
+	lock		xaddq	%rcx, (%rax)
+	movq	(%r14), %rax
+	addq	$-2072, %rcx
+	cmovoq	%r13, %rcx
+	.p2align	4
+.LBB2_20:
+	cmpq	%rax, %rcx
+	jge	.LBB2_22
+	lock		cmpxchgq	%rcx, (%r14)
+	jne	.LBB2_20
+.LBB2_22:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB2_23:
+	movq	free@GOTPCREL(%rip), %rax
+	callq	*%rax
+	movq	(%r12), %rbp
+	movq	memcpy@GOTPCREL(%rip), %rax
+	addq	$8, %r12
+	movl	$2056, %edx
+	leaq	48(%rsp), %rdi
+	movq	%r12, %rsi
+	movq	%rbp, 40(%rsp)
+	callq	*%rax
+	testq	%rbp, %rbp
+	je	.LBB2_4
+	movq	2088(%rsp), %r12
+	cmpq	$65, %r12
+	jae	.LBB2_25
+	testq	%r12, %r12
+	je	.LBB2_3
+	shlq	$5, %r12
+	xorl	%ebp, %ebp
+	.p2align	4
+.LBB2_29:
+	vmovups	40(%rsp,%rbp), %ymm0
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm1
+	movq	%r15, %rdi
+	vmovups	%ymm0, (%rsp)
+	vmovups	%ymm1, 40(%rsp,%rbp)
+	movq	(%rsp), %rax
+	vzeroupper
+	callq	*%rax
+	addq	$32, %rbp
+	cmpq	%rbp, %r12
+	jne	.LBB2_29
+	jmp	.LBB2_3
+.LBB2_4:
+	movq	(%rbx), %rdi
+	movq	$-2072, %rax
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	cmovoq	%r13, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB2_6
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+.LBB2_6:
+	andq	$-8, %rdi
+	.p2align	4
+.LBB2_7:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB2_13
+	leaq	1(%rax), %rcx
+	lock		cmpxchgq	%rcx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB2_7
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rdx
+	movq	$-2072, %rcx
+	lock		xaddq	%rcx, (%rax)
+	movq	(%rdx), %rax
+	addq	$-2072, %rcx
+	cmovoq	%r13, %rcx
+	.p2align	4
+.LBB2_10:
+	cmpq	%rax, %rcx
+	jge	.LBB2_12
+	lock		cmpxchgq	%rcx, (%rdx)
+	jne	.LBB2_10
+.LBB2_12:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB2_13:
+	movq	free@GOTPCREL(%rip), %rax
+	callq	*%rax
+	addq	$2104, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB2_25:
+	.cfi_def_cfa_offset 2160
+	movq	_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848(%rip), %rcx
+	movl	$64, %edx
+	xorl	%edi, %edi
+	movq	%r12, %rsi
+	callq	*%rax
+.Lfunc_end2:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_, .Lfunc_end2-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848
+	.globl	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end3, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848:
+.Lfunc_begin3:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	subq	$40, %rsp
+	.cfi_def_cfa_offset 80
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	2064(%rdi), %rbx
+	cmpq	$65, %rbx
+	jae	.LBB3_5
+	testq	%rbx, %rbx
+	je	.LBB3_4
+	movq	%rdi, %r14
+	addq	$16, %r14
+	shlq	$5, %rbx
+	leaq	8(%rsp), %r15
+	xorl	%r12d, %r12d
+	.p2align	4
+.LBB3_3:
+	vmovups	(%r14,%r12), %ymm0
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm1
+	movq	%r15, %rdi
+	vmovups	%ymm0, (%rsp)
+	vmovups	%ymm1, (%r14,%r12)
+	movq	(%rsp), %rax
+	vzeroupper
+	callq	*%rax
+	addq	$32, %r12
+	cmpq	%r12, %rbx
+	jne	.LBB3_3
+.LBB3_4:
+	addq	$40, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB3_5:
+	.cfi_def_cfa_offset 80
+	movq	_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848(%rip), %rcx
+	movl	$64, %edx
+	xorl	%edi, %edi
+	movq	%rbx, %rsi
+	callq	*%rax
+.Lfunc_end3:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848, .Lfunc_end3-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_,"ax",@progbits
+	.prefalign	4, .Lfunc_end4, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_:
+.Lfunc_begin4:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception0
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	pushq	%rax
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	%rdi, %rbx
+	movq	384(%rdi), %rdi
+	andq	$-8, %rdi
+	je	.LBB4_5
+	movq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED@GOTPCREL(%rip), %r14
+	movq	_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize@GOTPCREL(%rip), %r15
+	.p2align	4
+.LBB4_2:
+	movq	(%rdi), %r12
+	movl	%r12d, %eax
+	andl	$7, %eax
+	movq	%rax, (%rsp)
+	cmpq	$1, %rax
+	jne	.LBB4_6
+.Ltmp3:
+	movq	%r14, %rsi
+	callq	*%r15
+.Ltmp4:
+	andq	$-8, %r12
+	movq	%r12, %rdi
+	jne	.LBB4_2
+.LBB4_5:
+	movq	%rbx, %rdi
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	jmp	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_
+.LBB4_6:
+	.cfi_def_cfa_offset 48
+.Ltmp0:
+	movq	_RINvNtCs2k2z8Zem4rB_4core9panicking13assert_failedjjEB4_@GOTPCREL(%rip), %rax
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.16(%rip), %rdx
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.18(%rip), %r9
+	movq	%rsp, %rsi
+	xorl	%edi, %edi
+	xorl	%ecx, %ecx
+	callq	*%rax
+.Ltmp1:
+	ud2
+.LBB4_8:
+.Ltmp5:
+	jmp	.LBB4_10
+.LBB4_9:
+.Ltmp2:
+.LBB4_10:
+	movq	%rax, %r14
+.Ltmp6:
+	movq	%rbx, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_
+.Ltmp7:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB4_12:
+.Ltmp8:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end4:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_, .Lfunc_end4-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_
+	.cfi_endproc
+	.section	.gcc_except_table._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table4:
+.Lexception0:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase0-.Lttbaseref0
+.Lttbaseref0:
+	.byte	1
+	.uleb128 .Lcst_end0-.Lcst_begin0
+.Lcst_begin0:
+	.uleb128 .Ltmp3-.Lfunc_begin4
+	.uleb128 .Ltmp4-.Ltmp3
+	.uleb128 .Ltmp5-.Lfunc_begin4
+	.byte	0
+	.uleb128 .Ltmp4-.Lfunc_begin4
+	.uleb128 .Ltmp0-.Ltmp4
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp0-.Lfunc_begin4
+	.uleb128 .Ltmp1-.Ltmp0
+	.uleb128 .Ltmp2-.Lfunc_begin4
+	.byte	0
+	.uleb128 .Ltmp6-.Lfunc_begin4
+	.uleb128 .Ltmp7-.Ltmp6
+	.uleb128 .Ltmp8-.Lfunc_begin4
+	.byte	1
+	.uleb128 .Ltmp7-.Lfunc_begin4
+	.uleb128 .Lfunc_end4-.Ltmp7
+	.byte	0
+	.byte	0
+.Lcst_end0:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase0:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text._RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848
+	.globl	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end5, nop
+	.type	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848,@function
+_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848:
+.Lfunc_begin5:
+	.cfi_startproc
+	movq	$-2072, %rax
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	(%rdi), %rdi
+	movabsq	$-9223372036854775808, %rcx
+	cmovoq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB5_2
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+.LBB5_2:
+	andq	$-8, %rdi
+	.p2align	4
+.LBB5_3:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB5_9
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB5_3
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-2072, %rdx
+	lock		xaddq	%rdx, (%rax)
+	addq	$-2072, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB5_6:
+	cmpq	%rax, %rdx
+	jge	.LBB5_8
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB5_6
+.LBB5_8:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB5_9:
+	jmpq	*free@GOTPCREL(%rip)
+.Lfunc_end5:
+	.size	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848, .Lfunc_end5-_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text._RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_,"ax",@progbits
+	.prefalign	4, .Lfunc_end6, nop
+	.type	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_,@function
+_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_:
+.Lfunc_begin6:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception1
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r13
+	.cfi_def_cfa_offset 32
+	pushq	%r12
+	.cfi_def_cfa_offset 40
+	pushq	%rbx
+	.cfi_def_cfa_offset 48
+	subq	$32, %rsp
+	.cfi_def_cfa_offset 80
+	.cfi_offset %rbx, -48
+	.cfi_offset %r12, -40
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	(%rdi), %rbx
+	andq	$-128, %rbx
+	movq	2064(%rbx), %r14
+	cmpq	$65, %r14
+	jae	.LBB6_1
+	testq	%r14, %r14
+	je	.LBB6_7
+	leaq	16(%rbx), %r12
+	shlq	$5, %r14
+	leaq	8(%rsp), %r15
+	xorl	%r13d, %r13d
+	.p2align	4
+.LBB6_5:
+	vmovups	(%r12,%r13), %ymm0
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm1
+	vmovups	%ymm0, (%rsp)
+	vmovups	%ymm1, (%r12,%r13)
+	movq	(%rsp), %rax
+.Ltmp12:
+	movq	%r15, %rdi
+	vzeroupper
+	callq	*%rax
+.Ltmp13:
+	addq	$32, %r13
+	cmpq	%r13, %r14
+	jne	.LBB6_5
+.LBB6_7:
+	movq	$-2304, %rax
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movabsq	$-9223372036854775808, %rcx
+	cmovoq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB6_9
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB6_9:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB6_15
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB6_9
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-2304, %rdx
+	lock		xaddq	%rdx, (%rax)
+	addq	$-2304, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB6_12:
+	cmpq	%rax, %rdx
+	jge	.LBB6_14
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB6_12
+.LBB6_14:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB6_15:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%rbx, %rdi
+	callq	*%rax
+	addq	$32, %rsp
+	.cfi_def_cfa_offset 48
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r13
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB6_1:
+	.cfi_def_cfa_offset 80
+.Ltmp9:
+	movq	_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848(%rip), %rcx
+	movl	$64, %edx
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	callq	*%rax
+.Ltmp10:
+	ud2
+.LBB6_16:
+.Ltmp14:
+	jmp	.LBB6_18
+.LBB6_17:
+.Ltmp11:
+.LBB6_18:
+	movl	$2304, %esi
+	movl	$128, %edx
+	movq	%rbx, %rdi
+	movq	%rax, %r14
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end6:
+	.size	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_, .Lfunc_end6-_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_
+	.cfi_endproc
+	.section	.gcc_except_table._RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table6:
+.Lexception1:
+	.byte	255
+	.byte	255
+	.byte	1
+	.uleb128 .Lcst_end1-.Lcst_begin1
+.Lcst_begin1:
+	.uleb128 .Ltmp12-.Lfunc_begin6
+	.uleb128 .Ltmp13-.Ltmp12
+	.uleb128 .Ltmp14-.Lfunc_begin6
+	.byte	0
+	.uleb128 .Ltmp13-.Lfunc_begin6
+	.uleb128 .Ltmp9-.Ltmp13
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp9-.Lfunc_begin6
+	.uleb128 .Ltmp10-.Ltmp9
+	.uleb128 .Ltmp11-.Lfunc_begin6
+	.byte	0
+	.uleb128 .Ltmp10-.Lfunc_begin6
+	.uleb128 .Lfunc_end6-.Ltmp10
+	.byte	0
+	.byte	0
+.Lcst_end1:
+	.p2align	2, 0x0
+
+	.section	.text._RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848
+	.globl	_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end7, nop
+	.type	_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848,@function
+_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848:
+.Lfunc_begin7:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	movq	(%rdi), %rax
+	movq	(%rax), %rbx
+	movq	$0, (%rax)
+	testq	%rbx, %rbx
+	je	.LBB7_2
+	movq	_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default@GOTPCREL(%rip), %rax
+	callq	*%rax
+	movq	(%rbx), %rcx
+	movq	%rax, (%rcx)
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB7_2:
+	.cfi_def_cfa_offset 16
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13unwrap_failed@GOTPCREL(%rip), %rax
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.9(%rip), %rdi
+	callq	*%rax
+.Lfunc_end7:
+	.size	_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848, .Lfunc_end7-_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text._RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848
+	.globl	_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end8, nop
+	.type	_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848,@function
+_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848:
+.Lfunc_begin8:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbx, -16
+	movq	(%rdi), %rax
+	movq	(%rax), %rbx
+	movq	$0, (%rax)
+	testq	%rbx, %rbx
+	je	.LBB8_2
+	movq	_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default@GOTPCREL(%rip), %rax
+	callq	*%rax
+	movq	(%rbx), %rcx
+	movq	%rax, (%rcx)
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB8_2:
+	.cfi_def_cfa_offset 16
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13unwrap_failed@GOTPCREL(%rip), %rax
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.9(%rip), %rdi
+	callq	*%rax
+.Lfunc_end8:
+	.size	_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848, .Lfunc_end8-_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text._RNvMNtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB2_5Guard5flush,"ax",@progbits
+	.globl	_RNvMNtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB2_5Guard5flush
+	.prefalign	4, .Lfunc_end9, nop
+	.type	_RNvMNtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB2_5Guard5flush,@function
+_RNvMNtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB2_5Guard5flush:
+.Lfunc_begin9:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$4096, %rsp
+	.cfi_adjust_cfa_offset 4096
+	movq	$0, (%rsp)
+	pushq	%rax
+	.cfi_def_cfa_offset 4160
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	(%rdi), %r15
+	testq	%r15, %r15
+	jne	.LBB9_1
+	addq	$4104, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB9_1:
+	.cfi_def_cfa_offset 4160
+	cmpq	$0, 2064(%r15)
+	movq	%rdi, %rbx
+	je	.LBB9_17
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm0
+	movq	8(%r15), %r12
+	movl	$480, %eax
+	.p2align	4
+.LBB9_3:
+	vmovups	%ymm0, -480(%rsp,%rax)
+	vmovups	%ymm0, -448(%rsp,%rax)
+	vmovups	%ymm0, -416(%rsp,%rax)
+	vmovups	%ymm0, -384(%rsp,%rax)
+	vmovups	%ymm0, -352(%rsp,%rax)
+	vmovups	%ymm0, -320(%rsp,%rax)
+	vmovups	%ymm0, -288(%rsp,%rax)
+	vmovups	%ymm0, -256(%rsp,%rax)
+	vmovups	%ymm0, -224(%rsp,%rax)
+	vmovups	%ymm0, -192(%rsp,%rax)
+	vmovups	%ymm0, -160(%rsp,%rax)
+	vmovups	%ymm0, -128(%rsp,%rax)
+	vmovups	%ymm0, -96(%rsp,%rax)
+	vmovups	%ymm0, -64(%rsp,%rax)
+	vmovups	%ymm0, -32(%rsp,%rax)
+	vmovups	%ymm0, (%rsp,%rax)
+	addq	$512, %rax
+	cmpq	$2528, %rax
+	jne	.LBB9_3
+	movq	memcpy@GOTPCREL(%rip), %r13
+	leaq	16(%r15), %r14
+	leaq	2048(%rsp), %rdi
+	movl	$2056, %edx
+	movq	%r14, %rsi
+	vzeroupper
+	callq	*%r13
+	movl	$2048, %edx
+	movq	%rsp, %rsi
+	movq	%r14, %rdi
+	callq	*%r13
+	movq	malloc@GOTPCREL(%rip), %rax
+	movq	$0, 2064(%r15)
+	lock		orl	$0, -64(%rsp)
+	movq	384(%r12), %rbp
+	movl	$2072, %edi
+	movl	$2072, %r13d
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB9_19
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rsi
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rdx
+	movq	$-1, %rcx
+	movq	%rax, %r14
+	incq	%rsi
+	cmoveq	%rcx, %rsi
+	addq	%r13, %rdx
+	cmovbq	%rcx, %rdx
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %r13
+	movabsq	$9223372036854775807, %rcx
+	movq	%rsi, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%rdx, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmovoq	%rcx, %r13
+	movq	%r13, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %r13
+	jle	.LBB9_7
+	movq	%r13, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB9_7:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB9_13
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB9_7
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rsi
+	lock		incq	(%rax)
+	lock		addq	$2072, (%rdx)
+	movl	$2072, %edx
+	lock		xaddq	%rdx, (%rsi)
+	addq	$2072, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB9_10:
+	cmpq	%rax, %rdx
+	jle	.LBB9_12
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB9_10
+.LBB9_12:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB9_13:
+	movq	memcpy@GOTPCREL(%rip), %rax
+	leaq	2048(%rsp), %rsi
+	movl	$2056, %edx
+	movq	%r14, %rdi
+	callq	*%rax
+	movq	%rbp, 2056(%r14)
+	movq	$0, 2064(%r14)
+	jmp	.LBB9_14
+	.p2align	4
+.LBB9_20:
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rsi, 256(%r12)
+.LBB9_14:
+	movq	256(%r12), %rcx
+	movq	%rcx, %rdx
+	andq	$-8, %rdx
+	movq	2064(%rdx), %rsi
+	cmpq	$7, %rsi
+	ja	.LBB9_20
+	xorl	%eax, %eax
+	lock		cmpxchgq	%r14, 2064(%rdx)
+	jne	.LBB9_14
+	movq	%rcx, %rax
+	lock		cmpxchgq	%r14, 256(%r12)
+.LBB9_17:
+	movq	8(%r15), %rdi
+	movq	%rbx, %rsi
+	subq	$-128, %rdi
+	addq	$4104, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	jmpq	*_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect@GOTPCREL(%rip)
+.LBB9_19:
+	.cfi_def_cfa_offset 4160
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$8, %edi
+	movl	$2072, %esi
+	callq	*%rax
+.Lfunc_end9:
+	.size	_RNvMNtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB2_5Guard5flush, .Lfunc_end9-_RNvMNtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB2_5Guard5flush
+	.cfi_endproc
+
+	.section	.text._RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register,"ax",@progbits
+	.globl	_RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register
+	.prefalign	4, .Lfunc_end10, nop
+	.type	_RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register,@function
+_RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register:
+.Lfunc_begin10:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception2
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r15
+	pushq	%r14
+	pushq	%rbx
+	andq	$-128, %rsp
+	subq	$3968, %rsp
+	movq	$0, (%rsp)
+	subq	$640, %rsp
+	.cfi_offset %rbx, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	movq	(%rdi), %r14
+	lock		incq	(%r14)
+	jle	.LBB10_17
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm0
+	movl	$480, %eax
+	.p2align	4
+.LBB10_2:
+	vmovups	%ymm0, -352(%rsp,%rax)
+	vmovups	%ymm0, -320(%rsp,%rax)
+	vmovups	%ymm0, -288(%rsp,%rax)
+	vmovups	%ymm0, -256(%rsp,%rax)
+	vmovups	%ymm0, -224(%rsp,%rax)
+	vmovups	%ymm0, -192(%rsp,%rax)
+	vmovups	%ymm0, -160(%rsp,%rax)
+	vmovups	%ymm0, -128(%rsp,%rax)
+	vmovups	%ymm0, -96(%rsp,%rax)
+	vmovups	%ymm0, -64(%rsp,%rax)
+	vmovups	%ymm0, -32(%rsp,%rax)
+	vmovups	%ymm0, (%rsp,%rax)
+	vmovups	%ymm0, 32(%rsp,%rax)
+	vmovups	%ymm0, 64(%rsp,%rax)
+	vmovups	%ymm0, 96(%rsp,%rax)
+	vmovups	%ymm0, 128(%rsp,%rax)
+	addq	$512, %rax
+	cmpq	$2528, %rax
+	jne	.LBB10_2
+	movq	memcpy@GOTPCREL(%rip), %r15
+	leaq	2192(%rsp), %rdi
+	leaq	128(%rsp), %rsi
+	movl	$2048, %edx
+	movq	$0, 2176(%rsp)
+	movq	%r14, 2184(%rsp)
+	vzeroupper
+	callq	*%r15
+	movq	posix_memalign@GOTPCREL(%rip), %rax
+	leaq	120(%rsp), %rdi
+	movl	$128, %esi
+	movl	$2304, %edx
+	vxorps	%xmm0, %xmm0, %xmm0
+	vmovaps	%xmm0, 4240(%rsp)
+	movq	$1, 4256(%rsp)
+	movq	$0, 4264(%rsp)
+	movq	$0, 4352(%rsp)
+	movq	$0, 120(%rsp)
+	callq	*%rax
+	testl	%eax, %eax
+	jne	.LBB10_16
+	movq	120(%rsp), %rbx
+	testq	%rbx, %rbx
+	je	.LBB10_16
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rdx
+	movq	$-1, %rcx
+	incq	%rax
+	cmoveq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movl	$2304, %eax
+	addq	%rax, %rdx
+	cmovbq	%rcx, %rdx
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movabsq	$9223372036854775807, %rcx
+	movq	%rdx, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmovoq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jle	.LBB10_7
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB10_7:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB10_13
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB10_7
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rsi
+	lock		incq	(%rax)
+	lock		addq	$2304, (%rdx)
+	movl	$2304, %edx
+	lock		xaddq	%rdx, (%rsi)
+	addq	$2304, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB10_10:
+	cmpq	%rax, %rdx
+	jle	.LBB10_12
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB10_10
+.LBB10_12:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB10_13:
+	leaq	2176(%rsp), %rsi
+	movl	$2304, %edx
+	movq	%rbx, %rdi
+	callq	*%r15
+	movq	512(%r14), %rax
+	.p2align	4
+.LBB10_14:
+	movq	%rax, (%rbx)
+	lock		cmpxchgq	%rbx, 512(%r14)
+	jne	.LBB10_14
+	movq	%rbx, %rax
+	leaq	-24(%rbp), %rsp
+	popq	%rbx
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	retq
+.LBB10_16:
+	.cfi_def_cfa %rbp, 16
+.Ltmp15:
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$128, %edi
+	movl	$2304, %esi
+	callq	*%rax
+.Ltmp16:
+.LBB10_17:
+	ud2
+.LBB10_19:
+.Ltmp17:
+	movq	%rax, %rbx
+.Ltmp18:
+	leaq	2176(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal5LocalEBF_.llvm.707543514826133848
+.Ltmp19:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB10_18:
+.Ltmp20:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end10:
+	.size	_RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register, .Lfunc_end10-_RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register
+	.cfi_endproc
+	.section	.gcc_except_table._RNvMs1_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9Collector8register,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table10:
+.Lexception2:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase1-.Lttbaseref1
+.Lttbaseref1:
+	.byte	1
+	.uleb128 .Lcst_end2-.Lcst_begin2
+.Lcst_begin2:
+	.uleb128 .Lfunc_begin10-.Lfunc_begin10
+	.uleb128 .Ltmp15-.Lfunc_begin10
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp15-.Lfunc_begin10
+	.uleb128 .Ltmp16-.Ltmp15
+	.uleb128 .Ltmp17-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp18-.Lfunc_begin10
+	.uleb128 .Ltmp19-.Ltmp18
+	.uleb128 .Ltmp20-.Lfunc_begin10
+	.byte	1
+	.uleb128 .Ltmp19-.Lfunc_begin10
+	.uleb128 .Lfunc_end10-.Ltmp19
+	.byte	0
+	.byte	0
+.Lcst_end2:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase1:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text.unlikely._RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848
+	.globl	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end11, nop
+	.type	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848,@function
+_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848:
+.Lfunc_begin11:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	pushq	%rax
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	256(%rdi), %rbx
+	lock		orl	$0, -64(%rsp)
+	movq	384(%rdi), %r12
+	movq	_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize@GOTPCREL(%rip), %r13
+	leaq	384(%rdi), %rbp
+	movq	%rsi, %r15
+	movq	%rdi, %r14
+	movq	%rbp, (%rsp)
+.LBB11_1:
+	movq	%r12, %rax
+	andq	$-8, %rax
+	je	.LBB11_8
+	movq	%r12, %rdi
+	.p2align	4
+.LBB11_3:
+	movq	(%rax), %r12
+	movl	%r12d, %ecx
+	andl	$7, %ecx
+	cmpl	$1, %ecx
+	jne	.LBB11_10
+	andq	$-8, %r12
+	movq	%rdi, %rax
+	lock		cmpxchgq	%r12, (%rbp)
+	jne	.LBB11_6
+	andq	$-8, %rdi
+	movq	%r15, %rsi
+	callq	*%r13
+	movq	%r12, %rax
+.LBB11_6:
+	testb	$7, %al
+	jne	.LBB11_12
+	movq	%rax, %rdi
+	testq	%rax, %rax
+	jne	.LBB11_3
+	jmp	.LBB11_8
+	.p2align	4
+.LBB11_10:
+	movq	2176(%rax), %rcx
+	movq	%rax, %rbp
+	testb	$1, %cl
+	je	.LBB11_1
+	andq	$-2, %rcx
+	movq	%rax, %rbp
+	cmpq	%rbx, %rcx
+	je	.LBB11_1
+	jmp	.LBB11_9
+.LBB11_8:
+	addq	$2, %rbx
+	#MEMBARRIER
+	movq	%rbx, 256(%r14)
+	jmp	.LBB11_9
+.LBB11_12:
+	movq	(%rsp), %rax
+	movq	(%rax), %rax
+.LBB11_9:
+	movq	%rbx, %rax
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end11:
+	.size	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848, .Lfunc_end11-_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text.unlikely._RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect,"ax",@progbits
+	.globl	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect
+	.prefalign	4, .Lfunc_end12, nop
+	.type	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect,@function
+_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect:
+.Lfunc_begin12:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$2120, %rsp
+	.cfi_def_cfa_offset 2176
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	%rsi, %r15
+	movq	%rdi, %rbx
+	callq	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global11try_advance.llvm.707543514826133848
+	movq	(%r15), %r8
+	leaq	24(%rsp), %r13
+	movq	%rax, %r14
+	xorl	%r9d, %r9d
+	.p2align	4
+.LBB12_1:
+	movq	(%rbx), %rcx
+	movq	%rcx, %rdi
+	andq	$-8, %rdi
+	movq	2064(%rdi), %rdx
+	movq	%rdx, %rbp
+	andq	$-8, %rbp
+	je	.LBB12_24
+	movq	2056(%rbp), %rax
+	movq	%r14, %rsi
+	andq	$-2, %rax
+	subq	%rax, %rsi
+	cmpq	$4, %rsi
+	jl	.LBB12_24
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rdx, (%rbx)
+	jne	.LBB12_1
+	movq	128(%rbx), %rax
+	cmpq	%rax, %rcx
+	jne	.LBB12_5
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rdx, 128(%rbx)
+.LBB12_5:
+	movq	%r9, 8(%rsp)
+	testq	%r8, %r8
+	je	.LBB12_10
+	movq	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer@GOTPCREL(%rip), %r15
+	leaq	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyINtNtNtB9_4sync5queue4NodeNtNtB9_8internal9SealedBagEE0INtNtB9_6atomic5OwnedB2i_EE0EB9_.llvm.707543514826133848(%rip), %rax
+	leaq	56(%rsp), %rsi
+	movq	%r8, %rdi
+	movq	%r8, %r12
+	movq	%rax, 56(%rsp)
+	movq	%rcx, 64(%rsp)
+	callq	*%r15
+	movq	(%rbp), %r15
+	testq	%r15, %r15
+	jne	.LBB12_8
+	jmp	.LBB12_24
+.LBB12_10:
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	$-2072, %rcx
+	movabsq	$-9223372036854775808, %rdx
+	addq	%rcx, %rax
+	cmovoq	%rdx, %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rdx
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB12_12
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB12_12:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB12_18
+	leaq	1(%rax), %rcx
+	lock		cmpxchgq	%rcx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB12_12
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-2072, %rcx
+	lock		xaddq	%rcx, (%rax)
+	movabsq	$-9223372036854775808, %rax
+	addq	$-2072, %rcx
+	cmovoq	%rax, %rcx
+	movq	(%rdx), %rax
+	.p2align	4
+.LBB12_15:
+	cmpq	%rax, %rcx
+	jge	.LBB12_17
+	lock		cmpxchgq	%rcx, (%rdx)
+	jne	.LBB12_15
+.LBB12_17:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB12_18:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%r8, %r12
+	callq	*%rax
+	movq	(%rbp), %r15
+	testq	%r15, %r15
+	je	.LBB12_24
+.LBB12_8:
+	movq	memcpy@GOTPCREL(%rip), %rax
+	addq	$8, %rbp
+	movl	$2056, %edx
+	leaq	64(%rsp), %rdi
+	movq	%rbp, %rsi
+	callq	*%rax
+	movq	%r15, 56(%rsp)
+	movq	2104(%rsp), %rbp
+	cmpq	$65, %rbp
+	jae	.LBB12_9
+	testq	%rbp, %rbp
+	je	.LBB12_23
+	shlq	$5, %rbp
+	xorl	%r15d, %r15d
+	.p2align	4
+.LBB12_22:
+	vmovups	56(%rsp,%r15), %ymm0
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm1
+	movq	%r13, %rdi
+	vmovups	%ymm0, 16(%rsp)
+	vmovups	%ymm1, 56(%rsp,%r15)
+	movq	16(%rsp), %rax
+	vzeroupper
+	callq	*%rax
+	addq	$32, %r15
+	cmpq	%r15, %rbp
+	jne	.LBB12_22
+.LBB12_23:
+	movq	8(%rsp), %r9
+	movq	%r12, %r8
+	incq	%r9
+	cmpq	$8, %r9
+	jne	.LBB12_1
+.LBB12_24:
+	addq	$2120, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB12_9:
+	.cfi_def_cfa_offset 2176
+	movq	_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848(%rip), %rcx
+	movl	$64, %edx
+	xorl	%edi, %edi
+	movq	%rbp, %rsi
+	callq	*%rax
+.Lfunc_end12:
+	.size	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect, .Lfunc_end12-_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect
+	.cfi_endproc
+
+	.section	.text._RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848
+	.globl	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end13, nop
+	.type	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848,@function
+_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848:
+.Lfunc_begin13:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception3
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$16, %rsp
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -16
+	movq	%rdi, 8(%rsp)
+	movq	2072(%rdi), %rax
+	cmpq	$-1, %rax
+	je	.LBB13_5
+	leaq	1(%rax), %rcx
+	movq	%rcx, 2072(%rdi)
+	testq	%rax, %rax
+	jne	.LBB13_4
+	movq	8(%rdi), %rax
+	movq	384(%rax), %rcx
+	xorl	%eax, %eax
+	orq	$1, %rcx
+	lock		cmpxchgq	%rcx, 2176(%rdi)
+	#MEMBARRIER
+	movq	2088(%rdi), %rax
+	leaq	1(%rax), %rcx
+	movq	%rcx, 2088(%rdi)
+	testb	$127, %al
+	je	.LBB13_3
+.LBB13_4:
+	movq	%rdi, %rax
+	addq	$16, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB13_5:
+	.cfi_def_cfa_offset 32
+.Ltmp23:
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13unwrap_failed@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848(%rip), %rdi
+	callq	*%rax
+.Ltmp24:
+	ud2
+.LBB13_3:
+	movq	8(%rdi), %rax
+	subq	$-128, %rax
+.Ltmp21:
+	movq	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect@GOTPCREL(%rip), %rcx
+	leaq	8(%rsp), %rsi
+	movq	%rdi, %rbx
+	movq	%rax, %rdi
+	callq	*%rcx
+	movq	%rbx, %rdi
+.Ltmp22:
+	jmp	.LBB13_4
+.LBB13_8:
+.Ltmp25:
+	movq	%rax, %rbx
+.Ltmp26:
+	leaq	8(%rsp), %rdi
+	callq	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848
+.Ltmp27:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB13_7:
+.Ltmp28:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end13:
+	.size	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848, .Lfunc_end13-_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848
+	.cfi_endproc
+	.section	.gcc_except_table._RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local3pin.llvm.707543514826133848,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table13:
+.Lexception3:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase2-.Lttbaseref2
+.Lttbaseref2:
+	.byte	1
+	.uleb128 .Lcst_end3-.Lcst_begin3
+.Lcst_begin3:
+	.uleb128 .Ltmp23-.Lfunc_begin13
+	.uleb128 .Ltmp22-.Ltmp23
+	.uleb128 .Ltmp25-.Lfunc_begin13
+	.byte	0
+	.uleb128 .Ltmp26-.Lfunc_begin13
+	.uleb128 .Ltmp27-.Ltmp26
+	.uleb128 .Ltmp28-.Lfunc_begin13
+	.byte	1
+	.uleb128 .Ltmp27-.Lfunc_begin13
+	.uleb128 .Lfunc_end13-.Ltmp27
+	.byte	0
+	.byte	0
+.Lcst_end3:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase2:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text._RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer,"ax",@progbits
+	.globl	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer
+	.prefalign	4, .Lfunc_end14, nop
+	.type	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer,@function
+_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer:
+.Lfunc_begin14:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$4096, %rsp
+	.cfi_adjust_cfa_offset 4096
+	movq	$0, (%rsp)
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 4176
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	2064(%rdi), %rax
+	movq	%rsi, 8(%rsp)
+	movq	%rdi, %rbx
+	cmpq	$64, %rax
+	jb	.LBB14_17
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm0
+	movq	memcpy@GOTPCREL(%rip), %r14
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %r12
+	.p2align	4
+.LBB14_2:
+	movq	8(%rbx), %r13
+	movl	$480, %eax
+	.p2align	4
+.LBB14_3:
+	vmovups	%ymm0, -464(%rsp,%rax)
+	vmovups	%ymm0, -432(%rsp,%rax)
+	vmovups	%ymm0, -400(%rsp,%rax)
+	vmovups	%ymm0, -368(%rsp,%rax)
+	vmovups	%ymm0, -336(%rsp,%rax)
+	vmovups	%ymm0, -304(%rsp,%rax)
+	vmovups	%ymm0, -272(%rsp,%rax)
+	vmovups	%ymm0, -240(%rsp,%rax)
+	vmovups	%ymm0, -208(%rsp,%rax)
+	vmovups	%ymm0, -176(%rsp,%rax)
+	vmovups	%ymm0, -144(%rsp,%rax)
+	vmovups	%ymm0, -112(%rsp,%rax)
+	vmovups	%ymm0, -80(%rsp,%rax)
+	vmovups	%ymm0, -48(%rsp,%rax)
+	vmovups	%ymm0, -16(%rsp,%rax)
+	vmovups	%ymm0, 16(%rsp,%rax)
+	addq	$512, %rax
+	cmpq	$2528, %rax
+	jne	.LBB14_3
+	leaq	16(%rbx), %r15
+	movl	$2056, %edx
+	leaq	2064(%rsp), %rdi
+	movq	%r15, %rsi
+	vzeroupper
+	callq	*%r14
+	movl	$2048, %edx
+	leaq	16(%rsp), %rsi
+	movq	%r15, %rdi
+	callq	*%r14
+	movq	malloc@GOTPCREL(%rip), %rax
+	movq	$0, 2064(%rbx)
+	lock		orl	$0, -64(%rsp)
+	movq	384(%r13), %r15
+	movl	$2072, %edi
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB14_18
+	movq	%rax, %rbp
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	$-1, %rdx
+	movl	$2072, %ecx
+	incq	%rax
+	cmoveq	%rdx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	addq	%rcx, %rax
+	cmovbq	%rdx, %rax
+	movabsq	$9223372036854775807, %rdx
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	addq	%rcx, %rax
+	cmovoq	%rdx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jle	.LBB14_7
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB14_7:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB14_13
+	leaq	1(%rax), %rcx
+	lock		cmpxchgq	%rcx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB14_7
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rcx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rdx
+	lock		incq	(%rax)
+	movabsq	$9223372036854775807, %rax
+	lock		addq	$2072, (%rcx)
+	movl	$2072, %ecx
+	lock		xaddq	%rcx, (%rdx)
+	addq	$2072, %rcx
+	cmovoq	%rax, %rcx
+	movq	(%r12), %rax
+	.p2align	4
+.LBB14_10:
+	cmpq	%rax, %rcx
+	jle	.LBB14_12
+	lock		cmpxchgq	%rcx, (%r12)
+	jne	.LBB14_10
+.LBB14_12:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB14_13:
+	movl	$2056, %edx
+	leaq	2064(%rsp), %rsi
+	movq	%rbp, %rdi
+	callq	*%r14
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm0
+	movq	%r15, 2056(%rbp)
+	movq	$0, 2064(%rbp)
+	jmp	.LBB14_14
+	.p2align	4
+.LBB14_19:
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rsi, 256(%r13)
+.LBB14_14:
+	movq	256(%r13), %rcx
+	movq	%rcx, %rdx
+	andq	$-8, %rdx
+	movq	2064(%rdx), %rsi
+	cmpq	$7, %rsi
+	ja	.LBB14_19
+	xorl	%eax, %eax
+	lock		cmpxchgq	%rbp, 2064(%rdx)
+	jne	.LBB14_14
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rbp, 256(%r13)
+	movq	2064(%rbx), %rax
+	cmpq	$63, %rax
+	ja	.LBB14_2
+.LBB14_17:
+	movq	8(%rsp), %rcx
+	shlq	$5, %rax
+	vmovups	(%rcx), %ymm0
+	leaq	16(%rbx), %rcx
+	vmovups	%ymm0, (%rcx,%rax)
+	incq	2064(%rbx)
+	addq	$4120, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB14_18:
+	.cfi_def_cfa_offset 4176
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$8, %edi
+	movl	$2072, %esi
+	callq	*%rax
+.Lfunc_end14:
+	.size	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer, .Lfunc_end14-_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer
+	.cfi_endproc
+
+	.section	.text.unlikely._RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize,"ax",@progbits
+	.globl	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize
+	.prefalign	4, .Lfunc_end15, nop
+	.type	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize,@function
+_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize:
+.Lfunc_begin15:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception4
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$4096, %rsp
+	.cfi_adjust_cfa_offset 4096
+	movq	$0, (%rsp)
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 4176
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	$1, 2080(%rdi)
+	movq	%rdi, 2064(%rsp)
+	movq	2072(%rdi), %rax
+	cmpq	$-1, %rax
+	je	.LBB15_25
+	leaq	1(%rax), %rcx
+	movq	%rdi, %rbx
+	movq	%rcx, 2072(%rdi)
+	testq	%rax, %rax
+	jne	.LBB15_4
+	movq	8(%rbx), %rax
+	movq	384(%rax), %rcx
+	xorl	%eax, %eax
+	orq	$1, %rcx
+	lock		cmpxchgq	%rcx, 2176(%rbx)
+	#MEMBARRIER
+	movq	2088(%rbx), %rax
+	leaq	1(%rax), %rcx
+	movq	%rcx, 2088(%rbx)
+	testb	$127, %al
+	je	.LBB15_3
+.LBB15_4:
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm0
+	movq	%rbx, 8(%rsp)
+	movl	$480, %eax
+	movq	8(%rbx), %r15
+	.p2align	4
+.LBB15_5:
+	vmovups	%ymm0, -464(%rsp,%rax)
+	vmovups	%ymm0, -432(%rsp,%rax)
+	vmovups	%ymm0, -400(%rsp,%rax)
+	vmovups	%ymm0, -368(%rsp,%rax)
+	vmovups	%ymm0, -336(%rsp,%rax)
+	vmovups	%ymm0, -304(%rsp,%rax)
+	vmovups	%ymm0, -272(%rsp,%rax)
+	vmovups	%ymm0, -240(%rsp,%rax)
+	vmovups	%ymm0, -208(%rsp,%rax)
+	vmovups	%ymm0, -176(%rsp,%rax)
+	vmovups	%ymm0, -144(%rsp,%rax)
+	vmovups	%ymm0, -112(%rsp,%rax)
+	vmovups	%ymm0, -80(%rsp,%rax)
+	vmovups	%ymm0, -48(%rsp,%rax)
+	vmovups	%ymm0, -16(%rsp,%rax)
+	vmovups	%ymm0, 16(%rsp,%rax)
+	addq	$512, %rax
+	cmpq	$2528, %rax
+	jne	.LBB15_5
+	movq	memcpy@GOTPCREL(%rip), %r12
+	leaq	16(%rbx), %r14
+	leaq	2064(%rsp), %rdi
+	movl	$2056, %edx
+	movq	%r14, %rsi
+	vzeroupper
+	callq	*%r12
+	leaq	16(%rsp), %rsi
+	movl	$2048, %edx
+	movq	%r14, %rdi
+	callq	*%r12
+	movq	malloc@GOTPCREL(%rip), %rax
+	movq	$0, 2064(%rbx)
+	lock		orl	$0, -64(%rsp)
+	movq	384(%r15), %r13
+	movl	$2072, %edi
+	movl	$2072, %ebp
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB15_28
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rsi
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rdx
+	movq	$-1, %rcx
+	movq	%rax, %r14
+	incq	%rsi
+	cmoveq	%rcx, %rsi
+	addq	%rbp, %rdx
+	cmovbq	%rcx, %rdx
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rbp
+	movabsq	$9223372036854775807, %rcx
+	movq	%rsi, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%rdx, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmovoq	%rcx, %rbp
+	movq	%rbp, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rbp
+	jle	.LBB15_9
+	movq	%rbp, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB15_9:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB15_15
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB15_9
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rsi
+	lock		incq	(%rax)
+	lock		addq	$2072, (%rdx)
+	movl	$2072, %edx
+	lock		xaddq	%rdx, (%rsi)
+	addq	$2072, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB15_12:
+	cmpq	%rax, %rdx
+	jle	.LBB15_14
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB15_12
+.LBB15_14:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB15_15:
+	leaq	2064(%rsp), %rsi
+	movl	$2056, %edx
+	movq	%r14, %rdi
+	callq	*%r12
+	movq	%r13, 2056(%r14)
+	movq	$0, 2064(%r14)
+	jmp	.LBB15_16
+	.p2align	4
+.LBB15_29:
+	movq	%rcx, %rax
+	lock		cmpxchgq	%rsi, 256(%r15)
+.LBB15_16:
+	movq	256(%r15), %rcx
+	movq	%rcx, %rdx
+	andq	$-8, %rdx
+	movq	2064(%rdx), %rsi
+	cmpq	$7, %rsi
+	ja	.LBB15_29
+	xorl	%eax, %eax
+	lock		cmpxchgq	%r14, 2064(%rdx)
+	jne	.LBB15_16
+	movq	%rcx, %rax
+	lock		cmpxchgq	%r14, 256(%r15)
+	decq	2072(%rbx)
+	jne	.LBB15_21
+	movq	$0, 2176(%rbx)
+	cmpq	$0, 2080(%rbx)
+	je	.LBB15_20
+.LBB15_21:
+	movq	$0, 2080(%rbx)
+	movq	8(%rbx), %rax
+	lock		orq	$1, (%rbx)
+	movq	%rax, 2064(%rsp)
+	lock		decq	(%rax)
+	jne	.LBB15_23
+	movq	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_@GOTPCREL(%rip), %rax
+	leaq	2064(%rsp), %rdi
+	#MEMBARRIER
+	callq	*%rax
+.LBB15_23:
+	addq	$4120, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB15_25:
+	.cfi_def_cfa_offset 4176
+.Ltmp37:
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13unwrap_failed@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848(%rip), %rdi
+	callq	*%rax
+.Ltmp38:
+	jmp	.LBB15_26
+.LBB15_20:
+	movq	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize@GOTPCREL(%rip), %rax
+	movq	%rbx, %rdi
+	callq	*%rax
+	jmp	.LBB15_21
+.LBB15_3:
+	movq	8(%rbx), %rdi
+	subq	$-128, %rdi
+.Ltmp29:
+	movq	_RNvMs5_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_6Global7collect@GOTPCREL(%rip), %rax
+	leaq	2064(%rsp), %rsi
+	callq	*%rax
+.Ltmp30:
+	jmp	.LBB15_4
+.LBB15_28:
+.Ltmp31:
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$8, %edi
+	movl	$2072, %esi
+	callq	*%rax
+.Ltmp32:
+.LBB15_26:
+	ud2
+.LBB15_30:
+.Ltmp33:
+	movq	%rax, %rbx
+.Ltmp34:
+	leaq	8(%rsp), %rdi
+	callq	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848
+.Ltmp35:
+	jmp	.LBB15_31
+.LBB15_32:
+.Ltmp36:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB15_24:
+.Ltmp39:
+	movq	%rax, %rbx
+.Ltmp40:
+	leaq	2064(%rsp), %rdi
+	callq	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848
+.Ltmp41:
+.LBB15_31:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB15_27:
+.Ltmp42:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end15:
+	.size	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize, .Lfunc_end15-_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize
+	.cfi_endproc
+	.section	.gcc_except_table._RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table15:
+.Lexception4:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase3-.Lttbaseref3
+.Lttbaseref3:
+	.byte	1
+	.uleb128 .Lcst_end4-.Lcst_begin4
+.Lcst_begin4:
+	.uleb128 .Lfunc_begin15-.Lfunc_begin15
+	.uleb128 .Ltmp37-.Lfunc_begin15
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp37-.Lfunc_begin15
+	.uleb128 .Ltmp38-.Ltmp37
+	.uleb128 .Ltmp39-.Lfunc_begin15
+	.byte	0
+	.uleb128 .Ltmp38-.Lfunc_begin15
+	.uleb128 .Ltmp29-.Ltmp38
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp29-.Lfunc_begin15
+	.uleb128 .Ltmp30-.Ltmp29
+	.uleb128 .Ltmp39-.Lfunc_begin15
+	.byte	0
+	.uleb128 .Ltmp31-.Lfunc_begin15
+	.uleb128 .Ltmp32-.Ltmp31
+	.uleb128 .Ltmp33-.Lfunc_begin15
+	.byte	0
+	.uleb128 .Ltmp34-.Lfunc_begin15
+	.uleb128 .Ltmp35-.Ltmp34
+	.uleb128 .Ltmp36-.Lfunc_begin15
+	.byte	1
+	.uleb128 .Ltmp35-.Lfunc_begin15
+	.uleb128 .Ltmp40-.Ltmp35
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp40-.Lfunc_begin15
+	.uleb128 .Ltmp41-.Ltmp40
+	.uleb128 .Ltmp42-.Lfunc_begin15
+	.byte	1
+	.uleb128 .Ltmp41-.Lfunc_begin15
+	.uleb128 .Lfunc_end15-.Ltmp41
+	.byte	0
+	.byte	0
+.Lcst_end4:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase3:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text._RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_,"ax",@progbits
+	.globl	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_
+	.prefalign	4, .Lfunc_end16, nop
+	.type	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_,@function
+_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_:
+.Lfunc_begin16:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception5
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	pushq	%rax
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	(%rdi), %rbx
+	leaq	128(%rbx), %rdi
+.Ltmp43:
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_
+.Ltmp44:
+	cmpq	$-1, %rbx
+	je	.LBB16_16
+	lock		decq	8(%rbx)
+	jne	.LBB16_16
+	#MEMBARRIER
+	movq	$-640, %rax
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movabsq	$-9223372036854775808, %rcx
+	cmovoq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB16_5
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB16_5:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB16_11
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB16_5
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-640, %rdx
+	lock		xaddq	%rdx, (%rax)
+	addq	$-640, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB16_8:
+	cmpq	%rax, %rdx
+	jge	.LBB16_10
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB16_8
+.LBB16_10:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB16_11:
+	movq	%rbx, %rdi
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	jmpq	*free@GOTPCREL(%rip)
+.LBB16_16:
+	.cfi_def_cfa_offset 32
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	retq
+.LBB16_12:
+	.cfi_def_cfa_offset 32
+.Ltmp45:
+	movq	%rax, %r14
+	cmpq	$-1, %rbx
+	je	.LBB16_15
+	lock		decq	8(%rbx)
+	jne	.LBB16_15
+	movl	$640, %esi
+	movl	$128, %edx
+	movq	%rbx, %rdi
+	#MEMBARRIER
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB16_15:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end16:
+	.size	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_, .Lfunc_end16-_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_
+	.cfi_endproc
+	.section	.gcc_except_table._RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalE9drop_slowBK_,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table16:
+.Lexception5:
+	.byte	255
+	.byte	255
+	.byte	1
+	.uleb128 .Lcst_end5-.Lcst_begin5
+.Lcst_begin5:
+	.uleb128 .Ltmp43-.Lfunc_begin16
+	.uleb128 .Ltmp44-.Ltmp43
+	.uleb128 .Ltmp45-.Lfunc_begin16
+	.byte	0
+	.uleb128 .Ltmp44-.Lfunc_begin16
+	.uleb128 .Lfunc_end16-.Ltmp44
+	.byte	0
+	.byte	0
+.Lcst_end5:
+	.p2align	2, 0x0
+
+	.section	.text._RNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector,"ax",@progbits
+	.globl	_RNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector
+	.prefalign	4, .Lfunc_end17, nop
+	.type	_RNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector,@function
+_RNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector:
+.Lfunc_begin17:
+	.cfi_startproc
+	movl	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848+8(%rip), %eax
+	testl	%eax, %eax
+	jne	.LBB17_1
+	leaq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848(%rip), %rax
+	retq
+.LBB17_1:
+	pushq	%rax
+	.cfi_def_cfa_offset 16
+	callq	_RINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB6_8OnceLockNtNtBa_9collector9CollectorE10initializeNvMs1_B1b_B19_3newEBa_.llvm.707543514826133848
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 8
+	leaq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848(%rip), %rax
+	retq
+.Lfunc_end17:
+	.size	_RNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector, .Lfunc_end17-_RNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector
+	.cfi_endproc
+
+	.section	.text._RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848
+	.globl	_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end18, nop
+	.type	_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848,@function
+_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848:
+.Lfunc_begin18:
+	.cfi_startproc
+	retq
+.Lfunc_end18:
+	.size	_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848, .Lfunc_end18-_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848
+	.cfi_endproc
+
+	.section	.text._RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default,"ax",@progbits
+	.globl	_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default
+	.prefalign	4, .Lfunc_end19, nop
+	.type	_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default,@function
+_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default:
+.Lfunc_begin19:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception6
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r14
+	pushq	%rbx
+	andq	$-128, %rsp
+	subq	$1152, %rsp
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	movq	malloc@GOTPCREL(%rip), %rax
+	movl	$2072, %edi
+	movq	$0, 128(%rsp)
+	movq	$0, 120(%rsp)
+	movq	$0, 256(%rsp)
+	movl	$2072, %ebx
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB19_20
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rdi
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rsi
+	movq	$-1, %rdx
+	movabsq	$9223372036854775807, %r14
+	movq	%rax, %rcx
+	incq	%rdi
+	cmoveq	%rdx, %rdi
+	addq	%rbx, %rsi
+	cmovbq	%rdx, %rsi
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rbx
+	movq	%rdi, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%rsi, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmovoq	%r14, %rbx
+	movq	%rbx, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rbx
+	jle	.LBB19_3
+	movq	%rbx, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB19_3:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB19_9
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB19_3
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rsi
+	lock		incq	(%rax)
+	lock		addq	$2072, (%rdx)
+	movl	$2072, %edx
+	lock		xaddq	%rdx, (%rsi)
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rsi
+	movq	(%rsi), %rax
+	addq	$2072, %rdx
+	cmovoq	%r14, %rdx
+	.p2align	4
+.LBB19_6:
+	cmpq	%rax, %rdx
+	jle	.LBB19_8
+	lock		cmpxchgq	%rdx, (%rsi)
+	jne	.LBB19_6
+.LBB19_8:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB19_9:
+	movq	$0, 2064(%rcx)
+	movq	%rcx, 128(%rsp)
+	movq	%rcx, 256(%rsp)
+	movq	posix_memalign@GOTPCREL(%rip), %rax
+	leaq	128(%rsp), %rdi
+	movl	$128, %esi
+	movl	$640, %edx
+	vmovaps	128(%rsp), %zmm0
+	vmovaps	192(%rsp), %zmm1
+	vmovaps	256(%rsp), %zmm2
+	vmovaps	320(%rsp), %zmm3
+	movq	$0, 128(%rsp)
+	vmovaps	%zmm3, 704(%rsp)
+	vmovaps	%zmm2, 640(%rsp)
+	vmovaps	%zmm1, 576(%rsp)
+	vmovaps	%zmm0, 512(%rsp)
+	movq	$1, 384(%rsp)
+	movq	$1, 392(%rsp)
+	movq	$0, 768(%rsp)
+	movq	$0, 896(%rsp)
+	vzeroupper
+	callq	*%rax
+	testl	%eax, %eax
+	jne	.LBB19_26
+	movq	128(%rsp), %rbx
+	testq	%rbx, %rbx
+	je	.LBB19_26
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rdx
+	movq	$-1, %rcx
+	incq	%rax
+	cmoveq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movl	$640, %eax
+	addq	%rax, %rdx
+	cmovbq	%rcx, %rdx
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	%rdx, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmovoq	%r14, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jle	.LBB19_13
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB19_13:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB19_19
+	leaq	1(%rax), %rcx
+	lock		cmpxchgq	%rcx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB19_13
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rcx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rdx
+	lock		incq	(%rax)
+	lock		addq	$640, (%rcx)
+	movl	$640, %ecx
+	lock		xaddq	%rcx, (%rdx)
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rdx
+	movq	(%rdx), %rax
+	addq	$640, %rcx
+	cmovoq	%r14, %rcx
+	.p2align	4
+.LBB19_16:
+	cmpq	%rax, %rcx
+	jle	.LBB19_18
+	lock		cmpxchgq	%rcx, (%rdx)
+	jne	.LBB19_16
+.LBB19_18:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB19_19:
+	movq	memcpy@GOTPCREL(%rip), %rax
+	leaq	384(%rsp), %rsi
+	movl	$640, %edx
+	movq	%rbx, %rdi
+	callq	*%rax
+	movq	%rbx, %rax
+	leaq	-16(%rbp), %rsp
+	popq	%rbx
+	popq	%r14
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	retq
+.LBB19_20:
+	.cfi_def_cfa %rbp, 16
+.Ltmp52:
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$8, %edi
+	movl	$2072, %esi
+	callq	*%rax
+.Ltmp53:
+	jmp	.LBB19_21
+.LBB19_26:
+.Ltmp46:
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$128, %edi
+	movl	$640, %esi
+	leaq	512(%rsp), %r14
+	callq	*%rax
+.Ltmp47:
+.LBB19_21:
+	ud2
+.LBB19_27:
+.Ltmp48:
+	movq	%rax, %rbx
+.Ltmp49:
+	movq	%r14, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs18aJq3QiqAb_15crossbeam_epoch8internal6GlobalEBF_
+.Ltmp50:
+	jmp	.LBB19_25
+.LBB19_28:
+.Ltmp51:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB19_23:
+.Ltmp54:
+	movq	%rax, %rbx
+.Ltmp55:
+	leaq	128(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync5queue5QueueNtNtBI_8internal9SealedBagEEBI_
+.Ltmp56:
+.Ltmp58:
+	leaq	120(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCs18aJq3QiqAb_15crossbeam_epoch4sync4list4ListNtNtBI_8internal5LocalEEBI_
+.Ltmp59:
+.LBB19_25:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB19_29:
+.Ltmp60:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB19_22:
+.Ltmp57:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end19:
+	.size	_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default, .Lfunc_end19-_RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default
+	.cfi_endproc
+	.section	.gcc_except_table._RNvXs0_NtCs18aJq3QiqAb_15crossbeam_epoch9collectorNtB5_9CollectorNtNtCs2k2z8Zem4rB_4core7default7Default7default,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table19:
+.Lexception6:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase4-.Lttbaseref4
+.Lttbaseref4:
+	.byte	1
+	.uleb128 .Lcst_end6-.Lcst_begin6
+.Lcst_begin6:
+	.uleb128 .Lfunc_begin19-.Lfunc_begin19
+	.uleb128 .Ltmp52-.Lfunc_begin19
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp52-.Lfunc_begin19
+	.uleb128 .Ltmp53-.Ltmp52
+	.uleb128 .Ltmp54-.Lfunc_begin19
+	.byte	0
+	.uleb128 .Ltmp46-.Lfunc_begin19
+	.uleb128 .Ltmp47-.Ltmp46
+	.uleb128 .Ltmp48-.Lfunc_begin19
+	.byte	0
+	.uleb128 .Ltmp49-.Lfunc_begin19
+	.uleb128 .Ltmp50-.Ltmp49
+	.uleb128 .Ltmp51-.Lfunc_begin19
+	.byte	1
+	.uleb128 .Ltmp50-.Lfunc_begin19
+	.uleb128 .Ltmp55-.Ltmp50
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp55-.Lfunc_begin19
+	.uleb128 .Ltmp56-.Ltmp55
+	.uleb128 .Ltmp57-.Lfunc_begin19
+	.byte	1
+	.uleb128 .Ltmp58-.Lfunc_begin19
+	.uleb128 .Ltmp59-.Ltmp58
+	.uleb128 .Ltmp60-.Lfunc_begin19
+	.byte	1
+	.uleb128 .Ltmp59-.Lfunc_begin19
+	.uleb128 .Lfunc_end19-.Ltmp59
+	.byte	0
+	.byte	0
+.Lcst_end6:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase4:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text._RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize,"ax",@progbits
+	.globl	_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize
+	.prefalign	4, .Lfunc_end20, nop
+	.type	_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize,@function
+_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize:
+.Lfunc_begin20:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception7
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r13
+	.cfi_def_cfa_offset 32
+	pushq	%r12
+	.cfi_def_cfa_offset 40
+	pushq	%rbx
+	.cfi_def_cfa_offset 48
+	subq	$32, %rsp
+	.cfi_def_cfa_offset 80
+	.cfi_offset %rbx, -48
+	.cfi_offset %r12, -40
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	%rdi, %rax
+	andq	$120, %rax
+	movq	%rax, (%rsp)
+	jne	.LBB20_23
+	movq	%rdi, %rbx
+	movq	(%rsi), %rdi
+	testq	%rdi, %rdi
+	je	.LBB20_4
+	leaq	_RINvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB7_8Deferred3new4callNCINvMNtB9_5guardNtB1g_5Guard15defer_uncheckedNCINvB1f_13defer_destroyNtNtB9_8internal5LocalE0INtNtB9_6atomic5OwnedB2i_EE0EB9_(%rip), %rax
+	movq	%rsp, %rsi
+	movq	%rax, (%rsp)
+	movq	%rbx, 8(%rsp)
+	movq	_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local5defer@GOTPCREL(%rip), %rbx
+	callq	*%rbx
+	jmp	.LBB20_3
+.LBB20_4:
+	movq	2064(%rbx), %r14
+	cmpq	$65, %r14
+	jae	.LBB20_5
+	testq	%r14, %r14
+	je	.LBB20_11
+	leaq	16(%rbx), %r12
+	shlq	$5, %r14
+	leaq	8(%rsp), %r15
+	xorl	%r13d, %r13d
+	.p2align	4
+.LBB20_9:
+	vmovups	(%r12,%r13), %ymm0
+	vmovups	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848(%rip), %ymm1
+	vmovups	%ymm0, (%rsp)
+	vmovups	%ymm1, (%r12,%r13)
+	movq	(%rsp), %rax
+.Ltmp64:
+	movq	%r15, %rdi
+	vzeroupper
+	callq	*%rax
+.Ltmp65:
+	addq	$32, %r13
+	cmpq	%r13, %r14
+	jne	.LBB20_9
+.LBB20_11:
+	movq	$-2304, %rax
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movabsq	$-9223372036854775808, %rcx
+	cmovoq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB20_13
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB20_13:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB20_19
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB20_13
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-2304, %rdx
+	lock		xaddq	%rdx, (%rax)
+	addq	$-2304, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB20_16:
+	cmpq	%rax, %rdx
+	jge	.LBB20_18
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB20_16
+.LBB20_18:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB20_19:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%rbx, %rdi
+	callq	*%rax
+.LBB20_3:
+	addq	$32, %rsp
+	.cfi_def_cfa_offset 48
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r13
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB20_23:
+	.cfi_def_cfa_offset 80
+	movq	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED@GOTPCREL(%rip), %rdx
+	movq	_RINvNtCs2k2z8Zem4rB_4core9panicking13assert_failedjjEB4_@GOTPCREL(%rip), %rax
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.5(%rip), %rcx
+	leaq	.Lanon.2e6e419384757ba05ca99f7d38f7197c.7(%rip), %r9
+	movl	$35, %r8d
+	movq	%rsp, %rsi
+	xorl	%edi, %edi
+	callq	*%rax
+.LBB20_5:
+.Ltmp61:
+	movq	_RNvNtNtCs2k2z8Zem4rB_4core5slice5index16slice_index_fail@GOTPCREL(%rip), %rax
+	leaq	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848(%rip), %rcx
+	movl	$64, %edx
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	callq	*%rax
+.Ltmp62:
+	ud2
+.LBB20_20:
+.Ltmp66:
+	jmp	.LBB20_22
+.LBB20_21:
+.Ltmp63:
+.LBB20_22:
+	movl	$2304, %esi
+	movl	$128, %edx
+	movq	%rbx, %rdi
+	movq	%rax, %r14
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end20:
+	.size	_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize, .Lfunc_end20-_RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize
+	.cfi_endproc
+	.section	.gcc_except_table._RNvXs7_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5LocalINtNtNtB7_4sync4list9IsElementBL_E8finalize,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table20:
+.Lexception7:
+	.byte	255
+	.byte	255
+	.byte	1
+	.uleb128 .Lcst_end7-.Lcst_begin7
+.Lcst_begin7:
+	.uleb128 .Lfunc_begin20-.Lfunc_begin20
+	.uleb128 .Ltmp64-.Lfunc_begin20
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp64-.Lfunc_begin20
+	.uleb128 .Ltmp65-.Ltmp64
+	.uleb128 .Ltmp66-.Lfunc_begin20
+	.byte	0
+	.uleb128 .Ltmp65-.Lfunc_begin20
+	.uleb128 .Ltmp61-.Ltmp65
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp61-.Lfunc_begin20
+	.uleb128 .Ltmp62-.Ltmp61
+	.uleb128 .Ltmp63-.Lfunc_begin20
+	.byte	0
+	.uleb128 .Ltmp62-.Lfunc_begin20
+	.uleb128 .Lfunc_end20-.Ltmp62
+	.byte	0
+	.byte	0
+.Lcst_end7:
+	.p2align	2, 0x0
+
+	.section	.text._RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848,"ax",@progbits
+	.hidden	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848
+	.globl	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848
+	.prefalign	4, .Lfunc_end21, nop
+	.type	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848,@function
+_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848:
+.Lfunc_begin21:
+	.cfi_startproc
+	movq	(%rdi), %rdi
+	testq	%rdi, %rdi
+	je	.LBB21_3
+	decq	2072(%rdi)
+	jne	.LBB21_3
+	movq	$0, 2176(%rdi)
+	cmpq	$0, 2080(%rdi)
+	je	.LBB21_4
+.LBB21_3:
+	retq
+.LBB21_4:
+	jmpq	*_RNvMs6_NtCs18aJq3QiqAb_15crossbeam_epoch8internalNtB5_5Local8finalize@GOTPCREL(%rip)
+.Lfunc_end21:
+	.size	_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848, .Lfunc_end21-_RNvXs_NtCs18aJq3QiqAb_15crossbeam_epoch5guardNtB4_5GuardNtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4drop.llvm.707543514826133848
+	.cfi_endproc
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.0.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.0.llvm.707543514826133848,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.0.llvm.707543514826133848
+anon.2e6e419384757ba05ca99f7d38f7197c.0.llvm.707543514826133848:
+	.asciz	"/kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/once_lock.rs"
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.0.llvm.707543514826133848, 105
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848,@object
+	.section	.data.rel.ro.anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848,"aw",@progbits
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848
+	.p2align	3, 0x0
+anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848:
+	.quad	anon.2e6e419384757ba05ca99f7d38f7197c.0.llvm.707543514826133848
+	.asciz	"h\000\000\000\000\000\000\000B\000\000\000\023\000\000"
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.1.llvm.707543514826133848, 24
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848,@object
+	.section	.data.rel.ro.anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848,"aw",@progbits
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848
+	.p2align	3, 0x0
+anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848:
+	.asciz	"\000\000\000\000\000\000\000\000\b\000\000\000\000\000\000\000\b\000\000\000\000\000\000"
+	.quad	_RNSNvYNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtBd_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB1c_8OnceLockNtNtB1g_9collector9CollectorE10initializeNvMs1_B2i_B2g_3newE0E0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTRNtBd_9OnceStateEE9call_once6vtableB1g_.llvm.707543514826133848
+	.quad	_RNCINvMs0_NtNtCs7jcFBdfocI9_3std4sync4onceNtB8_4Once9call_onceNCINvMs0_NtNtCs18aJq3QiqAb_15crossbeam_epoch4sync9once_lockINtB17_8OnceLockNtNtB1b_9collector9CollectorE10initializeNvMs1_B2d_B2b_3newE0E0B1b_.llvm.707543514826133848
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.2.llvm.707543514826133848, 40
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.5,@object
+	.section	.rodata..Lanon.2e6e419384757ba05ca99f7d38f7197c.5,"a",@progbits
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.5:
+	.ascii	"unaligned pointer"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.5, 17
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.6,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.6:
+	.asciz	"/kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.6, 97
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.7,@object
+	.section	.data.rel.ro..Lanon.2e6e419384757ba05ca99f7d38f7197c.7,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.7:
+	.quad	.Lanon.2e6e419384757ba05ca99f7d38f7197c.6
+	.asciz	"`\000\000\000\000\000\000\000q\000\000\000\005\000\000"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.7, 24
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.8,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.8:
+	.asciz	"/rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/sync/once.rs"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.8, 77
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.9,@object
+	.section	.data.rel.ro..Lanon.2e6e419384757ba05ca99f7d38f7197c.9,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.9:
+	.quad	.Lanon.2e6e419384757ba05ca99f7d38f7197c.8
+	.asciz	"L\000\000\000\000\000\000\000\247\000\000\0002\000\000"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.9, 24
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848,@object
+	.section	.data.rel.ro.anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848,"aw",@progbits
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848
+	.p2align	3, 0x0
+anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848:
+	.quad	_RNvNvMs_NtCs18aJq3QiqAb_15crossbeam_epoch8deferredNtB6_8Deferred5NO_OP10no_op_call.llvm.707543514826133848
+	.zero	24
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.10.llvm.707543514826133848, 32
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848
+anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848:
+	.asciz	"/kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs"
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848, 99
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848,@object
+	.section	.data.rel.ro.anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848,"aw",@progbits
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848
+	.p2align	3, 0x0
+anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848:
+	.quad	anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848
+	.asciz	"b\000\000\000\000\000\000\000\201\001\000\0009\000\000"
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.12.llvm.707543514826133848, 24
+
+	.type	_RNvNCNKNvNtCs18aJq3QiqAb_15crossbeam_epoch7default6HANDLE0023___RUST_STD_INTERNAL_VAL,@object
+	.section	.tbss._RNvNCNKNvNtCs18aJq3QiqAb_15crossbeam_epoch7default6HANDLE0023___RUST_STD_INTERNAL_VAL,"awT",@nobits
+	.globl	_RNvNCNKNvNtCs18aJq3QiqAb_15crossbeam_epoch7default6HANDLE0023___RUST_STD_INTERNAL_VAL
+	.p2align	3, 0x0
+_RNvNCNKNvNtCs18aJq3QiqAb_15crossbeam_epoch7default6HANDLE0023___RUST_STD_INTERNAL_VAL:
+	.zero	8
+	.zero	1
+	.zero	7
+	.size	_RNvNCNKNvNtCs18aJq3QiqAb_15crossbeam_epoch7default6HANDLE0023___RUST_STD_INTERNAL_VAL, 16
+
+	.type	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED,@object
+	.section	.rodata._RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED,"a",@progbits
+	.globl	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED
+	.p2align	3, 0x0
+_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED:
+	.zero	8
+	.size	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch5guard11unprotected11UNPROTECTED, 8
+
+	.hidden	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848
+	.type	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848,@object
+	.section	.data._RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848,"aw",@progbits
+	.globl	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848
+	.p2align	3, 0x0
+_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848:
+	.zero	8
+	.asciz	"\003\000\000"
+	.zero	4
+	.size	_RNvNvNtCs18aJq3QiqAb_15crossbeam_epoch7default9collector9COLLECTOR.llvm.707543514826133848, 16
+
+	.hidden	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848
+	.type	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848,@object
+	.section	.data.rel.ro.anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848,"aw",@progbits
+	.globl	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848
+	.p2align	3, 0x0
+anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848:
+	.quad	anon.2e6e419384757ba05ca99f7d38f7197c.11.llvm.707543514826133848
+	.asciz	"b\000\000\000\000\000\000\000w\000\000\000,\000\000"
+	.size	anon.2e6e419384757ba05ca99f7d38f7197c.15.llvm.707543514826133848, 24
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.16,@object
+	.section	.rodata.cst8,"aM",@progbits,8
+	.p2align	3, 0x0
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.16:
+	.asciz	"\001\000\000\000\000\000\000"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.16, 8
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.17,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.17:
+	.asciz	"/kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/list.rs"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.17, 100
+
+	.type	.Lanon.2e6e419384757ba05ca99f7d38f7197c.18,@object
+	.section	.data.rel.ro..Lanon.2e6e419384757ba05ca99f7d38f7197c.18,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.2e6e419384757ba05ca99f7d38f7197c.18:
+	.quad	.Lanon.2e6e419384757ba05ca99f7d38f7197c.17
+	.asciz	"c\000\000\000\000\000\000\000\342\000\000\000\021\000\000"
+	.size	.Lanon.2e6e419384757ba05ca99f7d38f7197c.18, 24
+
+	.hidden	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601
+	.hidden	_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601
+	.hidden	_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601
+	.hidden	_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601
+	.hidden	_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601
+	.hidden	_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601
+	.hidden	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	.hidden	DW.ref.rust_eh_personality
+	.weak	DW.ref.rust_eh_personality
+	.section	.data.DW.ref.rust_eh_personality,"awG",@progbits,DW.ref.rust_eh_personality,comdat
+	.p2align	3, 0x0
+	.type	DW.ref.rust_eh_personality,@object
+	.size	DW.ref.rust_eh_personality, 8
+DW.ref.rust_eh_personality:
+	.quad	rust_eh_personality
+	.ident	"rustc version 1.100.0-nightly (4b6d04e70 2026-09-13)"
+	.section	".note.GNU-stack","",@progbits

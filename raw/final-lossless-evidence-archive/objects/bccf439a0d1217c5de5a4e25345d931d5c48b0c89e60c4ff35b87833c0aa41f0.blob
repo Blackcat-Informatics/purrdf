@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo rustc --locked --jobs 8 --release --manifest-path /opt/purrdf-454-current-qualification-20261008/final-project-private-kernel-native-cost-1/artifacts/probe-candidate/Cargo.toml --message-format=json-render-diagnostics --verbose -- --emit=link\,llvm-ir\,asm 

@@ -1,0 +1,6 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+crates/sparql-algebra/src/retained_size.rs:171:40: error: unnecessary qualification
+crates/sparql-algebra/src/retained_size.rs:171:57: error: unnecessary qualification
+crates/sparql-algebra/src/retained_size.rs:172:36: error: unnecessary qualification
+crates/sparql-algebra/src/retained_size.rs:172:53: error: unnecessary qualification
+error: could not compile `purrdf-sparql-algebra` (lib) due to 4 previous errors

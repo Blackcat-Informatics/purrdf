@@ -1,0 +1,17 @@
+[package]
+name = "qualification-454-native-cost"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+purrdf-sparql-algebra = { path = "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra" }
+purrdf-sparql-eval = { path = "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval" }
+purrdf-core = { path = "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core" }
+purrdf-alloc-probe = { path = "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/alloc-probe" }
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+debug-assertions = false
+overflow-checks = false

@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo run --locked --jobs 8 -p helper-census -- --glossary-gate --self-test 

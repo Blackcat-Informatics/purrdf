@@ -1,0 +1,11 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/prior-extend-call-inventory.txt	2026-10-08 10:07:10.718295998 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/current-extend-call-inventory.txt	2026-10-08 10:07:10.720295966 -0600
+@@ -9,7 +9,7 @@
+       1 <core::slice::iter::Iter<purrdf_sparql_eval::row_checkpoint::Deferred> as core::iter::traits::iterator::Iterator>::fold::<(u64, u64, u64), purrdf_sparql_eval::row_checkpoint::commit_items<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::parallel::MintedRow, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#2}>
+       1 <purrdf_core::small::IntoIter<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint); 1]> as core::iter::traits::iterator::Iterator>::unzip::<purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_core::small::SmallVec<[purrdf_sparql_eval::witness::RelationWitness; 1]>, purrdf_core::small::SmallVec<[purrdf_sparql_eval::row_checkpoint::RowCheckpoint; 1]>>
+       1 <purrdf_core::small::IntoIter<[purrdf_sparql_eval::row_checkpoint::RowCheckpoint; 1]> as core::iter::traits::iterator::Iterator>::collect::<alloc::vec::Vec<purrdf_sparql_eval::row_checkpoint::RowCheckpoint>>
+-      2 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
++      2 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::resize
+       2 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
+       2 <purrdf_sparql_eval::eval::EvalCtx>::charge_scratch_growth
+       1 <purrdf_sparql_eval::eval::EvalCtx>::loop_snapshot

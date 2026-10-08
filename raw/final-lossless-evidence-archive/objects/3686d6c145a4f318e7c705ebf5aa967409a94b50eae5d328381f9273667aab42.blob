@@ -1,0 +1,637 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-default-boundary-ir/qualification_454_native_cost.purrdf_iri-1f1d526d055ecfbb.purrdf_iri.6d5e0d082ee51115-cgu.0.rcgu.o.rcgu.ll:13225
+; purrdf_iri::parse::validate_component
+define internal fastcc void @_RNvNtCs9o9V9VrVHAD_10purrdf_iri5parse18validate_component(ptr dead_on_unwind noalias nofree noundef nonnull writable writeonly align 8 captures(none) dereferenceable(64) %0, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %1, i64 noundef %2, i64 noundef %3, i8 noundef range(i8 0, 61) %4, i1 noundef zeroext %5, i1 noundef zeroext %6) unnamed_addr #0 personality ptr @rust_eh_personality !guid !1528 {
+  %8 = or i8 %4, 3
+  %9 = icmp eq i64 %2, 0
+  br i1 %9, label %.loopexit, label %10
+
+10:                                               ; preds = %7
+  %11 = insertelement <2 x i8> poison, i8 %4, i64 0
+  %12 = shufflevector <2 x i8> %11, <2 x i8> poison, <8 x i32> zeroinitializer
+  %13 = and <8 x i8> %12, <i8 4, i8 8, i8 4, i8 8, i8 4, i8 8, i8 4, i8 8>
+  %14 = icmp ne <8 x i8> %13, zeroinitializer
+  %15 = and i8 %4, 16
+  %16 = icmp ne i8 %15, 0
+  %17 = icmp samesign ugt i8 %4, 31
+  %18 = insertelement <8 x i1> poison, i1 %17, i64 0
+  %19 = shufflevector <8 x i1> %18, <8 x i1> poison, <8 x i32> zeroinitializer
+  %20 = insertelement <8 x i1> poison, i1 %16, i64 0
+  %21 = shufflevector <8 x i1> %20, <8 x i1> poison, <8 x i32> zeroinitializer
+  %22 = shufflevector <8 x i1> %14, <8 x i1> poison, <8 x i32> <i32 1, i32 0, i32 1, i32 0, i32 1, i32 0, i32 1, i32 0>
+  br label %24
+
+.loopexit:                                        ; preds = %73, %7
+  store i64 -1, ptr %0, align 8
+  br label %23
+
+23:                                               ; preds = %205, %185, %107, %.loopexit
+  ret void
+
+24:                                               ; preds = %73, %10
+  %25 = phi i64 [ 0, %10 ], [ %74, %73 ]
+  %26 = sub nuw i64 %2, %25
+  %27 = icmp ult i64 %26, 8
+  br i1 %27, label %76, label %28
+
+28:                                               ; preds = %24
+  %29 = getelementptr inbounds nuw i8, ptr %1, i64 %25
+  %30 = load <8 x i8>, ptr %29, align 1
+  %31 = icmp eq <8 x i8> %30, splat (i8 33)
+  %32 = icmp eq <8 x i8> %30, splat (i8 36)
+  %33 = or <8 x i1> %31, %32
+  %34 = add <8 x i8> %30, splat (i8 -38)
+  %35 = icmp ult <8 x i8> %34, splat (i8 9)
+  %36 = or <8 x i1> %33, %35
+  %37 = add <8 x i8> %30, splat (i8 -48)
+  %38 = icmp ult <8 x i8> %37, splat (i8 10)
+  %39 = or <8 x i1> %38, %36
+  %40 = icmp eq <8 x i8> %30, splat (i8 59)
+  %41 = or <8 x i1> %40, %39
+  %42 = icmp eq <8 x i8> %30, splat (i8 61)
+  %43 = or <8 x i1> %42, %41
+  %44 = add <8 x i8> %30, splat (i8 -65)
+  %45 = icmp ult <8 x i8> %44, splat (i8 26)
+  %46 = or <8 x i1> %45, %43
+  %47 = icmp eq <8 x i8> %30, splat (i8 95)
+  %48 = or <8 x i1> %47, %46
+  %49 = add <8 x i8> %30, splat (i8 -97)
+  %50 = icmp ult <8 x i8> %49, splat (i8 26)
+  %51 = or <8 x i1> %50, %48
+  %52 = icmp eq <8 x i8> %30, splat (i8 126)
+  %53 = or <8 x i1> %52, %51
+  %54 = icmp eq <8 x i8> %30, <i8 64, i8 58, i8 64, i8 58, i8 64, i8 58, i8 64, i8 58>
+  %55 = and <8 x i1> %22, %54
+  %56 = icmp eq <8 x i8> %30, <i8 58, i8 64, i8 58, i8 64, i8 58, i8 64, i8 58, i8 64>
+  %57 = and <8 x i1> %14, %56
+  %58 = or <8 x i1> %57, %55
+  %59 = icmp eq <8 x i8> %30, splat (i8 47)
+  %60 = and <8 x i1> %21, %59
+  %61 = or <8 x i1> %60, %58
+  %62 = icmp eq <8 x i8> %30, splat (i8 63)
+  %63 = and <8 x i1> %19, %62
+  %64 = or <8 x i1> %63, %61
+  %65 = or <8 x i1> %64, %53
+  %66 = select <8 x i1> %65, <8 x i64> <i64 255, i64 65280, i64 16711680, i64 4278190080, i64 1095216660480, i64 280375465082880, i64 71776119061217280, i64 -72057594037927936>, <8 x i64> zeroinitializer
+  %67 = tail call i64 @llvm.vector.reduce.or.v8i64(<8 x i64> %66)
+  %68 = xor i64 %67, -1
+  %69 = tail call range(i64 0, 65) i64 @llvm.cttz.i64(i64 %68, i1 false)
+  %70 = lshr i64 %69, 3
+  %71 = add i64 %70, %25
+  %72 = icmp eq i64 %70, 8
+  br i1 %72, label %73, label %76
+
+73:                                               ; preds = %210, %196, %110, %28
+  %74 = phi i64 [ %71, %28 ], [ %211, %210 ], [ %198, %196 ], [ %85, %110 ]
+  %75 = icmp ult i64 %74, %2
+  br i1 %75, label %24, label %.loopexit
+
+76:                                               ; preds = %28, %24
+  %77 = phi i64 [ %25, %24 ], [ %71, %28 ]
+  %78 = icmp ult i64 %77, %2
+  br i1 %78, label %79, label %83
+
+79:                                               ; preds = %76
+  %80 = getelementptr inbounds nuw i8, ptr %1, i64 %77
+  %81 = load i8, ptr %80, align 1, !noundef !191
+  %82 = icmp eq i8 %81, 37
+  br i1 %82, label %84, label %87
+
+83:                                               ; preds = %76
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %77, i64 noundef %2, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.51a2f0f39df1c33eacd89d6eda192f45.4109) #29
+  unreachable
+
+84:                                               ; preds = %79
+  %85 = add i64 %77, 3
+  %86 = icmp ugt i64 %85, %2
+  br i1 %86, label %107, label %89
+
+87:                                               ; preds = %79
+  %88 = icmp sgt i8 %81, -1
+  br i1 %88, label %199, label %122
+
+89:                                               ; preds = %84
+  %90 = add nuw i64 %77, 1
+  %91 = icmp ult i64 %90, %2
+  br i1 %91, label %92, label %103
+
+92:                                               ; preds = %89
+  %93 = getelementptr inbounds nuw i8, ptr %1, i64 %90
+  %94 = load i8, ptr %93, align 1, !noundef !191
+  %95 = add nsw i8 %94, -48
+  %96 = icmp ult i8 %95, 10
+  %97 = icmp samesign ugt i8 %94, 64
+  %98 = icmp samesign ult i8 %94, 71
+  %99 = select i1 %97, i1 %98, i1 %96
+  %100 = icmp ugt i8 %94, 96
+  %101 = icmp ult i8 %94, 103
+  %102 = select i1 %100, i1 %101, i1 %99
+  br i1 %102, label %104, label %107
+
+103:                                              ; preds = %89
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %90, i64 noundef %2, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.51a2f0f39df1c33eacd89d6eda192f45.4110) #29
+  unreachable
+
+104:                                              ; preds = %92
+  %105 = add i64 %77, 2
+  %106 = icmp ult i64 %105, %2
+  br i1 %106, label %110, label %121
+
+107:                                              ; preds = %110, %92, %84
+  %108 = add i64 %77, %3
+  store i64 -9223372036854775805, ptr %0, align 8
+  %109 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 %108, ptr %109, align 8
+  br label %23
+
+110:                                              ; preds = %104
+  %111 = getelementptr inbounds nuw i8, ptr %1, i64 %105
+  %112 = load i8, ptr %111, align 1, !noundef !191
+  %113 = add nsw i8 %112, -48
+  %114 = icmp ult i8 %113, 10
+  %115 = icmp samesign ugt i8 %112, 64
+  %116 = icmp samesign ult i8 %112, 71
+  %117 = select i1 %115, i1 %116, i1 %114
+  %118 = icmp ugt i8 %112, 96
+  %119 = icmp ult i8 %112, 103
+  %120 = select i1 %118, i1 %119, i1 %117
+  br i1 %120, label %73, label %107
+
+121:                                              ; preds = %104
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check(i64 noundef %105, i64 noundef %2, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.51a2f0f39df1c33eacd89d6eda192f45.4111) #29
+  unreachable
+
+122:                                              ; preds = %87
+  %123 = icmp eq i64 %77, 0
+  %124 = icmp samesign ugt i8 %81, -65
+  %125 = select i1 %123, i1 true, i1 %124
+  br i1 %125, label %126, label %162
+
+126:                                              ; preds = %122
+  %127 = getelementptr inbounds nuw i8, ptr %80, i64 1
+  %128 = and i8 %81, 31
+  %129 = zext nneg i8 %128 to i32
+  %130 = add nuw nsw i64 %77, 1
+  %131 = icmp samesign ne i64 %130, %2
+  tail call void @llvm.assume(i1 %131)
+  %132 = load i8, ptr %127, align 1, !noalias !1529, !noundef !191
+  %133 = shl nuw nsw i32 %129, 6
+  %134 = and i8 %132, 63
+  %135 = zext nneg i8 %134 to i32
+  %136 = or disjoint i32 %133, %135
+  %137 = icmp samesign ugt i8 %81, -33
+  br i1 %137, label %138, label %163
+
+138:                                              ; preds = %126
+  %139 = getelementptr inbounds nuw i8, ptr %80, i64 2
+  %140 = add nuw nsw i64 %77, 2
+  %141 = icmp samesign ne i64 %140, %2
+  tail call void @llvm.assume(i1 %141)
+  %142 = load i8, ptr %139, align 1, !noalias !1529, !noundef !191
+  %143 = shl nuw nsw i32 %135, 6
+  %144 = and i8 %142, 63
+  %145 = zext nneg i8 %144 to i32
+  %146 = or disjoint i32 %143, %145
+  %147 = shl nuw nsw i32 %129, 12
+  %148 = or disjoint i32 %146, %147
+  %149 = icmp samesign ugt i8 %81, -17
+  br i1 %149, label %150, label %163
+
+150:                                              ; preds = %138
+  %151 = getelementptr inbounds nuw i8, ptr %80, i64 3
+  %152 = add nuw nsw i64 %77, 3
+  %153 = icmp samesign ne i64 %152, %2
+  tail call void @llvm.assume(i1 %153)
+  %154 = load i8, ptr %151, align 1, !noalias !1529, !noundef !191
+  %155 = shl nuw nsw i32 %129, 18
+  %156 = and i32 %155, 1835008
+  %157 = shl nuw nsw i32 %146, 6
+  %158 = and i8 %154, 63
+  %159 = zext nneg i8 %158 to i32
+  %160 = or disjoint i32 %157, %159
+  %161 = or disjoint i32 %160, %156
+  br label %163
+
+162:                                              ; preds = %122
+; call core::str::slice_error_fail
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core3str16slice_error_fail(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %1, i64 noundef %2, i64 noundef %77, i64 noundef %2, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.51a2f0f39df1c33eacd89d6eda192f45.4112) #29
+  unreachable
+
+163:                                              ; preds = %150, %138, %126
+  %164 = phi i32 [ %148, %138 ], [ %161, %150 ], [ %136, %126 ]
+  %165 = icmp samesign ult i32 %164, 1114112
+  tail call void @llvm.assume(i1 %165)
+  br i1 %6, label %185, label %166
+
+166:                                              ; preds = %163
+  %167 = insertelement <16 x i32> poison, i32 %164, i64 0
+  %168 = shufflevector <16 x i32> %167, <16 x i32> poison, <16 x i32> zeroinitializer
+  %.fr81 = freeze <16 x i32> %168
+  %169 = add nsw <16 x i32> %.fr81, <i32 -160, i32 -63744, i32 -65008, i32 -65536, i32 -131072, i32 -196608, i32 -262144, i32 -327680, i32 -393216, i32 -458752, i32 -524288, i32 -589824, i32 -655360, i32 -720896, i32 -786432, i32 -851968>
+  %170 = icmp ult <16 x i32> %169, <i32 55136, i32 1232, i32 512, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534, i32 65534>
+  %171 = bitcast <16 x i1> %170 to i16
+  %172 = icmp eq i16 %171, 0
+  %173 = add nsw i32 %164, -983038
+  %174 = icmp ult i32 %173, -61438
+  %.not85 = select i1 %172, i1 %174, i1 false
+  %.not82 = and i1 %.not85, %5
+  br i1 %.not82, label %175, label %184
+
+175:                                              ; preds = %166
+  %176 = add nsw i32 %164, -57344
+  %177 = icmp ult i32 %176, 6400
+  %178 = add nsw i32 %164, -983040
+  %179 = icmp ult i32 %178, 65534
+  %180 = select i1 %177, i1 true, i1 %179
+  %181 = add nsw i32 %164, -1048576
+  %182 = icmp ult i32 %181, 65534
+  %183 = select i1 %180, i1 true, i1 %182
+  br i1 %183, label %193, label %185
+
+184:                                              ; preds = %166
+  br i1 %.not85, label %185, label %189
+
+185:                                              ; preds = %184, %175, %163
+  %186 = add i64 %77, %3
+  store i64 -9223372036854775804, ptr %0, align 8
+  %187 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 %186, ptr %187, align 8
+  %188 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i32 %164, ptr %188, align 8
+  br label %23
+
+189:                                              ; preds = %184
+  %190 = icmp samesign ult i32 %164, 128
+  br i1 %190, label %196, label %191
+
+191:                                              ; preds = %189
+  %192 = icmp samesign ult i32 %164, 2048
+  br i1 %192, label %196, label %193
+
+193:                                              ; preds = %191, %175
+  %194 = icmp samesign ult i32 %164, 65536
+  %195 = select i1 %194, i64 3, i64 4
+  br label %196
+
+196:                                              ; preds = %193, %191, %189
+  %197 = phi i64 [ 2, %191 ], [ %195, %193 ], [ 1, %189 ]
+  %198 = add i64 %197, %77
+  br label %73
+
+199:                                              ; preds = %87
+  %200 = zext nneg i8 %81 to i64
+  %201 = getelementptr inbounds nuw i8, ptr @anon.51a2f0f39df1c33eacd89d6eda192f45.4095, i64 %200
+  %202 = load i8, ptr %201, align 1, !noundef !191
+  %203 = and i8 %202, %8
+  %204 = icmp eq i8 %203, 0
+  br i1 %204, label %205, label %210
+
+205:                                              ; preds = %199
+  %206 = zext nneg i8 %81 to i32
+  %207 = add i64 %77, %3
+  store i64 -9223372036854775804, ptr %0, align 8
+  %208 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 %207, ptr %208, align 8
+  %209 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i32 %206, ptr %209, align 8
+  br label %23
+
+210:                                              ; preds = %199
+  %211 = add nuw i64 %77, 1
+  br label %73
+}
+
+ASSEMBLY
+_RNvNtCs9o9V9VrVHAD_10purrdf_iri5parse18validate_component:
+.Lfunc_begin31:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	pushq	%rax
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	testq	%rdx, %rdx
+	je	.LBB31_5
+	vpbroadcastb	%r8d, %xmm0
+	vpandd	.LCPI31_21(%rip){1to4}, %xmm0, %xmm0
+	movl	%r8d, %r11d
+	vmovdqa64	.LCPI31_20(%rip), %zmm1
+	vpbroadcastb	.LCPI31_22(%rip), %xmm2
+	vpbroadcastb	.LCPI31_23(%rip), %xmm3
+	vpbroadcastb	.LCPI31_24(%rip), %xmm4
+	vpbroadcastb	.LCPI31_25(%rip), %xmm5
+	vpbroadcastb	.LCPI31_26(%rip), %xmm6
+	vpbroadcastb	.LCPI31_27(%rip), %xmm7
+	vpbroadcastb	.LCPI31_28(%rip), %xmm8
+	vpbroadcastb	.LCPI31_29(%rip), %xmm9
+	vpbroadcastb	.LCPI31_30(%rip), %xmm10
+	vpbroadcastb	.LCPI31_31(%rip), %xmm11
+	vpbroadcastb	.LCPI31_32(%rip), %xmm12
+	vpbroadcastb	.LCPI31_33(%rip), %xmm13
+	vpbroadcastb	.LCPI31_34(%rip), %xmm14
+	vpbroadcastw	.LCPI31_35(%rip), %xmm15
+	vpbroadcastw	.LCPI31_36(%rip), %xmm16
+	vpbroadcastb	.LCPI31_37(%rip), %xmm17
+	vpbroadcastb	.LCPI31_38(%rip), %xmm18
+	movzbl	48(%rsp), %r10d
+	leaq	.Lanon.51a2f0f39df1c33eacd89d6eda192f45.4095(%rip), %rbx
+	orb	$3, %r11b
+	cmpb	$32, %r8b
+	sbbl	%eax, %eax
+	notb	%al
+	kmovd	%eax, %k1
+	movzbl	%r8b, %eax
+	btl	$4, %eax
+	sbbl	%eax, %eax
+	kmovd	%eax, %k2
+	xorl	%eax, %eax
+	vptestmb	%xmm0, %xmm0, %k0
+	vpmovm2d	%k0, %ymm0
+	vpshufd	$225, %xmm0, %xmm0
+	vpbroadcastq	%xmm0, %ymm0
+	vpmovd2m	%ymm0, %k3
+	vmovdqa64	.LCPI31_19(%rip), %zmm0
+	jmp	.LBB31_2
+.LBB31_28:
+	leal	-57344(%r8), %ebp
+	leal	-983040(%r8), %r14d
+	cmpl	$6400, %ebp
+	setb	%bpl
+	cmpl	$65534, %r14d
+	setb	%r14b
+	orb	%bpl, %r14b
+	leal	-1048576(%r8), %ebp
+	cmpl	$65534, %ebp
+	setb	%bpl
+	orb	%r14b, %bpl
+	je	.LBB31_30
+.LBB31_33:
+	cmpl	$65536, %r8d
+	movl	$4, %r14d
+	sbbq	$0, %r14
+.LBB31_34:
+	addq	%rax, %r14
+	.p2align	4
+.LBB31_4:
+	movq	%r14, %rax
+	cmpq	%rdx, %r14
+	jae	.LBB31_5
+.LBB31_2:
+	movq	%rdx, %r8
+	subq	%rax, %r8
+	cmpq	$8, %r8
+	jb	.LBB31_7
+	vmovq	(%rsi,%rax), %xmm19
+	vpcmpeqb	%xmm2, %xmm19, %k4
+	vpcmpeqb	%xmm3, %xmm19, %k5
+	vpaddb	%xmm4, %xmm19, %xmm20
+	vpcmpeqb	%xmm8, %xmm19, %k6
+	vpcmpeqb	%xmm18, %xmm19, %k7
+	korb	%k5, %k4, %k4
+	vpcmpltub	%xmm5, %xmm20, %k5
+	vpaddb	%xmm6, %xmm19, %xmm20
+	kandb	%k7, %k1, %k7
+	korb	%k5, %k4, %k4
+	vpcmpltub	%xmm7, %xmm20, %k5
+	vpaddb	%xmm10, %xmm19, %xmm20
+	korb	%k5, %k6, %k5
+	vpcmpltub	%xmm11, %xmm20, %k6
+	vpaddb	%xmm13, %xmm19, %xmm20
+	korb	%k4, %k5, %k4
+	vpcmpeqb	%xmm9, %xmm19, %k5
+	korb	%k5, %k6, %k5
+	vpcmpeqb	%xmm12, %xmm19, %k6
+	korb	%k5, %k6, %k5
+	vpcmpeqb	%xmm14, %xmm19, %k6
+	korb	%k4, %k5, %k4
+	vpcmpltub	%xmm11, %xmm20, %k5
+	korb	%k5, %k6, %k5
+	vpcmpeqb	%xmm16, %xmm19, %k6
+	korb	%k4, %k5, %k4
+	vpcmpeqb	%xmm15, %xmm19, %k5
+	kandb	%k6, %k0, %k6
+	kandb	%k5, %k3, %k5
+	korb	%k5, %k6, %k5
+	vpcmpeqb	%xmm17, %xmm19, %k6
+	kandb	%k6, %k2, %k6
+	korb	%k6, %k7, %k6
+	korb	%k5, %k6, %k5
+	korb	%k4, %k5, %k4
+	vmovdqa64	.LCPI31_18(%rip), %zmm19 {%k4} {z}
+	vextracti64x4	$1, %zmm19, %ymm20
+	vporq	%zmm20, %zmm19, %zmm19
+	vextracti32x4	$1, %ymm19, %xmm20
+	vporq	%xmm20, %xmm19, %xmm19
+	vpshufd	$238, %xmm19, %xmm20
+	vporq	%xmm20, %xmm19, %xmm19
+	vmovq	%xmm19, %r8
+	notq	%r8
+	tzcntq	%r8, %r8
+	shrl	$3, %r8d
+	addq	%r8, %rax
+	movq	%rax, %r14
+	cmpl	$8, %r8d
+	je	.LBB31_4
+.LBB31_7:
+	cmpq	%rdx, %rax
+	jae	.LBB31_38
+	movzbl	(%rsi,%rax), %r14d
+	cmpl	$37, %r14d
+	jne	.LBB31_18
+	leaq	3(%rax), %r14
+	cmpq	%rdx, %r14
+	ja	.LBB31_14
+	leaq	1(%rax), %r8
+	cmpq	%rdx, %r8
+	jae	.LBB31_15
+	movzbl	(%rsi,%r8), %r8d
+	xorl	%r15d, %r15d
+	leal	-48(%r8), %ebp
+	cmpb	$10, %bpl
+	setb	%r15b
+	xorl	%ebp, %ebp
+	cmpb	$71, %r8b
+	setb	%bpl
+	cmpb	$65, %r8b
+	cmovael	%ebp, %r15d
+	xorl	%ebp, %ebp
+	cmpb	$103, %r8b
+	setb	%bpl
+	cmpb	$97, %r8b
+	cmovbl	%r15d, %ebp
+	testb	%bpl, %bpl
+	je	.LBB31_14
+	leaq	2(%rax), %r8
+	cmpq	%rdx, %r8
+	jae	.LBB31_17
+	movzbl	(%rsi,%r8), %r8d
+	xorl	%r15d, %r15d
+	leal	-48(%r8), %ebp
+	cmpb	$10, %bpl
+	setb	%r15b
+	xorl	%ebp, %ebp
+	cmpb	$71, %r8b
+	setb	%bpl
+	cmpb	$65, %r8b
+	cmovael	%ebp, %r15d
+	xorl	%ebp, %ebp
+	cmpb	$103, %r8b
+	setb	%bpl
+	cmpb	$97, %r8b
+	cmovbl	%r15d, %ebp
+	testb	%bpl, %bpl
+	jne	.LBB31_4
+	jmp	.LBB31_14
+	.p2align	4
+.LBB31_18:
+	testb	%r14b, %r14b
+	js	.LBB31_19
+	testb	%r11b, (%r14,%rbx)
+	je	.LBB31_36
+	incq	%rax
+	movq	%rax, %r14
+	jmp	.LBB31_4
+.LBB31_19:
+	testq	%rax, %rax
+	sete	%r8b
+	cmpb	$-64, %r14b
+	setae	%bpl
+	orb	%r8b, %bpl
+	cmpb	$1, %bpl
+	jne	.LBB31_24
+	movzbl	1(%rsi,%rax), %r15d
+	movl	%r14d, %r8d
+	andl	$31, %r8d
+	andl	$63, %r15d
+	cmpb	$-32, %r14b
+	jb	.LBB31_21
+	movzbl	2(%rsi,%rax), %ebp
+	shll	$6, %r15d
+	andl	$63, %ebp
+	orl	%r15d, %ebp
+	cmpb	$-16, %r14b
+	jb	.LBB31_23
+	movzbl	3(%rsi,%rax), %r14d
+	andl	$7, %r8d
+	shll	$6, %ebp
+	shll	$18, %r8d
+	andl	$63, %r14d
+	orl	%ebp, %r14d
+	orl	%r8d, %r14d
+	movl	%r14d, %r8d
+	testb	%r10b, %r10b
+	je	.LBB31_27
+	jmp	.LBB31_30
+.LBB31_21:
+	shll	$6, %r8d
+	orl	%r15d, %r8d
+	testb	%r10b, %r10b
+	je	.LBB31_27
+	jmp	.LBB31_30
+.LBB31_23:
+	shll	$12, %r8d
+	orl	%r8d, %ebp
+	movl	%ebp, %r8d
+	testb	%r10b, %r10b
+	jne	.LBB31_30
+.LBB31_27:
+	vpbroadcastd	%r8d, %zmm19
+	leal	-983038(%r8), %ebp
+	vpaddd	%zmm0, %zmm19, %zmm19
+	vpcmpltud	%zmm1, %zmm19, %k4
+	kortestw	%k4, %k4
+	sete	%r14b
+	cmpl	$-61438, %ebp
+	setb	%bpl
+	andb	%r14b, %bpl
+	movl	%ebp, %r14d
+	andb	%r9b, %r14b
+	cmpb	$1, %r14b
+	je	.LBB31_28
+	testb	%bpl, %bpl
+	jne	.LBB31_30
+	movl	$1, %r14d
+	cmpl	$128, %r8d
+	jb	.LBB31_34
+	movl	$2, %r14d
+	cmpl	$2048, %r8d
+	jae	.LBB31_33
+	jmp	.LBB31_34
+.LBB31_5:
+	movq	$-1, (%rdi)
+	jmp	.LBB31_6
+.LBB31_14:
+	movabsq	$-9223372036854775804, %rdx
+	addq	%rcx, %rax
+	decq	%rdx
+	movq	%rdx, (%rdi)
+	movq	%rax, 8(%rdi)
+	jmp	.LBB31_6
+.LBB31_30:
+	movabsq	$-9223372036854775804, %rdx
+	addq	%rcx, %rax
+	movq	%rdx, (%rdi)
+	movq	%rax, 8(%rdi)
+	movl	%r8d, 16(%rdi)
+	jmp	.LBB31_6
+.LBB31_36:
+	movabsq	$-9223372036854775804, %rdx
+	addq	%rcx, %rax
+	movq	%rdx, (%rdi)
+	movq	%rax, 8(%rdi)
+	movl	%r14d, 16(%rdi)
+.LBB31_6:
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB31_38:
+	.cfi_def_cfa_offset 48
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check@GOTPCREL(%rip), %r8
+	leaq	.Lanon.51a2f0f39df1c33eacd89d6eda192f45.4109(%rip), %rcx
+	movq	%rdx, %rsi
+	movq	%rax, %rdi
+	movq	%rcx, %rdx
+	vzeroupper
+	callq	*%r8
+.LBB31_15:
+	leaq	.Lanon.51a2f0f39df1c33eacd89d6eda192f45.4110(%rip), %rax
+	jmp	.LBB31_16
+.LBB31_17:
+	leaq	.Lanon.51a2f0f39df1c33eacd89d6eda192f45.4111(%rip), %rax
+.LBB31_16:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking18panic_bounds_check@GOTPCREL(%rip), %rcx
+	movq	%rdx, %rsi
+	movq	%r8, %rdi
+	movq	%rax, %rdx
+	vzeroupper
+	callq	*%rcx
+.LBB31_24:
+	movq	_RNvNtCs2k2z8Zem4rB_4core3str16slice_error_fail@GOTPCREL(%rip), %r9
+	leaq	.Lanon.51a2f0f39df1c33eacd89d6eda192f45.4112(%rip), %r8
+	movq	%rsi, %rdi
+	movq	%rdx, %rsi
+	movq	%rdx, %rcx
+	movq	%rax, %rdx
+	vzeroupper
+	callq	*%r9
+.Lfunc_end31:

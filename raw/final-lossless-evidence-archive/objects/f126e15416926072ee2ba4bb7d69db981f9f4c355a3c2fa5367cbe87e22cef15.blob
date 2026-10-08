@@ -1,0 +1,61 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:629:17
+    |
+629 | /                 invalid_policy.optional =
+630 | |                     Some(purrdf_sparql_algebra::algebra::OptionalApplication {
+631 | |                         retry_inputs: Vec::new(),
+632 | |                         forget_marker: Variable::new("marker"),
+633 | |                     })
+    | |______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+    |
+629 |                 invalid_policy.optional =
+...
+632 |                         forget_marker: Variable::new("marker"),
+633 ~                     });
+    |
+
+error: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:848:13
+    |
+848 |             assert!(fixture["triples"].as_array().unwrap().is_empty());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+    |
+848 -             assert!(fixture["triples"].as_array().unwrap().is_empty());
+848 +             assert_eq!(fixture["triples"].as_array().unwrap().as_slice(), []);
+    |
+
+error: this could be rewritten as `let...else`
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:882:13
+    |
+882 | /             let expected = match (
+883 | |                 case["oracle"]["answer"].as_bool(),
+884 | |                 case["oracle"]["boolean"].as_bool(),
+885 | |             ) {
+886 | |                 (Some(answer), None) | (None, Some(answer)) => answer,
+887 | |                 _ => panic!("one explicit ASK answer"),
+888 | |             };
+    | |______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+    = note: `-D clippy::manual-let-else` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+help: consider writing
+    |
+882 ~             let ((Some(expected), None) | (None, Some(expected))) = (
+883 +                 case["oracle"]["answer"].as_bool(),
+884 +                 case["oracle"]["boolean"].as_bool(),
+885 +             ) else { panic!("one explicit ASK answer") };
+    |
+
+error: could not compile `purrdf-sparql-eval` (test "rdflib_contextual") due to 3 previous errors

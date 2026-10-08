@@ -1,0 +1,4 @@
+module /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/purrdf_native.abi3.so
+module_sha256 c08110b6c4f888380a088f1270ab602bf2b56cd6ac58e1874a8c27fc7026e7ee
+oracle 7.6.0 /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py
+lock_sha256 06275d43821c8351f89f88071af043ce4c4645fe3adcf2126b2f28f031cafc01

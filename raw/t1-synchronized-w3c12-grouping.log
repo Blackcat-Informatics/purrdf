@@ -1,0 +1,9 @@
+    Finished `release` profile [optimized] target(s) in 0.05s
+     Running tests/sparql_conformance.rs (/opt/.cargo/slots/10d1255bdd2ffab0/1/build/release/build/purrdf-sparql-conformance/170d7936c4687719/out/sparql_conformance-170d7936c4687719)
+
+running 1 test
+[suite/w3c-sparql12/grouping/manifest.ttl] 2 passed, 0 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled
+test run_manifest_case::w3c-sparql12/grouping/manifest.ttl ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.00s
+

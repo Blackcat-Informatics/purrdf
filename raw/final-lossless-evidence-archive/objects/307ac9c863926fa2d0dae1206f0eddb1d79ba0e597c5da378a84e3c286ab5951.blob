@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo metadata --offline --locked --format-version 1 

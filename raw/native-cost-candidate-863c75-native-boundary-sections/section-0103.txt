@@ -1,0 +1,137 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-native-boundary-ir/qualification_454_native_cost.purrdf_sparql_eval-bf425426783cf5de.purrdf_sparql_eval.1e4be50d5a1c0ebd-cgu.0.rcgu.o.rcgu.ll:369496
+; core::ptr::drop_glue::<alloc::boxed::Box<purrdf_sparql_algebra::algebra::GraphPattern>>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc5boxed3BoxNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternEECs2BgzKN3npkD_18purrdf_sparql_eval(ptr nonnull %0) unnamed_addr #0 personality ptr @rust_eh_personality !guid !43567 {
+; invoke core::ptr::drop_glue::<purrdf_sparql_algebra::algebra::GraphPattern>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternECs2BgzKN3npkD_18purrdf_sparql_eval(ptr noalias nofree noundef nonnull align 8 dereferenceable(144) %0)
+          to label %2 unwind label %30
+
+2:                                                ; preds = %1
+  %3 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %4 = load i64, ptr %3, align 8, !noundef !1624
+  %5 = tail call i64 @llvm.sadd.sat.i64(i64 %4, i64 -144)
+  store i64 %5, ptr %3, align 8
+  %6 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %7 = load i64, ptr %6, align 8, !noundef !1624
+  %8 = icmp slt i64 %5, %7
+  br i1 %8, label %9, label %.preheader
+
+9:                                                ; preds = %2
+  store i64 %5, ptr %6, align 8
+  br label %.preheader
+
+.preheader:                                       ; preds = %9, %2
+  br label %10
+
+10:                                               ; preds = %.preheader, %13
+  %11 = load atomic i64, ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601 acquire, align 8
+  %12 = icmp slt i64 %11, 0
+  br i1 %12, label %13, label %_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit
+
+13:                                               ; preds = %10
+  %14 = add nsw i64 %11, 1
+  %15 = cmpxchg weak ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601, i64 %11, i64 %14 acq_rel acquire, align 8
+  %16 = extractvalue { i64, i1 } %15, 1
+  br i1 %16, label %17, label %10
+
+17:                                               ; preds = %13
+  %18 = atomicrmw sub ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES, i64 144 monotonic, align 8
+  %19 = tail call i64 @llvm.sadd.sat.i64(i64 %18, i64 -144)
+  %20 = load atomic i64, ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES monotonic, align 8
+  br label %21
+
+21:                                               ; preds = %24, %17
+  %22 = phi i64 [ %20, %17 ], [ %27, %24 ]
+  %23 = icmp slt i64 %19, %22
+  br i1 %23, label %24, label %28
+
+24:                                               ; preds = %21
+  %25 = cmpxchg weak ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES, i64 %22, i64 %19 monotonic monotonic, align 8
+  %26 = extractvalue { i64, i1 } %25, 1
+  %27 = extractvalue { i64, i1 } %25, 0
+  br i1 %26, label %28, label %21
+
+28:                                               ; preds = %24, %21
+  %29 = atomicrmw sub ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601, i64 1 release, align 8
+  br label %_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit
+
+_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit: ; preds = %10, %28
+  tail call void @free(ptr noundef nonnull %0) #86
+  ret void
+
+30:                                               ; preds = %1
+  %31 = landingpad { ptr, i32 }
+          cleanup
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %0, i64 noundef 144, i64 noundef 8) #86
+  resume { ptr, i32 } %31
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc5boxed3BoxNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternEECs2BgzKN3npkD_18purrdf_sparql_eval:
+.Lfunc_begin626:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception461
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	pushq	%rax
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	%rdi, %rbx
+.Ltmp17341:
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra7algebra12GraphPatternECs2BgzKN3npkD_18purrdf_sparql_eval
+.Ltmp17342:
+	movq	$-144, %rax
+	addq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movabsq	$-9223372036854775808, %rcx
+	cmovoq	%rcx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB626_3
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB626_3:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB626_9
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB626_3
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	$-144, %rdx
+	lock		xaddq	%rdx, (%rax)
+	addq	$-144, %rdx
+	cmovoq	%rcx, %rdx
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB626_6:
+	cmpq	%rax, %rdx
+	jge	.LBB626_8
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB626_6
+.LBB626_8:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB626_9:
+	movq	%rbx, %rdi
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	jmpq	*free@GOTPCREL(%rip)
+.LBB626_10:
+	.cfi_def_cfa_offset 32
+.Ltmp17343:
+	movl	$144, %esi
+	movl	$8, %edx
+	movq	%rbx, %rdi
+	movq	%rax, %r14
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end626:

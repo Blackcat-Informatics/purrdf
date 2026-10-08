@@ -1,0 +1,19 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-8d88597f61c9805d.purrdf_sparql_eval.3390c597aa620bea-cgu.0.rcgu.o.rcgu.ll:357907
+; <purrdf_sparql_eval::binop::eval_application_yielding<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}::{closure#0} as core::ops::function::FnOnce<(&purrdf_sparql_eval::solution::SolutionSeq, &mut purrdf_sparql_eval::eval::EvalCtx)>>::call_once::{shim:vtable#0}
+define internal void @_RNSNvYNCNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtBd_4eval11RowConsumerB1i_EE00INtNtNtCsb6ASFGx6cXz_4core3ops8function6FnOnceTRNtNtBd_8solution11SolutionSeqQNtB2g_7EvalCtxEE9call_once6vtableBd_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([48 x i8]) align 8 captures(none) dereferenceable(48) %0, ptr nofree noundef nonnull readonly captures(none) %1, ptr noalias nofree noundef readonly align 4 captures(none) dereferenceable(16) %2, ptr noalias nofree noundef align 16 dereferenceable(576) %3) unnamed_addr #1 !guid !65614 {
+; call purrdf_sparql_eval::binop::eval_application_yielding::<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}::{closure#0}
+  tail call void @_RNCNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtB8_4eval11RowConsumerB1d_EE00B8_(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %0, ptr noalias nofree noundef nonnull readonly align 4 dereferenceable(24) %1, ptr noalias nofree noundef nonnull readonly align 4 captures(address, read_provenance) dereferenceable(16) %2, ptr noalias nofree noundef nonnull align 16 dereferenceable(576) %3) #77
+  ret void
+}
+
+ASSEMBLY
+_RNSNvYNCNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtBd_4eval11RowConsumerB1i_EE00INtNtNtCsb6ASFGx6cXz_4core3ops8function6FnOnceTRNtNtBd_8solution11SolutionSeqQNtB2g_7EvalCtxEE9call_once6vtableBd_:
+.Lfunc_begin796:
+	.functype	_RNSNvYNCNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtBd_4eval11RowConsumerB1i_EE00INtNtNtCsb6ASFGx6cXz_4core3ops8function6FnOnceTRNtNtBd_8solution11SolutionSeqQNtB2g_7EvalCtxEE9call_once6vtableBd_ (i32, i32, i32, i32) -> ()
+	local.get	0
+	local.get	1
+	local.get	2
+	local.get	3
+	call	_RNCNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop25eval_application_yieldingNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtNtB8_4eval11RowConsumerB1d_EE00B8_
+	end_function
+.Lfunc_end796:

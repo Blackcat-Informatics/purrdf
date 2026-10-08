@@ -1,0 +1,801 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-base-python-ir/purrdf_native.ll:125445
+; core::ptr::drop_glue::<<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Dying, _, _, _>, alloc::collections::btree::node::marker::KV>>::drop_key_val::Dropper<purrdf_rdf::native_codecs::jsonld::context::JsonLdTermDefinition>>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNvMsT_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtBK_6HandleINtBK_7NodeRefNtNtBK_6marker5DyingpppENtB21_2KVE12drop_key_val7DropperNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context20JsonLdTermDefinitionEECseY6IX0djbTh_13purrdf_native(ptr %_1.0.val) unnamed_addr #1 personality ptr @rust_eh_personality !guid !24112 {
+start:
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %_1.0.val) ]
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24113)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24116)
+  %0 = load i64, ptr %_1.0.val, align 8, !range !3851, !alias.scope !24119, !noundef !3834
+  %1 = icmp eq i64 %0, -1
+  br i1 %1, label %bb16.i.i, label %bb2.i.i.i
+
+bb2.i.i.i:                                        ; preds = %start
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24120)
+  %2 = icmp eq i64 %0, 0
+  br i1 %2, label %bb16.i.i, label %bb2.i.i.i4.i.i.i.i.i
+
+bb2.i.i.i4.i.i.i.i.i:                             ; preds = %bb2.i.i.i
+  %3 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 8
+  %_1.val1.i.i.i.i = load ptr, ptr %3, align 8, !alias.scope !24123, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i.i.i, i64 noundef %0, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24123
+  br label %bb16.i.i
+
+bb16.i.i:                                         ; preds = %bb2.i.i.i4.i.i.i.i.i, %bb2.i.i.i, %start
+  %4 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 120
+  %.val19.i.i = load i64, ptr %4, align 8, !range !3980, !alias.scope !24113, !noundef !3834
+  switch i64 %.val19.i.i, label %bb2.i.i.i4.i.i.i.i.i.i [
+    i64 -1, label %bb15.i.i
+    i64 -9223372036854775805, label %bb15.i.i
+    i64 -9223372036854775806, label %bb15.i.i
+    i64 -9223372036854775807, label %bb15.i.i
+    i64 -9223372036854775808, label %bb15.i.i
+    i64 0, label %bb15.i.i
+  ]
+
+bb2.i.i.i4.i.i.i.i.i.i:                           ; preds = %bb16.i.i
+  %5 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 128
+  %.val20.i.i = load ptr, ptr %5, align 8, !alias.scope !24113, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %.val20.i.i, i64 noundef %.val19.i.i, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24124
+  br label %bb15.i.i
+
+bb15.i.i:                                         ; preds = %bb2.i.i.i4.i.i.i.i.i.i, %bb16.i.i, %bb16.i.i, %bb16.i.i, %bb16.i.i, %bb16.i.i, %bb16.i.i
+  %6 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 96
+  %.val23.i.i = load i64, ptr %6, align 8, !range !11172, !alias.scope !24113, !noundef !3834
+  %7 = icmp sgt i64 %.val23.i.i, 0
+  br i1 %7, label %bb2.i.i.i4.i.i.i.i28.i.i, label %bb14.i.i
+
+bb2.i.i.i4.i.i.i.i28.i.i:                         ; preds = %bb15.i.i
+  %8 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 104
+  %.val24.i.i = load ptr, ptr %8, align 8, !alias.scope !24113, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %.val24.i.i, i64 noundef %.val23.i.i, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24127
+  br label %bb14.i.i
+
+bb14.i.i:                                         ; preds = %bb2.i.i.i4.i.i.i.i28.i.i, %bb15.i.i
+  %9 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 176
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24130)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24133)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24136)
+  %self1.sroa.0.0.copyload.i.i.i.i = load ptr, ptr %9, align 8, !alias.scope !24139
+  %.not.i.i.i.i = icmp eq ptr %self1.sroa.0.0.copyload.i.i.i.i, null
+  br i1 %.not.i.i.i.i, label %bb13.i.i, label %bb3.i.i.i.i
+
+bb3.i.i.i.i:                                      ; preds = %bb14.i.i
+  %self1.sroa.5.0.self.sroa_idx.i.i.i.i = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 192
+  %self1.sroa.5.0.copyload.i.i.i.i = load i64, ptr %self1.sroa.5.0.self.sroa_idx.i.i.i.i, align 8, !alias.scope !24139
+  %self1.sroa.4.0.self.sroa_idx.i.i.i.i = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 184
+  %self1.sroa.4.0.copyload.i.i.i.i = load i64, ptr %self1.sroa.4.0.self.sroa_idx.i.i.i.i, align 8, !alias.scope !24139
+  %10 = icmp eq i64 %self1.sroa.5.0.copyload.i.i.i.i, 0
+  br i1 %10, label %bb3.i.i.i.i.i.i.i.i, label %bb4.i.lr.ph.i.i.i.i.i
+
+bb4.i.lr.ph.i.i.i.i.i:                            ; preds = %bb3.i.i.i.i
+  %11 = ptrtoint ptr %self1.sroa.0.0.copyload.i.i.i.i to i64
+  br label %bb4.i.i.i.i.i.i
+
+bb3.i.i.i.i.i.i.i.i:                              ; preds = %bb3.i.i.i.i
+  %12 = icmp eq i64 %self1.sroa.4.0.copyload.i.i.i.i, 0
+  br i1 %12, label %bb2.i.i.i.i.i.i.i, label %bb10.i.i.i.i.i.i.i.i.preheader
+
+bb10.i.i.i.i.i.i.i.i.preheader:                   ; preds = %bb3.i.i.i.i.i.i.i.i
+  %xtraiter41 = and i64 %self1.sroa.4.0.copyload.i.i.i.i, 7
+  %lcmp.mod42.not = icmp eq i64 %xtraiter41, 0
+  br i1 %lcmp.mod42.not, label %bb10.i.i.i.i.i.i.i.i.prol.loopexit, label %bb10.i.i.i.i.i.i.i.i.prol
+
+bb10.i.i.i.i.i.i.i.i.prol:                        ; preds = %bb10.i.i.i.i.i.i.i.i.preheader, %bb10.i.i.i.i.i.i.i.i.prol
+  %root2.sroa.0.011.i.i.i.i.i.i.i.i.prol = phi ptr [ %13, %bb10.i.i.i.i.i.i.i.i.prol ], [ %self1.sroa.0.0.copyload.i.i.i.i, %bb10.i.i.i.i.i.i.i.i.preheader ]
+  %root.sroa.0.010.i.i.i.i.i.i.i.i.prol = phi i64 [ %14, %bb10.i.i.i.i.i.i.i.i.prol ], [ %self1.sroa.4.0.copyload.i.i.i.i, %bb10.i.i.i.i.i.i.i.i.preheader ]
+  %prol.iter43 = phi i64 [ %prol.iter43.next, %bb10.i.i.i.i.i.i.i.i.prol ], [ 0, %bb10.i.i.i.i.i.i.i.i.preheader ]
+  %_22.i.i.i.i.i.i.i.i.prol = getelementptr inbounds nuw i8, ptr %root2.sroa.0.011.i.i.i.i.i.i.i.i.prol, i64 24
+  %13 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.prol, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %14 = add i64 %root.sroa.0.010.i.i.i.i.i.i.i.i.prol, -1
+  %prol.iter43.next = add i64 %prol.iter43, 1
+  %prol.iter43.cmp.not = icmp eq i64 %prol.iter43.next, %xtraiter41
+  br i1 %prol.iter43.cmp.not, label %bb10.i.i.i.i.i.i.i.i.prol.loopexit, label %bb10.i.i.i.i.i.i.i.i.prol, !llvm.loop !24151
+
+bb10.i.i.i.i.i.i.i.i.prol.loopexit:               ; preds = %bb10.i.i.i.i.i.i.i.i.prol, %bb10.i.i.i.i.i.i.i.i.preheader
+  %.lcssa32.unr = phi ptr [ poison, %bb10.i.i.i.i.i.i.i.i.preheader ], [ %13, %bb10.i.i.i.i.i.i.i.i.prol ]
+  %root2.sroa.0.011.i.i.i.i.i.i.i.i.unr = phi ptr [ %self1.sroa.0.0.copyload.i.i.i.i, %bb10.i.i.i.i.i.i.i.i.preheader ], [ %13, %bb10.i.i.i.i.i.i.i.i.prol ]
+  %root.sroa.0.010.i.i.i.i.i.i.i.i.unr = phi i64 [ %self1.sroa.4.0.copyload.i.i.i.i, %bb10.i.i.i.i.i.i.i.i.preheader ], [ %14, %bb10.i.i.i.i.i.i.i.i.prol ]
+  %15 = icmp ult i64 %self1.sroa.4.0.copyload.i.i.i.i, 8
+  br i1 %15, label %bb2.i.i.i.i.i.i.i, label %bb10.i.i.i.i.i.i.i.i
+
+bb10.i.i.i.i.i.i.i.i:                             ; preds = %bb10.i.i.i.i.i.i.i.i.prol.loopexit, %bb10.i.i.i.i.i.i.i.i
+  %root2.sroa.0.011.i.i.i.i.i.i.i.i = phi ptr [ %23, %bb10.i.i.i.i.i.i.i.i ], [ %root2.sroa.0.011.i.i.i.i.i.i.i.i.unr, %bb10.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %root.sroa.0.010.i.i.i.i.i.i.i.i = phi i64 [ %24, %bb10.i.i.i.i.i.i.i.i ], [ %root.sroa.0.010.i.i.i.i.i.i.i.i.unr, %bb10.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %_22.i.i.i.i.i.i.i.i = getelementptr inbounds nuw i8, ptr %root2.sroa.0.011.i.i.i.i.i.i.i.i, i64 24
+  %16 = load ptr, ptr %_22.i.i.i.i.i.i.i.i, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.1 = getelementptr inbounds nuw i8, ptr %16, i64 24
+  %17 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.1, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.2 = getelementptr inbounds nuw i8, ptr %17, i64 24
+  %18 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.2, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.3 = getelementptr inbounds nuw i8, ptr %18, i64 24
+  %19 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.3, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.4 = getelementptr inbounds nuw i8, ptr %19, i64 24
+  %20 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.4, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.5 = getelementptr inbounds nuw i8, ptr %20, i64 24
+  %21 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.5, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.6 = getelementptr inbounds nuw i8, ptr %21, i64 24
+  %22 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.6, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %_22.i.i.i.i.i.i.i.i.7 = getelementptr inbounds nuw i8, ptr %22, i64 24
+  %23 = load ptr, ptr %_22.i.i.i.i.i.i.i.i.7, align 8, !noalias !24140, !nonnull !3834, !noundef !3834
+  %24 = add i64 %root.sroa.0.010.i.i.i.i.i.i.i.i, -8
+  %25 = icmp eq i64 %24, 0
+  br i1 %25, label %bb2.i.i.i.i.i.i.i, label %bb10.i.i.i.i.i.i.i.i
+
+bb2.i.i.i.i.i.i.i:                                ; preds = %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i, %bb10.i.i.i.i.i.i.i.i.prol.loopexit, %bb10.i.i.i.i.i.i.i.i, %bb3.i.i.i.i.i.i.i.i
+  %_3.sroa.0.0.ph.i.i.i.i.i.i.i = phi ptr [ %self1.sroa.0.0.copyload.i.i.i.i, %bb3.i.i.i.i.i.i.i.i ], [ %23, %bb10.i.i.i.i.i.i.i.i ], [ %.lcssa32.unr, %bb10.i.i.i.i.i.i.i.i.prol.loopexit ], [ %self.sroa.0.0.ph.i.i.i.i.i.i.i.i.i, %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i ]
+  %26 = load ptr, ptr %_3.sroa.0.0.ph.i.i.i.i.i.i.i, align 8, !noalias !24152, !noundef !3834
+  %.not.i.i4.i.i.i.i.i.i.i.i = icmp eq ptr %26, null
+  br i1 %.not.i.i4.i.i.i.i.i.i.i.i, label %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i, label %bb4.i.i.i.i.i.i.i.i
+
+bb4.i.i.i.i.i.i.i.i:                              ; preds = %bb2.i.i.i.i.i.i.i, %bb4.i.i.i.i.i.i.i.i
+  %27 = phi ptr [ %28, %bb4.i.i.i.i.i.i.i.i ], [ %26, %bb2.i.i.i.i.i.i.i ]
+  %edge.sroa.0.06.i.i.i.i.i.i.i.i = phi ptr [ %27, %bb4.i.i.i.i.i.i.i.i ], [ %_3.sroa.0.0.ph.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i ]
+  %edge.sroa.3.05.i.i.i.i.i.i.i.i = phi i64 [ %_18.i.i.i.i.i.i.i.i.i.i, %bb4.i.i.i.i.i.i.i.i ], [ 0, %bb2.i.i.i.i.i.i.i ]
+  %_18.i.i.i.i.i.i.i.i.i.i = add i64 %edge.sroa.3.05.i.i.i.i.i.i.i.i, 1
+  %_10.not.i.i.i.i.i.i.i.i.i = icmp eq i64 %edge.sroa.3.05.i.i.i.i.i.i.i.i, 0
+  %..i.i.i.i.i.i.i.i.i = select i1 %_10.not.i.i.i.i.i.i.i.i.i, i64 24, i64 120
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %edge.sroa.0.06.i.i.i.i.i.i.i.i, i64 noundef %..i.i.i.i.i.i.i.i.i, i64 noundef 8) #77, !noalias !24157
+  %28 = load ptr, ptr %27, align 8, !noalias !24152, !noundef !3834
+  %.not.i.i.i.i.i.i.i.i.i.i = icmp eq ptr %28, null
+  br i1 %.not.i.i.i.i.i.i.i.i.i.i, label %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.loopexit.i.i.i.i, label %bb4.i.i.i.i.i.i.i.i
+
+_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.loopexit.i.i.i.i: ; preds = %bb4.i.i.i.i.i.i.i.i
+  %29 = icmp eq i64 %_18.i.i.i.i.i.i.i.i.i.i, 0
+  %30 = select i1 %29, i64 24, i64 120
+  br label %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i
+
+_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i: ; preds = %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.loopexit.i.i.i.i, %bb2.i.i.i.i.i.i.i
+  %edge.sroa.3.0.lcssa.i.i.i.i.i.i.i.i = phi i64 [ 24, %bb2.i.i.i.i.i.i.i ], [ %30, %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.loopexit.i.i.i.i ]
+  %edge.sroa.0.0.lcssa.i.i.i.i.i.i.i.i = phi ptr [ %_3.sroa.0.0.ph.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i ], [ %27, %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.loopexit.i.i.i.i ]
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %edge.sroa.0.0.lcssa.i.i.i.i.i.i.i.i, i64 noundef %edge.sroa.3.0.lcssa.i.i.i.i.i.i.i.i, i64 noundef 8) #77, !noalias !24157
+  br label %bb13.i.i
+
+bb4.i.i.i.i.i.i:                                  ; preds = %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i, %bb4.i.lr.ph.i.i.i.i.i
+  %_x.sroa.12.1.i.i.i.i = phi i64 [ %11, %bb4.i.lr.ph.i.i.i.i.i ], [ 0, %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i ]
+  %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i = phi i64 [ %self1.sroa.4.0.copyload.i.i.i.i, %bb4.i.lr.ph.i.i.i.i.i ], [ %self.sroa.7.0.ph.i.i.i.i.i.i.i.i.i, %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i ]
+  %self.sroa.0.0.ph.i.i.i.i11.i.i.i.i.i = phi ptr [ null, %bb4.i.lr.ph.i.i.i.i.i ], [ %self.sroa.0.0.ph.i.i.i.i.i.i.i.i.i, %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i ]
+  %31 = phi i64 [ %self1.sroa.5.0.copyload.i.i.i.i, %bb4.i.lr.ph.i.i.i.i.i ], [ %32, %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i ]
+  %32 = add i64 %31, -1
+  %.not.i.i1.i.i.i.i.i.i = icmp eq ptr %self.sroa.0.0.ph.i.i.i.i11.i.i.i.i.i, null
+  br i1 %.not.i.i1.i.i.i.i.i.i, label %bb2.i.i.i.i.i.i.i.i, label %bb7.i.i.i.i.i.i.i
+
+bb2.i.i.i.i.i.i.i.i:                              ; preds = %bb4.i.i.i.i.i.i
+  %33 = inttoptr i64 %_x.sroa.12.1.i.i.i.i to ptr
+  %34 = icmp eq i64 %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i, 0
+  br i1 %34, label %bb7.i.i.i.i.i.i.i, label %bb12.i.i.i.i.i.i.i.i.preheader
+
+bb12.i.i.i.i.i.i.i.i.preheader:                   ; preds = %bb2.i.i.i.i.i.i.i.i
+  %xtraiter = and i64 %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i, 7
+  %lcmp.mod.not = icmp eq i64 %xtraiter, 0
+  br i1 %lcmp.mod.not, label %bb12.i.i.i.i.i.i.i.i.prol.loopexit, label %bb12.i.i.i.i.i.i.i.i.prol
+
+bb12.i.i.i.i.i.i.i.i.prol:                        ; preds = %bb12.i.i.i.i.i.i.i.i.preheader, %bb12.i.i.i.i.i.i.i.i.prol
+  %self2.sroa.0.09.i.i.i.i.i.i.i.i.prol = phi ptr [ %self2.sroa.0.0.i.i.i.i.i.i.i.i.prol, %bb12.i.i.i.i.i.i.i.i.prol ], [ %33, %bb12.i.i.i.i.i.i.i.i.preheader ]
+  %self1.sroa.0.08.i.i.i.i.i.i.i.i.prol = phi i64 [ %35, %bb12.i.i.i.i.i.i.i.i.prol ], [ %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i, %bb12.i.i.i.i.i.i.i.i.preheader ]
+  %prol.iter = phi i64 [ %prol.iter.next, %bb12.i.i.i.i.i.i.i.i.prol ], [ 0, %bb12.i.i.i.i.i.i.i.i.preheader ]
+  %_19.i.i.i.i.i.i.i.i.prol = getelementptr inbounds nuw i8, ptr %self2.sroa.0.09.i.i.i.i.i.i.i.i.prol, i64 24
+  %35 = add i64 %self1.sroa.0.08.i.i.i.i.i.i.i.i.prol, -1
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.prol = load ptr, ptr %_19.i.i.i.i.i.i.i.i.prol, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %prol.iter.next = add i64 %prol.iter, 1
+  %prol.iter.cmp.not = icmp eq i64 %prol.iter.next, %xtraiter
+  br i1 %prol.iter.cmp.not, label %bb12.i.i.i.i.i.i.i.i.prol.loopexit, label %bb12.i.i.i.i.i.i.i.i.prol, !llvm.loop !24164
+
+bb12.i.i.i.i.i.i.i.i.prol.loopexit:               ; preds = %bb12.i.i.i.i.i.i.i.i.prol, %bb12.i.i.i.i.i.i.i.i.preheader
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.lcssa.unr = phi ptr [ poison, %bb12.i.i.i.i.i.i.i.i.preheader ], [ %self2.sroa.0.0.i.i.i.i.i.i.i.i.prol, %bb12.i.i.i.i.i.i.i.i.prol ]
+  %self2.sroa.0.09.i.i.i.i.i.i.i.i.unr = phi ptr [ %33, %bb12.i.i.i.i.i.i.i.i.preheader ], [ %self2.sroa.0.0.i.i.i.i.i.i.i.i.prol, %bb12.i.i.i.i.i.i.i.i.prol ]
+  %self1.sroa.0.08.i.i.i.i.i.i.i.i.unr = phi i64 [ %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i, %bb12.i.i.i.i.i.i.i.i.preheader ], [ %35, %bb12.i.i.i.i.i.i.i.i.prol ]
+  %36 = icmp ult i64 %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i, 8
+  br i1 %36, label %bb7.i.i.i.i.i.i.i, label %bb12.i.i.i.i.i.i.i.i
+
+bb12.i.i.i.i.i.i.i.i:                             ; preds = %bb12.i.i.i.i.i.i.i.i.prol.loopexit, %bb12.i.i.i.i.i.i.i.i
+  %self2.sroa.0.09.i.i.i.i.i.i.i.i = phi ptr [ %self2.sroa.0.0.i.i.i.i.i.i.i.i.7, %bb12.i.i.i.i.i.i.i.i ], [ %self2.sroa.0.09.i.i.i.i.i.i.i.i.unr, %bb12.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %self1.sroa.0.08.i.i.i.i.i.i.i.i = phi i64 [ %37, %bb12.i.i.i.i.i.i.i.i ], [ %self1.sroa.0.08.i.i.i.i.i.i.i.i.unr, %bb12.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %_19.i.i.i.i.i.i.i.i = getelementptr inbounds nuw i8, ptr %self2.sroa.0.09.i.i.i.i.i.i.i.i, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i = load ptr, ptr %_19.i.i.i.i.i.i.i.i, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.1 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.1 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.1, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.2 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i.1, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.2 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.2, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.3 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i.2, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.3 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.3, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.4 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i.3, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.4 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.4, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.5 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i.4, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.5 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.5, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.6 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i.5, i64 24
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.6 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.6, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %_19.i.i.i.i.i.i.i.i.7 = getelementptr inbounds nuw i8, ptr %self2.sroa.0.0.i.i.i.i.i.i.i.i.6, i64 24
+  %37 = add i64 %self1.sroa.0.08.i.i.i.i.i.i.i.i, -8
+  %self2.sroa.0.0.i.i.i.i.i.i.i.i.7 = load ptr, ptr %_19.i.i.i.i.i.i.i.i.7, align 8, !noalias !24158, !nonnull !3834, !noundef !3834
+  %38 = icmp eq i64 %37, 0
+  br i1 %38, label %bb7.i.i.i.i.i.i.i, label %bb12.i.i.i.i.i.i.i.i
+
+bb7.i.i.i.i.i.i.i:                                ; preds = %bb12.i.i.i.i.i.i.i.i.prol.loopexit, %bb12.i.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i.i, %bb4.i.i.i.i.i.i
+  %value.sroa.5.0.copyload.i.i.i.i.i.i.i.i = phi i64 [ %value.sroa.5.0.copyload.i.i.pre.i12.i.i.i.i.i, %bb4.i.i.i.i.i.i ], [ 0, %bb2.i.i.i.i.i.i.i.i ], [ 0, %bb12.i.i.i.i.i.i.i.i ], [ 0, %bb12.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %value.sroa.4.0.copyload.i.i.i.i.i.i.i.i = phi i64 [ %_x.sroa.12.1.i.i.i.i, %bb4.i.i.i.i.i.i ], [ 0, %bb2.i.i.i.i.i.i.i.i ], [ 0, %bb12.i.i.i.i.i.i.i.i ], [ 0, %bb12.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %value.sroa.0.0.copyload.i.i.i.i.i.i.i.i = phi ptr [ %self.sroa.0.0.ph.i.i.i.i11.i.i.i.i.i, %bb4.i.i.i.i.i.i ], [ %33, %bb2.i.i.i.i.i.i.i.i ], [ %self2.sroa.0.0.i.i.i.i.i.i.i.i.lcssa.unr, %bb12.i.i.i.i.i.i.i.i.prol.loopexit ], [ %self2.sroa.0.0.i.i.i.i.i.i.i.i.7, %bb12.i.i.i.i.i.i.i.i ]
+  %39 = getelementptr inbounds nuw i8, ptr %value.sroa.0.0.copyload.i.i.i.i.i.i.i.i, i64 10
+  %_2219.i.i.i.i.i.i.i.i.i.i = load i16, ptr %39, align 2, !noalias !24165, !noundef !3834
+  %_1820.i.i.i.i.i.i.i.i.i.i = zext i16 %_2219.i.i.i.i.i.i.i.i.i.i to i64
+  %_1621.i.i.i.i.i.i.i.i.i.i = icmp ult i64 %value.sroa.5.0.copyload.i.i.i.i.i.i.i.i, %_1820.i.i.i.i.i.i.i.i.i.i
+  br i1 %_1621.i.i.i.i.i.i.i.i.i.i, label %bb12.i.i.i.i.i.i.i.i.i.i, label %bb13.i.i.i.i.i.i.i.i.i.i
+
+bb13.i.i.i.i.i.i.i.i.i.i:                         ; preds = %bb7.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i.i.i.i
+  %edge.sroa.0.023.i.i.i.i.i.i.i.i.i.i = phi ptr [ %40, %bb7.i.i.i.i.i.i.i.i.i.i ], [ %value.sroa.0.0.copyload.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i ]
+  %edge.sroa.5.022.i.i.i.i.i.i.i.i.i.i = phi i64 [ %_18.i.i.i.i.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i.i.i.i ], [ %value.sroa.4.0.copyload.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i ]
+  %40 = load ptr, ptr %edge.sroa.0.023.i.i.i.i.i.i.i.i.i.i, align 8, !noalias !24175, !noundef !3834
+  %.not.i.i.i.i.i.i.i.i.i.i.i.i = icmp eq ptr %40, null
+  br i1 %.not.i.i.i.i.i.i.i.i.i.i.i.i, label %bb3.i.i.i.i.i.i.i.i.i, label %bb7.i.i.i.i.i.i.i.i.i.i
+
+bb12.loopexit.i.i.i.i.i.i.i.i.i.i:                ; preds = %bb7.i.i.i.i.i.i.i.i.i.i
+  %_20.i.i.i.i.i.i.i.i.i.i.i.i = zext i16 %_22.i.i.i.i.i.i.i.i.i.i.i.i to i64
+  br label %bb12.i.i.i.i.i.i.i.i.i.i
+
+bb12.i.i.i.i.i.i.i.i.i.i:                         ; preds = %bb12.loopexit.i.i.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i
+  %edge.sroa.8.0.lcssa.i.i.i.i.i.i.i.i.i.i = phi i64 [ %value.sroa.5.0.copyload.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i ], [ %_20.i.i.i.i.i.i.i.i.i.i.i.i, %bb12.loopexit.i.i.i.i.i.i.i.i.i.i ]
+  %edge.sroa.5.0.lcssa.i.i.i.i.i.i.i.i.i.i = phi i64 [ %value.sroa.4.0.copyload.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i ], [ %_18.i.i.i.i.i.i.i.i.i.i.i.i, %bb12.loopexit.i.i.i.i.i.i.i.i.i.i ]
+  %edge.sroa.0.0.lcssa.i.i.i.i.i.i.i.i.i.i = phi ptr [ %value.sroa.0.0.copyload.i.i.i.i.i.i.i.i, %bb7.i.i.i.i.i.i.i ], [ %40, %bb12.loopexit.i.i.i.i.i.i.i.i.i.i ]
+  %41 = icmp eq i64 %edge.sroa.5.0.lcssa.i.i.i.i.i.i.i.i.i.i, 0
+  br i1 %41, label %bb2.i.i.i.i.i.i.i.i.i.i.i, label %bb3.i.i.i.i.i.i.i.i.i.i.i
+
+bb2.i.i.i.i.i.i.i.i.i.i.i:                        ; preds = %bb12.i.i.i.i.i.i.i.i.i.i
+  %_11.i.i.i.i.i.i.i.i.i.i.i = add nuw nsw i64 %edge.sroa.8.0.lcssa.i.i.i.i.i.i.i.i.i.i, 1
+  br label %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i
+
+bb3.i.i.i.i.i.i.i.i.i.i.i:                        ; preds = %bb12.i.i.i.i.i.i.i.i.i.i
+  %_20.i.i.i.i.i.i.i.i.i.i.i = icmp samesign ult i64 %edge.sroa.8.0.lcssa.i.i.i.i.i.i.i.i.i.i, 11
+  tail call void @llvm.assume(i1 %_20.i.i.i.i.i.i.i.i.i.i.i)
+  %42 = getelementptr i8, ptr %edge.sroa.0.0.lcssa.i.i.i.i.i.i.i.i.i.i, i64 32
+  %self9.i.i.i.i.i.i.i.i.i.i.i = getelementptr [8 x i8], ptr %42, i64 %edge.sroa.8.0.lcssa.i.i.i.i.i.i.i.i.i.i
+  %xtraiter38 = and i64 %edge.sroa.5.0.lcssa.i.i.i.i.i.i.i.i.i.i, 7
+  %lcmp.mod39.not = icmp eq i64 %xtraiter38, 0
+  br i1 %lcmp.mod39.not, label %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit, label %bb6.i.i.i.i.i.i.i.i.i.i.i.prol
+
+bb6.i.i.i.i.i.i.i.i.i.i.i.prol:                   ; preds = %bb3.i.i.i.i.i.i.i.i.i.i.i, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol
+  %node.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.prol = phi ptr [ %_29.i.i.i.i.i.i.i.i.i.i.i.prol, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol ], [ %self9.i.i.i.i.i.i.i.i.i.i.i, %bb3.i.i.i.i.i.i.i.i.i.i.i ]
+  %self1.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.prol = phi i64 [ %self1.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.prol, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol ], [ %edge.sroa.5.0.lcssa.i.i.i.i.i.i.i.i.i.i, %bb3.i.i.i.i.i.i.i.i.i.i.i ]
+  %prol.iter40 = phi i64 [ %prol.iter40.next, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol ], [ 0, %bb3.i.i.i.i.i.i.i.i.i.i.i ]
+  %self1.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.prol = add i64 %self1.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.prol, -1
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.prol = load ptr, ptr %node.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.prol, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.prol = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.prol, i64 24
+  %prol.iter40.next = add i64 %prol.iter40, 1
+  %prol.iter40.cmp.not = icmp eq i64 %prol.iter40.next, %xtraiter38
+  br i1 %prol.iter40.cmp.not, label %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit, label %bb6.i.i.i.i.i.i.i.i.i.i.i.prol, !llvm.loop !24184
+
+bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit:          ; preds = %bb6.i.i.i.i.i.i.i.i.i.i.i.prol, %bb3.i.i.i.i.i.i.i.i.i.i.i
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.lcssa.unr = phi ptr [ poison, %bb3.i.i.i.i.i.i.i.i.i.i.i ], [ %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.prol, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol ]
+  %node.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.unr = phi ptr [ %self9.i.i.i.i.i.i.i.i.i.i.i, %bb3.i.i.i.i.i.i.i.i.i.i.i ], [ %_29.i.i.i.i.i.i.i.i.i.i.i.prol, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol ]
+  %self1.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.unr = phi i64 [ %edge.sroa.5.0.lcssa.i.i.i.i.i.i.i.i.i.i, %bb3.i.i.i.i.i.i.i.i.i.i.i ], [ %self1.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.prol, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol ]
+  %43 = icmp ult i64 %edge.sroa.5.0.lcssa.i.i.i.i.i.i.i.i.i.i, 8
+  br i1 %43, label %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i, label %bb6.i.i.i.i.i.i.i.i.i.i.i
+
+bb6.i.i.i.i.i.i.i.i.i.i.i:                        ; preds = %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit, %bb6.i.i.i.i.i.i.i.i.i.i.i
+  %node.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i = phi ptr [ %_29.i.i.i.i.i.i.i.i.i.i.i.7, %bb6.i.i.i.i.i.i.i.i.i.i.i ], [ %node.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.unr, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %self1.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i = phi i64 [ %self1.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.7, %bb6.i.i.i.i.i.i.i.i.i.i.i ], [ %self1.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i.unr, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i = load ptr, ptr %node.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i, i64 24
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.1 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.1 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.1, i64 24
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.2 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i.1, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.2 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.2, i64 24
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.3 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i.2, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.3 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.3, i64 24
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.4 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i.3, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.4 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.4, i64 24
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.5 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i.4, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.5 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.5, i64 24
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.6 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i.5, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %_29.i.i.i.i.i.i.i.i.i.i.i.6 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.6, i64 24
+  %self1.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.7 = add i64 %self1.sroa.0.0.in.i.i.i.i.i.i.i.i.i.i.i, -8
+  %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.7 = load ptr, ptr %_29.i.i.i.i.i.i.i.i.i.i.i.6, align 8, !noalias !24180, !nonnull !3834, !noundef !3834
+  %44 = icmp eq i64 %self1.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.7, 0
+  %_29.i.i.i.i.i.i.i.i.i.i.i.7 = getelementptr inbounds nuw i8, ptr %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.7, i64 24
+  br i1 %44, label %_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i, label %bb6.i.i.i.i.i.i.i.i.i.i.i
+
+bb7.i.i.i.i.i.i.i.i.i.i:                          ; preds = %bb13.i.i.i.i.i.i.i.i.i.i
+  %_18.i.i.i.i.i.i.i.i.i.i.i.i = add i64 %edge.sroa.5.022.i.i.i.i.i.i.i.i.i.i, 1
+  %45 = getelementptr inbounds nuw i8, ptr %edge.sroa.0.023.i.i.i.i.i.i.i.i.i.i, i64 8
+  %_22.i.i.i.i.i.i.i.i.i.i.i.i = load i16, ptr %45, align 8, !noalias !24175
+  %_10.not.i.i.i.i.i.i.i.i.i.i.i = icmp eq i64 %edge.sroa.5.022.i.i.i.i.i.i.i.i.i.i, 0
+  %..i.i.i.i.i.i.i.i.i.i.i = select i1 %_10.not.i.i.i.i.i.i.i.i.i.i.i, i64 24, i64 120
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %edge.sroa.0.023.i.i.i.i.i.i.i.i.i.i, i64 noundef %..i.i.i.i.i.i.i.i.i.i.i, i64 noundef 8) #77, !noalias !24185
+  %46 = getelementptr inbounds nuw i8, ptr %40, i64 10
+  %_22.i.i.i.i.i.i.i.i.i.i = load i16, ptr %46, align 2, !noalias !24165, !noundef !3834
+  %_16.i.i.i.i.i.i.i.i.i.i = icmp ult i16 %_22.i.i.i.i.i.i.i.i.i.i.i.i, %_22.i.i.i.i.i.i.i.i.i.i
+  br i1 %_16.i.i.i.i.i.i.i.i.i.i, label %bb12.loopexit.i.i.i.i.i.i.i.i.i.i, label %bb13.i.i.i.i.i.i.i.i.i.i
+
+bb3.i.i.i.i.i.i.i.i.i:                            ; preds = %bb13.i.i.i.i.i.i.i.i.i.i
+  %_10.not.i14.i.i.i.i.i.i.i.i.i.i = icmp eq i64 %edge.sroa.5.022.i.i.i.i.i.i.i.i.i.i, 0
+  %..i15.i.i.i.i.i.i.i.i.i.i = select i1 %_10.not.i14.i.i.i.i.i.i.i.i.i.i, i64 24, i64 120
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %edge.sroa.0.023.i.i.i.i.i.i.i.i.i.i, i64 noundef %..i15.i.i.i.i.i.i.i.i.i.i, i64 noundef 8) #77, !noalias !24185
+; invoke core::option::unwrap_failed
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core6option13unwrap_failed(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_9802629908ca7f9d4bdceb17acc08267) #78
+          to label %.noexc.i.i.i.i.i.i.i.i unwind label %cleanup.i.i.i.i.i.i.i.i, !noalias !24186
+
+.noexc.i.i.i.i.i.i.i.i:                           ; preds = %bb3.i.i.i.i.i.i.i.i.i
+  unreachable
+
+cleanup.i.i.i.i.i.i.i.i:                          ; preds = %bb3.i.i.i.i.i.i.i.i.i
+  %47 = landingpad { ptr, i32 }
+          cleanup
+  tail call void @llvm.trap()
+  unreachable
+
+_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB7_7set_val9SetValZSTE10dying_nextCseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i: ; preds = %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit, %bb6.i.i.i.i.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i.i.i.i.i
+  %self.sroa.7.0.ph.i.i.i.i.i.i.i.i.i = phi i64 [ %_11.i.i.i.i.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i.i.i.i.i ], [ 0, %bb6.i.i.i.i.i.i.i.i.i.i.i ], [ 0, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit ]
+  %self.sroa.0.0.ph.i.i.i.i.i.i.i.i.i = phi ptr [ %edge.sroa.0.0.lcssa.i.i.i.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i.i.i.i.i ], [ %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.lcssa.unr, %bb6.i.i.i.i.i.i.i.i.i.i.i.prol.loopexit ], [ %node.sroa.0.0.i.i.i.i.i.i.i.i.i.i.i.7, %bb6.i.i.i.i.i.i.i.i.i.i.i ]
+  %48 = icmp eq i64 %32, 0
+  br i1 %48, label %bb2.i.i.i.i.i.i.i, label %bb4.i.i.i.i.i.i
+
+bb13.i.i:                                         ; preds = %_RINvMsj_NtNtNtCsc70TAahYccp_5alloc11collections5btree8navigateINtNtB8_4node6HandleINtB11_7NodeRefNtNtB11_6marker5DyingNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context15JsonLdContainerNtNtB8_7set_val9SetValZSTNtB1z_4LeafENtB1z_4EdgeE16deallocating_endNtNtBc_5alloc6GlobalECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i, %bb14.i.i
+  %49 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 24
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24187)
+  %50 = load i64, ptr %49, align 8, !range !3851, !alias.scope !24190, !noundef !3834
+  %51 = icmp eq i64 %50, -1
+  br i1 %51, label %bb12.i.i, label %bb2.i34.i.i
+
+bb2.i34.i.i:                                      ; preds = %bb13.i.i
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24191)
+  %52 = icmp eq i64 %50, 0
+  br i1 %52, label %bb12.i.i, label %bb2.i.i.i4.i.i.i35.i.i
+
+bb2.i.i.i4.i.i.i35.i.i:                           ; preds = %bb2.i34.i.i
+  %53 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 32
+  %_1.val1.i.i36.i.i = load ptr, ptr %53, align 8, !alias.scope !24194, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i36.i.i, i64 noundef %50, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24194
+  br label %bb12.i.i
+
+bb12.i.i:                                         ; preds = %bb2.i.i.i4.i.i.i35.i.i, %bb2.i34.i.i, %bb13.i.i
+  %54 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 48
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24195)
+  %55 = load i64, ptr %54, align 8, !range !3851, !alias.scope !24198, !noundef !3834
+  %56 = icmp eq i64 %55, -1
+  br i1 %56, label %bb11.i.i, label %bb2.i42.i.i
+
+bb2.i42.i.i:                                      ; preds = %bb12.i.i
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24199)
+  %57 = icmp eq i64 %55, 0
+  br i1 %57, label %bb11.i.i, label %bb2.i.i.i4.i.i.i43.i.i
+
+bb2.i.i.i4.i.i.i43.i.i:                           ; preds = %bb2.i42.i.i
+  %58 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 56
+  %_1.val1.i.i44.i.i = load ptr, ptr %58, align 8, !alias.scope !24202, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i44.i.i, i64 noundef %55, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24202
+  br label %bb11.i.i
+
+bb11.i.i:                                         ; preds = %bb2.i.i.i4.i.i.i43.i.i, %bb2.i42.i.i, %bb12.i.i
+  %59 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 144
+  %60 = load i8, ptr %59, align 8, !range !14120, !alias.scope !24203, !noundef !3834
+  %61 = icmp eq i8 %60, -1
+  br i1 %61, label %bb10.i.i, label %bb2.i47.i.i
+
+bb2.i47.i.i:                                      ; preds = %bb11.i.i
+; invoke core::ptr::drop_glue::<purrdf_lex::json::value::Value>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfu9gKZjdDn1_10purrdf_lex4json5value5ValueECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull align 8 dereferenceable(32) %59)
+          to label %bb10.i.i unwind label %cleanup6.i.i
+
+bb2.i50.i.i:                                      ; preds = %cleanup6.i.i
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24206)
+  %62 = icmp eq i64 %66, 0
+  br i1 %62, label %bb2.i.i, label %bb2.i.i.i4.i.i.i51.i.i
+
+bb2.i.i.i4.i.i.i51.i.i:                           ; preds = %bb2.i50.i.i
+  %63 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 80
+  %_1.val1.i.i52.i.i = load ptr, ptr %63, align 8, !alias.scope !24209, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i52.i.i, i64 noundef %66, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24212
+  br label %bb2.i.i
+
+cleanup6.i.i:                                     ; preds = %bb2.i47.i.i
+  %64 = landingpad { ptr, i32 }
+          cleanup
+  %65 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 72
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24213)
+  %66 = load i64, ptr %65, align 8, !range !3851, !alias.scope !24214, !noundef !3834
+  %67 = icmp eq i64 %66, -1
+  br i1 %67, label %bb2.i.i, label %bb2.i50.i.i
+
+bb10.i.i:                                         ; preds = %bb2.i47.i.i, %bb11.i.i
+  %68 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 72
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24215)
+  %69 = load i64, ptr %68, align 8, !range !3851, !alias.scope !24218, !noundef !3834
+  %70 = icmp eq i64 %69, -1
+  br i1 %70, label %_RNvXNvMsT_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB8_6HandleINtB8_7NodeRefNtNtB8_6marker5DyingpppENtB1p_2KVE12drop_key_valINtB2_7DropperNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context20JsonLdTermDefinitionENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit, label %bb2.i54.i.i
+
+bb2.i54.i.i:                                      ; preds = %bb10.i.i
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24219)
+  %71 = icmp eq i64 %69, 0
+  br i1 %71, label %_RNvXNvMsT_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB8_6HandleINtB8_7NodeRefNtNtB8_6marker5DyingpppENtB1p_2KVE12drop_key_valINtB2_7DropperNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context20JsonLdTermDefinitionENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit, label %bb2.i.i.i4.i.i.i55.i.i
+
+bb2.i.i.i4.i.i.i55.i.i:                           ; preds = %bb2.i54.i.i
+  %72 = getelementptr inbounds nuw i8, ptr %_1.0.val, i64 80
+  %_1.val1.i.i56.i.i = load ptr, ptr %72, align 8, !alias.scope !24222, !nonnull !3834, !noundef !3834
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i56.i.i, i64 noundef %69, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !24223
+  br label %_RNvXNvMsT_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB8_6HandleINtB8_7NodeRefNtNtB8_6marker5DyingpppENtB1p_2KVE12drop_key_valINtB2_7DropperNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context20JsonLdTermDefinitionENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit
+
+bb2.i.i:                                          ; preds = %cleanup6.i.i, %bb2.i.i.i4.i.i.i51.i.i, %bb2.i50.i.i
+  resume { ptr, i32 } %64
+
+_RNvXNvMsT_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB8_6HandleINtB8_7NodeRefNtNtB8_6marker5DyingpppENtB1p_2KVE12drop_key_valINtB2_7DropperNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context20JsonLdTermDefinitionENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit: ; preds = %bb10.i.i, %bb2.i54.i.i, %bb2.i.i.i4.i.i.i55.i.i
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNvMsT_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtBK_6HandleINtBK_7NodeRefNtNtBK_6marker5DyingpppENtB21_2KVE12drop_key_val7DropperNtNtNtNtCseTXRsCekdKT_10purrdf_rdf13native_codecs6jsonld7context20JsonLdTermDefinitionEECseY6IX0djbTh_13purrdf_native:
+.Lfunc_begin438:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception438
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	pushq	%rax
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	(%rdi), %rsi
+	movq	%rdi, %rbx
+	cmpq	$-1, %rsi
+	je	.LBB818_3
+	testq	%rsi, %rsi
+	je	.LBB818_3
+	movq	8(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB818_3:
+	movq	120(%rbx), %rsi
+	movabsq	$-9223372036854775804, %rax
+	cmpq	%rax, %rsi
+	jl	.LBB818_5
+	leaq	1(%rsi), %rax
+	cmpq	$2, %rax
+	jae	.LBB818_59
+.LBB818_5:
+	movq	96(%rbx), %rsi
+	testq	%rsi, %rsi
+	jle	.LBB818_7
+.LBB818_6:
+	movq	104(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB818_7:
+	movq	176(%rbx), %r14
+	testq	%r14, %r14
+	je	.LBB818_47
+	movq	184(%rbx), %rbp
+	movq	192(%rbx), %r12
+	movq	%rbx, (%rsp)
+	testq	%r12, %r12
+	je	.LBB818_35
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %r15
+	movl	$24, %r13d
+	xorl	%edi, %edi
+	movq	%r14, %rax
+	jmp	.LBB818_12
+	.p2align	4
+.LBB818_10:
+	incq	%rbp
+	decq	%r12
+	movl	$0, %eax
+	movq	%r14, %rdi
+	je	.LBB818_41
+.LBB818_12:
+	testq	%rdi, %rdi
+	je	.LBB818_15
+	movzwl	10(%rdi), %ecx
+	cmpq	%rcx, %rbp
+	jae	.LBB818_24
+.LBB818_14:
+	movq	%rax, %rbx
+	movq	%rdi, %r14
+	jmp	.LBB818_26
+	.p2align	4
+.LBB818_15:
+	testq	%rbp, %rbp
+	je	.LBB818_20
+	movq	%rbp, %rcx
+	andq	$7, %rcx
+	movq	%rax, %rdi
+	je	.LBB818_21
+	xorl	%edx, %edx
+	.p2align	4
+.LBB818_18:
+	movq	24(%rdi), %rdi
+	incq	%rdx
+	cmpq	%rdx, %rcx
+	jne	.LBB818_18
+	movq	%rbp, %rax
+	subq	%rdx, %rax
+	cmpq	$8, %rbp
+	jae	.LBB818_22
+	jmp	.LBB818_23
+.LBB818_20:
+	movq	%rax, %rdi
+	jmp	.LBB818_23
+.LBB818_21:
+	movq	%rbp, %rax
+	cmpq	$8, %rbp
+	jb	.LBB818_23
+	.p2align	4
+.LBB818_22:
+	movq	24(%rdi), %rcx
+	addq	$-8, %rax
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rdi
+	jne	.LBB818_22
+.LBB818_23:
+	xorl	%ebp, %ebp
+	xorl	%eax, %eax
+	movzwl	10(%rdi), %ecx
+	cmpq	%rcx, %rbp
+	jb	.LBB818_14
+	.p2align	4
+.LBB818_24:
+	movq	(%rdi), %r14
+	testq	%r14, %r14
+	je	.LBB818_61
+	movzwl	8(%rdi), %ebp
+	testq	%rax, %rax
+	movl	$120, %esi
+	movl	$8, %edx
+	leaq	1(%rax), %rbx
+	cmoveq	%r13, %rsi
+	callq	*%r15
+	movq	%r14, %rdi
+	movq	%rbx, %rax
+	cmpw	10(%r14), %bp
+	jae	.LBB818_24
+.LBB818_26:
+	testq	%rbx, %rbx
+	je	.LBB818_10
+	leaq	32(%r14,%rbp,8), %rax
+	movq	%rbx, %rcx
+	andq	$7, %rcx
+	je	.LBB818_31
+	xorl	%edx, %edx
+	.p2align	4
+.LBB818_29:
+	movq	(%rax), %r14
+	incq	%rdx
+	leaq	24(%r14), %rax
+	cmpq	%rdx, %rcx
+	jne	.LBB818_29
+	movq	%rbx, %rcx
+	subq	%rdx, %rcx
+	cmpq	$8, %rbx
+	jb	.LBB818_32
+	.p2align	4
+.LBB818_33:
+	movq	(%rax), %rax
+	addq	$-8, %rcx
+	movq	24(%rax), %rax
+	movq	24(%rax), %rax
+	movq	24(%rax), %rax
+	movq	24(%rax), %rax
+	movq	24(%rax), %rax
+	movq	24(%rax), %rax
+	movq	24(%rax), %r14
+	leaq	24(%r14), %rax
+	jne	.LBB818_33
+.LBB818_32:
+	xorl	%ebp, %ebp
+	decq	%r12
+	movl	$0, %eax
+	movq	%r14, %rdi
+	jne	.LBB818_12
+	jmp	.LBB818_41
+	.p2align	4
+.LBB818_31:
+	movq	%rbx, %rcx
+	cmpq	$8, %rbx
+	jae	.LBB818_33
+	jmp	.LBB818_32
+.LBB818_35:
+	testq	%rbp, %rbp
+	je	.LBB818_41
+	movq	%rbp, %rax
+	andq	$7, %rax
+	je	.LBB818_60
+	xorl	%ecx, %ecx
+	.p2align	4
+.LBB818_38:
+	movq	24(%r14), %r14
+	incq	%rcx
+	cmpq	%rcx, %rax
+	jne	.LBB818_38
+	movq	%rbp, %rax
+	subq	%rcx, %rax
+	cmpq	$8, %rbp
+	jb	.LBB818_41
+	.p2align	4
+.LBB818_40:
+	movq	24(%r14), %rcx
+	addq	$-8, %rax
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %rcx
+	movq	24(%rcx), %r14
+	jne	.LBB818_40
+.LBB818_41:
+	movq	(%r14), %rax
+	testq	%rax, %rax
+	je	.LBB818_45
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %r12
+	movl	$24, %r15d
+	xorl	%ebx, %ebx
+	.p2align	4
+.LBB818_43:
+	subq	$1, %rbx
+	movl	$120, %esi
+	movl	$8, %edx
+	movq	%r14, %rdi
+	movq	%rax, %r14
+	cmovbq	%r15, %rsi
+	callq	*%r12
+	movq	(%r14), %rax
+	testq	%rax, %rax
+	jne	.LBB818_43
+	testq	%rbx, %rbx
+	movl	$24, %eax
+	movl	$120, %esi
+	cmoveq	%rax, %rsi
+	jmp	.LBB818_46
+.LBB818_45:
+	movl	$24, %esi
+.LBB818_46:
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$8, %edx
+	movq	%r14, %rdi
+	callq	*%rax
+	movq	(%rsp), %rbx
+.LBB818_47:
+	movq	24(%rbx), %rsi
+	cmpq	$-1, %rsi
+	je	.LBB818_50
+	testq	%rsi, %rsi
+	je	.LBB818_50
+	movq	32(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB818_50:
+	movq	48(%rbx), %rsi
+	cmpq	$-1, %rsi
+	je	.LBB818_53
+	testq	%rsi, %rsi
+	je	.LBB818_53
+	movq	56(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB818_53:
+	cmpb	$-1, 144(%rbx)
+	je	.LBB818_55
+.Ltmp5515:
+	leaq	144(%rbx), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfu9gKZjdDn1_10purrdf_lex4json5value5ValueECseY6IX0djbTh_13purrdf_native
+.Ltmp5516:
+.LBB818_55:
+	movq	72(%rbx), %rsi
+	cmpq	$-1, %rsi
+	je	.LBB818_58
+	testq	%rsi, %rsi
+	je	.LBB818_58
+	movq	80(%rbx), %rdi
+	movl	$1, %edx
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	jmpq	*_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+.LBB818_58:
+	.cfi_def_cfa_offset 64
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB818_59:
+	.cfi_def_cfa_offset 64
+	movq	128(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+	movq	96(%rbx), %rsi
+	testq	%rsi, %rsi
+	jg	.LBB818_6
+	jmp	.LBB818_7
+.LBB818_60:
+	movq	%rbp, %rax
+	cmpq	$8, %rbp
+	jae	.LBB818_40
+	jmp	.LBB818_41
+.LBB818_61:
+	testq	%rax, %rax
+	movl	$24, %eax
+	movl	$120, %esi
+	movl	$8, %edx
+	cmoveq	%rax, %rsi
+	callq	*%r15
+.Ltmp5512:
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13unwrap_failed@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_9802629908ca7f9d4bdceb17acc08267(%rip), %rdi
+	callq	*%rax
+.Ltmp5513:
+	ud2
+.LBB818_63:
+.Ltmp5517:
+	movq	72(%rbx), %rsi
+	movq	%rax, %r14
+	cmpq	$-1, %rsi
+	je	.LBB818_65
+	movq	%rbx, %rax
+	testq	%rsi, %rsi
+	jne	.LBB818_66
+.LBB818_65:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB818_66:
+	movq	80(%rax), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB818_67:
+.Ltmp5514:
+	ud2
+.Lfunc_end818:

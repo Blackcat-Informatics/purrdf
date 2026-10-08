@@ -1,0 +1,1 @@
+Initial retrieval session36817 exit1: gh refused terminal escape sequences fetching first job log; four ZIP verifications/extractions already passed. Corrected session86707 exit0: gh api --allow-escape-sequences retrieved four full logs. Original diagnostic: the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway.

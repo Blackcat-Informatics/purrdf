@@ -1,0 +1,50 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+   Compiling syn v2.0.118
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/jsonschema)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf)
+error[E0308]: mismatched types
+    --> crates/rdf/src/projections/dataset_description.rs:870:60
+     |
+ 870 |             expr: Expression::FunctionCall(Function::Rand, Vec::new()),
+     |                   ------------------------                 ^^^^^^^^^^ expected `Args<Expression>`, found `Vec<_>`
+     |                   |
+     |                   arguments to this enum variant are incorrect
+     |
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<_>`
+note: tuple variant defined here
+    --> crates/sparql-algebra/src/algebra.rs:1275:5
+     |
+1275 |     FunctionCall(Function, Args<Self>),
+     |     ^^^^^^^^^^^^
+help: call `Into::into` on this expression to convert `Vec<_>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+ 870 |             expr: Expression::FunctionCall(Function::Rand, Vec::new().into()),
+     |                                                                      +++++++
+
+error[E0308]: mismatched types
+    --> crates/rdf/src/projections/dataset_description.rs:912:17
+     |
+ 908 |             expr: Expression::FunctionCall(
+     |                   ------------------------ arguments to this enum variant are incorrect
+...
+ 912 |                 Vec::new(),
+     |                 ^^^^^^^^^^ expected `Args<Expression>`, found `Vec<_>`
+     |
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<_>`
+note: tuple variant defined here
+    --> crates/sparql-algebra/src/algebra.rs:1275:5
+     |
+1275 |     FunctionCall(Function, Args<Self>),
+     |     ^^^^^^^^^^^^
+help: call `Into::into` on this expression to convert `Vec<_>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+ 912 |                 Vec::new().into(),
+     |                           +++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-rdf` (lib test) due to 2 previous errors

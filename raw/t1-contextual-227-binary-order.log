@@ -1,0 +1,50 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `release` profile [optimized] target(s) in 1m 15s
+     Running tests/rdflib_contextual.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-eval/d5f0dc348460eb34/out/rdflib_contextual-d5f0dc348460eb34)
+
+running 12 tests
+context width=1 levels=8 source_bytes=266 nodes=317 retained=47235
+test ordinary_transformation_admission_rejects_contextual_applications ... ok
+context width=1 levels=16 source_bytes=498 nodes=613 retained=91115
+test successful_optional_rhs_is_invoked_once_per_duplicate_driver ... ok
+test contextual_service_uses_serializable_protocol_algebra_and_shared_source ... ok
+optional levels=16 nodes=1656 bytes=223489
+test configured_relations_receive_the_context_in_the_existing_call_home ... ok
+context width=1 levels=32 source_bytes=962 nodes=1205 retained=178875
+test initial_terms_keep_rdf12_identity_and_hygienic_aliases ... ok
+test contextual_blank_identity_is_shared_by_label_and_fresh_without_a_label ... ok
+context width=4 levels=8 source_bytes=671 nodes=973 retained=132884
+optional levels=32 nodes=3288 bytes=443153
+context width=4 levels=16 source_bytes=1263 nodes=1885 retained=256652
+test governed_publication_preserves_duplicate_columns_and_certified_rows ... ok
+context width=4 levels=32 source_bytes=2447 nodes=3709 retained=504188
+optional levels=64 nodes=6552 bytes=882481
+context width=16 levels=8 source_bytes=2399 nodes=3529 retained=477344
+context width=16 levels=16 source_bytes=4527 nodes=6841 retained=922760
+optional levels=128 nodes=13080 bytes=1761137
+test contextual_application_keeps_one_optional_condition_and_rhs ... ok
+context width=16 levels=32 source_bytes=8783 nodes=13465 retained=1813592
+test contextual_representation_scales_with_nodes_and_context_width ... ok
+group certificate cutoffs=135 computing_trips=38 query=SELECT (SUM(?tick) AS ?input) (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) }
+test production_entry_executes_nested_exists_on_an_admitted_stack ... ok
+group certificate cutoffs=206 computing_trips=53 query=SELECT ?group (SUM(?tick) AS ?input) (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { VALUES ?group { 0 1 0 } BIND(<http://example.org/counter>(1) AS ?tick) } GROUP BY ?group
+group certificate cutoffs=80 computing_trips=0 query=SELECT (COUNT(DISTINCT *) AS ?n) WHERE { VALUES ?x { 1 2 } BIND(0 AS ?x) }
+
+thread 'contextual_matrix' (2828192) panicked at crates/sparql-eval/tests/rdflib_contextual.rs:190:21:
+assertion `left == right` failed: nonlazy-join-limit-stop-unbound: every successful RHS runs once
+  left: "3"
+ right: "1"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test contextual_matrix ... FAILED
+group certificate cutoffs=306 computing_trips=0 query=SELECT (SUM(IF(EXISTS { VALUES ?probe { 1 2 } FILTER(?probe = ?x) }, 1, 0)) AS ?n) WHERE { VALUES ?x { 1 2 3 } }
+test grouped_continuation_withholds_incomplete_accumulators_at_every_fuel_cutoff ... ok
+
+failures:
+
+failures:
+    contextual_matrix
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test rdflib_contextual`

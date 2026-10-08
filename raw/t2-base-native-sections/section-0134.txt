@@ -1,0 +1,94 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-base-native-ir/qualification_454_native_cost.purrdf_sparql_eval-cc7dc99fbe55f667.purrdf_sparql_eval.8896fb09dcde828-cgu.0.rcgu.o.rcgu.ll:523254
+; purrdf_sparql_eval::modifier::eval_graph_with::<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}
+define internal void @_RNCINvNtCsJrn9KBnP7g_18purrdf_sparql_eval8modifier15eval_graph_withNtNtNtCsdODLh8rk10b_11purrdf_core2ir7dataset10RdfDatasetQINtNtB6_4eval11RowConsumerB13_EE0B6_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([96 x i8]) align 8 captures(none) dereferenceable(96) initializes((0, 9)) %0, ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(16) %1, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(32) %2, ptr noalias nofree noundef align 16 dereferenceable(944) %3) unnamed_addr #1 !guid !64170 {
+  %5 = alloca [96 x i8], align 8
+  %6 = getelementptr inbounds nuw i8, ptr %3, i64 664
+  %7 = load ptr, ptr %1, align 8, !nonnull !1680, !align !16508, !noundef !1680
+  call void @llvm.lifetime.start.p0(ptr nonnull %5)
+  %8 = getelementptr inbounds nuw i8, ptr %1, i64 8
+  %9 = load ptr, ptr %8, align 8, !nonnull !1680, !align !1797, !noundef !1680
+  %10 = load <2 x i32>, ptr %6, align 8
+  %11 = load <2 x i32>, ptr %7, align 4
+  store <2 x i32> %11, ptr %6, align 8
+  %12 = load ptr, ptr %9, align 8, !nonnull !1680, !align !1797, !noundef !1680
+; call <&mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset> as purrdf_sparql_eval::eval::RowDelivery<purrdf_core::ir::dataset::RdfDataset>>::deliver
+  call fastcc void @_RNvXsa_NtCsJrn9KBnP7g_18purrdf_sparql_eval4evalQINtB5_11RowConsumerNtNtNtCsdODLh8rk10b_11purrdf_core2ir7dataset10RdfDatasetEINtB5_11RowDeliveryB13_E7deliverB7_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(96) %5, ptr nonnull %12, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(32) %2, ptr noalias nofree noundef align 16 dereferenceable(944) %3)
+  store <2 x i32> %10, ptr %6, align 8
+  %13 = load i64, ptr %5, align 8, !range !2719, !noundef !1680
+  %14 = icmp eq i64 %13, -1
+  br i1 %14, label %16, label %15
+
+15:                                               ; preds = %4
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(96) %0, ptr noundef nonnull align 8 dereferenceable(96) %5, i64 96, i1 false)
+  br label %21
+
+16:                                               ; preds = %4
+  %17 = load ptr, ptr %9, align 8, !nonnull !1680, !align !1797, !noundef !1680
+  %18 = getelementptr inbounds nuw i8, ptr %17, i64 16
+  %19 = load i8, ptr %18, align 8, !range !1787, !noundef !1680
+  %20 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i8 %19, ptr %20, align 8
+  store i64 -1, ptr %0, align 8
+  br label %21
+
+21:                                               ; preds = %16, %15
+  call void @llvm.lifetime.end.p0(ptr nonnull %5)
+  ret void
+}
+
+ASSEMBLY
+_RNCINvNtCsJrn9KBnP7g_18purrdf_sparql_eval8modifier15eval_graph_withNtNtNtCsdODLh8rk10b_11purrdf_core2ir7dataset10RdfDatasetQINtNtB6_4eval11RowConsumerB13_EE0B6_:
+.Lfunc_begin1245:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	subq	$104, %rsp
+	.cfi_def_cfa_offset 144
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	(%rsi), %rax
+	movq	8(%rsi), %r15
+	movq	664(%rcx), %r12
+	movq	%rdi, %rbx
+	leaq	8(%rsp), %rdi
+	movq	%rcx, %r14
+	movq	(%rax), %rax
+	movq	%rax, 664(%rcx)
+	movq	(%r15), %rsi
+	callq	_RNvXsa_NtCsJrn9KBnP7g_18purrdf_sparql_eval4evalQINtB5_11RowConsumerNtNtNtCsdODLh8rk10b_11purrdf_core2ir7dataset10RdfDatasetEINtB5_11RowDeliveryB13_E7deliverB7_
+	cmpq	$-1, 8(%rsp)
+	movq	%r12, 664(%r14)
+	je	.LBB1245_2
+	vmovups	40(%rsp), %zmm1
+	vmovups	8(%rsp), %zmm0
+	vmovups	%zmm1, 32(%rbx)
+	vmovups	%zmm0, (%rbx)
+	jmp	.LBB1245_3
+.LBB1245_2:
+	movq	(%r15), %rax
+	movzbl	16(%rax), %eax
+	movb	%al, 8(%rbx)
+	movq	$-1, (%rbx)
+.LBB1245_3:
+	movq	%rbx, %rax
+	addq	$104, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.Lfunc_end1245:

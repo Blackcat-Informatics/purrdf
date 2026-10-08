@@ -1,0 +1,2 @@
+Matched native proof stage: O3, ThinLTO, codegen1, strip symbols, assertions/overflow false, target-cpu native, warnings denied.
+Matched host proof stage: same settings except LTO false; pre-link body/ABI proof, not final fat-LTO identity.

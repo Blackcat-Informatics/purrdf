@@ -1,0 +1,20 @@
+Auto-merging CHANGELOG.md
+Auto-merging bindings/python/python/src/purrdf/__init__.pyi
+Auto-merging bindings/python/src/py_store/quad_store.rs
+CONFLICT (content): Merge conflict in bindings/python/src/py_store/quad_store.rs
+Auto-merging crates/sparql-eval/src/binop.rs
+Auto-merging crates/sparql-eval/src/cdt_agg.rs
+Auto-merging crates/sparql-eval/src/engine.rs
+Auto-merging crates/sparql-eval/src/eval.rs
+Auto-merging crates/sparql-eval/src/expr.rs
+Auto-merging crates/sparql-eval/src/lib.rs
+Auto-merging crates/sparql-eval/src/modifier.rs
+Auto-merging docs/CONFORMANCE.md
+CONFLICT (content): Merge conflict in docs/CONFORMANCE.md
+Auto-merging docs/book/po/zh-Hans.po
+CONFLICT (content): Merge conflict in docs/book/po/zh-Hans.po
+Auto-merging docs/book/src/sparql/querying.md
+Recorded preimage for 'bindings/python/src/py_store/quad_store.rs'
+Recorded preimage for 'docs/CONFORMANCE.md'
+Recorded preimage for 'docs/book/po/zh-Hans.po'
+Automatic merge failed; fix conflicts and then commit the result.

@@ -1,0 +1,4 @@
+14337 preservation265/copy4929/reconstruction265/exact-removal265 terminal0
+56091 complete6075 mapping/4883 groups and retained-readable/hold presence terminal0
+89132 relocation evidence copies/complete raw+294 gzip plaintext policy/size terminal0
+final actual operation-readback copies cmp terminal0

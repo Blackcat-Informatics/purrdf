@@ -1,0 +1,2945 @@
+	.att_syntax
+	.file	"regex.150a99b839c1964c-cgu.0"
+	.section	.rodata.cst32,"aM",@progbits,32
+	.p2align	5, 0x0
+.LCPI0_0:
+	.quad	0
+	.quad	8
+	.quad	0
+	.quad	42949673210
+.LCPI0_1:
+	.quad	1
+	.quad	2097152
+	.quad	1
+	.quad	10485760
+	.section	.text.unlikely._RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131,"ax",@progbits
+	.hidden	_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131
+	.globl	_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131
+	.prefalign	4, .Lfunc_end0, nop
+	.type	_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131,@function
+_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131:
+.Lfunc_begin0:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception0
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$184, %rsp
+	.cfi_def_cfa_offset 240
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	vmovaps	.LCPI0_0(%rip), %ymm0
+	vmovaps	.LCPI0_1(%rip), %ymm1
+	movq	(%rsi), %r15
+	movq	8(%rsi), %r14
+	movabsq	$144680345676153346, %rax
+	movabsq	$4311744512, %r9
+	movq	%rdi, %rbx
+	leaq	144(%rsp), %rdi
+	vmovups	%ymm0, 144(%rsp)
+	vmovups	%ymm1, 16(%rsp)
+	movq	$2, 48(%rsp)
+	movq	$2, 64(%rsp)
+	movq	$2, 80(%rsp)
+	movb	$-1, 120(%rsp)
+	movb	$0, 128(%rsp)
+	movq	%rax, 130(%rsp)
+	movb	$-1, 138(%rsp)
+	movq	%r9, 176(%rsp)
+.Ltmp0:
+	movl	$1, %edx
+	movl	$8, %ecx
+	movl	$24, %r8d
+	xorl	%esi, %esi
+	vzeroupper
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+.Ltmp1:
+	testq	%r14, %r14
+	jns	.LBB0_33
+	xorl	%edi, %edi
+.LBB0_3:
+.Ltmp2:
+	movq	_RNvNtCsc70TAahYccp_5alloc7raw_vec12handle_error@GOTPCREL(%rip), %rax
+	movq	%r14, %rsi
+	callq	*%rax
+.Ltmp3:
+	ud2
+.LBB0_33:
+	movq	152(%rsp), %rbp
+	movq	160(%rsp), %r13
+	je	.LBB0_34
+	movq	malloc@GOTPCREL(%rip), %rax
+	movq	%r14, %rdi
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB0_36
+	movq	%rax, %r12
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rsi
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rdi
+	movabsq	$-9223372036854775808, %rcx
+	movq	$-1, %r8
+	leaq	(%r14,%rax), %rdx
+	sarq	$63, %rdx
+	xorq	%rcx, %rdx
+	addq	%r14, %rax
+	cmovoq	%rdx, %rax
+	incq	%rsi
+	cmoveq	%r8, %rsi
+	addq	%r14, %rdi
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmovbq	%r8, %rdi
+	movq	%rsi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	movq	%rdi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jle	.LBB0_39
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB0_39:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB0_45
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB0_39
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rdx
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rsi
+	lock		incq	(%rax)
+	lock		addq	%r14, (%rdx)
+	movq	%r14, %rdx
+	lock		xaddq	%rdx, (%rsi)
+	leaq	(%rdx,%r14), %rax
+	sarq	$63, %rax
+	xorq	%rcx, %rax
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rcx
+	addq	%r14, %rdx
+	cmovoq	%rax, %rdx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB0_42:
+	cmpq	%rax, %rdx
+	jle	.LBB0_44
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB0_42
+.LBB0_44:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB0_45:
+	movq	memcpy@GOTPCREL(%rip), %rax
+	movq	%r12, %rdi
+	movq	%r15, %rsi
+	movq	%r14, %rdx
+	callq	*%rax
+	jmp	.LBB0_46
+.LBB0_34:
+	movl	$1, %r12d
+.LBB0_46:
+	leaq	(%r13,%r13,2), %rax
+	incq	%r13
+	movq	%r14, (%rbp,%rax,8)
+	movq	%r12, 8(%rbp,%rax,8)
+	movq	%r14, 16(%rbp,%rax,8)
+	movq	%r13, 160(%rsp)
+	vmovups	80(%rsp), %zmm1
+	vmovups	16(%rsp), %zmm0
+	vmovups	%zmm1, 64(%rbx)
+	vmovups	120(%rsp), %zmm1
+	vmovups	%zmm0, (%rbx)
+	vmovups	%zmm1, 104(%rbx)
+	addq	$184, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB0_36:
+	.cfi_def_cfa_offset 240
+	movl	$1, %edi
+	jmp	.LBB0_3
+.LBB0_5:
+.Ltmp4:
+	movq	152(%rsp), %r14
+	movq	160(%rsp), %r15
+	movq	%rax, 8(%rsp)
+	testq	%r15, %r15
+	jne	.LBB0_6
+.LBB0_18:
+	movq	144(%rsp), %rax
+	testq	%rax, %rax
+	je	.LBB0_28
+	shlq	$3, %rax
+	movabsq	$9223372036854775807, %rdx
+	leaq	(%rax,%rax,2), %rcx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	cmpq	%rdx, %rcx
+	cmovaeq	%rdx, %rcx
+	xorl	%esi, %esi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%rdx, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB0_21
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB0_21:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB0_27
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB0_21
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rsi
+	negq	%rsi
+	lock		xaddq	%rsi, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rsi
+	setns	%al
+	addq	%rdx, %rax
+	subq	%rcx, %rsi
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rsi
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB0_24:
+	cmpq	%rax, %rsi
+	jge	.LBB0_26
+	lock		cmpxchgq	%rsi, (%rcx)
+	jne	.LBB0_24
+.LBB0_26:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB0_27:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%r14, %rdi
+	callq	*%rax
+.LBB0_28:
+	movzbl	120(%rsp), %eax
+	cmpb	$-1, %al
+	je	.LBB0_32
+	cmpb	$2, %al
+	je	.LBB0_32
+	movq	96(%rsp), %rax
+	lock		decq	(%rax)
+	jne	.LBB0_32
+	leaq	96(%rsp), %rdi
+	#MEMBARRIER
+.Ltmp5:
+	movq	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcDNtNtNtCsfd4Wypy26gk_14regex_automata4util9prefilter10PrefilterIEL_E9drop_slowBN_@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Ltmp6:
+.LBB0_32:
+	movq	8(%rsp), %rdi
+	callq	_Unwind_Resume@PLT
+.LBB0_6:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rbx
+	movq	free@GOTPCREL(%rip), %rbp
+	movabsq	$9223372036854775807, %r13
+	xorl	%r12d, %r12d
+	jmp	.LBB0_7
+	.p2align	4
+.LBB0_15:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB0_16:
+	callq	*%rbp
+.LBB0_17:
+	incq	%r12
+	cmpq	%r15, %r12
+	je	.LBB0_18
+.LBB0_7:
+	leaq	(%r12,%r12,2), %rax
+	movq	(%r14,%rax,8), %rcx
+	testq	%rcx, %rcx
+	je	.LBB0_17
+	leaq	(%r14,%rax,8), %rdx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	cmpq	%r13, %rcx
+	cmovaeq	%r13, %rcx
+	xorl	%esi, %esi
+	movq	8(%rdx), %rdi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%r13, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB0_10
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB0_10:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB0_16
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB0_10
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rdx
+	setns	%al
+	addq	%r13, %rax
+	subq	%rcx, %rdx
+	cmovoq	%rax, %rdx
+	movq	(%rbx), %rax
+	.p2align	4
+.LBB0_13:
+	cmpq	%rax, %rdx
+	jge	.LBB0_15
+	lock		cmpxchgq	%rdx, (%rbx)
+	jne	.LBB0_13
+	jmp	.LBB0_15
+.LBB0_47:
+.Ltmp7:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end0:
+	.size	_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131, .Lfunc_end0-_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131
+	.cfi_endproc
+	.section	.gcc_except_table._RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table0:
+.Lexception0:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase0-.Lttbaseref0
+.Lttbaseref0:
+	.byte	1
+	.uleb128 .Lcst_end0-.Lcst_begin0
+.Lcst_begin0:
+	.uleb128 .Ltmp0-.Lfunc_begin0
+	.uleb128 .Ltmp3-.Ltmp0
+	.uleb128 .Ltmp4-.Lfunc_begin0
+	.byte	0
+	.uleb128 .Ltmp3-.Lfunc_begin0
+	.uleb128 .Ltmp5-.Ltmp3
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp5-.Lfunc_begin0
+	.uleb128 .Ltmp6-.Ltmp5
+	.uleb128 .Ltmp7-.Lfunc_begin0
+	.byte	1
+	.uleb128 .Ltmp6-.Lfunc_begin0
+	.uleb128 .Lfunc_end0-.Ltmp6
+	.byte	0
+	.byte	0
+.Lcst_end0:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase0:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsc70TAahYccp_5alloc6string6StringECs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end1, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsc70TAahYccp_5alloc6string6StringECs1O0begj5g8i_5regex,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsc70TAahYccp_5alloc6string6StringECs1O0begj5g8i_5regex:
+.Lfunc_begin1:
+	.cfi_startproc
+	movq	(%rdi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB1_10
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	movabsq	$9223372036854775807, %rdx
+	movq	8(%rdi), %rdi
+	cmpq	%rdx, %rcx
+	cmovaeq	%rdx, %rcx
+	xorl	%esi, %esi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%rdx, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB1_3
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB1_3:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB1_9
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB1_3
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rsi
+	negq	%rsi
+	lock		xaddq	%rsi, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rsi
+	setns	%al
+	addq	%rdx, %rax
+	subq	%rcx, %rsi
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rsi
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB1_6:
+	cmpq	%rax, %rsi
+	jge	.LBB1_8
+	lock		cmpxchgq	%rsi, (%rcx)
+	jne	.LBB1_6
+.LBB1_8:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB1_9:
+	jmpq	*free@GOTPCREL(%rip)
+.LBB1_10:
+	retq
+.Lfunc_end1:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsc70TAahYccp_5alloc6string6StringECs1O0begj5g8i_5regex, .Lfunc_end1-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsc70TAahYccp_5alloc6string6StringECs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131,"ax",@progbits
+	.hidden	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131
+	.globl	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131
+	.prefalign	4, .Lfunc_end2, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131:
+.Lfunc_begin2:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	pushq	%rax
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	136(%rdi), %r14
+	movq	144(%rdi), %r12
+	movabsq	$9223372036854775807, %r15
+	movq	%rdi, (%rsp)
+	testq	%r12, %r12
+	je	.LBB2_13
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rbx
+	movq	free@GOTPCREL(%rip), %rbp
+	xorl	%r13d, %r13d
+	jmp	.LBB2_2
+	.p2align	4
+.LBB2_10:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB2_11:
+	callq	*%rbp
+.LBB2_12:
+	incq	%r13
+	cmpq	%r12, %r13
+	je	.LBB2_13
+.LBB2_2:
+	leaq	(%r13,%r13,2), %rax
+	movq	(%r14,%rax,8), %rcx
+	testq	%rcx, %rcx
+	je	.LBB2_12
+	leaq	(%r14,%rax,8), %rdx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	cmpq	%r15, %rcx
+	cmovaeq	%r15, %rcx
+	xorl	%esi, %esi
+	movq	8(%rdx), %rdi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%r15, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB2_5
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB2_5:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB2_11
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB2_5
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rdx
+	setns	%al
+	addq	%r15, %rax
+	subq	%rcx, %rdx
+	cmovoq	%rax, %rdx
+	movq	(%rbx), %rax
+	.p2align	4
+.LBB2_8:
+	cmpq	%rax, %rdx
+	jge	.LBB2_10
+	lock		cmpxchgq	%rdx, (%rbx)
+	jne	.LBB2_8
+	jmp	.LBB2_10
+.LBB2_13:
+	movq	(%rsp), %rbx
+	movq	128(%rbx), %rax
+	testq	%rax, %rax
+	je	.LBB2_23
+	shlq	$3, %rax
+	leaq	(%rax,%rax,2), %rcx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	cmpq	%r15, %rcx
+	cmovaeq	%r15, %rcx
+	xorl	%edx, %edx
+	cmpq	%rcx, %rax
+	setns	%dl
+	addq	%r15, %rdx
+	subq	%rcx, %rax
+	cmovoq	%rdx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB2_16
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB2_16:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB2_22
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB2_16
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rdx
+	setns	%al
+	addq	%r15, %rax
+	subq	%rcx, %rdx
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rdx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB2_19:
+	cmpq	%rax, %rdx
+	jge	.LBB2_21
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB2_19
+.LBB2_21:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB2_22:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%r14, %rdi
+	callq	*%rax
+.LBB2_23:
+	movzbl	104(%rbx), %eax
+	cmpb	$-1, %al
+	je	.LBB2_26
+	cmpb	$2, %al
+	je	.LBB2_26
+	addq	$80, %rbx
+	movq	(%rbx), %rax
+	lock		decq	(%rax)
+	jne	.LBB2_26
+	#MEMBARRIER
+	movq	%rbx, %rdi
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	jmpq	*_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcDNtNtNtCsfd4Wypy26gk_14regex_automata4util9prefilter10PrefilterIEL_E9drop_slowBN_@GOTPCREL(%rip)
+.LBB2_26:
+	.cfi_def_cfa_offset 64
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end2:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131, .Lfunc_end2-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5error10BuildErrorECs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end3, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5error10BuildErrorECs1O0begj5g8i_5regex,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5error10BuildErrorECs1O0begj5g8i_5regex:
+.Lfunc_begin3:
+	.cfi_startproc
+	movq	(%rdi), %rcx
+	cmpq	$-2, %rcx
+	jne	.LBB3_1
+	movq	8(%rdi), %rcx
+	movabsq	$-9223372036854775807, %rdx
+	xorl	%eax, %eax
+	leaq	(%rcx,%rdx), %rsi
+	orq	$6, %rdx
+	cmpq	%rdx, %rcx
+	cmovlq	%rsi, %rax
+	testq	%rax, %rax
+	je	.LBB3_23
+	cmpq	$1, %rax
+	jne	.LBB3_26
+	movq	16(%rdi), %rcx
+	movl	$16, %eax
+	testq	%rcx, %rcx
+	jg	.LBB3_16
+	jmp	.LBB3_26
+.LBB3_1:
+	testq	%rcx, %rcx
+	je	.LBB3_26
+	movl	$8, %eax
+	cmpq	$-1, %rcx
+	jne	.LBB3_4
+	movq	8(%rdi), %rcx
+	movl	$16, %eax
+	testq	%rcx, %rcx
+	je	.LBB3_26
+.LBB3_4:
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rsi
+	movabsq	$9223372036854775807, %rdx
+	movq	(%rdi,%rax), %rdi
+	cmpq	%rdx, %rcx
+	cmovaeq	%rdx, %rcx
+	xorl	%r8d, %r8d
+	cmpq	%rcx, %rsi
+	setns	%r8b
+	addq	%rdx, %r8
+	subq	%rcx, %rsi
+	cmovoq	%r8, %rsi
+	movq	%rsi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rsi
+	jge	.LBB3_6
+	movq	%rsi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB3_6:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB3_12
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB3_6
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rsi
+	negq	%rsi
+	lock		xaddq	%rsi, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rsi
+	setns	%al
+	addq	%rdx, %rax
+	subq	%rcx, %rsi
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rsi
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB3_9:
+	cmpq	%rax, %rsi
+	jge	.LBB3_11
+	lock		cmpxchgq	%rsi, (%rcx)
+	jne	.LBB3_9
+	jmp	.LBB3_11
+.LBB3_23:
+	testq	%rcx, %rcx
+	je	.LBB3_26
+	movl	$8, %eax
+	cmpq	$-1, %rcx
+	jne	.LBB3_16
+	movq	16(%rdi), %rcx
+	movl	$16, %eax
+	testq	%rcx, %rcx
+	je	.LBB3_26
+.LBB3_16:
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rsi
+	movabsq	$9223372036854775807, %rdx
+	movq	8(%rdi,%rax), %rdi
+	cmpq	%rdx, %rcx
+	cmovaeq	%rdx, %rcx
+	xorl	%r8d, %r8d
+	cmpq	%rcx, %rsi
+	setns	%r8b
+	addq	%rdx, %r8
+	subq	%rcx, %rsi
+	cmovoq	%r8, %rsi
+	movq	%rsi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rsi
+	jge	.LBB3_18
+	movq	%rsi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB3_18:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB3_12
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB3_18
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rsi
+	negq	%rsi
+	lock		xaddq	%rsi, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rsi
+	setns	%al
+	addq	%rdx, %rax
+	subq	%rcx, %rsi
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rsi
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB3_21:
+	cmpq	%rax, %rsi
+	jge	.LBB3_11
+	lock		cmpxchgq	%rsi, (%rcx)
+	jne	.LBB3_21
+.LBB3_11:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB3_12:
+	jmpq	*free@GOTPCREL(%rip)
+.LBB3_26:
+	retq
+.Lfunc_end3:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5error10BuildErrorECs1O0begj5g8i_5regex, .Lfunc_end3-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5error10BuildErrorECs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex6ConfigECs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end4, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex6ConfigECs1O0begj5g8i_5regex,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex6ConfigECs1O0begj5g8i_5regex:
+.Lfunc_begin4:
+	.cfi_startproc
+	movzbl	104(%rdi), %eax
+	cmpb	$-1, %al
+	je	.LBB4_3
+	cmpb	$2, %al
+	je	.LBB4_3
+	addq	$80, %rdi
+	movq	(%rdi), %rax
+	lock		decq	(%rax)
+	jne	.LBB4_3
+	#MEMBARRIER
+	jmpq	*_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcDNtNtNtCsfd4Wypy26gk_14regex_automata4util9prefilter10PrefilterIEL_E9drop_slowBN_@GOTPCREL(%rip)
+.LBB4_3:
+	retq
+.Lfunc_end4:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex6ConfigECs1O0begj5g8i_5regex, .Lfunc_end4-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex6ConfigECs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text._RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex7BuilderECs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end5, nop
+	.type	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex7BuilderECs1O0begj5g8i_5regex,@function
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex7BuilderECs1O0begj5g8i_5regex:
+.Lfunc_begin5:
+	.cfi_startproc
+	movzbl	104(%rdi), %eax
+	cmpb	$-1, %al
+	je	.LBB5_3
+	cmpb	$2, %al
+	je	.LBB5_3
+	addq	$80, %rdi
+	movq	(%rdi), %rax
+	lock		decq	(%rax)
+	jne	.LBB5_3
+	#MEMBARRIER
+	jmpq	*_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcDNtNtNtCsfd4Wypy26gk_14regex_automata4util9prefilter10PrefilterIEL_E9drop_slowBN_@GOTPCREL(%rip)
+.LBB5_3:
+	retq
+.Lfunc_end5:
+	.size	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex7BuilderECs1O0begj5g8i_5regex, .Lfunc_end5-_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex7BuilderECs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text.unlikely._RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end6, nop
+	.type	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex,@function
+_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex:
+.Lfunc_begin6:
+	.cfi_startproc
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	%rsi, %rbx
+	addq	%rdx, %rbx
+	jb	.LBB6_1
+	movq	(%rdi), %rsi
+	movq	%r8, %r9
+	movq	8(%rdi), %rdx
+	movq	%rdi, %r14
+	movq	%rcx, %r8
+	movq	%rsp, %rdi
+	leaq	(%rsi,%rsi), %rax
+	cmpq	%rbx, %rax
+	cmovaq	%rax, %rbx
+	xorl	%eax, %eax
+	cmpq	$1, %r9
+	sete	%al
+	leaq	4(,%rax,4), %rax
+	cmpq	%rbx, %rax
+	cmovaq	%rax, %rbx
+	movq	%rbx, %rcx
+	callq	_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1O0begj5g8i_5regex
+	cmpl	$1, (%rsp)
+	je	.LBB6_3
+	movq	8(%rsp), %rax
+	movq	%rax, 8(%r14)
+	movq	%rbx, (%r14)
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	retq
+.LBB6_1:
+	.cfi_def_cfa_offset 48
+	movq	_RNvNtCsc70TAahYccp_5alloc7raw_vec12handle_error@GOTPCREL(%rip), %rax
+	xorl	%edi, %edi
+	callq	*%rax
+.LBB6_3:
+	movq	8(%rsp), %rdi
+	movq	16(%rsp), %rsi
+	movq	_RNvNtCsc70TAahYccp_5alloc7raw_vec12handle_error@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end6:
+	.size	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex, .Lfunc_end6-_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text.unlikely._RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end7, nop
+	.type	_RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex,@function
+_RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex:
+.Lfunc_begin7:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception1
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	%rdi, %rbx
+	movq	$0, (%rsp)
+	movq	$1, 8(%rsp)
+	movq	$0, 16(%rsp)
+.Ltmp8:
+	movl	$79, %edx
+	movl	$1, %ecx
+	movl	$1, %r8d
+	movq	%rsp, %rdi
+	xorl	%esi, %esi
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+.Ltmp9:
+	movq	(%rsp), %rsi
+	movq	16(%rsp), %r15
+	movq	$-79, %r12
+	movq	%rsp, %r14
+	.p2align	4
+.LBB7_2:
+	cmpq	%rsi, %r15
+	je	.LBB7_3
+.LBB7_5:
+	movq	8(%rsp), %rax
+	movb	$126, (%rax,%r15)
+	incq	%r15
+	incq	%r12
+	movq	%r15, 16(%rsp)
+	jne	.LBB7_2
+	jmp	.LBB7_6
+.LBB7_3:
+.Ltmp11:
+	movl	$1, %edx
+	movl	$1, %ecx
+	movl	$1, %r8d
+	movq	%r14, %rdi
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+.Ltmp12:
+	movq	(%rsp), %rsi
+	jmp	.LBB7_5
+.LBB7_6:
+	vmovups	(%rsp), %xmm0
+	movq	16(%rsp), %rax
+	movq	%rax, 16(%rbx)
+	vmovups	%xmm0, (%rbx)
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB7_7:
+	.cfi_def_cfa_offset 64
+.Ltmp13:
+	jmp	.LBB7_9
+.LBB7_8:
+.Ltmp10:
+.LBB7_9:
+	movq	(%rsp), %rsi
+	movq	%rax, %rbx
+	testq	%rsi, %rsi
+	je	.LBB7_11
+	movq	8(%rsp), %rdi
+	movl	$1, %edx
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB7_11:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end7:
+	.size	_RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex, .Lfunc_end7-_RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex
+	.cfi_endproc
+	.section	.gcc_except_table._RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table7:
+.Lexception1:
+	.byte	255
+	.byte	255
+	.byte	1
+	.uleb128 .Lcst_end1-.Lcst_begin1
+.Lcst_begin1:
+	.uleb128 .Ltmp8-.Lfunc_begin7
+	.uleb128 .Ltmp9-.Ltmp8
+	.uleb128 .Ltmp10-.Lfunc_begin7
+	.byte	0
+	.uleb128 .Ltmp11-.Lfunc_begin7
+	.uleb128 .Ltmp12-.Ltmp11
+	.uleb128 .Ltmp13-.Lfunc_begin7
+	.byte	0
+	.uleb128 .Ltmp12-.Lfunc_begin7
+	.uleb128 .Lfunc_end7-.Ltmp12
+	.byte	0
+	.byte	0
+.Lcst_end1:
+	.p2align	2, 0x0
+
+	.section	.text._RNvCs1O0begj5g8i_5regex6escape,"ax",@progbits
+	.globl	_RNvCs1O0begj5g8i_5regex6escape
+	.prefalign	4, .Lfunc_end8, nop
+	.type	_RNvCs1O0begj5g8i_5regex6escape,@function
+_RNvCs1O0begj5g8i_5regex6escape:
+.Lfunc_begin8:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception2
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$32, %rsp
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -16
+	movq	%rdi, %rbx
+	movq	$0, 8(%rsp)
+	movq	$1, 16(%rsp)
+	movq	$0, 24(%rsp)
+.Ltmp14:
+	movq	_RNvCs8ljQyrFA6ft_12regex_syntax11escape_into@GOTPCREL(%rip), %rcx
+	leaq	8(%rsp), %rax
+	movq	%rsi, %rdi
+	movq	%rdx, %rsi
+	movq	%rax, %rdx
+	callq	*%rcx
+.Ltmp15:
+	vmovups	8(%rsp), %xmm0
+	movq	24(%rsp), %rax
+	movq	%rax, 16(%rbx)
+	movq	%rbx, %rax
+	vmovups	%xmm0, (%rbx)
+	addq	$32, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB8_2:
+	.cfi_def_cfa_offset 48
+.Ltmp16:
+	movq	8(%rsp), %rsi
+	movq	%rax, %rbx
+	testq	%rsi, %rsi
+	je	.LBB8_4
+	movq	16(%rsp), %rdi
+	movl	$1, %edx
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB8_4:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end8:
+	.size	_RNvCs1O0begj5g8i_5regex6escape, .Lfunc_end8-_RNvCs1O0begj5g8i_5regex6escape
+	.cfi_endproc
+	.section	.gcc_except_table._RNvCs1O0begj5g8i_5regex6escape,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table8:
+.Lexception2:
+	.byte	255
+	.byte	255
+	.byte	1
+	.uleb128 .Lcst_end2-.Lcst_begin2
+.Lcst_begin2:
+	.uleb128 .Ltmp14-.Lfunc_begin8
+	.uleb128 .Ltmp15-.Ltmp14
+	.uleb128 .Ltmp16-.Lfunc_begin8
+	.byte	0
+	.uleb128 .Ltmp15-.Lfunc_begin8
+	.uleb128 .Lfunc_end8-.Ltmp15
+	.byte	0
+	.byte	0
+.Lcst_end2:
+	.p2align	2, 0x0
+
+	.section	.text.unlikely._RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder3new,"ax",@progbits
+	.globl	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder3new
+	.prefalign	4, .Lfunc_end9, nop
+	.type	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder3new,@function
+_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder3new:
+.Lfunc_begin9:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$16, %rsp
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -16
+	movq	%rsi, (%rsp)
+	movq	%rsp, %rsi
+	movq	%rdi, %rbx
+	movq	%rdx, 8(%rsp)
+	callq	_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131
+	movq	%rbx, %rax
+	addq	$16, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end9:
+	.size	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder3new, .Lfunc_end9-_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder3new
+	.cfi_endproc
+
+	.section	.rodata.cst16,"aM",@progbits,16
+	.p2align	4, 0x0
+.LCPI10_0:
+	.byte	1
+	.byte	2
+	.byte	2
+	.byte	2
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+.LCPI10_1:
+	.byte	1
+	.byte	2
+	.byte	2
+	.byte	2
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.section	.text._RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build,"ax",@progbits
+	.globl	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build
+	.prefalign	4, .Lfunc_end10, nop
+	.type	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build,@function
+_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build:
+.Lfunc_begin10:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception3
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$648, %rsp
+	.cfi_def_cfa_offset 704
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	144(%rsi), %rax
+	movq	%rax, 232(%rsp)
+	cmpq	$1, %rax
+	jne	.LBB10_77
+	movzbl	104(%rsi), %ecx
+	movzbl	116(%rsi), %eax
+	cmpb	$-1, %cl
+	je	.LBB10_2
+	cmpb	$2, %cl
+	jne	.LBB10_4
+.LBB10_2:
+	jmp	.LBB10_6
+.LBB10_4:
+	movq	80(%rsi), %r9
+	lock		incq	(%r9)
+	jle	.LBB10_8
+	movq	88(%rsi), %r8
+	movq	96(%rsi), %rdx
+.LBB10_6:
+	movq	%r9, 184(%rsp)
+	movq	%r8, 192(%rsp)
+	movq	%rdx, 200(%rsp)
+	movzbl	122(%rsi), %edx
+	movq	16(%rsi), %r8
+	movb	%cl, 208(%rsp)
+	movq	24(%rsi), %r9
+	movq	72(%rsi), %rcx
+	movq	%rdi, 16(%rsp)
+	movabsq	$9223372036854775784, %rdi
+	movb	%dl, 226(%rsp)
+	movq	%r8, 120(%rsp)
+	movq	32(%rsi), %r8
+	movq	%r9, 128(%rsp)
+	movq	40(%rsi), %r9
+	movzbl	112(%rsi), %edx
+	movq	%r8, 136(%rsp)
+	movq	(%rsi), %r8
+	movq	%r9, 144(%rsp)
+	movq	8(%rsi), %r9
+	movq	%r8, 104(%rsp)
+	movq	48(%rsi), %r8
+	movq	%r9, 112(%rsp)
+	movq	56(%rsi), %r9
+	movq	%r8, 152(%rsp)
+	movq	64(%rsi), %r8
+	movq	%r9, 160(%rsp)
+	movq	%r8, 168(%rsp)
+	movq	%rcx, 176(%rsp)
+	movl	117(%rsi), %ecx
+	movl	%ecx, 221(%rsp)
+	movzbl	121(%rsi), %ecx
+	movb	%cl, 225(%rsp)
+	movzbl	113(%rsi), %ecx
+	movb	%dl, 216(%rsp)
+	movl	$1, %edx
+	vmovd	%ecx, %xmm0
+	vpinsrb	$1, %edx, %xmm0, %xmm0
+	vpinsrb	$2, %edx, %xmm0, %xmm0
+	vpinsrb	$3, %eax, %xmm0, %xmm0
+	movq	136(%rsi), %rax
+	vmovd	%xmm0, 217(%rsp)
+	movq	16(%rax), %r15
+	cmpq	%rdi, %r15
+	ja	.LBB10_7
+	movzbl	156(%rsi), %edx
+	movzbl	160(%rsi), %r8d
+	movl	152(%rsi), %ecx
+	movzwl	157(%rsi), %r9d
+	movq	8(%rax), %r12
+	movzbl	159(%rsi), %ebp
+	movzbl	163(%rsi), %ebx
+	leaq	23(%r15), %r13
+	leaq	16(%rdi), %rax
+	andq	%rax, %r13
+	movq	%r13, %rdi
+	movb	%dl, 15(%rsp)
+	movzbl	161(%rsi), %edx
+	movb	%r8b, 13(%rsp)
+	movzbl	162(%rsi), %r8d
+	movl	%ecx, 60(%rsp)
+	movl	%r9d, 56(%rsp)
+	movb	%dl, 14(%rsp)
+	movzbl	165(%rsi), %edx
+	movl	$8, %esi
+	movb	%r8b, 12(%rsp)
+	movb	%dl, 11(%rsp)
+	callq	_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc
+	testq	%rax, %rax
+	je	.LBB10_10
+	movq	%rax, %r14
+	movl	%ebp, %r13d
+	movq	%rax, %rbp
+	movq	memcpy@GOTPCREL(%rip), %rax
+	movq	$1, (%r14)
+	movq	$1, 8(%r14)
+	addq	$16, %r14
+	movq	%r12, %rsi
+	movq	%r15, %rdx
+	movq	%r14, %rdi
+	callq	*%rax
+	vmovdqu64	104(%rsp), %zmm0
+	vmovdqu64	168(%rsp), %zmm1
+	movabsq	$144680345676153346, %rax
+	movq	%rbp, 88(%rsp)
+	movq	$0, 232(%rsp)
+	movq	$2, 248(%rsp)
+	movq	$2, 264(%rsp)
+	movq	$2, 280(%rsp)
+	movq	$2, 296(%rsp)
+	movb	$-1, 336(%rsp)
+	movb	$0, 344(%rsp)
+	movq	%r15, 96(%rsp)
+	movq	%rax, 346(%rsp)
+	movb	$-1, 354(%rsp)
+	movq	$250, 368(%rsp)
+	movb	$1, 360(%rsp)
+	movl	$33686018, 361(%rsp)
+	movw	$514, 365(%rsp)
+	movb	$10, 367(%rsp)
+	vmovdqu64	%zmm1, 576(%rsp)
+	vmovdqu64	%zmm0, 512(%rsp)
+.Ltmp17:
+	movq	_RNvMsj_NtNtCsfd4Wypy26gk_14regex_automata4meta5regexNtB5_7Builder9configure@GOTPCREL(%rip), %rax
+	leaq	232(%rsp), %rdi
+	leaq	512(%rsp), %rsi
+	vzeroupper
+	callq	*%rax
+.Ltmp18:
+	movzbl	12(%rsp), %ecx
+	vmovd	56(%rsp), %xmm0
+	movb	$2, %dl
+	subb	13(%rsp), %dl
+	vmovd	.LCPI10_1(%rip), %xmm1
+	addb	%bl, %bl
+	movb	%cl, 140(%rax)
+	movl	60(%rsp), %ecx
+	vpslld	$8, %xmm0, %xmm0
+	vpinsrb	$3, %r13d, %xmm0, %xmm0
+	movl	%ecx, 136(%rax)
+	movzbl	11(%rsp), %ecx
+	vpsubb	%xmm0, %xmm1, %xmm0
+	movb	%cl, 141(%rax)
+	movb	$2, %cl
+	movb	%bl, 133(%rax)
+	movb	%dl, 134(%rax)
+	movzbl	15(%rsp), %edx
+	subb	14(%rsp), %cl
+	movb	%dl, 135(%rax)
+	movb	%cl, 132(%rax)
+	vmovd	%xmm0, 128(%rax)
+.Ltmp19:
+	movq	_RNvMsj_NtNtCsfd4Wypy26gk_14regex_automata4meta5regexNtB5_7Builder5build@GOTPCREL(%rip), %r8
+	leaq	376(%rsp), %rdi
+	movq	%rax, %rsi
+	movq	%r14, %rdx
+	movq	%r15, %rcx
+	callq	*%r8
+.Ltmp20:
+	movq	376(%rsp), %r14
+	movq	384(%rsp), %r13
+	movq	392(%rsp), %r12
+	movq	%rbp, 32(%rsp)
+	movq	%r15, 40(%rsp)
+	cmpq	$-3, %r14
+	jne	.LBB10_15
+	movq	16(%rsp), %rbx
+	movq	%r13, (%rbx)
+	movq	%r12, 8(%rbx)
+	movq	%rbp, 16(%rbx)
+	movq	%r15, 24(%rbx)
+	movzbl	336(%rsp), %eax
+	cmpb	$-1, %al
+	jne	.LBB10_24
+	jmp	.LBB10_27
+.LBB10_15:
+	vmovdqu64	416(%rsp), %zmm0
+	vmovdqu64	448(%rsp), %zmm1
+	movq	400(%rsp), %rbx
+	movq	408(%rsp), %r15
+	vmovdqu64	%zmm0, 512(%rsp)
+	vmovdqu64	%zmm1, 544(%rsp)
+	lock		decq	(%rbp)
+	jne	.LBB10_17
+	#MEMBARRIER
+.Ltmp24:
+	movq	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArceE9drop_slowCsfd4Wypy26gk_14regex_automata@GOTPCREL(%rip), %rax
+	leaq	32(%rsp), %rdi
+	vzeroupper
+	callq	*%rax
+.Ltmp25:
+.LBB10_17:
+	vmovdqu64	512(%rsp), %zmm0
+	vmovdqu64	544(%rsp), %zmm1
+	movabsq	$9223372036854775784, %rdx
+	movq	%r14, %rax
+	xorq	$-2, %rax
+	movq	%r14, 376(%rsp)
+	movq	%r13, 384(%rsp)
+	movq	%r12, 392(%rsp)
+	movq	%rbx, 400(%rsp)
+	movq	%r15, 408(%rsp)
+	leaq	28(%rdx), %rcx
+	xorq	%r13, %rcx
+	orq	%rax, %rcx
+	vmovdqu64	%zmm0, 416(%rsp)
+	vmovdqu64	%zmm1, 448(%rsp)
+	jne	.LBB10_57
+	movq	16(%rsp), %rbx
+	movq	$-1, %r14
+	movq	%r12, %r15
+	jmp	.LBB10_19
+.LBB10_57:
+	cmpq	$-2, %r14
+	jne	.LBB10_58
+	movq	$0, 32(%rsp)
+	movq	$1, 40(%rsp)
+	movq	$0, 48(%rsp)
+.Ltmp34:
+	leaq	32(%rsp), %rdi
+	movl	$18, %edx
+	movl	$1, %ecx
+	movl	$1, %r8d
+	xorl	%esi, %esi
+	vzeroupper
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+.Ltmp35:
+	movq	16(%rsp), %rbx
+	vmovdqu	anon.235a72609f26589013c0fccb3585f110.452.llvm.5518582722057624360(%rip), %xmm0
+	movq	40(%rsp), %r15
+	movq	48(%rsp), %rbp
+	movzwl	anon.235a72609f26589013c0fccb3585f110.452.llvm.5518582722057624360+16(%rip), %eax
+	movabsq	$9223372036854775784, %rdx
+	movw	%ax, 16(%r15,%rbp)
+	vmovdqu	%xmm0, (%r15,%rbp)
+	addq	$18, %rbp
+	movq	32(%rsp), %r14
+.LBB10_19:
+	leaq	31(%rdx), %rcx
+	leaq	25(%rdx,%r13), %rdx
+	xorl	%eax, %eax
+	cmpq	%rcx, %r13
+	cmovlq	%rdx, %rax
+	testq	%rax, %rax
+	je	.LBB10_52
+	cmpq	$1, %rax
+	jne	.LBB10_51
+	testq	%r12, %r12
+	jg	.LBB10_56
+	jmp	.LBB10_51
+.LBB10_58:
+	leaq	64(%rsp), %rax
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.44(%rip), %rcx
+	movq	$0, 64(%rsp)
+	movq	$1, 72(%rsp)
+	movq	$1610612768, 48(%rsp)
+	movq	$0, 80(%rsp)
+	movq	%rax, 32(%rsp)
+	movq	%rcx, 40(%rsp)
+	cmpq	$-1, %r14
+	je	.LBB10_59
+.Ltmp27:
+	movq	_RNvXs0_NtCs8ljQyrFA6ft_12regex_syntax3astNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+	leaq	376(%rsp), %rdi
+	leaq	32(%rsp), %rsi
+	vzeroupper
+	callq	*%rax
+.Ltmp28:
+	jmp	.LBB10_60
+.LBB10_52:
+	testq	%r13, %r13
+	je	.LBB10_51
+	cmpq	$-1, %r13
+	jne	.LBB10_54
+	testq	%r12, %r12
+	je	.LBB10_51
+.LBB10_56:
+	movl	$16, %eax
+	movq	%r12, %r13
+	jmp	.LBB10_42
+.LBB10_59:
+.Ltmp29:
+	movq	_RNvXs0_NtCs8ljQyrFA6ft_12regex_syntax3hirNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt@GOTPCREL(%rip), %rax
+	leaq	384(%rsp), %rdi
+	leaq	32(%rsp), %rsi
+	vzeroupper
+	callq	*%rax
+.Ltmp30:
+.LBB10_60:
+	testb	%al, %al
+	jne	.LBB10_61
+	movq	64(%rsp), %rsi
+	movq	72(%rsp), %r15
+	movq	80(%rsp), %rbp
+	testq	%r14, %r14
+	je	.LBB10_29
+	cmpq	$-1, %r14
+	jne	.LBB10_31
+	movq	%r13, %r14
+	testq	%r13, %r13
+	jne	.LBB10_33
+.LBB10_29:
+	movq	16(%rsp), %rbx
+	movq	%rsi, %r14
+	jmp	.LBB10_51
+.LBB10_54:
+	movl	$8, %eax
+.LBB10_42:
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rdx
+	movabsq	$9223372036854775807, %rcx
+	movq	384(%rsp,%rax), %r12
+	cmpq	%rcx, %r13
+	cmovaeq	%rcx, %r13
+	xorl	%esi, %esi
+	cmpq	%r13, %rdx
+	setns	%sil
+	addq	%rcx, %rsi
+	subq	%r13, %rdx
+	cmovoq	%rsi, %rdx
+	movq	%rdx, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rdx
+	jge	.LBB10_44
+	movq	%rdx, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB10_44:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB10_50
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB10_44
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%r13, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%r13, %rdx
+	setns	%al
+	addq	%rcx, %rax
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	subq	%r13, %rdx
+	cmovoq	%rax, %rdx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB10_47:
+	cmpq	%rax, %rdx
+	jge	.LBB10_49
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB10_47
+.LBB10_49:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jmp	.LBB10_50
+.LBB10_31:
+	movq	%r13, %r12
+.LBB10_33:
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	movabsq	$9223372036854775807, %rcx
+	cmpq	%rcx, %r14
+	cmovaeq	%rcx, %r14
+	xorl	%edx, %edx
+	cmpq	%r14, %rax
+	setns	%dl
+	addq	%rcx, %rdx
+	subq	%r14, %rax
+	cmovoq	%rdx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB10_35
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB10_35:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB10_36
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB10_35
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%r14, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%r14, %rdx
+	setns	%al
+	addq	%rcx, %rax
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	subq	%r14, %rdx
+	cmovoq	%rax, %rdx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB10_39:
+	cmpq	%rax, %rdx
+	jge	.LBB10_41
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB10_39
+.LBB10_41:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB10_36:
+	movq	16(%rsp), %rbx
+	movq	%rsi, %r14
+.LBB10_50:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%r12, %rdi
+	vzeroupper
+	callq	*%rax
+.LBB10_51:
+	movq	%r14, 8(%rbx)
+	movq	%r15, 16(%rbx)
+	movq	%rbp, 24(%rbx)
+	movq	$0, (%rbx)
+	movzbl	336(%rsp), %eax
+	cmpb	$-1, %al
+	je	.LBB10_27
+.LBB10_24:
+	cmpb	$2, %al
+	je	.LBB10_27
+	movq	312(%rsp), %rax
+	lock		decq	(%rax)
+	jne	.LBB10_27
+	movq	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcDNtNtNtCsfd4Wypy26gk_14regex_automata4util9prefilter10PrefilterIEL_E9drop_slowBN_@GOTPCREL(%rip), %rax
+	leaq	312(%rsp), %rdi
+	#MEMBARRIER
+	vzeroupper
+	callq	*%rax
+.LBB10_27:
+	movq	%rbx, %rax
+	addq	$648, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB10_77:
+	.cfi_def_cfa_offset 704
+	movq	_RINvNtCs2k2z8Zem4rB_4core9panicking13assert_failedjjEB4_@GOTPCREL(%rip), %rax
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.12(%rip), %rsi
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.15(%rip), %r9
+	leaq	232(%rsp), %rdx
+	xorl	%edi, %edi
+	xorl	%ecx, %ecx
+	callq	*%rax
+.LBB10_10:
+.Ltmp39:
+	movq	_RNvNtCsc70TAahYccp_5alloc5alloc18handle_alloc_error@GOTPCREL(%rip), %rax
+	movl	$8, %edi
+	movq	%r13, %rsi
+	callq	*%rax
+.Ltmp40:
+	jmp	.LBB10_8
+.LBB10_61:
+.Ltmp31:
+	movq	_RNvNtCs2k2z8Zem4rB_4core6result13unwrap_failed@GOTPCREL(%rip), %rax
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.45(%rip), %rdi
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.5(%rip), %rcx
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.47(%rip), %r8
+	leaq	31(%rsp), %rdx
+	movl	$55, %esi
+	callq	*%rax
+.Ltmp32:
+	jmp	.LBB10_8
+.LBB10_7:
+.Ltmp41:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt@GOTPCREL(%rip), %rax
+	leaq	anon.cf1786984c7fd69ab2ba2fbb81429368.22.llvm.6053114248238979605(%rip), %rdi
+	leaq	anon.cf1786984c7fd69ab2ba2fbb81429368.28.llvm.6053114248238979605(%rip), %rdx
+	movl	$35, %esi
+	callq	*%rax
+.Ltmp42:
+.LBB10_8:
+	ud2
+.LBB10_65:
+.Ltmp36:
+	movq	32(%rsp), %rsi
+	movq	%rax, %rbx
+	testq	%rsi, %rsi
+	je	.LBB10_68
+	movq	40(%rsp), %rdi
+	jmp	.LBB10_67
+.LBB10_71:
+.Ltmp26:
+	movq	%rax, %rbx
+	jmp	.LBB10_72
+.LBB10_74:
+.Ltmp21:
+	lock		decq	(%rbp)
+	movq	%rax, %rbx
+	jne	.LBB10_72
+	#MEMBARRIER
+.Ltmp22:
+	movq	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArceE9drop_slowCsfd4Wypy26gk_14regex_automata@GOTPCREL(%rip), %rax
+	leaq	88(%rsp), %rdi
+	callq	*%rax
+.Ltmp23:
+	jmp	.LBB10_72
+.LBB10_63:
+.Ltmp33:
+	movq	64(%rsp), %rsi
+	movq	%rax, %rbx
+	testq	%rsi, %rsi
+	je	.LBB10_68
+	movq	72(%rsp), %rdi
+.LBB10_67:
+	movl	$1, %edx
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB10_68:
+	leaq	376(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5error10BuildErrorECs1O0begj5g8i_5regex
+.LBB10_72:
+.Ltmp37:
+	leaq	232(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex7BuilderECs1O0begj5g8i_5regex
+.Ltmp38:
+	jmp	.LBB10_73
+.LBB10_11:
+.Ltmp43:
+	movq	%rax, %rbx
+.Ltmp44:
+	leaq	104(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCsfd4Wypy26gk_14regex_automata4meta5regex6ConfigECs1O0begj5g8i_5regex
+.Ltmp45:
+.LBB10_73:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB10_76:
+.Ltmp46:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end10:
+	.size	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build, .Lfunc_end10-_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build
+	.cfi_endproc
+	.section	.gcc_except_table._RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table10:
+.Lexception3:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase1-.Lttbaseref1
+.Lttbaseref1:
+	.byte	1
+	.uleb128 .Lcst_end3-.Lcst_begin3
+.Lcst_begin3:
+	.uleb128 .Lfunc_begin10-.Lfunc_begin10
+	.uleb128 .Ltmp17-.Lfunc_begin10
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp17-.Lfunc_begin10
+	.uleb128 .Ltmp20-.Ltmp17
+	.uleb128 .Ltmp21-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp24-.Lfunc_begin10
+	.uleb128 .Ltmp25-.Ltmp24
+	.uleb128 .Ltmp26-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp34-.Lfunc_begin10
+	.uleb128 .Ltmp35-.Ltmp34
+	.uleb128 .Ltmp36-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp27-.Lfunc_begin10
+	.uleb128 .Ltmp30-.Ltmp27
+	.uleb128 .Ltmp33-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp30-.Lfunc_begin10
+	.uleb128 .Ltmp39-.Ltmp30
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp39-.Lfunc_begin10
+	.uleb128 .Ltmp40-.Ltmp39
+	.uleb128 .Ltmp43-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp31-.Lfunc_begin10
+	.uleb128 .Ltmp32-.Ltmp31
+	.uleb128 .Ltmp33-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp41-.Lfunc_begin10
+	.uleb128 .Ltmp42-.Ltmp41
+	.uleb128 .Ltmp43-.Lfunc_begin10
+	.byte	0
+	.uleb128 .Ltmp22-.Lfunc_begin10
+	.uleb128 .Ltmp23-.Ltmp22
+	.uleb128 .Ltmp46-.Lfunc_begin10
+	.byte	1
+	.uleb128 .Ltmp23-.Lfunc_begin10
+	.uleb128 .Ltmp37-.Ltmp23
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp37-.Lfunc_begin10
+	.uleb128 .Ltmp45-.Ltmp37
+	.uleb128 .Ltmp46-.Lfunc_begin10
+	.byte	1
+	.uleb128 .Ltmp45-.Lfunc_begin10
+	.uleb128 .Lfunc_end10-.Ltmp45
+	.byte	0
+	.byte	0
+.Lcst_end3:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase1:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text.unlikely._RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new,"ax",@progbits
+	.globl	_RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new
+	.prefalign	4, .Lfunc_end11, nop
+	.type	_RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new,@function
+_RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new:
+.Lfunc_begin11:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception4
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$200, %rsp
+	.cfi_def_cfa_offset 256
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	%rsi, 16(%rsp)
+	leaq	32(%rsp), %r14
+	leaq	16(%rsp), %rsi
+	movq	%rdi, %rbx
+	movq	%rdx, 24(%rsp)
+	movq	%r14, %rdi
+	callq	_RINvMs_NtCs1O0begj5g8i_5regex8buildersNtB5_7Builder3newARej1_BS_EB7_.llvm.3545930361513583131
+.Ltmp47:
+	movq	_RNvMNtNtCs1O0begj5g8i_5regex8builders6stringNtB2_12RegexBuilder5build@GOTPCREL(%rip), %rax
+	movq	%rbx, 8(%rsp)
+	movq	%rbx, %rdi
+	movq	%r14, %rsi
+	callq	*%rax
+.Ltmp48:
+	movq	168(%rsp), %r14
+	movq	176(%rsp), %r12
+	movabsq	$9223372036854775807, %r15
+	testq	%r12, %r12
+	je	.LBB11_14
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rbx
+	movq	free@GOTPCREL(%rip), %rbp
+	xorl	%r13d, %r13d
+	jmp	.LBB11_3
+	.p2align	4
+.LBB11_11:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB11_12:
+	callq	*%rbp
+.LBB11_13:
+	incq	%r13
+	cmpq	%r12, %r13
+	je	.LBB11_14
+.LBB11_3:
+	leaq	(%r13,%r13,2), %rax
+	movq	(%r14,%rax,8), %rcx
+	testq	%rcx, %rcx
+	je	.LBB11_13
+	leaq	(%r14,%rax,8), %rdx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	cmpq	%r15, %rcx
+	cmovaeq	%r15, %rcx
+	xorl	%esi, %esi
+	movq	8(%rdx), %rdi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%r15, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB11_6
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB11_6:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB11_12
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB11_6
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rdx
+	setns	%al
+	addq	%r15, %rax
+	subq	%rcx, %rdx
+	cmovoq	%rax, %rdx
+	movq	(%rbx), %rax
+	.p2align	4
+.LBB11_9:
+	cmpq	%rax, %rdx
+	jge	.LBB11_11
+	lock		cmpxchgq	%rdx, (%rbx)
+	jne	.LBB11_9
+	jmp	.LBB11_11
+.LBB11_14:
+	movq	160(%rsp), %rax
+	testq	%rax, %rax
+	je	.LBB11_24
+	shlq	$3, %rax
+	leaq	(%rax,%rax,2), %rcx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	cmpq	%r15, %rcx
+	cmovaeq	%r15, %rcx
+	xorl	%edx, %edx
+	cmpq	%rcx, %rax
+	setns	%dl
+	addq	%r15, %rdx
+	subq	%rcx, %rax
+	cmovoq	%rdx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB11_17
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB11_17:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB11_23
+	leaq	1(%rax), %rdx
+	lock		cmpxchgq	%rdx, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB11_17
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rdx
+	negq	%rdx
+	lock		xaddq	%rdx, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rdx
+	setns	%al
+	addq	%r15, %rax
+	subq	%rcx, %rdx
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rdx
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB11_20:
+	cmpq	%rax, %rdx
+	jge	.LBB11_22
+	lock		cmpxchgq	%rdx, (%rcx)
+	jne	.LBB11_20
+.LBB11_22:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB11_23:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%r14, %rdi
+	callq	*%rax
+.LBB11_24:
+	movzbl	136(%rsp), %eax
+	cmpb	$-1, %al
+	je	.LBB11_28
+	cmpb	$2, %al
+	je	.LBB11_28
+	movq	112(%rsp), %rax
+	lock		decq	(%rax)
+	jne	.LBB11_28
+	movq	_RNvMsn_NtCsc70TAahYccp_5alloc4syncINtB5_3ArcDNtNtNtCsfd4Wypy26gk_14regex_automata4util9prefilter10PrefilterIEL_E9drop_slowBN_@GOTPCREL(%rip), %rax
+	leaq	112(%rsp), %rdi
+	#MEMBARRIER
+	callq	*%rax
+.LBB11_28:
+	movq	8(%rsp), %rax
+	addq	$200, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB11_30:
+	.cfi_def_cfa_offset 256
+.Ltmp49:
+	movq	%rax, %rbx
+.Ltmp50:
+	leaq	32(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs1O0begj5g8i_5regex8builders6string12RegexBuilderEBH_.llvm.3545930361513583131
+.Ltmp51:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB11_29:
+.Ltmp52:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end11:
+	.size	_RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new, .Lfunc_end11-_RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new
+	.cfi_endproc
+	.section	.gcc_except_table._RNvMs3_NtNtCs1O0begj5g8i_5regex5regex6stringNtB5_5Regex3new,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table11:
+.Lexception4:
+	.byte	255
+	.byte	155
+	.uleb128 .Lttbase2-.Lttbaseref2
+.Lttbaseref2:
+	.byte	1
+	.uleb128 .Lcst_end4-.Lcst_begin4
+.Lcst_begin4:
+	.uleb128 .Lfunc_begin11-.Lfunc_begin11
+	.uleb128 .Ltmp47-.Lfunc_begin11
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp47-.Lfunc_begin11
+	.uleb128 .Ltmp48-.Ltmp47
+	.uleb128 .Ltmp49-.Lfunc_begin11
+	.byte	0
+	.uleb128 .Ltmp48-.Lfunc_begin11
+	.uleb128 .Ltmp50-.Ltmp48
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp50-.Lfunc_begin11
+	.uleb128 .Ltmp51-.Ltmp50
+	.uleb128 .Ltmp52-.Lfunc_begin11
+	.byte	1
+	.uleb128 .Ltmp51-.Lfunc_begin11
+	.uleb128 .Lfunc_end11-.Ltmp51
+	.byte	0
+	.byte	0
+.Lcst_end4:
+	.byte	127
+	.byte	0
+	.p2align	2, 0x0
+.Lttbase2:
+	.byte	0
+	.p2align	2, 0x0
+
+	.section	.text.unlikely._RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end12, nop
+	.type	_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1O0begj5g8i_5regex,@function
+_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1O0begj5g8i_5regex:
+.Lfunc_begin12:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	pushq	%rax
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	%rdx, %r10
+	movq	%r9, %rax
+	mulq	%rcx
+	movabsq	$-9223372036854775808, %rcx
+	movl	$1, %r15d
+	movq	%rdi, %rbx
+	seto	%dl
+	subq	%r8, %rcx
+	movq	%rax, %r14
+	cmpq	%rcx, %r14
+	seta	%cl
+	orb	%dl, %cl
+	je	.LBB12_2
+	movl	$8, %eax
+	xorl	%r14d, %r14d
+	jmp	.LBB12_10
+.LBB12_2:
+	testq	%rsi, %rsi
+	je	.LBB12_4
+	movq	_RNvXCscZeUgkR9L6J_18purrdf_alloc_probeNtB2_17CountingAllocatorNtNtNtCs2k2z8Zem4rB_4core5alloc6global11GlobalAlloc7realloc@GOTPCREL(%rip), %rax
+	imulq	%rsi, %r9
+	leaq	_RNvCshI9zw314oUL_29qualification_454_native_cost6GLOBAL.llvm.11174181910260379007(%rip), %rdi
+	movq	%r10, %rsi
+	movq	%r8, %r12
+	movq	%r8, %rdx
+	movq	%r14, %r8
+	movq	%r9, %rcx
+	callq	*%rax
+	testq	%rax, %rax
+	jne	.LBB12_6
+	jmp	.LBB12_9
+.LBB12_4:
+	testq	%r14, %r14
+	je	.LBB12_5
+	movq	%r14, %rdi
+	movq	%r8, %rsi
+	movq	%r8, %r12
+	callq	_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc
+	testq	%rax, %rax
+	jne	.LBB12_6
+.LBB12_9:
+	movl	$16, %eax
+	movq	%r12, 8(%rbx)
+	jmp	.LBB12_10
+.LBB12_5:
+	movq	%r8, %rax
+.LBB12_6:
+	movq	%rax, 8(%rbx)
+	movl	$16, %eax
+	xorl	%r15d, %r15d
+.LBB12_10:
+	movq	%r14, (%rbx,%rax)
+	movq	%r15, (%rbx)
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end12:
+	.size	_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1O0begj5g8i_5regex, .Lfunc_end12-_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text._RNvXs0_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt,"ax",@progbits
+	.globl	_RNvXs0_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt
+	.prefalign	4, .Lfunc_end13, nop
+	.type	_RNvXs0_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt,@function
+_RNvXs0_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt:
+.Lfunc_begin13:
+	.cfi_startproc
+	cmpq	$-1, (%rdi)
+	je	.LBB13_1
+	movq	8(%rdi), %rax
+	movq	16(%rdi), %rdx
+	movq	%rsi, %rdi
+	movq	%rax, %rsi
+	jmpq	*_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter3pad@GOTPCREL(%rip)
+.LBB13_1:
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 32
+	movq	8(%rdi), %rax
+	movq	_RNvXsi_NtNtNtCs2k2z8Zem4rB_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rcx
+	movq	(%rsi), %rdi
+	movq	8(%rsi), %rsi
+	movq	%rsp, %rdx
+	movq	%rdx, 8(%rsp)
+	leaq	anon.f4ed987ff5d2f2e34d0856c87efce975.25.llvm.3545930361513583131(%rip), %rdx
+	movq	%rax, (%rsp)
+	movq	_RNvNtCs2k2z8Zem4rB_4core3fmt5write@GOTPCREL(%rip), %rax
+	movq	%rcx, 16(%rsp)
+	leaq	8(%rsp), %rcx
+	callq	*%rax
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end13:
+	.size	_RNvXs0_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt, .Lfunc_end13-_RNvXs0_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt
+	.cfi_endproc
+
+	.section	.text._RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt,"ax",@progbits
+	.globl	_RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt
+	.prefalign	4, .Lfunc_end14, nop
+	.type	_RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt,@function
+_RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt:
+.Lfunc_begin14:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception5
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$72, %rsp
+	.cfi_def_cfa_offset 128
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	cmpq	$-1, (%rdi)
+	movq	%rsi, %rbx
+	jne	.LBB14_13
+	movq	8(%rdi), %rax
+	movq	8(%rbx), %r15
+	movq	(%rbx), %r14
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.32(%rip), %rsi
+	movl	$14, %edx
+	movq	%rax, 16(%rsp)
+	movq	%r14, %rdi
+	movq	24(%r15), %r12
+	callq	*%r12
+	movb	$1, %bpl
+	testb	%al, %al
+	je	.LBB14_2
+.LBB14_26:
+	movl	%ebp, %eax
+	addq	$72, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB14_2:
+	.cfi_def_cfa_offset 128
+	testb	$-128, 18(%rbx)
+	jne	.LBB14_5
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.46.llvm.9794848731438112354(%rip), %rsi
+	movl	$1, %edx
+	movq	%r14, %rdi
+	callq	*%r12
+	testb	%al, %al
+	jne	.LBB14_26
+	leaq	16(%rsp), %rdi
+	movq	%rbx, %rsi
+	callq	_RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt
+	testb	%al, %al
+	jne	.LBB14_26
+	jmp	.LBB14_9
+.LBB14_5:
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.47.llvm.9794848731438112354(%rip), %rsi
+	movl	$2, %edx
+	movq	%r14, %rdi
+	callq	*%r12
+	testb	%al, %al
+	jne	.LBB14_26
+	movq	16(%rbx), %rdx
+	leaq	15(%rsp), %rax
+	movq	%r14, 24(%rsp)
+	movq	%r15, 32(%rsp)
+	leaq	24(%rsp), %rcx
+	leaq	16(%rsp), %rdi
+	leaq	48(%rsp), %rsi
+	movb	$1, 15(%rsp)
+	movq	%rax, 40(%rsp)
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354(%rip), %rax
+	movq	%rdx, 64(%rsp)
+	movq	%rcx, 48(%rsp)
+	movq	%rax, 56(%rsp)
+	callq	_RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt
+	testb	%al, %al
+	jne	.LBB14_26
+	movq	56(%rsp), %rax
+	movq	48(%rsp), %rdi
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354(%rip), %rsi
+	movl	$2, %edx
+	movq	24(%rax), %rax
+	callq	*%rax
+	testb	%al, %al
+	jne	.LBB14_26
+.LBB14_9:
+	movq	8(%rbx), %rax
+	movq	(%rbx), %rdi
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.45.llvm.9794848731438112354(%rip), %rsi
+	movl	$1, %edx
+	movq	24(%rax), %rax
+	callq	*%rax
+	movl	%eax, %ebp
+	jmp	.LBB14_26
+.LBB14_13:
+	leaq	48(%rsp), %r15
+	movq	%rdi, 16(%rsp)
+	movq	%r15, %rdi
+	callq	_RINvXs5_NtCsc70TAahYccp_5alloc6stringNtB6_6StringINtNtNtNtCs2k2z8Zem4rB_4core4iter6traits7collect12FromIteratorcE9from_iterINtNtNtBS_8adapters4take4TakeINtNtNtBS_7sources6repeat6RepeatcEEECs1O0begj5g8i_5regex
+	movq	(%rbx), %r14
+	movq	8(%rbx), %rbx
+	movq	24(%rbx), %r12
+.Ltmp53:
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.29(%rip), %rsi
+	movl	$8, %edx
+	movq	%r14, %rdi
+	callq	*%r12
+.Ltmp54:
+	testb	%al, %al
+	jne	.LBB14_27
+	leaq	_RNvXsq_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt(%rip), %rbp
+	movq	%r15, 24(%rsp)
+	movq	%rbp, 32(%rsp)
+.Ltmp55:
+	movq	_RNvNtCs2k2z8Zem4rB_4core3fmt5write@GOTPCREL(%rip), %r13
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.30(%rip), %rdx
+	leaq	24(%rsp), %rcx
+	movq	%r14, %rdi
+	movq	%rbx, %rsi
+	callq	*%r13
+.Ltmp56:
+	testb	%al, %al
+	jne	.LBB14_27
+	leaq	16(%rsp), %rax
+	movq	%rax, 24(%rsp)
+	leaq	_RNvXs1i_NtCs2k2z8Zem4rB_4core3fmtRNtNtCsc70TAahYccp_5alloc6string6StringNtB6_7Display3fmtCs1O0begj5g8i_5regex(%rip), %rax
+	movq	%rax, 32(%rsp)
+.Ltmp57:
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.30(%rip), %rdx
+	leaq	24(%rsp), %rcx
+	movq	%r14, %rdi
+	movq	%rbx, %rsi
+	callq	*%r13
+.Ltmp58:
+	testb	%al, %al
+	jne	.LBB14_27
+	movq	%r15, 24(%rsp)
+	movq	%rbp, 32(%rsp)
+.Ltmp59:
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.30(%rip), %rdx
+	leaq	24(%rsp), %rcx
+	movq	%r14, %rdi
+	movq	%rbx, %rsi
+	callq	*%r13
+.Ltmp60:
+	testb	%al, %al
+	jne	.LBB14_27
+.Ltmp61:
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.31(%rip), %rsi
+	movl	$1, %edx
+	movq	%r14, %rdi
+	callq	*%r12
+.Ltmp62:
+	testb	%al, %al
+	je	.LBB14_23
+.LBB14_27:
+	movq	48(%rsp), %rcx
+	testq	%rcx, %rcx
+	je	.LBB14_37
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	movabsq	$9223372036854775807, %rdx
+	movq	56(%rsp), %rdi
+	cmpq	%rdx, %rcx
+	cmovaeq	%rdx, %rcx
+	xorl	%esi, %esi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%rdx, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jge	.LBB14_30
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB14_30:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB14_36
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB14_30
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rsi
+	negq	%rsi
+	lock		xaddq	%rsi, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rsi
+	setns	%al
+	addq	%rdx, %rax
+	subq	%rcx, %rsi
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rsi
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB14_33:
+	cmpq	%rax, %rsi
+	jge	.LBB14_35
+	lock		cmpxchgq	%rsi, (%rcx)
+	jne	.LBB14_33
+.LBB14_35:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+.LBB14_36:
+	movq	free@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB14_37:
+	movb	$1, %bpl
+	jmp	.LBB14_26
+.LBB14_23:
+	movq	48(%rsp), %rsi
+	testq	%rsi, %rsi
+	je	.LBB14_25
+	movq	56(%rsp), %rdi
+	movl	$1, %edx
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB14_25:
+	xorl	%ebp, %ebp
+	jmp	.LBB14_26
+.LBB14_10:
+.Ltmp63:
+	movq	48(%rsp), %rsi
+	movq	%rax, %rbx
+	testq	%rsi, %rsi
+	je	.LBB14_12
+	movq	56(%rsp), %rdi
+	movl	$1, %edx
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB14_12:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end14:
+	.size	_RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt, .Lfunc_end14-_RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt
+	.cfi_endproc
+	.section	.gcc_except_table._RNvXs1_NtCs1O0begj5g8i_5regex5errorNtB5_5ErrorNtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmt,"a",@progbits
+	.p2align	2, 0x0
+GCC_except_table14:
+.Lexception5:
+	.byte	255
+	.byte	255
+	.byte	1
+	.uleb128 .Lcst_end5-.Lcst_begin5
+.Lcst_begin5:
+	.uleb128 .Lfunc_begin14-.Lfunc_begin14
+	.uleb128 .Ltmp53-.Lfunc_begin14
+	.byte	0
+	.byte	0
+	.uleb128 .Ltmp53-.Lfunc_begin14
+	.uleb128 .Ltmp62-.Ltmp53
+	.uleb128 .Ltmp63-.Lfunc_begin14
+	.byte	0
+	.uleb128 .Ltmp62-.Lfunc_begin14
+	.uleb128 .Lfunc_end14-.Ltmp62
+	.byte	0
+	.byte	0
+.Lcst_end5:
+	.p2align	2, 0x0
+
+	.section	.text._RNvXs1i_NtCs2k2z8Zem4rB_4core3fmtRNtNtCsc70TAahYccp_5alloc6string6StringNtB6_7Display3fmtCs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end15, nop
+	.type	_RNvXs1i_NtCs2k2z8Zem4rB_4core3fmtRNtNtCsc70TAahYccp_5alloc6string6StringNtB6_7Display3fmtCs1O0begj5g8i_5regex,@function
+_RNvXs1i_NtCs2k2z8Zem4rB_4core3fmtRNtNtCsc70TAahYccp_5alloc6string6StringNtB6_7Display3fmtCs1O0begj5g8i_5regex:
+.Lfunc_begin15:
+	.cfi_startproc
+	movq	(%rdi), %rcx
+	movq	%rsi, %rax
+	movq	%rax, %rdi
+	movq	8(%rcx), %rsi
+	movq	16(%rcx), %rdx
+	jmpq	*_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter3pad@GOTPCREL(%rip)
+.Lfunc_end15:
+	.size	_RNvXs1i_NtCs2k2z8Zem4rB_4core3fmtRNtNtCsc70TAahYccp_5alloc6string6StringNtB6_7Display3fmtCs1O0begj5g8i_5regex, .Lfunc_end15-_RNvXs1i_NtCs2k2z8Zem4rB_4core3fmtRNtNtCsc70TAahYccp_5alloc6string6StringNtB6_7Display3fmtCs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.section	.text._RNvXsK_NtCs2k2z8Zem4rB_4core3fmtNtB5_5ErrorNtB5_5Debug3fmt,"ax",@progbits
+	.prefalign	4, .Lfunc_end16, nop
+	.type	_RNvXsK_NtCs2k2z8Zem4rB_4core3fmtNtB5_5ErrorNtB5_5Debug3fmt,@function
+_RNvXsK_NtCs2k2z8Zem4rB_4core3fmtNtB5_5ErrorNtB5_5Debug3fmt:
+.Lfunc_begin16:
+	.cfi_startproc
+	movq	(%rsi), %rdi
+	movq	8(%rsi), %rax
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.48(%rip), %rsi
+	movl	$5, %edx
+	jmpq	*24(%rax)
+.Lfunc_end16:
+	.size	_RNvXsK_NtCs2k2z8Zem4rB_4core3fmtNtB5_5ErrorNtB5_5Debug3fmt, .Lfunc_end16-_RNvXsK_NtCs2k2z8Zem4rB_4core3fmtNtB5_5ErrorNtB5_5Debug3fmt
+	.cfi_endproc
+
+	.section	.rodata.cst16,"aM",@progbits,16
+	.p2align	4, 0x0
+.LCPI17_0:
+	.long	18
+	.long	12
+	.long	6
+	.long	0
+.LCPI17_1:
+	.byte	240
+	.byte	128
+	.byte	128
+	.byte	128
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+.LCPI17_2:
+	.byte	255
+	.byte	63
+	.byte	63
+	.byte	63
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+	.zero	1
+.LCPI17_3:
+	.byte	240
+	.byte	128
+	.byte	128
+	.byte	128
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.byte	0
+	.section	.rodata.cst4,"aM",@progbits,4
+	.p2align	2, 0x0
+.LCPI17_4:
+	.byte	255
+	.byte	63
+	.byte	63
+	.byte	63
+	.section	.text._RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write10write_char,"ax",@progbits
+	.prefalign	4, .Lfunc_end17, nop
+	.type	_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write10write_char,@function
+_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write10write_char:
+.Lfunc_begin17:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	pushq	%rax
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	16(%rdi), %rbx
+	movl	$1, %r14d
+	cmpl	$128, %esi
+	jb	.LBB17_3
+	movl	$2, %r14d
+	cmpl	$2048, %esi
+	jb	.LBB17_3
+	cmpl	$65536, %esi
+	movl	$4, %r14d
+	sbbq	$0, %r14
+.LBB17_3:
+	movq	(%rdi), %rax
+	subq	%rbx, %rax
+	cmpq	%rax, %r14
+	ja	.LBB17_4
+	movq	8(%rdi), %rax
+	cmpl	$128, %esi
+	jae	.LBB17_6
+.LBB17_12:
+	movb	%sil, (%rax,%rbx)
+	jmp	.LBB17_11
+.LBB17_4:
+	movl	$1, %ecx
+	movl	$1, %r8d
+	movl	%esi, %ebp
+	movq	%rdi, %r15
+	movq	%rbx, %rsi
+	movq	%r14, %rdx
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+	movl	%ebp, %esi
+	movq	%r15, %rdi
+	movq	8(%rdi), %rax
+	cmpl	$128, %esi
+	jb	.LBB17_12
+.LBB17_6:
+	vpbroadcastd	%esi, %xmm0
+	vpsrlvd	.LCPI17_0(%rip), %xmm0, %xmm0
+	vpmovdb	%xmm0, %xmm1
+	vmovd	.LCPI17_3(%rip), %xmm0
+	vpternlogd	$248, .LCPI17_4(%rip){1to4}, %xmm1, %xmm0
+	cmpl	$2048, %esi
+	jae	.LBB17_8
+	vpextrb	$2, %xmm1, %ecx
+	orb	$-64, %cl
+	movb	%cl, (%rax,%rbx)
+	vpextrb	$3, %xmm0, 1(%rax,%rbx)
+	jmp	.LBB17_11
+.LBB17_8:
+	cmpl	$65535, %esi
+	ja	.LBB17_10
+	vpextrb	$1, %xmm1, %ecx
+	orb	$-32, %cl
+	movb	%cl, (%rax,%rbx)
+	vpextrb	$2, %xmm0, 1(%rax,%rbx)
+	vpextrb	$3, %xmm0, 2(%rax,%rbx)
+	jmp	.LBB17_11
+.LBB17_10:
+	vmovd	%xmm0, (%rax,%rbx)
+.LBB17_11:
+	addq	%rbx, %r14
+	xorl	%eax, %eax
+	movq	%r14, 16(%rdi)
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end17:
+	.size	_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write10write_char, .Lfunc_end17-_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write10write_char
+	.cfi_endproc
+
+	.section	.text._RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_str,"ax",@progbits
+	.prefalign	4, .Lfunc_end18, nop
+	.type	_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_str,@function
+_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_str:
+.Lfunc_begin18:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	pushq	%rax
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	(%rdi), %rax
+	movq	16(%rdi), %r15
+	movq	%rdx, %rbx
+	movq	%rdi, %r14
+	subq	%r15, %rax
+	cmpq	%rax, %rdx
+	ja	.LBB18_1
+	testq	%rbx, %rbx
+	je	.LBB18_4
+.LBB18_3:
+	movq	8(%r14), %rdi
+	movq	memcpy@GOTPCREL(%rip), %rax
+	movq	%rbx, %rdx
+	addq	%r15, %rdi
+	callq	*%rax
+.LBB18_4:
+	addq	%rbx, %r15
+	xorl	%eax, %eax
+	movq	%r15, 16(%r14)
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB18_1:
+	.cfi_def_cfa_offset 48
+	movl	$1, %ecx
+	movl	$1, %r8d
+	movq	%rsi, %r12
+	movq	%r14, %rdi
+	movq	%r15, %rsi
+	movq	%rbx, %rdx
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs1O0begj5g8i_5regex
+	movq	16(%r14), %r15
+	movq	%r12, %rsi
+	jmp	.LBB18_3
+.Lfunc_end18:
+	.size	_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_str, .Lfunc_end18-_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_str
+	.cfi_endproc
+
+	.section	.text._RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt,"ax",@progbits
+	.prefalign	4, .Lfunc_end19, nop
+	.type	_RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt,@function
+_RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt:
+.Lfunc_begin19:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$32, %rsp
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -16
+	movl	16(%rsi), %eax
+	testl	$33554432, %eax
+	jne	.LBB19_11
+	testl	$67108864, %eax
+	jne	.LBB19_13
+	movq	(%rdi), %rcx
+	movl	$20, %edi
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.194.llvm.9794848731438112354(%rip), %rax
+	movq	%rcx, %r8
+	cmpq	$1000, %rcx
+	jb	.LBB19_5
+	movabsq	$3777893186295716171, %r9
+	movq	%rcx, %rdx
+	.p2align	4
+.LBB19_4:
+	mulxq	%r9, %r8, %r8
+	movl	%edx, %r11d
+	shrq	$11, %r8
+	imull	$10000, %r8d, %r10d
+	subl	%r10d, %r11d
+	imull	$5243, %r11d, %r10d
+	shrl	$19, %r10d
+	imull	$100, %r10d, %ebx
+	movzwl	(%rax,%r10,2), %r10d
+	subl	%ebx, %r11d
+	movzwl	%r11w, %r11d
+	vmovd	%r10d, %xmm0
+	vpinsrw	$1, (%rax,%r11,2), %xmm0, %xmm0
+	vmovd	%xmm0, 8(%rsp,%rdi)
+	addq	$-4, %rdi
+	cmpq	$9999999, %rdx
+	movq	%r8, %rdx
+	ja	.LBB19_4
+.LBB19_5:
+	cmpq	$10, %r8
+	jb	.LBB19_7
+	movl	$4098, %edx
+	bextrl	%edx, %r8d, %edx
+	imull	$5243, %edx, %edx
+	shrl	$17, %edx
+	imull	$100, %edx, %r9d
+	subl	%r9d, %r8d
+	movzwl	%r8w, %r8d
+	movzwl	(%rax,%r8,2), %r8d
+	movw	%r8w, 10(%rsp,%rdi)
+	addq	$-2, %rdi
+	movq	%rdx, %r8
+.LBB19_7:
+	testq	%rcx, %rcx
+	je	.LBB19_9
+	testq	%r8, %r8
+	je	.LBB19_10
+.LBB19_9:
+	andl	$15, %r8d
+	movzbl	1(%rax,%r8,2), %eax
+	movb	%al, 11(%rsp,%rdi)
+	decq	%rdi
+.LBB19_10:
+	movq	_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter12pad_integral@GOTPCREL(%rip), %rax
+	movl	$20, %r9d
+	leaq	12(%rsp,%rdi), %r8
+	movl	$1, %edx
+	xorl	%ecx, %ecx
+	subq	%rdi, %r9
+	movq	%rsi, %rdi
+	jmp	.LBB19_16
+.LBB19_11:
+	movq	(%rdi), %rax
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.2.llvm.9794848731438112354(%rip), %rcx
+	xorl	%r9d, %r9d
+	.p2align	4
+.LBB19_12:
+	movl	%eax, %edx
+	andl	$15, %edx
+	shrq	$4, %rax
+	movzbl	(%rdx,%rcx), %edx
+	movb	%dl, 27(%rsp,%r9)
+	decq	%r9
+	testq	%rax, %rax
+	jne	.LBB19_12
+	jmp	.LBB19_15
+.LBB19_13:
+	movq	(%rdi), %rax
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.408.llvm.9794848731438112354(%rip), %rcx
+	xorl	%r9d, %r9d
+	.p2align	4
+.LBB19_14:
+	movl	%eax, %edx
+	andl	$15, %edx
+	shrq	$4, %rax
+	movzbl	(%rdx,%rcx), %edx
+	movb	%dl, 27(%rsp,%r9)
+	decq	%r9
+	testq	%rax, %rax
+	jne	.LBB19_14
+.LBB19_15:
+	movq	_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter12pad_integral@GOTPCREL(%rip), %rax
+	leaq	28(%rsp,%r9), %r8
+	movq	%rsi, %rdi
+	negq	%r9
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.394.llvm.9794848731438112354(%rip), %rdx
+	movl	$2, %ecx
+.LBB19_16:
+	movl	$1, %esi
+	callq	*%rax
+	addq	$32, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end19:
+	.size	_RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt, .Lfunc_end19-_RNvXsZ_NtNtCs2k2z8Zem4rB_4core3fmt3numjNtB7_5Debug3fmt
+	.cfi_endproc
+
+	.section	.text._RNvXsq_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt,"ax",@progbits
+	.prefalign	4, .Lfunc_end20, nop
+	.type	_RNvXsq_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt,@function
+_RNvXsq_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt:
+.Lfunc_begin20:
+	.cfi_startproc
+	movq	%rsi, %rax
+	movq	8(%rdi), %rsi
+	movq	16(%rdi), %rdx
+	movq	%rax, %rdi
+	jmpq	*_RNvMsa_NtCs2k2z8Zem4rB_4core3fmtNtB5_9Formatter3pad@GOTPCREL(%rip)
+.Lfunc_end20:
+	.size	_RNvXsq_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt, .Lfunc_end20-_RNvXsq_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt7Display3fmt
+	.cfi_endproc
+
+	.section	.text._RNvYNtNtCsc70TAahYccp_5alloc6string6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_fmtCs1O0begj5g8i_5regex,"ax",@progbits
+	.prefalign	4, .Lfunc_end21, nop
+	.type	_RNvYNtNtCsc70TAahYccp_5alloc6string6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_fmtCs1O0begj5g8i_5regex,@function
+_RNvYNtNtCsc70TAahYccp_5alloc6string6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_fmtCs1O0begj5g8i_5regex:
+.Lfunc_begin21:
+	.cfi_startproc
+	movq	%rdx, %rcx
+	movq	%rsi, %rdx
+	leaq	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.44(%rip), %rsi
+	jmpq	*_RNvNtCs2k2z8Zem4rB_4core3fmt5write@GOTPCREL(%rip)
+.Lfunc_end21:
+	.size	_RNvYNtNtCsc70TAahYccp_5alloc6string6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_fmtCs1O0begj5g8i_5regex, .Lfunc_end21-_RNvYNtNtCsc70TAahYccp_5alloc6string6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_fmtCs1O0begj5g8i_5regex
+	.cfi_endproc
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.5,@object
+	.section	.data.rel.ro..Lanon.f4ed987ff5d2f2e34d0856c87efce975.5,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.5:
+	.asciz	"\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\001\000\000\000\000\000\000"
+	.quad	_RNvXsK_NtCs2k2z8Zem4rB_4core3fmtNtB5_5ErrorNtB5_5Debug3fmt
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.5, 32
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.12,@object
+	.section	.rodata.cst8,"aM",@progbits,8
+	.p2align	3, 0x0
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.12:
+	.asciz	"\001\000\000\000\000\000\000"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.12, 8
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.13,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.13:
+	.asciz	"/kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-1.12.4/src/builders.rs"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.13, 89
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.15,@object
+	.section	.data.rel.ro..Lanon.f4ed987ff5d2f2e34d0856c87efce975.15,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.15:
+	.quad	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.13
+	.asciz	"X\000\000\000\000\000\000\000G\000\000\000\t\000\000"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.15, 24
+
+	.hidden	anon.f4ed987ff5d2f2e34d0856c87efce975.25.llvm.3545930361513583131
+	.type	anon.f4ed987ff5d2f2e34d0856c87efce975.25.llvm.3545930361513583131,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+	.globl	anon.f4ed987ff5d2f2e34d0856c87efce975.25.llvm.3545930361513583131
+anon.f4ed987ff5d2f2e34d0856c87efce975.25.llvm.3545930361513583131:
+	.asciz	"%Compiled regex exceeds size limit of \300\007 bytes."
+	.size	anon.f4ed987ff5d2f2e34d0856c87efce975.25.llvm.3545930361513583131, 48
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.29,@object
+	.section	.rodata.cst8,"aM",@progbits,8
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.29:
+	.ascii	"Syntax(\n"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.29, 8
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.30,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.30:
+	.asciz	"\300\001\n"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.30, 4
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.31,@object
+	.section	.rodata..Lanon.f4ed987ff5d2f2e34d0856c87efce975.31,"a",@progbits
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.31:
+	.byte	41
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.31, 1
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.32,@object
+	.section	.rodata..Lanon.f4ed987ff5d2f2e34d0856c87efce975.32,"a",@progbits
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.32:
+	.ascii	"CompiledTooBig"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.32, 14
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.44,@object
+	.section	.data.rel.ro..Lanon.f4ed987ff5d2f2e34d0856c87efce975.44,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.44:
+	.quad	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsc70TAahYccp_5alloc6string6StringECs1O0begj5g8i_5regex
+	.asciz	"\030\000\000\000\000\000\000\000\b\000\000\000\000\000\000"
+	.quad	_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_str
+	.quad	_RNvXsZ_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write10write_char
+	.quad	_RNvYNtNtCsc70TAahYccp_5alloc6string6StringNtNtCs2k2z8Zem4rB_4core3fmt5Write9write_fmtCs1O0begj5g8i_5regex
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.44, 48
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.45,@object
+	.section	.rodata..Lanon.f4ed987ff5d2f2e34d0856c87efce975.45,"a",@progbits
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.45:
+	.ascii	"a Display implementation returned an error unexpectedly"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.45, 55
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.46,@object
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.46:
+	.asciz	"/rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/string.rs"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.46, 76
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.47,@object
+	.section	.data.rel.ro..Lanon.f4ed987ff5d2f2e34d0856c87efce975.47,"aw",@progbits
+	.p2align	3, 0x0
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.47:
+	.quad	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.46
+	.asciz	"K\000\000\000\000\000\000\000\254\013\000\000\016\000\000"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.47, 24
+
+	.type	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.48,@object
+	.section	.rodata..Lanon.f4ed987ff5d2f2e34d0856c87efce975.48,"a",@progbits
+.Lanon.f4ed987ff5d2f2e34d0856c87efce975.48:
+	.ascii	"Error"
+	.size	.Lanon.f4ed987ff5d2f2e34d0856c87efce975.48, 5
+
+	.hidden	anon.cf1786984c7fd69ab2ba2fbb81429368.22.llvm.6053114248238979605
+	.hidden	anon.cf1786984c7fd69ab2ba2fbb81429368.28.llvm.6053114248238979605
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.2.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.45.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.46.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.47.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.194.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.394.llvm.9794848731438112354
+	.hidden	anon.a647af78948fdeb0321157bdb82ef7e0.408.llvm.9794848731438112354
+	.hidden	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvCshI9zw314oUL_29qualification_454_native_cost6GLOBAL.llvm.11174181910260379007
+	.hidden	anon.235a72609f26589013c0fccb3585f110.452.llvm.5518582722057624360
+	.hidden	_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc
+	.hidden	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	.hidden	DW.ref.rust_eh_personality
+	.weak	DW.ref.rust_eh_personality
+	.section	.data.DW.ref.rust_eh_personality,"awG",@progbits,DW.ref.rust_eh_personality,comdat
+	.p2align	3, 0x0
+	.type	DW.ref.rust_eh_personality,@object
+	.size	DW.ref.rust_eh_personality, 8
+DW.ref.rust_eh_personality:
+	.quad	rust_eh_personality
+	.ident	"rustc version 1.100.0-nightly (4b6d04e70 2026-09-13)"
+	.section	".note.GNU-stack","",@progbits

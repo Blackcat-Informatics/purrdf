@@ -1,0 +1,64 @@
+worktree /home/paudley/Active/purrdf
+HEAD 18489a91cb452b1773c60b469d4c30dc33a9a4a4
+branch refs/heads/main
+
+worktree /home/paudley/Active/purrdf-408-wip-source
+HEAD 33bc4f2f12e9c5dd874a88c3904d40217c763ab4
+branch refs/heads/issue-408-geodesy-spatial-index
+
+worktree /home/paudley/Active/purrdf/.worktrees/384-portable-adversarial-conformance
+HEAD ab8870616cf7bb0d79daf3e012b97f5efeafbc61
+branch refs/heads/paudley/384-portable-adversarial-conformance
+
+worktree /home/paudley/Active/purrdf/.worktrees/402-shacl-profiles-reports
+HEAD 14b35b2ffea3afe967d5af9a019f854c751af6e1
+branch refs/heads/paudley/402-shacl-profiles-reports
+
+worktree /home/paudley/Active/purrdf/.worktrees/406-native-xpath-regex
+HEAD 36a13ac79bd5883a8f67fb3791c46cfb0afca483
+branch refs/heads/paudley/406-native-xpath-regex
+
+worktree /home/paudley/Active/purrdf/.worktrees/408-geo-deterministic-geodesic-distance-in
+HEAD a7bf02d6e139017302b961e75f12b8a99feef18a
+branch refs/heads/paudley/408-geo-deterministic-geodesic-distance-in
+
+worktree /home/paudley/Active/purrdf/.worktrees/416-owl-anonymous-classes
+HEAD 0e07eb3da748a73fb22643aabf4b6106e4abc87f
+branch refs/heads/paudley/416-owl-anonymous-classes
+
+worktree /home/paudley/Active/purrdf/.worktrees/422-bounded-numerics
+HEAD 92ceebafa7af335f94faf5b04ea1117743a50848
+branch refs/heads/paudley/422-bounded-numerics
+
+worktree /home/paudley/Active/purrdf/.worktrees/423-pr
+HEAD 66f8a793be38bc64c13c3078da42a330b83abb23
+branch refs/heads/paudley/423-arbitrary-precision
+
+worktree /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment
+HEAD 18489a91cb452b1773c60b469d4c30dc33a9a4a4
+branch refs/heads/paudley/454-rdflib-shim-algebra-level-reassignment
+
+worktree /home/paudley/Active/purrdf/.worktrees/prebound-values-nested
+HEAD 87068c3e818902b1306c53423fb9bbf254df9f56
+branch refs/heads/paudley/prebound-values-nested
+
+worktree /home/paudley/Active/purrdf/.worktrees/stack-safe-evaluator
+HEAD ce3c07192aba1e36666062c00f958670a827cfb5
+branch refs/heads/paudley/turtle-chain-and-pack-depth
+
+worktree /home/paudley/Active/purrdf/.worktrees/v4-decimal-defaults
+HEAD 5854ef59e6eeba17e513894bc405a5d1ff72a493
+branch refs/heads/paudley/423-v4-decimal-defaults
+
+worktree /home/paudley/Active/purrdf/.worktrees/v4-remembered-graphs-default
+HEAD 06900aa56a8f7f986d0c24d3cb99e9e83e384254
+branch refs/heads/paudley/v4-remembered-graphs-default
+
+worktree /tmp/purrdf-402-rust-v3.0.1-api-baseline
+HEAD dcd24b1cc56cd7ac24cbe0d38dcf5a89022eaccf
+detached
+
+worktree /tmp/ttldiff/main-wt
+HEAD ce3c07192aba1e36666062c00f958670a827cfb5
+detached
+

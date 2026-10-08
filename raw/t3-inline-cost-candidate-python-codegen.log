@@ -1,0 +1,818 @@
+       Fresh typenum v1.20.1
+       Fresh hybrid-array v0.4.15
+       Fresh purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hash)
+       Fresh crypto-common v0.2.2
+       Fresh block-buffer v0.12.1
+       Fresh cpufeatures v0.3.0
+       Fresh purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/lex)
+       Fresh cfg-if v1.0.4
+       Fresh const-oid v0.10.2
+       Fresh digest v0.11.3
+       Fresh purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/iri)
+       Dirty purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd): the file `crates/xsd/src/exact/cost.rs` has changed (1791349386.194520682s, 13m 42s after last build at 1791348564.515163383s)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd)
+       Fresh purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-events)
+       Fresh sha2 v0.11.0
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.11.0/src/sha256.rs:55:17
+   |
+55 |                 cpufeatures::new!(shani_cpuid, "sha", "sse2", "ssse3", "sse4.1");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D deprecated` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(deprecated)]`
+   = note: the `deprecated` lint ignores `-D warnings`
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.11.0/src/sha512.rs:50:17
+   |
+50 |                 cpufeatures::new!(avx2_cpuid, "avx2");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_xsd CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='Native XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-xsd CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_xsd --edition=2024 crates/xsd/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=cebcad2fc6a3cd01 -C extra-filename=-a6bdeeb7174020b5 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+warning: `sha2` (lib) generated 2 warnings
+       Fresh regex-syntax v0.8.11
+       Fresh regex-automata v0.4.14
+warning: use of deprecated constant `core::usize::MAX`: replaced by the `MAX` associated constant on this type
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.14/src/nfa/thompson/pikevm.rs:1241:51
+     |
+1241 |             input.haystack().len() < core::usize::MAX,
+     |                                                   ^^^
+     |
+     = note: `-D deprecated` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(deprecated)]`
+     = note: the `deprecated` lint ignores `-D warnings`
+
+warning: use of deprecated constant `core::usize::MAX`: replaced by the `MAX` associated constant on this type
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.14/src/nfa/thompson/pikevm.rs:1416:51
+     |
+1416 |             input.haystack().len() < core::usize::MAX,
+     |                                                   ^^^
+
+warning: use of deprecated constant `core::i32::MAX`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.14/src/util/primitives.rs:151:46
+    |
+151 |         SmallIndex::new_unchecked(core::i32::MAX as usize - 1);
+    |                                              ^^^
+
+warning: `regex-automata` (lib) generated 3 warnings
+       Fresh purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/deflate)
+       Fresh regex v1.12.4
+       Fresh hashbrown v0.17.1
+       Fresh crossbeam-utils v0.8.21
+       Fresh crossbeam-epoch v0.9.18
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/lib.rs:66:7
+   |
+66 | #[cfg(crossbeam_loom)]
+   |       ^^^^^^^^^^^^^^
+   |
+   = help: expected names are: `docsrs`, `feature`, and `test` and 34 more
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `-D unexpected-cfgs` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unexpected_cfgs)]`
+   = note: the `unexpected_cfgs` lint ignores `-D warnings`
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/lib.rs:69:7
+   |
+69 | #[cfg(crossbeam_loom)]
+   |       ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/lib.rs:91:11
+   |
+91 | #[cfg(not(crossbeam_loom))]
+   |           ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+    --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs:1675:21
+     |
+1675 | #[cfg(all(test, not(crossbeam_loom)))]
+     |                     ^^^^^^^^^^^^^^
+     |
+     = help: consider using a Cargo feature instead
+     = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+              [lints.rust]
+              unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+     = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+     = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs:350:15
+    |
+350 |     #[cfg(not(crossbeam_loom))]
+    |               ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/atomic.rs:358:11
+    |
+358 |     #[cfg(crossbeam_loom)]
+    |           ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/collector.rs:112:21
+    |
+112 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/deferred.rs:90:21
+   |
+90 | #[cfg(all(test, not(crossbeam_loom)))]
+   |                     ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:56:15
+   |
+56 | #[cfg(not(any(crossbeam_sanitize, miri)))]
+   |               ^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:59:11
+   |
+59 | #[cfg(any(crossbeam_sanitize, miri))]
+   |           ^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:300:15
+    |
+300 | #[cfg(not(any(crossbeam_sanitize, miri)))] // `crossbeam_sanitize` and `miri` reduce the size of `Local`
+    |               ^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:557:21
+    |
+557 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_sanitize`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:202:29
+    |
+202 |         let steps = if cfg!(crossbeam_sanitize) {
+    |                             ^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_sanitize)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_sanitize)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/mod.rs:5:11
+  |
+5 | #[cfg(not(crossbeam_loom))]
+  |           ^^^^^^^^^^^^^^
+  |
+  = help: consider using a Cargo feature instead
+  = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+           [lints.rust]
+           unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+  = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/list.rs:298:21
+    |
+298 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/sync/queue.rs:217:21
+    |
+217 | #[cfg(all(test, not(crossbeam_loom)))]
+    |                     ^^^^^^^^^^^^^^
+    |
+    = help: consider using a Cargo feature instead
+    = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+             [lints.rust]
+             unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+    = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:10:11
+   |
+10 | #[cfg(not(crossbeam_loom))]
+   |           ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:64:21
+   |
+64 | #[cfg(all(test, not(crossbeam_loom)))]
+   |                     ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:14:15
+   |
+14 |     #[cfg(not(crossbeam_loom))]
+   |               ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: unexpected `cfg` condition name: `crossbeam_loom`
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/default.rs:22:11
+   |
+22 |     #[cfg(crossbeam_loom)]
+   |           ^^^^^^^^^^^^^^
+   |
+   = help: consider using a Cargo feature instead
+   = help: or consider adding in `Cargo.toml` the `check-cfg` lint config for the lint:
+            [lints.rust]
+            unexpected_cfgs = { level = "warn", check-cfg = ['cfg(crossbeam_loom)'] }
+   = help: or consider adding `println!("cargo::rustc-check-cfg=cfg(crossbeam_loom)");` to the top of the `build.rs`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+
+warning: use of deprecated associated function `core::num::<impl usize>::max_value`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.18/src/internal.rs:203:20
+    |
+203 |             usize::max_value()
+    |                    ^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+    = note: the `deprecated` lint ignores `-D warnings`
+
+warning: `crossbeam-epoch` (lib) generated 21 warnings
+       Fresh crossbeam-deque v0.8.6
+       Fresh rayon-core v1.13.0
+       Fresh libc v0.2.186
+warning: unused import: `linux::can::*`
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/new/mod.rs:184:17
+    |
+184 |         pub use linux::can::*;
+    |                 ^^^^^^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+    = note: the `unused_imports` lint ignores `-D warnings`
+
+warning: `#[repr(..)]` attribute is specified more than once
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/macros.rs:229:16
+    |
+229 |           #[repr(C)]
+    |                  ^
+    |
+   ::: /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.186/src/unix/linux_like/linux/gnu/mod.rs:409:1
+    |
+409 | / s_no_extra_traits! {
+410 | |     // linux/if_ether.h
+411 | |
+412 | |     #[repr(C, packed)]
+    | |            ^
+...   |
+441 | | }
+    | |_- in this macro invocation
+    |
+    = note: for consistency, only specify the representation once
+    = note: `-D repeated-reprs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(repeated_reprs)]`
+    = note: the `repeated_reprs` lint ignores `-D warnings`
+    = note: this warning originates in the macro `s_no_extra_traits` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `libc` (lib) generated 2 warnings
+       Fresh either v1.16.0
+       Fresh rayon v1.12.0
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/blocks.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `-D unused-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(unused_imports)]`
+  = note: the `unused_imports` lint ignores `-D warnings`
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/chain.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/chunks.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/cloned.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/copied.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::iter::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/empty.rs:1:5
+  |
+1 | use crate::iter::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/enumerate.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/filter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/filter_map.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/find.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/find_first_last/mod.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flat_map.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flat_map_iter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flatten.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/flatten_iter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/fold.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/fold_chunks.rs:4:5
+  |
+4 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/fold_chunks_with.rs:4:5
+  |
+4 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/inspect.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/interleave.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/interleave_shortest.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/intersperse.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/len.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/map.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/map_with.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/multizip.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::iter::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/once.rs:1:5
+  |
+1 | use crate::iter::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/panic_fuse.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/positions.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/repeat.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/rev.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip.rs:2:5
+  |
+2 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip_any.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip_any_while.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/splitter.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/step_by.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take_any.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take_any_while.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/unzip.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/update.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/while_some.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/zip.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::plumbing::*`
+ --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/zip_eq.rs:1:5
+  |
+1 | use super::plumbing::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/find_first_last/mod.rs:187:22
+    |
+187 |                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    |                      ^^^^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+    = note: the `deprecated` lint ignores `-D warnings`
+help: replace the use of the deprecated method
+    |
+187 -                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+187 +                     .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/par_bridge.rs:113:14
+    |
+113 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| c.checked_sub(1));
+    |              ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+113 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| c.checked_sub(1));
+113 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |c| c.checked_sub(1));
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/skip_any.rs:105:7
+    |
+105 |     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |       ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+105 -     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+105 +     u.try_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/iter/take_any.rs:105:7
+    |
+105 |     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |       ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+105 -     u.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+105 +     u.try_update(Ordering::Relaxed, Ordering::Relaxed, |u| u.checked_sub(1))
+    |
+
+warning: `rayon` (lib) generated 48 warnings
+       Fresh inout v0.2.2
+       Fresh cmov v0.5.4
+       Fresh ctutils v0.4.2
+       Fresh getrandom v0.3.4
+       Fresh purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/stack)
+       Fresh cpubits v0.1.1
+       Fresh universal-hash v0.6.1
+       Fresh cipher v0.5.2
+       Fresh polyval v0.7.3
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+  --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/polyval-0.7.3/src/backend/intrinsics/x86.rs:34:1
+   |
+34 | cpufeatures::new!(clmul, "avx", "pclmulqdq");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D deprecated` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(deprecated)]`
+   = note: the `deprecated` lint ignores `-D warnings`
+   = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `polyval` (lib) generated 1 warning
+       Fresh fastrand v2.4.1
+       Fresh twox-hash v2.1.2
+       Fresh structured-zstd v0.0.49
+       Fresh ghash v0.6.0
+       Fresh target-lexicon v0.13.5
+       Fresh aes v0.9.3
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aes-0.9.3/src/lib.rs:152:9
+    |
+152 |         cpufeatures::new!(features_aes, "aes");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D deprecated` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(deprecated)]`
+    = note: the `deprecated` lint ignores `-D warnings`
+    = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aes-0.9.3/src/lib.rs:153:9
+    |
+153 |         cpufeatures::new!(features_vaes256, "vaes");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated associated function `core::num::<impl u8>::max_value`: replaced by the `MAX` associated constant on this type
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aes-0.9.3/src/lib.rs:154:9
+    |
+154 |         cpufeatures::new!(features_vaes512, "avx512f", "vaes");
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this warning originates in the macro `cpufeatures::new` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `aes` (lib) generated 3 warnings
+       Fresh ctr v0.10.1
+       Fresh aead v0.6.1
+       Fresh aes-gcm v0.11.1
+       Fresh pyo3-build-config v0.29.0
+       Fresh purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/ed25519)
+       Fresh visual-hashing v1.0.0
+       Fresh unicode-ident v1.0.24
+       Fresh proc-macro2 v1.0.106
+       Fresh quote v1.0.46
+       Fresh syn v2.0.118
+       Fresh heck v0.5.0
+       Fresh pyo3-macros-backend v0.29.0
+       Fresh pyo3-macros v0.29.0
+       Fresh pyo3-ffi v0.29.0
+       Fresh once_cell v1.21.4
+       Fresh pyo3 v0.29.0
+warning: unreachable call
+   --> /kache/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-0.29.0/src/conversions/std/num.rs:178:73
+    |
+178 |                     .map_err(|e| exceptions::PyOverflowError::new_err(e.to_string()))
+    |                                                                       - ^^^^^^^^^ unreachable call
+    |                                                                       |
+    |                                                                       any code following this expression is unreachable
+...
+338 | int_fits_c_long!(i64);
+    | --------------------- in this macro invocation
+    |
+    = note: `-D unreachable-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unreachable_code)]`
+    = note: the `unreachable_code` lint ignores `-D warnings`
+    = note: this warning originates in the macro `int_fits_c_long` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `pyo3` (lib) generated 1 warning
+       Dirty purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt): the dependency `purrdf-xsd` was rebuilt
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_cdt CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='Native SPARQL composite datatypes (SEP-0009 cdt:List / cdt:Map): iterative bounded lexical scanner, canonical lexical mapping, spec equality/ordering and a total order, for the RDF 1.2 query stack' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-cdt CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_cdt --edition=2024 crates/cdt/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=733c7ce012017a8c -C extra-filename=-f4b1ad27753c3643 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out --extern purrdf_events=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out/libpurrdf_events-94ab5c52104db47a.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts): the dependency `purrdf-xsd` was rebuilt
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_gts CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='PurRDF GTS container engine: CBOR-sequence append-only graph transport reader, writer, folder, and verifier' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-gts CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_gts --edition=2024 crates/gts/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=4ad245508bac54cb -C extra-filename=-b12474c4464b8f4f --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-gts/b12474c4464b8f4f/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/aead/835803d039ead0fd/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/aes/8a84cf102ecbfa97/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cipher/3a0977992c63e4b8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cmov/639c277bb9591aa3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpubits/8a051da9be9fc4c2/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-deque/e9ee82e7ab5750a9/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-epoch/b56ed632bef75409/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-utils/53373d3348874ec7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/ctr/b61274d51ea2f4af/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/ctutils/abe3edff0002feec/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/either/81e8f2802465a32b/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/fastrand/e324693e05d26aa8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/ghash/ff81b3938405f01c/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/inout/52b1a575e1b39ec7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/polyval/0896b367b657b2c8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon-core/f10ba476cd1637c7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/twox-hash/8de18af7d8e6d9e5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/universal-hash/9de7ce3bf60a5ce5/out --extern aes_gcm=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/aes-gcm/b067d141923b8865/out/libaes_gcm-b067d141923b8865.rmeta --extern fastrand=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/fastrand/e324693e05d26aa8/out/libfastrand-e324693e05d26aa8.rmeta --extern purrdf_deflate=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out/libpurrdf_deflate-965b2efc9d89a6cc.rmeta --extern purrdf_ed25519=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-ed25519/cb4744d72f315ad8/out/libpurrdf_ed25519-cb4744d72f315ad8.rmeta --extern purrdf_events=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out/libpurrdf_events-94ab5c52104db47a.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta --extern rayon=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon/68f697368a3857d3/out/librayon-68f697368a3857d3.rmeta --extern sha2=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out/libsha2-ea5c0fd321f6863d.rmeta --extern structured_zstd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/structured-zstd/2958952baa7066c2/out/libstructured_zstd-2958952baa7066c2.rmeta --extern visual_hashing=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/visual-hashing/209413e9e5483082/out/libvisual_hashing-209413e9e5483082.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core): the dependency `purrdf-cdt` was rebuilt
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_core CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='PurRDF RDF 1.2 kernel: model, diagnostics, IR, store traits, and event ingestion' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-core CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' OUT_DIR=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/73508e441b8a2bcf/out PURRDF_BUILD_IDENTITY='rustc=1.100.0-nightly; commit=4b6d04e706108ccfeafe2547fbe857dfe8972bad; llvm=23.1.1; target-cpu=znver5; opt-level=3' kache rustc --crate-name purrdf_core --edition=2024 crates/rdf-core/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=231cd241d6e4d27c -C extra-filename=-e1326c6a8c71d75d --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern hashbrown=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out/libhashbrown-aaa27637972246c6.rmeta --extern purrdf_cdt=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out/libpurrdf_cdt-f4b1ad27753c3643.rmeta --extern purrdf_deflate=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out/libpurrdf_deflate-965b2efc9d89a6cc.rmeta --extern purrdf_events=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out/libpurrdf_events-94ab5c52104db47a.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta --extern regex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out/libregex-cc0b782e0c096f71.rmeta --extern regex_syntax=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out/libregex_syntax-bd478f64c0e3110d.rmeta --extern sha2=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out/libsha2-ea5c0fd321f6863d.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra): the dependency `purrdf-cdt` was rebuilt
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_sparql_algebra CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-sparql-algebra CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_sparql_algebra --edition=2024 crates/sparql-algebra/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=e3d6fddaad1424be -C extra-filename=-d98564c2959a9261 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-algebra/d98564c2959a9261/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out --extern purrdf_cdt=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out/libpurrdf_cdt-f4b1ad27753c3643.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results): the dependency `purrdf-core` was rebuilt
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_sparql_results CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='Native, wasm-clean serializer for the SPARQL result model (SELECT/ASK/CONSTRUCT) to SPARQL Results JSON/XML/CSV/TSV plus a provenance-carrying purrdf extension — the canonical results-serialization authority' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-sparql-results CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_sparql_results --edition=2024 crates/sparql-results/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=793dc4c98979f00f -C extra-filename=-e6227e226bfcafc0 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-results/e6227e226bfcafc0/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern purrdf_core=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out/libpurrdf_core-e1326c6a8c71d75d.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/datalog): the dependency `purrdf-core` was rebuilt
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/datalog)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_datalog CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/datalog CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/datalog/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='PurRDF native Datalog: deterministic wasm-clean semi-naive evaluation over a columnar relation store' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-datalog CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_datalog --edition=2024 crates/datalog/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=a9ab01aec013975b -C extra-filename=-db27b18376649144 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-datalog/db27b18376649144/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-deque/e9ee82e7ab5750a9/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-epoch/b56ed632bef75409/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-utils/53373d3348874ec7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/either/81e8f2802465a32b/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon-core/f10ba476cd1637c7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern hashbrown=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out/libhashbrown-aaa27637972246c6.rmeta --extern purrdf_core=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out/libpurrdf_core-e1326c6a8c71d75d.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern rayon=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon/68f697368a3857d3/out/librayon-68f697368a3857d3.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval): the dependency `purrdf-core` was rebuilt
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_sparql_eval CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra on the query path' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-sparql-eval CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_sparql_eval --edition=2024 crates/sparql-eval/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=dd90df96dd1c6bde -C extra-filename=-3f5477b54e67e9f6 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-eval/3f5477b54e67e9f6/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-deque/e9ee82e7ab5750a9/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-epoch/b56ed632bef75409/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-utils/53373d3348874ec7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/either/81e8f2802465a32b/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/libc/f1eeab4eeedbf8c3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon-core/f10ba476cd1637c7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern getrandom=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/getrandom/93d85c4c41616b70/out/libgetrandom-93d85c4c41616b70.rmeta --extern hashbrown=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out/libhashbrown-aaa27637972246c6.rmeta --extern purrdf_cdt=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out/libpurrdf_cdt-f4b1ad27753c3643.rmeta --extern purrdf_core=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out/libpurrdf_core-e1326c6a8c71d75d.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_sparql_algebra=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-algebra/d98564c2959a9261/out/libpurrdf_sparql_algebra-d98564c2959a9261.rmeta --extern purrdf_sparql_results=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-sparql-results/e6227e226bfcafc0/out/libpurrdf_sparql_results-e6227e226bfcafc0.rmeta --extern purrdf_stack=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-stack/ee75fce9789273e9/out/libpurrdf_stack-ee75fce9789273e9.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta --extern rayon=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon/68f697368a3857d3/out/librayon-68f697368a3857d3.rmeta --extern regex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out/libregex-cc0b782e0c096f71.rmeta --extern sha2=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out/libsha2-ea5c0fd321f6863d.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/entail): the dependency `purrdf-core` was rebuilt
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/entail)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_entail CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/entail CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/entail/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='PurRDF native entailment: wasm-clean RDF/RDFS/OWL 2 RL/D forward materialization over the RdfDataset IR, with a reasoning report on every closure' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-entail CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_entail --edition=2024 crates/entail/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=767971abd8ab9360 -C extra-filename=-60019d6bd39c7fcb --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-entail/60019d6bd39c7fcb/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-deque/e9ee82e7ab5750a9/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-epoch/b56ed632bef75409/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crossbeam-utils/53373d3348874ec7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/either/81e8f2802465a32b/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon-core/f10ba476cd1637c7/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/rayon/68f697368a3857d3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern hashbrown=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out/libhashbrown-aaa27637972246c6.rmeta --extern purrdf_core=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out/libpurrdf_core-e1326c6a8c71d75d.rmeta --extern purrdf_datalog=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-datalog/db27b18376649144/out/libpurrdf_datalog-db27b18376649144.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/markdown): the dependency `purrdf-core` was rebuilt
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/markdown)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_markdown CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/markdown CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/markdown/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='PurRDF structural Markdown-to-RDF 1.2 slicer: a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans, under a caller-supplied vocabulary and a declared, content-addressed profile.' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-markdown CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_markdown --edition=2024 crates/markdown/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=2e881e3a5d62b096 -C extra-filename=-2f5765a80edee54c --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-markdown/2f5765a80edee54c/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern purrdf_core=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out/libpurrdf_core-e1326c6a8c71d75d.rmeta --extern purrdf_hash=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out/libpurrdf_hash-a6e1be941db82612.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`
+       Dirty purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shex): the dependency `purrdf-core` was rebuilt
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shex)
+     Running `CARGO=/home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/bin/cargo CARGO_CRATE_NAME=purrdf_shex CARGO_MANIFEST_DIR=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shex CARGO_MANIFEST_PATH=/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shex/Cargo.toml CARGO_PKG_AUTHORS='' CARGO_PKG_DESCRIPTION='PurRDF ShEx 2.1 engine: ShExC/ShExJ schema parsing, structural validation, and shape-map validation over the purrdf-core IR, gated against the shexTest conformance suite' CARGO_PKG_HOMEPAGE='https://blackcatinformatics.ca/purrdf/' CARGO_PKG_LICENSE='MIT OR Apache-2.0 OR MulanPSL-2.0' CARGO_PKG_LICENSE_FILE='' CARGO_PKG_NAME=purrdf-shex CARGO_PKG_README=README.md CARGO_PKG_REPOSITORY='https://github.com/Blackcat-Informatics/purrdf' CARGO_PKG_RUST_VERSION=1.98 CARGO_PKG_VERSION=3.0.1 CARGO_PKG_VERSION_MAJOR=3 CARGO_PKG_VERSION_MINOR=0 CARGO_PKG_VERSION_PATCH=1 CARGO_PKG_VERSION_PRE='' KACHE_CACHE_DIR=/opt/.kache KACHE_CONFIG=/home/paudley/stage/dotfiles/dot-config/kache/config.toml KACHE_RUNTIME_DIR=/opt/.kache KACHE_SOCKET_PATH=/opt/.kache/daemon.sock LD_LIBRARY_PATH='' kache rustc --crate-name purrdf_shex --edition=2024 crates/shex/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type rlib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C codegen-units=1 --warn=rust_2018_idioms '--warn=clippy::pedantic' '--warn=clippy::nursery' '--warn=clippy::all' '--allow=clippy::zero_sized_map_values' '--allow=clippy::unused_self' --warn=unused_qualifications --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_wraps' '--allow=clippy::unnecessary_debug_formatting' '--allow=clippy::too_many_lines' '--allow=clippy::too_long_first_doc_paragraph' '--allow=clippy::single_match_else' '--allow=clippy::similar_names' '--allow=clippy::redundant_pub_crate' '--allow=clippy::option_if_let_else' '--allow=clippy::must_use_candidate' '--allow=clippy::module_name_repetitions' '--allow=clippy::missing_panics_doc' '--allow=clippy::missing_errors_doc' --warn=missing_docs --warn=missing_debug_implementations '--allow=clippy::missing_const_for_fn' '--allow=clippy::match_same_arms' '--allow=clippy::many_single_char_names' '--allow=clippy::items_after_statements' '--allow=clippy::if_not_else' '--allow=clippy::float_cmp' '--allow=clippy::doc_markdown' '--allow=clippy::cast_sign_loss' '--allow=clippy::cast_precision_loss' '--allow=clippy::cast_possible_wrap' '--allow=clippy::cast_possible_truncation' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=2a4bbe1e5a310abc -C extra-filename=-c4ad3889c88ae454 --out-dir /opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-shex/c4ad3889c88ae454/out -C strip=symbols -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/block-buffer/f611a49cad1976b1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cfg-if/48fe517c02b4cff1/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/const-oid/5f32966dff09d5f8/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/cpufeatures/92aa079344235a04/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/crypto-common/18a975cf0060325e/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/digest/4e3e094fe18226ae/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hashbrown/aaa27637972246c6/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/hybrid-array/1f9890fd95056ead/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-cdt/f4b1ad27753c3643/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-deflate/965b2efc9d89a6cc/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-events/94ab5c52104db47a/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-hash/a6e1be941db82612/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-automata/dffb17ce11462fb3/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex-syntax/bd478f64c0e3110d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/regex/cc0b782e0c096f71/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/sha2/ea5c0fd321f6863d/out -L dependency=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/typenum/1e971c1889daea51/out --extern purrdf_core=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-core/e1326c6a8c71d75d/out/libpurrdf_core-e1326c6a8c71d75d.rmeta --extern purrdf_iri=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-iri/38bfcfa80f915c25/out/libpurrdf_iri-38bfcfa80f915c25.rmeta --extern purrdf_lex=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-lex/c7b628e4c902b189/out/libpurrdf_lex-c7b628e4c902b189.rmeta --extern purrdf_xsd=/opt/.cargo/slots/10d1255bdd2ffab0/0/build/release/build/purrdf-xsd/a6bdeeb7174020b5/out/libpurrdf_xsd-a6bdeeb7174020b5.rmeta -D warnings -C target-cpu=native --force-warn=unused_crate_dependencies`

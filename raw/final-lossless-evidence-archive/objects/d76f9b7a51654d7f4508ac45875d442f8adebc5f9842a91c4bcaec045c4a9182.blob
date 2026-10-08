@@ -1,0 +1,84 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "ask-direct-stop-unbound",
+      "query": "ASK WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "boolean": true,
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "ask-direct-stop-bound",
+      "query": "ASK WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "boolean": true,
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "ask-join-stop-unbound",
+      "query": "ASK WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } VALUES ?y {0} }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "boolean": true,
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "ask-join-stop-bound",
+      "query": "ASK WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } VALUES ?y {0} }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "boolean": true,
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "ask-minus-stop-unbound",
+      "query": "ASK WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } MINUS { VALUES ?y {0} } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "boolean": true,
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "ask-minus-stop-bound",
+      "query": "ASK WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } MINUS { VALUES ?y {0} } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "boolean": true,
+        "callback_invocations": 1
+      }
+    }
+  ]
+}

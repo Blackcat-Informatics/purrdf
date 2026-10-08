@@ -1,0 +1,96 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "optional-retry-stops-first-match",
+      "query": "SELECT ?x WHERE { VALUES ?x { 1 } { OPTIONAL { VALUES ?y { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) FILTER(BOUND(?x)) } } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [],
+        "callback_invocations": 4
+      },
+      "count_callback": true
+    },
+    {
+      "name": "exists-root-filter-retains-context",
+      "query": "SELECT ?x WHERE { VALUES ?x { 1 } FILTER EXISTS { FILTER(?x = 1) } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "not-exists-root-filter-retains-context",
+      "query": "SELECT ?x WHERE { VALUES ?x { 1 } FILTER NOT EXISTS { FILTER(?x = 1) } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "plain-group-filter-forgets-context",
+      "query": "SELECT ?x WHERE { VALUES ?x { 1 } { FILTER(?x = 1) } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "having-clause-local-sampling",
+      "query": "SELECT (<http://example.org/b> AS ?this) (COUNT(*) AS ?n) WHERE { VALUES ?this { <http://example.org/a> } } HAVING(?this = <http://example.org/a>)",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

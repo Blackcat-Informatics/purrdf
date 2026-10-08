@@ -1,0 +1,69 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-base-native-ir/qualification_454_native_cost.purrdf_sparql_eval-f1be5881d2e83378.purrdf_sparql_eval.5af75fb13b780118-cgu.0.rcgu.o.rcgu.ll:821955
+; purrdf_sparql_eval::governor::soundness::validate_graph_pattern_depth
+define void @_RNvNtNtCs7Od70DJOKqO_18purrdf_sparql_eval8governor9soundness28validate_graph_pattern_depth(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([96 x i8]) align 8 captures(none) dereferenceable(96) initializes((0, 8)) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1) unnamed_addr #2 !guid !105160 {
+  %3 = alloca [16 x i8], align 8
+  %4 = alloca [96 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %4)
+  call void @llvm.lifetime.start.p0(ptr nonnull %3), !noalias !105161
+  store i64 0, ptr %3, align 8, !noalias !105161
+  %5 = getelementptr inbounds nuw i8, ptr %3, i64 8
+  store ptr %1, ptr %5, align 8, !noalias !105161
+; call purrdf_sparql_eval::stack::height::admit::<[purrdf_sparql_algebra::walk::NodeRef; 1]>
+  call fastcc void @_RINvNtNtCs7Od70DJOKqO_18purrdf_sparql_eval5stack6height5admitANtNtCscTZQnUyyJie_21purrdf_sparql_algebra4walk7NodeRefj1_EB6_.llvm.16114685706076860956(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(96) %4, ptr noalias nofree noundef align 8 captures(address) dereferenceable(16) %3)
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !noalias !105161
+  %6 = load i64, ptr %4, align 8, !range !2402, !noundef !1671
+  %7 = icmp eq i64 %6, -1
+  br i1 %7, label %9, label %8
+
+8:                                                ; preds = %2
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(96) %0, ptr noundef nonnull align 8 dereferenceable(96) %4, i64 96, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  br label %10
+
+9:                                                ; preds = %2
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  store i64 -1, ptr %0, align 8
+  br label %10
+
+10:                                               ; preds = %9, %8
+  ret void
+}
+
+ASSEMBLY
+_RNvNtNtCs7Od70DJOKqO_18purrdf_sparql_eval8governor9soundness28validate_graph_pattern_depth:
+.Lfunc_begin1767:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$112, %rsp
+	.cfi_def_cfa_offset 128
+	.cfi_offset %rbx, -16
+	movq	%rdi, %rbx
+	leaq	16(%rsp), %rdi
+	movq	$0, (%rsp)
+	movq	%rsi, 8(%rsp)
+	movq	%rsp, %rsi
+	callq	_RINvNtNtCs7Od70DJOKqO_18purrdf_sparql_eval5stack6height5admitANtNtCscTZQnUyyJie_21purrdf_sparql_algebra4walk7NodeRefj1_EB6_.llvm.16114685706076860956
+	cmpq	$-1, 16(%rsp)
+	je	.LBB1767_2
+	vmovups	48(%rsp), %zmm1
+	vmovups	16(%rsp), %zmm0
+	vmovups	%zmm1, 32(%rbx)
+	vmovups	%zmm0, (%rbx)
+	movq	%rbx, %rax
+	addq	$112, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB1767_2:
+	.cfi_def_cfa_offset 128
+	movq	$-1, (%rbx)
+	movq	%rbx, %rax
+	addq	$112, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end1767:

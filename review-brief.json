@@ -1,0 +1,93 @@
+{
+  "issue": 454,
+  "branch": "paudley/454-rdflib-shim-algebra-level-reassignment",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "08e7cd585dfecfb335d258c187c14c2ce75e388d",
+      "subject": "Align Python scoreboard with qualified conformance results",
+      "date": "2026-10-08"
+    },
+    {
+      "oid": "239c3c1aa25a3b1952734d002b93bdb7d388ef3d",
+      "subject": "Refresh generated conformance and SIMD measurements",
+      "date": "2026-10-08"
+    },
+    {
+      "oid": "6ce3cc6567d0874414cf138bcdfd11f4799e6901",
+      "subject": "Complete contextual application policy fixtures",
+      "date": "2026-10-08"
+    },
+    {
+      "oid": "56e636497c049debe2de5445389abf3e018d4783",
+      "subject": "fix(rdflib): route graph queries through contextual algebra",
+      "date": "2026-10-06"
+    },
+    {
+      "oid": "e72660e8769af222387ecc4fd4f84ea9887e43a1",
+      "subject": "fix(sparql): compile contextual mappings through native algebra",
+      "date": "2026-10-06"
+    }
+  ],
+  "files": [
+    "CHANGELOG.md",
+    "bindings/python/python/src/purrdf/__init__.pyi",
+    "bindings/python/python/src/purrdf/compat/rdflib/graph.py",
+    "bindings/python/python/src/purrdf/compat/rdflib/query.py",
+    "bindings/python/src/py_store/quad_store.rs",
+    "bindings/python/src/py_store/query.rs",
+    "bindings/python/tests/README.md",
+    "bindings/python/tests/test_contextual_mappings.py",
+    "bindings/python/tests/test_solution_row_protocol.py",
+    "crates/purrdf/src/reasoning.rs",
+    "crates/rdf-core/src/small.rs",
+    "crates/rdf/src/projections/dataset_description.rs",
+    "crates/shapes/src/prebinding.rs",
+    "crates/shapes/src/profile.rs",
+    "crates/shapes/src/shapes/parser/admission.rs",
+    "crates/shapes/src/srl/reads.rs",
+    "crates/slice/src/ownership.rs",
+    "crates/sparql-algebra/src/algebra.rs",
+    "crates/sparql-algebra/src/owned.rs",
+    "crates/sparql-algebra/src/parser.rs",
+    "crates/sparql-algebra/src/parser/machine.rs",
+    "crates/sparql-algebra/src/parser/triples.rs",
+    "crates/sparql-algebra/src/retained_size.rs",
+    "crates/sparql-algebra/src/serialize.rs",
+    "crates/sparql-algebra/src/traits.rs",
+    "crates/sparql-algebra/src/validate.rs",
+    "crates/sparql-algebra/src/walk.rs",
+    "crates/sparql-algebra/tests/iterative_traits.rs",
+    "crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs",
+    "crates/sparql-eval/src/basic_profile.rs",
+    "crates/sparql-eval/src/bgp.rs",
+    "crates/sparql-eval/src/binop.rs",
+    "crates/sparql-eval/src/blank_scope.rs",
+    "crates/sparql-eval/src/cdt_agg.rs",
+    "crates/sparql-eval/src/construct.rs",
+    "crates/sparql-eval/src/engine.rs",
+    "crates/sparql-eval/src/eval.rs",
+    "crates/sparql-eval/src/expr.rs",
+    "crates/sparql-eval/src/governor/soundness.rs",
+    "crates/sparql-eval/src/lib.rs",
+    "crates/sparql-eval/src/modifier.rs",
+    "crates/sparql-eval/src/prebind_memo.rs",
+    "crates/sparql-eval/src/property_fn_eval.rs",
+    "crates/sparql-eval/src/property_fn_plan.rs",
+    "crates/sparql-eval/src/rdflib.rs",
+    "crates/sparql-eval/src/remote.rs",
+    "crates/sparql-eval/src/row_checkpoint.rs",
+    "crates/sparql-eval/src/service_endpoints.rs",
+    "crates/sparql-eval/src/substitute.rs",
+    "crates/sparql-eval/tests/fixtures/contextual-mappings.json",
+    "crates/sparql-eval/tests/native_xpath.rs",
+    "crates/sparql-eval/tests/rdflib_contextual.rs",
+    "crates/xsd/src/exact/cost.rs",
+    "docs/CONFORMANCE.md",
+    "docs/book/po/zh-Hans.po",
+    "docs/book/src/interop/rdflib.md",
+    "docs/book/src/sparql/querying.md",
+    "docs/design/purrdf-simd.md"
+  ],
+  "adrs_touched": []
+}

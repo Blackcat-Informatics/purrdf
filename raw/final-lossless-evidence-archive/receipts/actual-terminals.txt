@@ -1,0 +1,6 @@
+71688 raw policy/before inventory terminal0
+rendered164 tar membership/content/mode/raw+member policy terminal0
+5694 canonical compression/fullcmp/decompressed SHA/map terminal0
+supplementary41 policy/copy/fullcmp/SHA terminal0
+34893 complete4882 stored-object finalSHA readback terminal0
+71042 all294 stored gzip plaintext policy terminal0

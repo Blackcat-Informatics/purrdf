@@ -1,0 +1,26 @@
+RUF015 Prefer `next(...)` over single element slice
+   --> tests/test_contextual_mappings.py:338:16
+    |
+336 |         f"SELECT (AGG(<{namespace}MEDIAN>, ?v) AS ?m) WHERE {{ VALUES ?v {{1 2 3}} }}"
+337 |     )
+338 |     assert str(list(graph.query(query, aggregate_namespace=namespace))[0].m) == "2"
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+339 |     extension = EX + "extension/"
+340 |     held = f"ASK {{ FILTER(<{extension}heldIn>(<{EX}r>, <{EX}s>)) }}"
+    |
+help: Replace with `next(...)`
+
+RUF015 Prefer `next(iter(graph.query(query)))` over single element slice
+   --> tests/test_contextual_mappings.py:418:20
+    |
+416 |             f"SELECT ?x WHERE {{ BIND(IF(true, 1, EXISTS {{ {graph_body} }}) AS ?x) }}"
+417 |         )
+418 |         assert str(list(graph.query(query))[0].x) == "1"
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+419 |         for query in (
+420 |             f"SELECT ?s WHERE {{ ?s <{EX}p> ?o MINUS {{ {graph_body} }} }}",
+    |
+help: Replace with `next(iter(graph.query(query)))`
+
+Found 2 errors.
+No fixes available (2 hidden fixes can be enabled with the `--unsafe-fixes` option).

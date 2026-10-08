@@ -1,0 +1,42 @@
+# Owning-backend paired inliner adjudication
+
+2026-10-08. **Diagnostic verdict: PASS for exact edge/reason coverage. Whole cost remains FAILED.** Corrected46120 actualterminal0, driver/all six commands0, both original32-output comparisons0, frozen579 and original-source/artifact readbacks0. Root `/opt/purrdf-454-current-qualification-20261008/project-outer-owning-inline-diagnostic-1`. Both roles' owning-evaluator and final-binary actual argv receive `-Cremark=inline`, with original O3/ThinLTO/codegen1/compiler/thresholds unchanged. No shipping edit, build or runtime by reviewer.
+
+Complete demangled raw remarks and selected exact outer chain records are retained in Stage `raw/project-outer-owning-inline-diagnostic-review/`; original stderr logs remain authoritative. Prior4629 missed coverage and97434 whole-body failure remain preserved.
+
+## Actual compiler decisions
+
+| Exact edge | Actual raw/demangled log observation |
+| --- | --- |
+| Baseline ordinary-local outer SpecExtend into SpecFromIterNested | baseline338036 success, cost−14160, threshold250. This is an intermediate edge, not the final Project decision. |
+| Baseline outer SpecFromIterNested into SpecFromIter | baseline338044 success, cost−14045, threshold250. |
+| Baseline outer SpecFromIter into ordinary Project | baseline351806 success, cost−14060, threshold250. Closure identity is ordinary `eval_project<RdfDataset>::closure#2`. |
+| Candidate extend_trusted into shared outer SpecExtend | candidate345359 success, cost−14185, threshold250; TrustedLen selection/internal composition succeeded. |
+| Candidate shared outer SpecExtend into contextual yield-transform | candidate358587 missed because too costly, cost800, threshold250. |
+| Candidate same shared outer SpecExtend into ordinary Project | candidate366889 missed because too costly, cost800, threshold250. |
+
+The failed edge is not a noinline veto, unavailable-definition error or failed cardinality specialization. Candidate's shared closure is `eval_project_sequence<TermId>::closure#1`. Its final complete actual use inventory is two calls, ordinary Project and contextual yield-transform, as independently retained in the preceding full-body review. Baseline's ordinary-local outer closure has one owning ordinary pipeline; its final integrated body has no living outer container callee. Internal SmallVec grow remains intentionally noinline in both; unrelated source-column/range/DeltaDataset remarks are not substituted for this comparison.
+
+## Compiler mechanism and limits
+
+Read-only GitHub contents lookup for the actual rustc commit `4b6d04e706108ccfeafe2547fbe857dfe8972bad` binds its LLVM submodule to `rust-lang/llvm-project` commit `1b9c0d5ff9bbe7634aead059efe6b11a7eeba145`. That exact compiler source requires local linkage plus one live use for the sole-call test, then subtracts the last-static-call bonus from cost. [Exact InlineCost.cpp](https://github.com/rust-lang/llvm-project/blob/1b9c0d5ff9bbe7634aead059efe6b11a7eeba145/llvm/lib/Analysis/InlineCost.cpp#L1147) and its [bonus application](https://github.com/rust-lang/llvm-project/blob/1b9c0d5ff9bbe7634aead059efe6b11a7eeba145/llvm/lib/Analysis/InlineCost.cpp#L2016).
+
+The default target bonus is15000 in the [exact TargetTransformInfo implementation](https://github.com/rust-lang/llvm-project/blob/1b9c0d5ff9bbe7634aead059efe6b11a7eeba145/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L89). **Inference from actual costs/use inventory and bound compiler source:** baseline's large negative score reflects eliminable single-use pipeline credit; shared two-use candidate loses that opportunity and is rejected at800>250. Adding15000 to the recorded baseline score gives approximately940 before that bonus, not proof of a cheaper baseline algorithm. The raw remarks do not itemize static bonus, instruction/SROA cost breakdown, pass iteration name or hotness; none is presented as an observed field. Both recorded final thresholds are250, with no reported hotness override. No claim that arbitrary code rearrangement forces a particular result follows.
+
+## Bounded design consequence
+
+The demonstrated obstacle is the shared outer iterator closure's monomorphization/use identity, not Vec correctness. Another switch between push/extend/collect inside the same shared closure does not address that mechanism. A coherent repair must retain one shared row-projection algorithm and safe standard-library bulk allocation/length/drop homes, while giving genuinely distinct ordinary/contextual call-site iterator composition an opportunity to integrate without a multi-use outer specialization. It must preserve source-view hoist, inner bulk fill and caller-owned Lift.
+
+One evidence-grounded design to evaluate is caller-local outer iterator composition whose per-row transform calls the single inline shared row-projection home; the shared algorithm must not be duplicated. Any thin plumbing duplication must be explicitly judged against the one-home law before implementation. This is a design candidate, not an emission guarantee. Introducing a fake runtime mode, phantom marker, threshold override, private raw-slot/partial-init guard or copied standard-library implementation is not justified. Existing actual delivery types may be considered only if they are a real design input rather than a nominal optimizer trick.
+
+Root owns that bounded design decision/source implementation. Required subsequent proof remains affected existing Project/contextual/prepared controls and strict gates, then exact fresh native/host complete twelve-row bodies against admitted immutable85204. The cost criterion cannot pass from this diagnostic, negative scores, annotations or32 outputs alone.
+
+## Concrete private macro design assessment requested by root
+
+**Design verdict: PASS for the bounded private one-body macro route, subject to review of actual source and new emission.** Replace the current inlined sequence function with one module-private `macro_rules!` kernel and invoke it at the same ordinary/contextual sites. Declare it before both uses for lexical scope. The expansion is a block that binds its `seq` expression once, then its `out` expression once, followed by the exact existing kernel. Rust macro hygiene keeps internal bindings from capturing caller names. Binding `&seq` and `layout()` in that order retains the old function-argument evaluation and immutable borrowing; contextual already-owned `out` moves once. Use neither repeated argument substitution nor early return/control flow from the caller.
+
+The exact source-column map, `Vec::with_capacity(seq.rows.len())`, one mapped outer Extend, once-per-row `as_slice`, existing inner Solution bulk fill, final `SolutionSeq { schema: out, rows }`, and their local/drop ordering must remain unchanged. Layout, Lift construction/absorb/finish and ordinary error/None return remain in their current callers. On panic the standard Vec/SmallVec guards and initialized element destruction remain authoritative; no hand-written unsafe/guard or borrowed-row lifetime extension is introduced. There is one authored projection body, not two algorithm copies or a hidden alternate path.
+
+This makes the iterator closures call-site-owned through expansion rather than one generic helper's shared closure identity. It directly targets the actual two-use specialization obstacle without semantic modes, nominal markers, new dependencies or threshold changes. Distinct expansion identities and the expected sole-call opportunity are a design rationale, not a guarantee that later inlining/merging phases preserve them or erase every frame. Whole fresh native/host caller/callee inspection must prove the outcome.
+
+Compared with a caller-generic function, splitting identity without an unused marker requires a genuine per-row callback/factory supplied separately by callers. That either exposes new projection plumbing or moves outer composition into two authored sites while adding a shared per-row helper; neither is a smaller exact-preservation route here. An unused type argument/phantom or fake policy is not justified. The private macro is consequently the smallest coherent source candidate under the one-home requirement. Existing35 Project/contextual/prepared controls, strict clippy/fmt and affected hygiene must qualify its actual source before fresh complete twelve-row cost proof; prior unchanged controls remain scope-applicable.

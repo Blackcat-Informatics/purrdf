@@ -1,0 +1,11 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-project-view-lift-cost-body-review/prior-dispatcher-normalized.ll	2026-10-08 10:34:25.417059769 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-project-view-lift-cost-body-review/current-dispatcher-normalized.ll	2026-10-08 10:34:25.418059753 -0600
+@@ -389,7 +389,7 @@
+   %183 = getelementptr inbounds nuw i8, ptr %1, i64 24
+   %184 = load i64, ptr %183, align 8, !alias.scope !ID, !noalias !ID, !noundef !ID
+ ; call purrdf_sparql_eval::modifier::eval_project::<purrdf_core::ir::dataset::RdfDataset>
+-  tail call void @purrdf_sparql_eval::modifier::eval_project::<purrdf_core::ir::dataset::RdfDataset>(ptr noalias nofree noundef nonnull sret([112 x i8]) align 16 captures(address) dereferenceable(112) %0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %1, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %82, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %182, i64 noundef range(i64 0, 576460752303423488) %184, ptr noalias nofree noundef nonnull align 16 dereferenceable(1248) %2) #ATTR
++  tail call void @purrdf_sparql_eval::modifier::eval_project::<purrdf_core::ir::dataset::RdfDataset>(ptr noalias nofree noundef nonnull sret([112 x i8]) align 16 captures(none) dereferenceable(112) %0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %1, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %82, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %182, i64 noundef range(i64 0, 576460752303423488) %184, ptr noalias nofree noundef nonnull align 16 dereferenceable(1248) %2) #ATTR
+   br label %227
+ 
+ 185:                                              ; preds = %80

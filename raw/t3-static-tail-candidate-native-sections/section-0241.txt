@@ -1,0 +1,552 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:693047
+; <purrdf_sparql_eval::eval::EvalCtx>::charge_exact_numeric
+define internal fastcc void @_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx20charge_exact_numericB7_(ptr dead_on_unwind noalias nofree noundef nonnull writable writeonly align 8 captures(none) dereferenceable(24) %0, ptr nofree noundef nonnull align 16 captures(none) %1, i64 noundef %2, i64 noundef %3) unnamed_addr #0 personality ptr @rust_eh_personality !guid !87115 {
+  %5 = alloca [32 x i8], align 8
+  %6 = alloca [24 x i8], align 8
+  %7 = alloca [32 x i8], align 8
+  %8 = alloca [32 x i8], align 8
+  %9 = alloca [24 x i8], align 8
+  %10 = alloca [24 x i8], align 8
+  %11 = alloca [24 x i8], align 8
+  %12 = icmp eq i64 %3, 0
+  %13 = or i64 %3, %2
+  %14 = icmp eq i64 %13, 0
+  br i1 %14, label %20, label %15
+
+15:                                               ; preds = %4
+  %16 = getelementptr inbounds nuw i8, ptr %1, i64 336
+  %17 = getelementptr i8, ptr %1, i64 344
+  %18 = load i8, ptr %17, align 8, !range !3430, !noundef !1703
+  %19 = icmp eq i8 %18, 2
+  br i1 %19, label %25, label %21
+
+20:                                               ; preds = %4
+  store i8 -1, ptr %0, align 8
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit: ; preds = %100, %99, %93, %156, %155, %111, %110, %104, %76, %30, %28, %20
+  ret void
+
+21:                                               ; preds = %15
+  call void @llvm.lifetime.start.p0(ptr nonnull %11)
+  %22 = load ptr, ptr %16, align 16
+; call <purrdf_sparql_eval::eval::EvalCtx>::charge_deferred
+  call fastcc void @_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx15charge_deferredB7_(ptr noalias nofree noundef align 8 captures(address) dereferenceable(24) %11, ptr noundef nonnull align 16 %1, ptr %22, i8 %18, i8 noundef 4, i64 noundef %2)
+  %23 = load i8, ptr %11, align 8, !range !1970, !noundef !1703
+  %24 = icmp eq i8 %23, -1
+  br i1 %24, label %29, label %28
+
+25:                                               ; preds = %15
+  call void @llvm.lifetime.start.p0(ptr nonnull %10)
+; call <purrdf_sparql_eval::eval::EvalCtx>::charge_occurrences
+  call fastcc void @_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx18charge_occurrencesB7_(ptr noalias nofree noundef align 8 captures(address) dereferenceable(24) %10, ptr noundef nonnull align 16 %1, i8 noundef 4, i64 noundef %2) #93
+  %26 = load i8, ptr %10, align 8, !range !1970, !noundef !1703
+  %27 = icmp eq i8 %26, -1
+  br i1 %27, label %105, label %104
+
+28:                                               ; preds = %21
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %0, ptr noundef nonnull align 8 dereferenceable(24) %11, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %11)
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+29:                                               ; preds = %21
+  call void @llvm.lifetime.end.p0(ptr nonnull %11)
+  br i1 %12, label %30, label %31
+
+30:                                               ; preds = %31, %29
+  store i8 -1, ptr %0, align 8
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+31:                                               ; preds = %29
+  %32 = load ptr, ptr %16, align 16, !nonnull !1703, !noundef !1703
+  %33 = getelementptr inbounds nuw i8, ptr %32, i64 81
+  %34 = load i8, ptr %33, align 1, !range !1936, !noundef !1703
+  %35 = trunc nuw i8 %34 to i1
+  br i1 %35, label %36, label %30
+
+36:                                               ; preds = %31
+  %37 = load i8, ptr %17, align 8
+  %38 = getelementptr inbounds nuw i8, ptr %32, i64 16
+  %39 = trunc nuw i8 %37 to i1
+  br i1 %39, label %46, label %40
+
+40:                                               ; preds = %36
+  %41 = getelementptr inbounds nuw i8, ptr %1, i64 840
+  %42 = load i64, ptr %41, align 8, !noalias !87116, !noundef !1703
+  %43 = getelementptr inbounds nuw i8, ptr %1, i64 848
+  %44 = atomicrmw umax ptr %43, i64 %42 monotonic, align 8, !noalias !87116
+  %45 = icmp ugt i64 %42, %44
+  br i1 %45, label %58, label %82
+
+46:                                               ; preds = %36
+  %47 = getelementptr inbounds nuw i8, ptr %1, i64 832
+  %48 = load i64, ptr %47, align 16, !noalias !87116, !noundef !1703
+  %49 = getelementptr inbounds nuw i8, ptr %1, i64 696
+  %50 = load i64, ptr %49, align 8, !noalias !87116, !noundef !1703
+  %51 = icmp ult i64 %50, 115292150460684698
+  tail call void @llvm.assume(i1 %51)
+  %52 = getelementptr inbounds nuw i8, ptr %32, i64 80
+  %53 = load atomic i8, ptr %52 monotonic, align 1, !noalias !87116
+  %54 = icmp eq i8 %53, 0
+  br i1 %54, label %55, label %82
+
+55:                                               ; preds = %46
+  %56 = add i64 %50, %48
+  call void @llvm.lifetime.start.p0(ptr nonnull %8), !noalias !87116
+  %57 = getelementptr inbounds nuw i8, ptr %8, i64 8
+  store i64 %56, ptr %57, align 8, !noalias !87116
+  store i64 3, ptr %8, align 8, !noalias !87116
+; call <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::record
+  call fastcc void @_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral6record.llvm.14007767151641398955(ptr noundef nonnull align 8 %38, ptr noalias nofree noundef align 8 captures(address) dereferenceable(32) %8), !noalias !87116
+  call void @llvm.lifetime.end.p0(ptr nonnull %8), !noalias !87116
+  br label %82
+
+58:                                               ; preds = %40
+  %59 = getelementptr inbounds nuw i8, ptr %32, i64 72
+  %60 = load atomic i64, ptr %59 monotonic, align 8, !noalias !87119
+  %61 = getelementptr inbounds nuw i8, ptr %32, i64 80
+  %62 = load atomic i8, ptr %61 monotonic, align 8, !noalias !87119
+  %63 = icmp eq i8 %62, 0
+  br i1 %63, label %64, label %72
+
+64:                                               ; preds = %58
+  %65 = sub nuw i64 %42, %44
+  %66 = tail call i64 @llvm.uadd.sat.i64(i64 %60, i64 %65)
+  store atomic i64 %66, ptr %59 monotonic, align 8, !noalias !87119
+  call void @llvm.lifetime.start.p0(ptr nonnull %7), !noalias !87119
+  %67 = getelementptr inbounds nuw i8, ptr %7, i64 24
+  store i64 %65, ptr %67, align 8, !noalias !87119
+  %68 = getelementptr inbounds nuw i8, ptr %7, i64 8
+  store i64 0, ptr %68, align 8, !noalias !87119
+  store i64 2, ptr %7, align 8, !noalias !87119
+; call <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::record
+  call fastcc void @_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral6record.llvm.14007767151641398955(ptr noundef nonnull align 8 %38, ptr noalias nofree noundef align 8 captures(address) dereferenceable(32) %7), !noalias !87119
+  call void @llvm.lifetime.end.p0(ptr nonnull %7), !noalias !87119
+  %69 = getelementptr inbounds nuw i8, ptr %32, i64 56
+  %70 = load i64, ptr %69, align 8, !noalias !87119, !noundef !1703
+  %71 = icmp ugt i64 %66, %70
+  br i1 %71, label %75, label %82
+
+72:                                               ; preds = %58
+  %73 = getelementptr inbounds nuw i8, ptr %32, i64 56
+  %74 = load i64, ptr %73, align 8, !noalias !87119, !noundef !1703
+  br label %76
+
+75:                                               ; preds = %64
+  store atomic i8 1, ptr %61 monotonic, align 8, !noalias !87119
+  br label %76
+
+76:                                               ; preds = %75, %72
+  %77 = phi i64 [ %60, %72 ], [ %66, %75 ]
+  %78 = phi i64 [ %74, %72 ], [ %70, %75 ]
+  store i8 0, ptr %0, align 8
+  %79 = getelementptr inbounds nuw i8, ptr %0, i64 1
+  store i8 3, ptr %79, align 1
+  %80 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 %78, ptr %80, align 8
+  %81 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i64 %77, ptr %81, align 8
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+82:                                               ; preds = %64, %55, %46, %40
+  %83 = load ptr, ptr %16, align 16, !nonnull !1703, !noundef !1703
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !87122)
+  %84 = getelementptr inbounds nuw i8, ptr %83, i64 80
+  %85 = load atomic i8, ptr %84 monotonic, align 1, !noalias !87122
+  %86 = icmp eq i8 %85, 0
+  br i1 %86, label %87, label %93
+
+87:                                               ; preds = %82
+  %88 = getelementptr inbounds nuw i8, ptr %83, i64 16
+  call void @llvm.lifetime.start.p0(ptr nonnull %5), !noalias !87122
+  %89 = getelementptr inbounds nuw i8, ptr %5, i64 8
+  store i64 %3, ptr %89, align 8, !noalias !87122
+  store i64 4, ptr %5, align 8, !noalias !87122
+; call <purrdf_sparql_eval::row_checkpoint::ExactDeferral>::record
+  call fastcc void @_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral6record.llvm.14007767151641398955(ptr noundef nonnull align 8 %88, ptr noalias nofree noundef align 8 captures(address) dereferenceable(32) %5), !noalias !87122
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !noalias !87122
+  %90 = getelementptr inbounds nuw i8, ptr %83, i64 56
+  %91 = load i64, ptr %90, align 8, !noalias !87122, !noundef !1703
+  %92 = icmp ugt i64 %3, %91
+  br i1 %92, label %100, label %99
+
+93:                                               ; preds = %82
+  %94 = getelementptr inbounds nuw i8, ptr %83, i64 56
+  %95 = load i64, ptr %94, align 8, !noalias !87122, !noundef !1703
+  store i8 0, ptr %0, align 8, !alias.scope !87122
+  %96 = getelementptr inbounds nuw i8, ptr %0, i64 1
+  store i8 3, ptr %96, align 1, !alias.scope !87122
+  %97 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 %95, ptr %97, align 8, !alias.scope !87122
+  %98 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i64 %3, ptr %98, align 8, !alias.scope !87122
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+99:                                               ; preds = %87
+  store i8 -1, ptr %0, align 8, !alias.scope !87122
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+100:                                              ; preds = %87
+  store atomic i8 1, ptr %84 monotonic, align 8, !noalias !87122
+  store i8 0, ptr %0, align 8, !alias.scope !87122
+  %101 = getelementptr inbounds nuw i8, ptr %0, i64 1
+  store i8 3, ptr %101, align 1, !alias.scope !87122
+  %102 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 %91, ptr %102, align 8, !alias.scope !87122
+  %103 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i64 %3, ptr %103, align 8, !alias.scope !87122
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+104:                                              ; preds = %25
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %0, ptr noundef nonnull align 8 dereferenceable(24) %10, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %10)
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+105:                                              ; preds = %25
+  call void @llvm.lifetime.end.p0(ptr nonnull %10)
+  %106 = getelementptr inbounds nuw i8, ptr %1, i64 480
+  %107 = load ptr, ptr %106, align 16, !noundef !1703
+  %108 = icmp eq ptr %107, null
+  br i1 %108, label %110, label %109
+
+109:                                              ; preds = %105
+  br i1 %12, label %111, label %112
+
+110:                                              ; preds = %105
+  store i8 -1, ptr %0, align 8
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+111:                                              ; preds = %112, %109
+  store i8 -1, ptr %0, align 8
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+112:                                              ; preds = %109
+  %113 = getelementptr inbounds nuw i8, ptr %107, i64 40
+  %114 = load i64, ptr %113, align 8
+  %115 = icmp eq i64 %114, -1
+  br i1 %115, label %111, label %116
+
+116:                                              ; preds = %112
+  call void @llvm.lifetime.start.p0(ptr nonnull %9)
+  %117 = load i8, ptr %17, align 8, !range !3430, !noalias !87125, !noundef !1703
+  %118 = icmp eq i8 %117, 2
+  br i1 %118, label %121, label %119
+
+119:                                              ; preds = %116
+  %120 = load ptr, ptr %16, align 16, !noalias !87125, !nonnull !1703, !noundef !1703
+; call <purrdf_sparql_eval::eval::EvalCtx>::defer_growth
+  call fastcc void @_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx12defer_growthB7_(ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(24) %9, ptr noundef nonnull align 16 %1, ptr nonnull %120, i8 %117)
+  br label %152
+
+121:                                              ; preds = %116
+  %122 = getelementptr inbounds nuw i8, ptr %1, i64 840
+  %123 = load i64, ptr %122, align 8, !noalias !87125, !noundef !1703
+  %124 = getelementptr inbounds nuw i8, ptr %1, i64 848
+  %125 = atomicrmw umax ptr %124, i64 %123 monotonic, align 8, !noalias !87125
+  %126 = icmp ugt i64 %123, %125
+  br i1 %126, label %127, label %156
+
+127:                                              ; preds = %121
+  %128 = sub nuw i64 %123, %125
+  %129 = getelementptr inbounds nuw i8, ptr %107, i64 16
+  %130 = getelementptr inbounds nuw i8, ptr %107, i64 296
+  %131 = load atomic i32, ptr %130 acquire, align 8, !noalias !87128
+  %132 = icmp eq i32 %131, 0
+  br i1 %132, label %146, label %133
+
+133:                                              ; preds = %127
+  %134 = getelementptr inbounds nuw i8, ptr %107, i64 104
+  %135 = load atomic i64, ptr %134 monotonic, align 8, !noalias !87128
+  br label %136
+
+136:                                              ; preds = %136, %133
+  %137 = phi i64 [ %135, %133 ], [ %141, %136 ]
+  %138 = tail call i64 @llvm.uadd.sat.i64(i64 %137, i64 %128)
+  %139 = cmpxchg weak ptr %134, i64 %137, i64 %138 monotonic monotonic, align 8, !noalias !87128
+  %140 = extractvalue { i64, i1 } %139, 1
+  %141 = extractvalue { i64, i1 } %139, 0
+  br i1 %140, label %142, label %136
+
+142:                                              ; preds = %136
+  %143 = tail call i64 @llvm.uadd.sat.i64(i64 %141, i64 %128)
+  %144 = load i64, ptr %113, align 8, !noalias !87128
+  %145 = icmp ugt i64 %143, %144
+  br i1 %145, label %148, label %156
+
+146:                                              ; preds = %127
+  %147 = getelementptr inbounds nuw i8, ptr %107, i64 272
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %9, ptr noundef nonnull align 8 dereferenceable(24) %147, i64 24, i1 false)
+  br label %152
+
+148:                                              ; preds = %142
+  call void @llvm.lifetime.start.p0(ptr nonnull %6), !noalias !87128
+  %149 = getelementptr inbounds nuw i8, ptr %6, i64 1
+  store i8 3, ptr %149, align 1, !noalias !87128
+  %150 = getelementptr inbounds nuw i8, ptr %6, i64 8
+  store i64 %144, ptr %150, align 8, !noalias !87128
+  %151 = getelementptr inbounds nuw i8, ptr %6, i64 16
+  store i64 %143, ptr %151, align 8, !noalias !87128
+  store i8 0, ptr %6, align 8, !noalias !87128
+; call <purrdf_sparql_eval::governor::GovernorState>::trip
+  call fastcc void @_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval8governorNtB5_13GovernorState4trip.llvm.14007767151641398955(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(24) %9, ptr noundef nonnull align 8 %129, ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %6)
+  call void @llvm.lifetime.end.p0(ptr nonnull %6), !noalias !87128
+  br label %152
+
+152:                                              ; preds = %148, %146, %119
+  %153 = load i8, ptr %9, align 8
+  %154 = icmp eq i8 %153, -1
+  br i1 %154, label %156, label %155
+
+155:                                              ; preds = %152
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %0, ptr noundef nonnull align 8 dereferenceable(24) %9, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %9)
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+
+156:                                              ; preds = %152, %142, %121
+  call void @llvm.lifetime.end.p0(ptr nonnull %9)
+  %157 = load ptr, ptr %106, align 16, !nonnull !1703, !noundef !1703
+  %158 = getelementptr inbounds nuw i8, ptr %157, i64 16
+; call <purrdf_sparql_eval::governor::GovernorState>::admit_transient
+  tail call void @_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval8governorNtB5_13GovernorState15admit_transient(ptr noalias nofree noundef nonnull sret([24 x i8]) align 8 captures(none) dereferenceable(24) %0, ptr noundef nonnull align 8 %158, i8 noundef 3, i64 noundef %3)
+  br label %_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral15admit_transient.exit
+}
+
+ASSEMBLY
+_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx20charge_exact_numericB7_:
+.Lfunc_begin1581:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r13
+	.cfi_def_cfa_offset 32
+	pushq	%r12
+	.cfi_def_cfa_offset 40
+	pushq	%rbx
+	.cfi_def_cfa_offset 48
+	subq	$64, %rsp
+	.cfi_def_cfa_offset 112
+	.cfi_offset %rbx, -48
+	.cfi_offset %r12, -40
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	%rcx, %rax
+	orq	%rdx, %rax
+	movq	%rdi, %rbx
+	je	.LBB1581_4
+	movzbl	344(%rsi), %eax
+	movq	%rcx, %r14
+	movq	%rdx, %r9
+	movq	%rsi, %r15
+	cmpb	$2, %al
+	jne	.LBB1581_2
+	movl	$4, %edx
+	movq	%rsp, %rdi
+	movq	%r15, %rsi
+	movq	%r9, %rcx
+	callq	_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx18charge_occurrencesB7_
+	cmpb	$-1, (%rsp)
+	jne	.LBB1581_3
+	movq	480(%r15), %rcx
+	testq	%rcx, %rcx
+	je	.LBB1581_4
+	testq	%r14, %r14
+	je	.LBB1581_4
+	cmpq	$-1, 40(%rcx)
+	je	.LBB1581_4
+	movzbl	344(%r15), %eax
+	cmpb	$2, %al
+	jne	.LBB1581_29
+	movq	840(%r15), %rdx
+	movq	848(%r15), %rax
+	.p2align	4
+.LBB1581_31:
+	cmpq	%rdx, %rax
+	movq	%rdx, %rsi
+	cmovaq	%rax, %rsi
+	lock		cmpxchgq	%rsi, 848(%r15)
+	jne	.LBB1581_31
+	subq	%rax, %rdx
+	jbe	.LBB1581_40
+	movl	296(%rcx), %eax
+	testl	%eax, %eax
+	je	.LBB1581_41
+	movq	104(%rcx), %rax
+	leaq	16(%rcx), %rsi
+	movq	$-1, %rdi
+.LBB1581_35:
+	movq	%rax, %r8
+	addq	%rdx, %r8
+	cmovbq	%rdi, %r8
+	lock		cmpxchgq	%r8, 104(%rcx)
+	jne	.LBB1581_35
+	addq	%rdx, %rax
+	movq	$-1, %rdx
+	cmovaeq	%rax, %rdx
+	movq	40(%rcx), %rax
+	cmpq	%rax, %rdx
+	jbe	.LBB1581_40
+	leaq	32(%rsp), %rdi
+	movq	%rax, 8(%rsp)
+	movq	%rdx, 16(%rsp)
+	movq	%rsp, %rdx
+	movw	$768, (%rsp)
+	callq	_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval8governorNtB5_13GovernorState4trip.llvm.14007767151641398955
+	cmpb	$-1, 32(%rsp)
+	jne	.LBB1581_39
+	jmp	.LBB1581_40
+.LBB1581_2:
+	movq	336(%r15), %rdx
+	movzbl	%al, %ecx
+	movl	$4, %r8d
+	movq	%rsp, %rdi
+	movq	%r15, %rsi
+	callq	_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx15charge_deferredB7_
+	cmpb	$-1, (%rsp)
+	je	.LBB1581_6
+.LBB1581_3:
+	vmovups	(%rsp), %xmm0
+	movq	16(%rsp), %rax
+	movq	%rax, 16(%rbx)
+	vmovups	%xmm0, (%rbx)
+	jmp	.LBB1581_5
+.LBB1581_6:
+	testq	%r14, %r14
+	je	.LBB1581_4
+	movq	336(%r15), %r12
+	cmpb	$1, 81(%r12)
+	jne	.LBB1581_4
+	testb	$1, 344(%r15)
+	leaq	16(%r12), %rdi
+	je	.LBB1581_9
+	movq	696(%r15), %rax
+	movq	832(%r15), %rcx
+	movzbl	80(%r12), %edx
+	testb	%dl, %dl
+	jne	.LBB1581_17
+	addq	%rcx, %rax
+	movq	%rsp, %rsi
+	movq	%rax, 8(%rsp)
+	movq	$3, (%rsp)
+	callq	_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral6record.llvm.14007767151641398955
+	jmp	.LBB1581_17
+.LBB1581_9:
+	movq	840(%r15), %rcx
+	movq	848(%r15), %rax
+	.p2align	4
+.LBB1581_10:
+	cmpq	%rcx, %rax
+	movq	%rcx, %rdx
+	cmovaq	%rax, %rdx
+	lock		cmpxchgq	%rdx, 848(%r15)
+	jne	.LBB1581_10
+	subq	%rax, %rcx
+	jbe	.LBB1581_17
+	movq	72(%r12), %r13
+	movzbl	80(%r12), %eax
+	testb	%al, %al
+	je	.LBB1581_13
+	movq	56(%r12), %rax
+	jmp	.LBB1581_21
+.LBB1581_29:
+	movq	336(%r15), %rdx
+	movzbl	%al, %ecx
+	leaq	32(%rsp), %rdi
+	movq	%r15, %rsi
+	callq	_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval4evalNtB5_7EvalCtx12defer_growthB7_
+	cmpb	$-1, 32(%rsp)
+	je	.LBB1581_40
+.LBB1581_39:
+	vmovaps	32(%rsp), %xmm0
+	movq	48(%rsp), %rax
+	movq	%rax, 16(%rbx)
+	vmovups	%xmm0, (%rbx)
+	jmp	.LBB1581_5
+.LBB1581_13:
+	movq	%r13, %rax
+	addq	%rcx, %rax
+	movq	$-1, %r13
+	movq	%rsp, %rsi
+	cmovaeq	%rax, %r13
+	movq	%r13, 72(%r12)
+	movq	%rcx, 24(%rsp)
+	movq	$0, 8(%rsp)
+	movq	$2, (%rsp)
+	callq	_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral6record.llvm.14007767151641398955
+	movq	56(%r12), %rax
+	cmpq	%rax, %r13
+	jbe	.LBB1581_17
+	movb	$1, 80(%r12)
+.LBB1581_21:
+	movw	$768, (%rbx)
+	movq	%rax, 8(%rbx)
+	movq	%r13, 16(%rbx)
+	jmp	.LBB1581_5
+.LBB1581_17:
+	movq	336(%r15), %r15
+	movzbl	80(%r15), %eax
+	testb	%al, %al
+	je	.LBB1581_18
+	movq	56(%r15), %rax
+	jmp	.LBB1581_23
+.LBB1581_18:
+	leaq	16(%r15), %rdi
+	movq	%r14, 8(%rsp)
+	movq	%rsp, %rsi
+	movq	$4, (%rsp)
+	callq	_RNvMNtCs7veJbOBHQwe_18purrdf_sparql_eval14row_checkpointNtB2_13ExactDeferral6record.llvm.14007767151641398955
+	movq	56(%r15), %rax
+	cmpq	%rax, %r14
+	jbe	.LBB1581_4
+	movb	$1, 80(%r15)
+.LBB1581_23:
+	movw	$768, (%rbx)
+	movq	%rax, 8(%rbx)
+	movq	%r14, 16(%rbx)
+	jmp	.LBB1581_5
+.LBB1581_4:
+	movb	$-1, (%rbx)
+.LBB1581_5:
+	addq	$64, %rsp
+	.cfi_def_cfa_offset 48
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r13
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1581_41:
+	.cfi_def_cfa_offset 112
+	movq	288(%rcx), %rax
+	movq	%rax, 48(%rsp)
+	vmovups	272(%rcx), %xmm0
+	vmovaps	%xmm0, 32(%rsp)
+	cmpb	$-1, 32(%rsp)
+	jne	.LBB1581_39
+.LBB1581_40:
+	movq	480(%r15), %rsi
+	movq	%rbx, %rdi
+	movl	$3, %edx
+	movq	%r14, %rcx
+	addq	$16, %rsi
+	addq	$64, %rsp
+	.cfi_def_cfa_offset 48
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r13
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	jmpq	*_RNvMs6_NtCs7veJbOBHQwe_18purrdf_sparql_eval8governorNtB5_13GovernorState15admit_transient@GOTPCREL(%rip)
+.Lfunc_end1581:

@@ -1,0 +1,51 @@
+{
+  "issue": 454,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 473,
+      "title": "Python: iterating a SPARQL solution row with 'for v in row' raises KeyError",
+      "state": "OPEN"
+    },
+    {
+      "number": 11,
+      "title": "EPIC \u2014 purrdf as a high-performance, RDF-1.2-first drop-in replacement for rdflib",
+      "state": "CLOSED"
+    },
+    {
+      "number": 9,
+      "title": "Full W3C conformance (SPARQL 1.1/1.2 \u00b7 RDFC-1.0 \u00b7 IRI \u00b7 syntax) + rdflib test-suite gate",
+      "state": "CLOSED"
+    },
+    {
+      "number": 192,
+      "title": "SEP-0008 SHA-3 builtins",
+      "state": "CLOSED"
+    },
+    {
+      "number": 190,
+      "title": "CONSTRUCT GRAPH (quads) + CONSTRUCT/DESCRIBE conformance corpora",
+      "state": "CLOSED"
+    },
+    {
+      "number": 384,
+      "title": "Build a portable adversarial SHACL suite and contribute missing W3C tests",
+      "state": "OPEN"
+    }
+  ],
+  "defect_classes": {
+    "none": 16,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #454 + 6 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['rdflib', 'shim:', 'algebra-level']: 6 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits"
+  ]
+}

@@ -1,0 +1,8 @@
+ActiveState=active
+SubState=running
+InvocationID=b098fde4f49b4c53afda2845b747bc16
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-project-private-kernel-native-cost-20261008.scope
+MemoryCurrent=303718400
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

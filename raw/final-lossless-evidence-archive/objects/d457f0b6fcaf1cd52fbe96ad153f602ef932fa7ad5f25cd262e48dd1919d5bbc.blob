@@ -1,0 +1,10 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 51.75s
+     Running tests/contextual_probe.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-eval/be5da7b39bb72dc3/out/contextual_probe-be5da7b39bb72dc3)
+
+running 1 test
+test freeze_contextual_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

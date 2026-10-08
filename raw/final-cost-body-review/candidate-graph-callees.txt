@@ -1,0 +1,36 @@
+      2 ; call <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      1 ; call <core::iter::adapters::filter::Filter<core::iter::adapters::flatten::FlatMap<core::option::IntoIter<purrdf_core::ir::term::TermId>, core::iter::adapters::map::Map<core::iter::adapters::copied::Copied<core::slice::iter::Iter<(purrdf_core::ir::term::TermId, purrdf_core::ir::term::TermId, core::option::Option<purrdf_core::ir::term::TermId>)>>, <purrdf_core::ir::dataset::RdfDataset>::reifier_quads::{closure#0}::{closure#0}>, <purrdf_core::ir::dataset::RdfDataset>::reifier_quads::{closure#0}>, <purrdf_core::ir::dataset::RdfDataset as purrdf_core::dataset_view::DatasetView>::reifier_quads_in_graph::{closure#0}> as core::iter::traits::iterator::Iterator>::next
+      1 ; call <purrdf_core::ir::dataset::RdfDataset>::probe_plan
+      2 ; call <purrdf_sparql_eval::governor::lift::Lift>::at
+      3 ; call <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::new
+      9 ; call __rustc::__rust_dealloc
+     10 ; call core::panicking::panic_in_cleanup
+      2 ; call core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+      2 ; call core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+      2 ; call core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+      2 ; invoke <alloc::raw_vec::RawVec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>::grow_one
+      1 ; invoke <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+     12 ; invoke <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      1 ; invoke <purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next
+      1 ; invoke <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan
+      2 ; invoke <purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri
+      1 ; invoke <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value
+      1 ; invoke <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
+      3 ; invoke <purrdf_sparql_eval::governor::lift::Lift>::absorb::<purrdf_core::ir::term::TermId>
+      3 ; invoke <purrdf_sparql_eval::governor::lift::Lift>::withheld::<purrdf_core::ir::term::TermId>
+      5 ; invoke <purrdf_sparql_eval::solution::VarSchema as core::clone::Clone>::clone
+      1 ; invoke <purrdf_sparql_eval::solution::VarSchema>::index_of
+      5 ; invoke <purrdf_sparql_eval::solution::VarSchema>::push
+      4 ; invoke alloc::alloc::handle_alloc_error
+      1 ; invoke alloc::boxed::box_new_uninit
+      2 ; invoke alloc::raw_vec::handle_error
+      2 ; invoke core::panicking::panic_bounds_check
+      1 ; invoke core::panicking::panic_fmt
+      2 ; invoke core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+      1 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Evaluated<purrdf_core::ir::term::TermId>>
+      2 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Lift>
+      4 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+     13 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::VarSchema>
+      3 ; invoke purrdf_sparql_eval::eval::eval_evaluated_with::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::eval::eval_evaluated<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+      3 ; invoke purrdf_sparql_eval::eval::syntactic_schema
+      1 ; invoke purrdf_sparql_eval::modifier::yields_nothing_without_rows_in_the_active_graph

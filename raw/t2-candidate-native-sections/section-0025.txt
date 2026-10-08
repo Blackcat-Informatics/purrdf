@@ -1,0 +1,1134 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_algebra-2f54bfeaed8b20be.purrdf_sparql_algebra.1f9a9904874edf46-cgu.0.rcgu.o.rcgu.ll:91836
+; <purrdf_sparql_algebra::parser::Parser<false>>::block_boundary
+define internal fastcc noundef zeroext i1 @_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E14block_boundaryB7_(ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(680) %0) unnamed_addr #9 !guid !14720 {
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !14721)
+  %2 = getelementptr inbounds nuw i8, ptr %0, i64 120
+  %3 = load i64, ptr %2, align 8, !alias.scope !14721, !noalias !14724, !noundef !1058
+  %4 = getelementptr inbounds nuw i8, ptr %0, i64 624
+  %5 = load i64, ptr %4, align 8, !alias.scope !14721, !noalias !14724, !noundef !1058
+  %6 = icmp ult i64 %5, %3
+  br i1 %6, label %7, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+7:                                                ; preds = %1
+  %8 = getelementptr inbounds nuw i8, ptr %0, i64 112
+  %9 = load ptr, ptr %8, align 8, !alias.scope !14721, !noalias !14724, !nonnull !1058, !noundef !1058
+  %10 = getelementptr inbounds nuw [56 x i8], ptr %9, i64 %5
+  %11 = load i64, ptr %10, align 8, !range !6119, !noalias !14726, !noundef !1058
+  %12 = icmp eq i64 %11, -2
+  br i1 %12, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %13
+
+13:                                               ; preds = %7
+; call <purrdf_sparql_algebra::lexer::Token as core::cmp::PartialEq>::eq
+  %14 = tail call fastcc noundef zeroext i1 @_RNvXs2_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra5lexerNtB5_5TokenNtNtCs2k2z8Zem4rB_4core3cmp9PartialEq2eq(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(40) %10, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(40) @anon.11e6520e54d94dc868ac851900fc33ed.262) #49, !noalias !14721
+  br i1 %14, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %15
+
+15:                                               ; preds = %13
+  %16 = icmp ne i64 %11, -9223372036854775807
+  tail call void @llvm.assume(i1 %16)
+  %17 = icmp eq i64 %11, -9223372036854775797
+  br i1 %17, label %18, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+18:                                               ; preds = %15
+  %19 = getelementptr inbounds nuw i8, ptr %10, i64 16
+  %20 = load i64, ptr %19, align 8, !noalias !14727, !noundef !1058
+  switch i64 %20, label %.thread [
+    i64 8, label %21
+    i64 5, label %86
+    i64 7, label %158
+    i64 6, label %215
+  ]
+
+21:                                               ; preds = %18
+  %22 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %23 = load ptr, ptr %22, align 8, !noalias !14727, !nonnull !1058, !noundef !1058
+  %24 = load i8, ptr %23, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %25 = add i8 %24, -65
+  %26 = icmp ult i8 %25, 26
+  %27 = select i1 %26, i8 32, i8 0
+  %28 = or i8 %27, %24
+  %29 = icmp eq i8 %28, 111
+  br i1 %29, label %30, label %.thread
+
+30:                                               ; preds = %21
+  %31 = getelementptr inbounds nuw i8, ptr %23, i64 1
+  %32 = load i8, ptr %31, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %33 = add i8 %32, -65
+  %34 = icmp ult i8 %33, 26
+  %35 = select i1 %34, i8 32, i8 0
+  %36 = or i8 %35, %32
+  %37 = icmp eq i8 %36, 112
+  br i1 %37, label %38, label %.thread
+
+38:                                               ; preds = %30
+  %39 = getelementptr inbounds nuw i8, ptr %23, i64 2
+  %40 = load i8, ptr %39, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %41 = add i8 %40, -65
+  %42 = icmp ult i8 %41, 26
+  %43 = select i1 %42, i8 32, i8 0
+  %44 = or i8 %43, %40
+  %45 = icmp eq i8 %44, 116
+  br i1 %45, label %46, label %.thread
+
+46:                                               ; preds = %38
+  %47 = getelementptr inbounds nuw i8, ptr %23, i64 3
+  %48 = load i8, ptr %47, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %49 = add i8 %48, -65
+  %50 = icmp ult i8 %49, 26
+  %51 = select i1 %50, i8 32, i8 0
+  %52 = or i8 %51, %48
+  %53 = icmp eq i8 %52, 105
+  br i1 %53, label %54, label %.thread
+
+54:                                               ; preds = %46
+  %55 = getelementptr inbounds nuw i8, ptr %23, i64 4
+  %56 = load i8, ptr %55, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %57 = add i8 %56, -65
+  %58 = icmp ult i8 %57, 26
+  %59 = select i1 %58, i8 32, i8 0
+  %60 = or i8 %59, %56
+  %61 = icmp eq i8 %60, 111
+  br i1 %61, label %62, label %.thread
+
+62:                                               ; preds = %54
+  %63 = getelementptr inbounds nuw i8, ptr %23, i64 5
+  %64 = load i8, ptr %63, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %65 = add i8 %64, -65
+  %66 = icmp ult i8 %65, 26
+  %67 = select i1 %66, i8 32, i8 0
+  %68 = or i8 %67, %64
+  %69 = icmp eq i8 %68, 110
+  br i1 %69, label %70, label %.thread
+
+70:                                               ; preds = %62
+  %71 = getelementptr inbounds nuw i8, ptr %23, i64 6
+  %72 = load i8, ptr %71, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %73 = add i8 %72, -65
+  %74 = icmp ult i8 %73, 26
+  %75 = select i1 %74, i8 32, i8 0
+  %76 = or i8 %75, %72
+  %77 = icmp eq i8 %76, 97
+  br i1 %77, label %78, label %.thread
+
+78:                                               ; preds = %70
+  %79 = getelementptr inbounds nuw i8, ptr %23, i64 7
+  %80 = load i8, ptr %79, align 1, !alias.scope !14731, !noalias !14734, !noundef !1058
+  %81 = add i8 %80, -65
+  %82 = icmp ult i8 %81, 26
+  %83 = select i1 %82, i8 32, i8 0
+  %84 = or i8 %83, %80
+  %85 = icmp eq i8 %84, 108
+  br i1 %85, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %.thread
+
+86:                                               ; preds = %18
+  %87 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %88 = load ptr, ptr %87, align 8, !noalias !14736, !nonnull !1058, !noundef !1058
+  %89 = load i8, ptr %88, align 1, !alias.scope !14740, !noalias !14743, !noundef !1058
+  %90 = add i8 %89, -65
+  %91 = icmp ult i8 %90, 26
+  %92 = select i1 %91, i8 32, i8 0
+  %93 = or i8 %92, %89
+  switch i8 %93, label %.thread [
+    i8 109, label %94
+    i8 103, label %126
+  ]
+
+94:                                               ; preds = %86
+  %95 = getelementptr inbounds nuw i8, ptr %88, i64 1
+  %96 = load i8, ptr %95, align 1, !alias.scope !14740, !noalias !14743, !noundef !1058
+  %97 = add i8 %96, -65
+  %98 = icmp ult i8 %97, 26
+  %99 = select i1 %98, i8 32, i8 0
+  %100 = or i8 %99, %96
+  %101 = icmp eq i8 %100, 105
+  br i1 %101, label %102, label %.thread
+
+102:                                              ; preds = %94
+  %103 = getelementptr inbounds nuw i8, ptr %88, i64 2
+  %104 = load i8, ptr %103, align 1, !alias.scope !14740, !noalias !14743, !noundef !1058
+  %105 = add i8 %104, -65
+  %106 = icmp ult i8 %105, 26
+  %107 = select i1 %106, i8 32, i8 0
+  %108 = or i8 %107, %104
+  %109 = icmp eq i8 %108, 110
+  br i1 %109, label %110, label %.thread
+
+110:                                              ; preds = %102
+  %111 = getelementptr inbounds nuw i8, ptr %88, i64 3
+  %112 = load i8, ptr %111, align 1, !alias.scope !14740, !noalias !14743, !noundef !1058
+  %113 = add i8 %112, -65
+  %114 = icmp ult i8 %113, 26
+  %115 = select i1 %114, i8 32, i8 0
+  %116 = or i8 %115, %112
+  %117 = icmp eq i8 %116, 117
+  br i1 %117, label %118, label %.thread
+
+118:                                              ; preds = %110
+  %119 = getelementptr inbounds nuw i8, ptr %88, i64 4
+  %120 = load i8, ptr %119, align 1, !alias.scope !14740, !noalias !14743, !noundef !1058
+  %121 = add i8 %120, -65
+  %122 = icmp ult i8 %121, 26
+  %123 = select i1 %122, i8 32, i8 0
+  %124 = or i8 %123, %120
+  %125 = icmp eq i8 %124, 115
+  br i1 %125, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %.thread
+
+126:                                              ; preds = %86
+  %127 = getelementptr inbounds nuw i8, ptr %88, i64 1
+  %128 = load i8, ptr %127, align 1, !alias.scope !14745, !noalias !14748, !noundef !1058
+  %129 = add i8 %128, -65
+  %130 = icmp ult i8 %129, 26
+  %131 = select i1 %130, i8 32, i8 0
+  %132 = or i8 %131, %128
+  %133 = icmp eq i8 %132, 114
+  br i1 %133, label %134, label %.thread
+
+134:                                              ; preds = %126
+  %135 = getelementptr inbounds nuw i8, ptr %88, i64 2
+  %136 = load i8, ptr %135, align 1, !alias.scope !14745, !noalias !14748, !noundef !1058
+  %137 = add i8 %136, -65
+  %138 = icmp ult i8 %137, 26
+  %139 = select i1 %138, i8 32, i8 0
+  %140 = or i8 %139, %136
+  %141 = icmp eq i8 %140, 97
+  br i1 %141, label %142, label %.thread
+
+142:                                              ; preds = %134
+  %143 = getelementptr inbounds nuw i8, ptr %88, i64 3
+  %144 = load i8, ptr %143, align 1, !alias.scope !14745, !noalias !14748, !noundef !1058
+  %145 = add i8 %144, -65
+  %146 = icmp ult i8 %145, 26
+  %147 = select i1 %146, i8 32, i8 0
+  %148 = or i8 %147, %144
+  %149 = icmp eq i8 %148, 112
+  br i1 %149, label %150, label %.thread
+
+150:                                              ; preds = %142
+  %151 = getelementptr inbounds nuw i8, ptr %88, i64 4
+  %152 = load i8, ptr %151, align 1, !alias.scope !14745, !noalias !14748, !noundef !1058
+  %153 = add i8 %152, -65
+  %154 = icmp ult i8 %153, 26
+  %155 = select i1 %154, i8 32, i8 0
+  %156 = or i8 %155, %152
+  %157 = icmp eq i8 %156, 104
+  br i1 %157, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %.thread
+
+158:                                              ; preds = %18
+  %159 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %160 = load ptr, ptr %159, align 8, !noalias !14753, !nonnull !1058, !noundef !1058
+  %161 = load i8, ptr %160, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %162 = add i8 %161, -65
+  %163 = icmp ult i8 %162, 26
+  %164 = select i1 %163, i8 32, i8 0
+  %165 = or i8 %164, %161
+  %166 = icmp eq i8 %165, 115
+  br i1 %166, label %167, label %.thread
+
+167:                                              ; preds = %158
+  %168 = getelementptr inbounds nuw i8, ptr %160, i64 1
+  %169 = load i8, ptr %168, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %170 = add i8 %169, -65
+  %171 = icmp ult i8 %170, 26
+  %172 = select i1 %171, i8 32, i8 0
+  %173 = or i8 %172, %169
+  %174 = icmp eq i8 %173, 101
+  br i1 %174, label %175, label %.thread
+
+175:                                              ; preds = %167
+  %176 = getelementptr inbounds nuw i8, ptr %160, i64 2
+  %177 = load i8, ptr %176, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %178 = add i8 %177, -65
+  %179 = icmp ult i8 %178, 26
+  %180 = select i1 %179, i8 32, i8 0
+  %181 = or i8 %180, %177
+  %182 = icmp eq i8 %181, 114
+  br i1 %182, label %183, label %.thread
+
+183:                                              ; preds = %175
+  %184 = getelementptr inbounds nuw i8, ptr %160, i64 3
+  %185 = load i8, ptr %184, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %186 = add i8 %185, -65
+  %187 = icmp ult i8 %186, 26
+  %188 = select i1 %187, i8 32, i8 0
+  %189 = or i8 %188, %185
+  %190 = icmp eq i8 %189, 118
+  br i1 %190, label %191, label %.thread
+
+191:                                              ; preds = %183
+  %192 = getelementptr inbounds nuw i8, ptr %160, i64 4
+  %193 = load i8, ptr %192, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %194 = add i8 %193, -65
+  %195 = icmp ult i8 %194, 26
+  %196 = select i1 %195, i8 32, i8 0
+  %197 = or i8 %196, %193
+  %198 = icmp eq i8 %197, 105
+  br i1 %198, label %199, label %.thread
+
+199:                                              ; preds = %191
+  %200 = getelementptr inbounds nuw i8, ptr %160, i64 5
+  %201 = load i8, ptr %200, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %202 = add i8 %201, -65
+  %203 = icmp ult i8 %202, 26
+  %204 = select i1 %203, i8 32, i8 0
+  %205 = or i8 %204, %201
+  %206 = icmp eq i8 %205, 99
+  br i1 %206, label %207, label %.thread
+
+207:                                              ; preds = %199
+  %208 = getelementptr inbounds nuw i8, ptr %160, i64 6
+  %209 = load i8, ptr %208, align 1, !alias.scope !14757, !noalias !14760, !noundef !1058
+  %210 = add i8 %209, -65
+  %211 = icmp ult i8 %210, 26
+  %212 = select i1 %211, i8 32, i8 0
+  %213 = or i8 %212, %209
+  %214 = icmp eq i8 %213, 101
+  br i1 %214, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %.thread
+
+215:                                              ; preds = %18
+  %216 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %217 = load ptr, ptr %216, align 8, !noalias !14762, !nonnull !1058, !noundef !1058
+  %218 = load i8, ptr %217, align 1, !alias.scope !14766, !noalias !14769, !noundef !1058
+  %219 = add i8 %218, -65
+  %220 = icmp ult i8 %219, 26
+  %221 = select i1 %220, i8 32, i8 0
+  %222 = or i8 %221, %218
+  %223 = icmp eq i8 %222, 102
+  br i1 %223, label %224, label %.thread
+
+224:                                              ; preds = %215
+  %225 = getelementptr inbounds nuw i8, ptr %217, i64 1
+  %226 = load i8, ptr %225, align 1, !alias.scope !14766, !noalias !14769, !noundef !1058
+  %227 = add i8 %226, -65
+  %228 = icmp ult i8 %227, 26
+  %229 = select i1 %228, i8 32, i8 0
+  %230 = or i8 %229, %226
+  %231 = icmp eq i8 %230, 105
+  br i1 %231, label %232, label %.thread
+
+232:                                              ; preds = %224
+  %233 = getelementptr inbounds nuw i8, ptr %217, i64 2
+  %234 = load i8, ptr %233, align 1, !alias.scope !14766, !noalias !14769, !noundef !1058
+  %235 = add i8 %234, -65
+  %236 = icmp ult i8 %235, 26
+  %237 = select i1 %236, i8 32, i8 0
+  %238 = or i8 %237, %234
+  %239 = icmp eq i8 %238, 108
+  br i1 %239, label %240, label %.thread
+
+240:                                              ; preds = %232
+  %241 = getelementptr inbounds nuw i8, ptr %217, i64 3
+  %242 = load i8, ptr %241, align 1, !alias.scope !14766, !noalias !14769, !noundef !1058
+  %243 = add i8 %242, -65
+  %244 = icmp ult i8 %243, 26
+  %245 = select i1 %244, i8 32, i8 0
+  %246 = or i8 %245, %242
+  %247 = icmp eq i8 %246, 116
+  br i1 %247, label %248, label %.thread
+
+248:                                              ; preds = %240
+  %249 = getelementptr inbounds nuw i8, ptr %217, i64 4
+  %250 = load i8, ptr %249, align 1, !alias.scope !14766, !noalias !14769, !noundef !1058
+  %251 = add i8 %250, -65
+  %252 = icmp ult i8 %251, 26
+  %253 = select i1 %252, i8 32, i8 0
+  %254 = or i8 %253, %250
+  %255 = icmp eq i8 %254, 101
+  br i1 %255, label %256, label %.thread
+
+256:                                              ; preds = %248
+  %257 = getelementptr inbounds nuw i8, ptr %217, i64 5
+  %258 = load i8, ptr %257, align 1, !alias.scope !14766, !noalias !14769, !noundef !1058
+  %259 = add i8 %258, -65
+  %260 = icmp ult i8 %259, 26
+  %261 = select i1 %260, i8 32, i8 0
+  %262 = or i8 %261, %258
+  %263 = icmp eq i8 %262, 114
+  br i1 %263, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %.thread
+
+.thread:                                          ; preds = %86, %94, %102, %110, %118, %18, %21, %30, %38, %46, %54, %62, %70, %78, %150, %142, %134, %126, %158, %167, %175, %183, %191, %199, %207, %256, %248, %240, %232, %224, %215
+  %264 = getelementptr inbounds nuw i8, ptr %10, i64 16
+  %265 = load i64, ptr %264, align 8, !noalias !14771, !noundef !1058
+  %266 = icmp eq i64 %265, 4
+  br i1 %266, label %267, label %300
+
+267:                                              ; preds = %.thread
+  %268 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %269 = load ptr, ptr %268, align 8, !noalias !14771, !nonnull !1058, !noundef !1058
+  %270 = load i8, ptr %269, align 1, !alias.scope !14775, !noalias !14778, !noundef !1058
+  %271 = add i8 %270, -65
+  %272 = icmp ult i8 %271, 26
+  %273 = select i1 %272, i8 32, i8 0
+  %274 = or i8 %273, %270
+  %275 = icmp eq i8 %274, 98
+  br i1 %275, label %276, label %300
+
+276:                                              ; preds = %267
+  %277 = getelementptr inbounds nuw i8, ptr %269, i64 1
+  %278 = load i8, ptr %277, align 1, !alias.scope !14775, !noalias !14778, !noundef !1058
+  %279 = add i8 %278, -65
+  %280 = icmp ult i8 %279, 26
+  %281 = select i1 %280, i8 32, i8 0
+  %282 = or i8 %281, %278
+  %283 = icmp eq i8 %282, 105
+  br i1 %283, label %284, label %300
+
+284:                                              ; preds = %276
+  %285 = getelementptr inbounds nuw i8, ptr %269, i64 2
+  %286 = load i8, ptr %285, align 1, !alias.scope !14775, !noalias !14778, !noundef !1058
+  %287 = add i8 %286, -65
+  %288 = icmp ult i8 %287, 26
+  %289 = select i1 %288, i8 32, i8 0
+  %290 = or i8 %289, %286
+  %291 = icmp eq i8 %290, 110
+  br i1 %291, label %292, label %300
+
+292:                                              ; preds = %284
+  %293 = getelementptr inbounds nuw i8, ptr %269, i64 3
+  %294 = load i8, ptr %293, align 1, !alias.scope !14775, !noalias !14778, !noundef !1058
+  %295 = add i8 %294, -65
+  %296 = icmp ult i8 %295, 26
+  %297 = select i1 %296, i8 32, i8 0
+  %298 = or i8 %297, %294
+  %299 = icmp eq i8 %298, 100
+  br i1 %299, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %300
+
+300:                                              ; preds = %267, %276, %284, %292, %.thread
+  %301 = getelementptr inbounds nuw i8, ptr %10, i64 16
+  %302 = load i64, ptr %301, align 8, !noalias !14780, !noundef !1058
+  %303 = icmp eq i64 %302, 6
+  br i1 %303, label %304, label %353
+
+304:                                              ; preds = %300
+  %305 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %306 = load ptr, ptr %305, align 8, !noalias !14780, !nonnull !1058, !noundef !1058
+  %307 = load i8, ptr %306, align 1, !alias.scope !14784, !noalias !14787, !noundef !1058
+  %308 = add i8 %307, -65
+  %309 = icmp ult i8 %308, 26
+  %310 = select i1 %309, i8 32, i8 0
+  %311 = or i8 %310, %307
+  %312 = icmp eq i8 %311, 118
+  br i1 %312, label %313, label %353
+
+313:                                              ; preds = %304
+  %314 = getelementptr inbounds nuw i8, ptr %306, i64 1
+  %315 = load i8, ptr %314, align 1, !alias.scope !14784, !noalias !14787, !noundef !1058
+  %316 = add i8 %315, -65
+  %317 = icmp ult i8 %316, 26
+  %318 = select i1 %317, i8 32, i8 0
+  %319 = or i8 %318, %315
+  %320 = icmp eq i8 %319, 97
+  br i1 %320, label %321, label %353
+
+321:                                              ; preds = %313
+  %322 = getelementptr inbounds nuw i8, ptr %306, i64 2
+  %323 = load i8, ptr %322, align 1, !alias.scope !14784, !noalias !14787, !noundef !1058
+  %324 = add i8 %323, -65
+  %325 = icmp ult i8 %324, 26
+  %326 = select i1 %325, i8 32, i8 0
+  %327 = or i8 %326, %323
+  %328 = icmp eq i8 %327, 108
+  br i1 %328, label %329, label %353
+
+329:                                              ; preds = %321
+  %330 = getelementptr inbounds nuw i8, ptr %306, i64 3
+  %331 = load i8, ptr %330, align 1, !alias.scope !14784, !noalias !14787, !noundef !1058
+  %332 = add i8 %331, -65
+  %333 = icmp ult i8 %332, 26
+  %334 = select i1 %333, i8 32, i8 0
+  %335 = or i8 %334, %331
+  %336 = icmp eq i8 %335, 117
+  br i1 %336, label %337, label %353
+
+337:                                              ; preds = %329
+  %338 = getelementptr inbounds nuw i8, ptr %306, i64 4
+  %339 = load i8, ptr %338, align 1, !alias.scope !14784, !noalias !14787, !noundef !1058
+  %340 = add i8 %339, -65
+  %341 = icmp ult i8 %340, 26
+  %342 = select i1 %341, i8 32, i8 0
+  %343 = or i8 %342, %339
+  %344 = icmp eq i8 %343, 101
+  br i1 %344, label %345, label %353
+
+345:                                              ; preds = %337
+  %346 = getelementptr inbounds nuw i8, ptr %306, i64 5
+  %347 = load i8, ptr %346, align 1, !alias.scope !14784, !noalias !14787, !noundef !1058
+  %348 = add i8 %347, -65
+  %349 = icmp ult i8 %348, 26
+  %350 = select i1 %349, i8 32, i8 0
+  %351 = or i8 %350, %347
+  %352 = icmp eq i8 %351, 115
+  br i1 %352, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %353
+
+353:                                              ; preds = %304, %313, %321, %329, %337, %345, %300
+  %354 = getelementptr inbounds nuw i8, ptr %10, i64 16
+  %355 = load i64, ptr %354, align 8, !noalias !14789, !noundef !1058
+  %356 = icmp eq i64 %355, 7
+  br i1 %356, label %357, label %414
+
+357:                                              ; preds = %353
+  %358 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %359 = load ptr, ptr %358, align 8, !noalias !14789, !nonnull !1058, !noundef !1058
+  %360 = load i8, ptr %359, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %361 = add i8 %360, -65
+  %362 = icmp ult i8 %361, 26
+  %363 = select i1 %362, i8 32, i8 0
+  %364 = or i8 %363, %360
+  %365 = icmp eq i8 %364, 108
+  br i1 %365, label %366, label %414
+
+366:                                              ; preds = %357
+  %367 = getelementptr inbounds nuw i8, ptr %359, i64 1
+  %368 = load i8, ptr %367, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %369 = add i8 %368, -65
+  %370 = icmp ult i8 %369, 26
+  %371 = select i1 %370, i8 32, i8 0
+  %372 = or i8 %371, %368
+  %373 = icmp eq i8 %372, 97
+  br i1 %373, label %374, label %414
+
+374:                                              ; preds = %366
+  %375 = getelementptr inbounds nuw i8, ptr %359, i64 2
+  %376 = load i8, ptr %375, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %377 = add i8 %376, -65
+  %378 = icmp ult i8 %377, 26
+  %379 = select i1 %378, i8 32, i8 0
+  %380 = or i8 %379, %376
+  %381 = icmp eq i8 %380, 116
+  br i1 %381, label %382, label %414
+
+382:                                              ; preds = %374
+  %383 = getelementptr inbounds nuw i8, ptr %359, i64 3
+  %384 = load i8, ptr %383, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %385 = add i8 %384, -65
+  %386 = icmp ult i8 %385, 26
+  %387 = select i1 %386, i8 32, i8 0
+  %388 = or i8 %387, %384
+  %389 = icmp eq i8 %388, 101
+  br i1 %389, label %390, label %414
+
+390:                                              ; preds = %382
+  %391 = getelementptr inbounds nuw i8, ptr %359, i64 4
+  %392 = load i8, ptr %391, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %393 = add i8 %392, -65
+  %394 = icmp ult i8 %393, 26
+  %395 = select i1 %394, i8 32, i8 0
+  %396 = or i8 %395, %392
+  %397 = icmp eq i8 %396, 114
+  br i1 %397, label %398, label %414
+
+398:                                              ; preds = %390
+  %399 = getelementptr inbounds nuw i8, ptr %359, i64 5
+  %400 = load i8, ptr %399, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %401 = add i8 %400, -65
+  %402 = icmp ult i8 %401, 26
+  %403 = select i1 %402, i8 32, i8 0
+  %404 = or i8 %403, %400
+  %405 = icmp eq i8 %404, 97
+  br i1 %405, label %406, label %414
+
+406:                                              ; preds = %398
+  %407 = getelementptr inbounds nuw i8, ptr %359, i64 6
+  %408 = load i8, ptr %407, align 1, !alias.scope !14793, !noalias !14796, !noundef !1058
+  %409 = add i8 %408, -65
+  %410 = icmp ult i8 %409, 26
+  %411 = select i1 %410, i8 32, i8 0
+  %412 = or i8 %411, %408
+  %413 = icmp eq i8 %412, 108
+  br i1 %413, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit, label %414
+
+414:                                              ; preds = %357, %366, %374, %382, %390, %398, %406, %353
+  %415 = getelementptr inbounds nuw i8, ptr %10, i64 16
+  %416 = load i64, ptr %415, align 8, !noalias !14798, !noundef !1058
+  %417 = icmp eq i64 %416, 6
+  br i1 %417, label %418, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+418:                                              ; preds = %414
+  %419 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  %420 = load ptr, ptr %419, align 8, !noalias !14798, !nonnull !1058, !noundef !1058
+  %421 = load i8, ptr %420, align 1, !alias.scope !14802, !noalias !14805, !noundef !1058
+  %422 = add i8 %421, -65
+  %423 = icmp ult i8 %422, 26
+  %424 = select i1 %423, i8 32, i8 0
+  %425 = or i8 %424, %421
+  %426 = icmp eq i8 %425, 117
+  br i1 %426, label %427, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+427:                                              ; preds = %418
+  %428 = getelementptr inbounds nuw i8, ptr %420, i64 1
+  %429 = load i8, ptr %428, align 1, !alias.scope !14802, !noalias !14805, !noundef !1058
+  %430 = add i8 %429, -65
+  %431 = icmp ult i8 %430, 26
+  %432 = select i1 %431, i8 32, i8 0
+  %433 = or i8 %432, %429
+  %434 = icmp eq i8 %433, 110
+  br i1 %434, label %435, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+435:                                              ; preds = %427
+  %436 = getelementptr inbounds nuw i8, ptr %420, i64 2
+  %437 = load i8, ptr %436, align 1, !alias.scope !14802, !noalias !14805, !noundef !1058
+  %438 = add i8 %437, -65
+  %439 = icmp ult i8 %438, 26
+  %440 = select i1 %439, i8 32, i8 0
+  %441 = or i8 %440, %437
+  %442 = icmp eq i8 %441, 102
+  br i1 %442, label %443, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+443:                                              ; preds = %435
+  %444 = getelementptr inbounds nuw i8, ptr %420, i64 3
+  %445 = load i8, ptr %444, align 1, !alias.scope !14802, !noalias !14805, !noundef !1058
+  %446 = add i8 %445, -65
+  %447 = icmp ult i8 %446, 26
+  %448 = select i1 %447, i8 32, i8 0
+  %449 = or i8 %448, %445
+  %450 = icmp eq i8 %449, 111
+  br i1 %450, label %451, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+451:                                              ; preds = %443
+  %452 = getelementptr inbounds nuw i8, ptr %420, i64 4
+  %453 = load i8, ptr %452, align 1, !alias.scope !14802, !noalias !14805, !noundef !1058
+  %454 = add i8 %453, -65
+  %455 = icmp ult i8 %454, 26
+  %456 = select i1 %455, i8 32, i8 0
+  %457 = or i8 %456, %453
+  %458 = icmp eq i8 %457, 108
+  br i1 %458, label %459, label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+459:                                              ; preds = %451
+  %460 = getelementptr inbounds nuw i8, ptr %420, i64 5
+  %461 = load i8, ptr %460, align 1, !alias.scope !14802, !noalias !14805, !noundef !1058
+  %462 = add i8 %461, -65
+  %463 = icmp ult i8 %462, 26
+  %464 = select i1 %463, i8 32, i8 0
+  %465 = or i8 %464, %461
+  %466 = icmp eq i8 %465, 100
+  br label %_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit
+
+_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E7peek_kwB7_.exit: ; preds = %15, %459, %292, %345, %406, %418, %427, %435, %443, %451, %7, %1, %414, %256, %207, %150, %118, %78, %13
+  %467 = phi i1 [ false, %451 ], [ true, %406 ], [ false, %7 ], [ true, %78 ], [ true, %207 ], [ true, %150 ], [ true, %118 ], [ true, %256 ], [ true, %13 ], [ false, %414 ], [ false, %1 ], [ true, %345 ], [ false, %435 ], [ false, %443 ], [ false, %418 ], [ true, %292 ], [ false, %427 ], [ %466, %459 ], [ false, %15 ]
+  ret i1 %467
+}
+
+ASSEMBLY
+_RNvMs0_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parserINtB5_6ParserKb0_E14block_boundaryB7_:
+.Lfunc_begin251:
+	.cfi_startproc
+	movq	624(%rdi), %rax
+	cmpq	120(%rdi), %rax
+	jae	.LBB251_4
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	pushq	%rax
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	112(%rdi), %rbx
+	imulq	$56, %rax, %rax
+	movq	(%rbx,%rax), %r14
+	cmpq	$-2, %r14
+	jne	.LBB251_5
+.LBB251_2:
+	xorl	%eax, %eax
+.LBB251_3:
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	.cfi_restore %rbx
+	.cfi_restore %r14
+	retq
+.LBB251_4:
+	xorl	%eax, %eax
+	retq
+.LBB251_5:
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	addq	%rax, %rbx
+	leaq	.Lanon.11e6520e54d94dc868ac851900fc33ed.262(%rip), %rsi
+	movq	%rbx, %rdi
+	callq	_RNvXs2_NtCs2Ie3PLnVZCk_21purrdf_sparql_algebra5lexerNtB5_5TokenNtNtCs2k2z8Zem4rB_4core3cmp9PartialEq2eq
+	movl	%eax, %ecx
+	movb	$1, %al
+	testb	%cl, %cl
+	jne	.LBB251_3
+	movabsq	$-9223372036854775807, %rcx
+	orq	$10, %rcx
+	cmpq	%rcx, %r14
+	jne	.LBB251_2
+	movq	16(%rbx), %rcx
+	addq	$-5, %rcx
+	cmpq	$3, %rcx
+	ja	.LBB251_41
+	leaq	.LJTI251_0(%rip), %rdx
+	movslq	(%rdx,%rcx,4), %rcx
+	addq	%rdx, %rcx
+	jmpq	*%rcx
+.LBB251_9:
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %esi
+	leal	-65(%rsi), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%sil, %dl
+	cmpb	$103, %dl
+	je	.LBB251_37
+	movzbl	%dl, %edx
+	cmpl	$109, %edx
+	jne	.LBB251_41
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$105, %sil
+	jne	.LBB251_41
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$110, %sil
+	jne	.LBB251_41
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$117, %sil
+	jne	.LBB251_41
+	movzbl	4(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$115, %dl
+	je	.LBB251_3
+	jmp	.LBB251_41
+.LBB251_16:
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$115, %sil
+	jne	.LBB251_41
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$101, %sil
+	jne	.LBB251_41
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$114, %sil
+	jne	.LBB251_41
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$118, %sil
+	jne	.LBB251_41
+	movzbl	4(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$105, %sil
+	jne	.LBB251_41
+	movzbl	5(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$99, %sil
+	jne	.LBB251_41
+	movzbl	6(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$101, %dl
+	je	.LBB251_3
+	jmp	.LBB251_41
+.LBB251_23:
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$111, %sil
+	jne	.LBB251_41
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$112, %sil
+	jne	.LBB251_41
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$116, %sil
+	jne	.LBB251_41
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$105, %sil
+	jne	.LBB251_41
+	movzbl	4(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$111, %sil
+	jne	.LBB251_41
+	movzbl	5(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$110, %sil
+	jne	.LBB251_41
+	movzbl	6(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$97, %sil
+	jne	.LBB251_41
+	movzbl	7(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$108, %dl
+	je	.LBB251_3
+	jmp	.LBB251_41
+.LBB251_31:
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$102, %sil
+	jne	.LBB251_41
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$105, %sil
+	jne	.LBB251_41
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$108, %sil
+	jne	.LBB251_41
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$116, %sil
+	jne	.LBB251_41
+	movzbl	4(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$101, %sil
+	jne	.LBB251_41
+	movzbl	5(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$114, %dl
+	je	.LBB251_3
+	jmp	.LBB251_41
+.LBB251_37:
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$114, %sil
+	jne	.LBB251_41
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$97, %sil
+	jne	.LBB251_41
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$112, %sil
+	jne	.LBB251_41
+	movzbl	4(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$104, %dl
+	je	.LBB251_3
+.LBB251_41:
+	cmpq	$4, 16(%rbx)
+	jne	.LBB251_46
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$98, %sil
+	jne	.LBB251_46
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$105, %sil
+	jne	.LBB251_46
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$110, %sil
+	jne	.LBB251_46
+	movzbl	3(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$100, %dl
+	je	.LBB251_3
+.LBB251_46:
+	cmpq	$6, 16(%rbx)
+	jne	.LBB251_53
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$118, %sil
+	jne	.LBB251_53
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$97, %sil
+	jne	.LBB251_53
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$108, %sil
+	jne	.LBB251_53
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$117, %sil
+	jne	.LBB251_53
+	movzbl	4(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$101, %sil
+	jne	.LBB251_53
+	movzbl	5(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$115, %dl
+	je	.LBB251_3
+.LBB251_53:
+	cmpq	$7, 16(%rbx)
+	jne	.LBB251_61
+	movq	8(%rbx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$108, %sil
+	jne	.LBB251_61
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$97, %sil
+	jne	.LBB251_61
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$116, %sil
+	jne	.LBB251_61
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$101, %sil
+	jne	.LBB251_61
+	movzbl	4(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$114, %sil
+	jne	.LBB251_61
+	movzbl	5(%rcx), %edx
+	leal	-65(%rdx), %esi
+	cmpb	$26, %sil
+	setb	%sil
+	shlb	$5, %sil
+	orb	%dl, %sil
+	cmpb	$97, %sil
+	jne	.LBB251_61
+	movzbl	6(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$108, %dl
+	je	.LBB251_3
+.LBB251_61:
+	cmpq	$6, 16(%rbx)
+	jne	.LBB251_2
+	movq	8(%rbx), %rax
+	movzbl	(%rax), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$117, %dl
+	jne	.LBB251_2
+	movzbl	1(%rax), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$110, %dl
+	jne	.LBB251_2
+	movzbl	2(%rax), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$102, %dl
+	jne	.LBB251_2
+	movzbl	3(%rax), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$111, %dl
+	jne	.LBB251_2
+	movzbl	4(%rax), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$108, %dl
+	jne	.LBB251_2
+	movzbl	5(%rax), %eax
+	leal	-65(%rax), %ecx
+	cmpb	$26, %cl
+	setb	%cl
+	shlb	$5, %cl
+	orb	%al, %cl
+	cmpb	$100, %cl
+	sete	%al
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	.cfi_restore %rbx
+	.cfi_restore %r14
+	retq
+.Lfunc_end251:

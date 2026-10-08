@@ -1,0 +1,11 @@
+# Project bulk home source and focused qualification
+
+VERDICT: PASS for admitted source/semantic/lint qualification. Fresh full native-cost acceptance remains NOT MET, pending candidate-only matched emissions/body audit.
+
+Current treeb3274735168b7aa063b7163ef5c3f0d4ea8a82e3 replaces only the Project inner manual reserve/push loop with Solution::new()+the existing SmallVec::extend over the identical source Map. Shared Extend reserves the iterator lower bound, bulk-fills reserved slots with LenOnDrop and performs its final length store. Source order/unbound handling/schema/lift/outer Vec loop remain unchanged; no FromIterator wrapper, copied SmallVec body, allocation-law change or new mode. Root independently reviewed the exact delta. Native emitted equivalence is not inferred from this source argument.
+
+Actual37479 terminal0 observed via tools.write_stdin; driver.exit0/all four child commands0 retained `/opt/purrdf-454-current-qualification-20261008/final-project-rust-1`. Exact Project modifier unit1PASS, prepared_parameters12PASS, rdflib_contextual22PASS =35/0fail/0ignore. Strict evaluator all-target clippy and workspace fmt PASS. Boundb327 source stayed unchanged/full hash readback0/unstaged clean. Scope purrdf-454-project-bulk-rust-20261008.scope invocation51ad2eceb250421094fe597231ddbaf3 inactive/dead/lane FREE. Live64GiB/SwapMax0/rawSDK/privatecache/jobs8/libtest8/inheritedwrapper captured; no timing claim.
+
+Unchanged mint-prefix focused45PASS/current helper gate remain scoped reuse from6c3. Current docs and28-wheel boundaries remain actual qualified semantic evidence for their exact earlier bytes; these equivalent algorithm/home source repairs do not add a host protocol change or justify broad wheel/docs/full Rust reruns. Independent settled2f3 whole-cost matrix has only the mint-prefix and Project defects; fresh candidate-only emissions must prove their actual complete Filter/Extend/Group and Project callers, plus whole-criterion applicability. Immutable85204 baseline source/compiler/profile/frames/checksum/artifact and actual PyO3 build configuration must all admit before reuse; never relabel2f3 candidate bodies asb327.
+
+Root authorized candidate-only generation after this actual terminalPASS; no emission ran during this focused phase. No commit/push/hosted/whole-completion claim.

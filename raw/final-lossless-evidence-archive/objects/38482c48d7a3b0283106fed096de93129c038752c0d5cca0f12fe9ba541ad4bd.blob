@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python
+configfile: pyproject.toml
+collected 21 items
+
+tests/test_query.py .......xx                                            [ 42%]
+tests/test_sparqlprocessor.py .....                                      [ 66%]
+tests/test_prepared_prebound_grouping.py .......                         [100%]
+
+======================== 19 passed, 2 xfailed in 0.44s =========================

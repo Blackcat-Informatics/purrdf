@@ -1,0 +1,3 @@
+M	crates/purrdf/src/reasoning.rs
+M	crates/rdf/src/projections/dataset_description.rs
+M	crates/slice/src/ownership.rs

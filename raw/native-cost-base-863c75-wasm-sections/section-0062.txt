@@ -1,0 +1,83 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-47404805bc082bb3.purrdf_sparql_eval.4e34a4d67f036f69-cgu.0.rcgu.o.rcgu.ll:206281
+; core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_algebra::algebra::GraphPattern>>
+define internal void @_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCseEDRShONSVg_21purrdf_sparql_algebra7algebra12GraphPatternEECs6IhMpzk205x_18purrdf_sparql_eval(ptr noalias nofree noundef readonly align 4 captures(none) dereferenceable(12) %0) unnamed_addr #0 !guid !35335 {
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !35336)
+  %2 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  %3 = load ptr, ptr %2, align 4, !alias.scope !35336, !nonnull !1577, !noundef !1577
+  %4 = getelementptr inbounds nuw i8, ptr %0, i32 8
+  %5 = load i32, ptr %4, align 4, !alias.scope !35336, !noundef !1577
+  %6 = icmp eq i32 %5, 0
+  br i1 %6, label %.loopexit, label %.preheader
+
+.preheader:                                       ; preds = %1, %.preheader
+  %7 = phi i32 [ %9, %.preheader ], [ 0, %1 ]
+  %8 = getelementptr inbounds nuw [72 x i8], ptr %3, i32 %7
+  %9 = add nuw i32 %7, 1
+; call core::ptr::drop_glue::<purrdf_sparql_algebra::algebra::GraphPattern>
+  tail call fastcc void @_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueNtNtCseEDRShONSVg_21purrdf_sparql_algebra7algebra12GraphPatternECs6IhMpzk205x_18purrdf_sparql_eval(ptr noalias nofree noundef nonnull align 4 dereferenceable(72) %8) #71, !noalias !35336, !inline_history !35339
+  %10 = icmp eq i32 %9, %5
+  br i1 %10, label %.loopexit, label %.preheader
+
+.loopexit:                                        ; preds = %.preheader, %1
+  %11 = load i32, ptr %0, align 4
+  %12 = icmp eq i32 %11, 0
+  br i1 %12, label %15, label %13
+
+13:                                               ; preds = %.loopexit
+  %14 = mul nuw i32 %11, 72
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %3, i32 noundef %14, i32 noundef range(i32 1, -2147483647) 4) #71
+  br label %15
+
+15:                                               ; preds = %13, %.loopexit
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCseEDRShONSVg_21purrdf_sparql_algebra7algebra12GraphPatternEECs6IhMpzk205x_18purrdf_sparql_eval:
+.Lfunc_begin351:
+	.functype	_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCseEDRShONSVg_21purrdf_sparql_algebra7algebra12GraphPatternEECs6IhMpzk205x_18purrdf_sparql_eval (i32) -> ()
+	.local  	i32, i32, i32
+	local.get	0
+	i32.load	4
+	local.set	1
+	block   	
+	local.get	0
+	i32.load	8
+	local.tee	2
+	i32.eqz
+	br_if   	0
+	local.get	1
+	local.set	3
+.LBB351_2:
+	loop    	
+	local.get	3
+	call	_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueNtNtCseEDRShONSVg_21purrdf_sparql_algebra7algebra12GraphPatternECs6IhMpzk205x_18purrdf_sparql_eval
+	local.get	3
+	i32.const	72
+	i32.add 
+	local.set	3
+	local.get	2
+	i32.const	-1
+	i32.add 
+	local.tee	2
+	br_if   	0
+.LBB351_3:
+	end_loop
+	end_block
+	block   	
+	local.get	0
+	i32.load	0
+	local.tee	3
+	i32.eqz
+	br_if   	0
+	local.get	1
+	local.get	3
+	i32.const	72
+	i32.mul 
+	i32.const	4
+	call	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB351_5:
+	end_block
+	end_function
+.Lfunc_end351:

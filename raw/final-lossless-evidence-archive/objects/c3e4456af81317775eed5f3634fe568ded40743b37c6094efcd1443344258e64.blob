@@ -1,0 +1,166 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-python-ir/purrdf_native.ll:131089
+; core::ptr::drop_glue::<alloc::collections::btree::map::BTreeMap<*const purrdf_sparql_algebra::algebra::GraphPattern, purrdf_sparql_eval::rdflib::Facts>>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsEECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(24) %_1) unnamed_addr #1 personality ptr @rust_eh_personality !guid !25306 {
+start:
+  %_2.i.i.i = alloca [24 x i8], align 8
+  %_x.i = alloca [72 x i8], align 8
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !25307)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_x.i), !noalias !25307
+  %self1.sroa.0.0.copyload.i = load ptr, ptr %_1, align 8, !alias.scope !25307
+  %.not.i = icmp eq ptr %self1.sroa.0.0.copyload.i, null
+  br i1 %.not.i, label %bb3.i, label %bb1.i
+
+bb1.i:                                            ; preds = %start
+  %self1.sroa.5.0.self.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_1, i64 16
+  %self1.sroa.5.0.copyload.i = load i64, ptr %self1.sroa.5.0.self.sroa_idx.i, align 8, !alias.scope !25307
+  %self1.sroa.4.0.self.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_1, i64 8
+  %self1.sroa.4.0.copyload.i = load i64, ptr %self1.sroa.4.0.self.sroa_idx.i, align 8, !alias.scope !25307
+  %full_range.sroa.4.0._x.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_x.i, i64 8
+  store ptr null, ptr %full_range.sroa.4.0._x.sroa_idx.i, align 8, !noalias !25307
+  %full_range.sroa.4.sroa.4.0.full_range.sroa.4.0._x.sroa_idx.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_x.i, i64 16
+  store ptr %self1.sroa.0.0.copyload.i, ptr %full_range.sroa.4.sroa.4.0.full_range.sroa.4.0._x.sroa_idx.sroa_idx.i, align 8, !noalias !25307
+  %full_range.sroa.4.sroa.5.0.full_range.sroa.4.0._x.sroa_idx.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_x.i, i64 24
+  store i64 %self1.sroa.4.0.copyload.i, ptr %full_range.sroa.4.sroa.5.0.full_range.sroa.4.0._x.sroa_idx.sroa_idx.i, align 8, !noalias !25307
+  %full_range.sroa.6.0._x.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_x.i, i64 40
+  store ptr null, ptr %full_range.sroa.6.0._x.sroa_idx.i, align 8, !noalias !25307
+  %full_range.sroa.6.sroa.4.0.full_range.sroa.6.0._x.sroa_idx.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_x.i, i64 48
+  store ptr %self1.sroa.0.0.copyload.i, ptr %full_range.sroa.6.sroa.4.0.full_range.sroa.6.0._x.sroa_idx.sroa_idx.i, align 8, !noalias !25307
+  %full_range.sroa.6.sroa.5.0.full_range.sroa.6.0._x.sroa_idx.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_x.i, i64 56
+  store i64 %self1.sroa.4.0.copyload.i, ptr %full_range.sroa.6.sroa.5.0.full_range.sroa.6.0._x.sroa_idx.sroa_idx.i, align 8, !noalias !25307
+  br label %bb3.i
+
+bb3.i:                                            ; preds = %bb1.i, %start
+  %.sink9.i = phi i64 [ 1, %bb1.i ], [ 0, %start ]
+  %self1.sroa.5.0.copyload.sink.i = phi i64 [ %self1.sroa.5.0.copyload.i, %bb1.i ], [ 0, %start ]
+  store i64 %.sink9.i, ptr %_x.i, align 8, !noalias !25307
+  %0 = getelementptr inbounds nuw i8, ptr %_x.i, i64 32
+  store i64 %.sink9.i, ptr %0, align 8, !noalias !25307
+  %1 = getelementptr inbounds nuw i8, ptr %_x.i, i64 64
+  store i64 %self1.sroa.5.0.copyload.sink.i, ptr %1, align 8, !noalias !25307
+  %kv.sroa.42.0._2.sroa_idx.i.i.i = getelementptr inbounds nuw i8, ptr %_2.i.i.i, i64 16
+  call void @llvm.lifetime.start.p0(ptr nonnull %_2.i.i.i), !noalias !25310
+; call <alloc::collections::btree::map::IntoIter<*const purrdf_sparql_algebra::algebra::GraphPattern, purrdf_sparql_eval::rdflib::Facts>>::dying_next
+  call fastcc void @_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsE10dying_nextCseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 captures(none) dereferenceable(24) %_2.i.i.i, ptr noalias nofree noundef nonnull align 8 dereferenceable(72) %_x.i), !noalias !25307
+  %2 = load ptr, ptr %_2.i.i.i, align 8, !noalias !25310, !noundef !3923
+  %.not.i.i.i1 = icmp eq ptr %2, null
+  br i1 %.not.i.i.i1, label %_RNvXNtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB2_8BTreeMapPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit, label %bb3.i.i.i
+
+bb3.i.i.i:                                        ; preds = %bb3.i, %bb4.i.i.i
+  %3 = phi ptr [ %5, %bb4.i.i.i ], [ %2, %bb3.i ]
+  %kv.sroa.42.0.copyload.i.i.i = load i64, ptr %kv.sroa.42.0._2.sroa_idx.i.i.i, align 8, !noalias !25310
+  %_17.i.i.i.i = getelementptr inbounds nuw [32 x i8], ptr %3, i64 %kv.sroa.42.0.copyload.i.i.i
+; invoke core::ptr::drop_glue::<alloc::collections::btree::map::BTreeMap<purrdf_sparql_algebra::ast::Variable, alloc::collections::btree::set_val::SetValZST>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra3ast8VariableNtNtBG_7set_val9SetValZSTEECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(32) %_17.i.i.i.i)
+          to label %bb4.i.i.i unwind label %cleanup.i.i.i, !noalias !25310
+
+cleanup.i.i.i:                                    ; preds = %bb3.i.i.i
+  %4 = landingpad { ptr, i32 }
+          cleanup
+; invoke core::ptr::drop_glue::<<alloc::collections::btree::map::IntoIter<_, _, _> as core::ops::drop::Drop>::drop::DropGuard<*const purrdf_sparql_algebra::algebra::GraphPattern, purrdf_sparql_eval::rdflib::Facts, alloc::alloc::Global>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNvXsy_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtBK_8IntoIterpppENtNtNtB4_3ops4drop4Drop4drop9DropGuardPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNtNtBQ_5alloc6GlobalEECseY6IX0djbTh_13purrdf_native(ptr nonnull align 8 dereferenceable(72) %_x.i) #79
+          to label %bb6.i.i.i unwind label %terminate.i.i.i, !noalias !25307
+
+bb4.i.i.i:                                        ; preds = %bb3.i.i.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_2.i.i.i), !noalias !25310
+  call void @llvm.lifetime.start.p0(ptr nonnull %_2.i.i.i), !noalias !25310
+; call <alloc::collections::btree::map::IntoIter<*const purrdf_sparql_algebra::algebra::GraphPattern, purrdf_sparql_eval::rdflib::Facts>>::dying_next
+  call fastcc void @_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsE10dying_nextCseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 captures(none) dereferenceable(24) %_2.i.i.i, ptr noalias nofree noundef nonnull align 8 dereferenceable(72) %_x.i), !noalias !25307
+  %5 = load ptr, ptr %_2.i.i.i, align 8, !noalias !25310, !noundef !3923
+  %.not.i.i.i = icmp eq ptr %5, null
+  br i1 %.not.i.i.i, label %_RNvXNtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB2_8BTreeMapPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit, label %bb3.i.i.i
+
+terminate.i.i.i:                                  ; preds = %cleanup.i.i.i
+  %6 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #75, !noalias !25310
+  unreachable
+
+bb6.i.i.i:                                        ; preds = %cleanup.i.i.i
+  resume { ptr, i32 } %4
+
+_RNvXNtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB2_8BTreeMapPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropCseY6IX0djbTh_13purrdf_native.exit: ; preds = %bb4.i.i.i, %bb3.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_2.i.i.i), !noalias !25310
+  call void @llvm.lifetime.end.p0(ptr nonnull %_x.i), !noalias !25307
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsEECseY6IX0djbTh_13purrdf_native:
+.Lfunc_begin436:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception436
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	subq	$104, %rsp
+	.cfi_def_cfa_offset 128
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	(%rdi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB804_1
+	movq	8(%rdi), %rdx
+	movq	16(%rdi), %rax
+	movq	$0, 40(%rsp)
+	movq	%rcx, 48(%rsp)
+	movq	%rdx, 56(%rsp)
+	movq	$0, 72(%rsp)
+	movq	%rcx, 80(%rsp)
+	movl	$1, %ecx
+	movq	%rdx, 88(%rsp)
+	jmp	.LBB804_3
+.LBB804_1:
+	xorl	%ecx, %ecx
+	xorl	%eax, %eax
+.LBB804_3:
+	leaq	8(%rsp), %rdi
+	leaq	32(%rsp), %rsi
+	movq	%rcx, 32(%rsp)
+	movq	%rcx, 64(%rsp)
+	movq	%rax, 96(%rsp)
+	callq	_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsE10dying_nextCseY6IX0djbTh_13purrdf_native
+	movq	8(%rsp), %rax
+	testq	%rax, %rax
+	je	.LBB804_7
+	leaq	8(%rsp), %rbx
+	leaq	32(%rsp), %r14
+	.p2align	4
+.LBB804_5:
+	movq	24(%rsp), %rdi
+	shlq	$5, %rdi
+	addq	%rax, %rdi
+.Ltmp5930:
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra3ast8VariableNtNtBG_7set_val9SetValZSTEECseY6IX0djbTh_13purrdf_native
+.Ltmp5931:
+	movq	%rbx, %rdi
+	movq	%r14, %rsi
+	callq	_RNvMsz_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtB5_8IntoIterPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsE10dying_nextCseY6IX0djbTh_13purrdf_native
+	movq	8(%rsp), %rax
+	testq	%rax, %rax
+	jne	.LBB804_5
+.LBB804_7:
+	addq	$104, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	retq
+.LBB804_9:
+	.cfi_def_cfa_offset 128
+.Ltmp5932:
+	movq	%rax, %rbx
+.Ltmp5933:
+	leaq	32(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNvXsy_NtNtNtCsc70TAahYccp_5alloc11collections5btree3mapINtBK_8IntoIterpppENtNtNtB4_3ops4drop4Drop4drop9DropGuardPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNtNtBQ_5alloc6GlobalEECseY6IX0djbTh_13purrdf_native
+.Ltmp5934:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB804_8:
+.Ltmp5935:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end804:

@@ -1,0 +1,100 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-47404805bc082bb3.purrdf_sparql_eval.4e34a4d67f036f69-cgu.0.rcgu.o.rcgu.ll:280696
+; purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset>::{closure#5}
+define internal fastcc { i32, i32 } @_RNCINvNtCs6IhMpzk205x_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir7dataset10RdfDatasetEs3_0B6_(ptr noundef nonnull align 4 %0, ptr noundef nonnull align 8 %1, ptr noalias nofree noundef nonnull align 4 captures(address) dead_on_return dereferenceable(40) %2) unnamed_addr #1 !guid !51081 {
+  %4 = alloca [40 x i8], align 4
+; call purrdf_sparql_eval::scratch::language_tags_well_formed
+  %5 = tail call noundef zeroext i1 @_RNvNtCs6IhMpzk205x_18purrdf_sparql_eval7scratch25language_tags_well_formed(ptr noalias nofree noundef nonnull readonly align 4 captures(address, read_provenance) dereferenceable(40) %2) #71, !noalias !51082
+  br i1 %5, label %7, label %6
+
+6:                                                ; preds = %3
+; call core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+  tail call fastcc void @_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir4term9TermValueECs6IhMpzk205x_18purrdf_sparql_eval(ptr noalias nofree noundef nonnull align 4 dereferenceable(40) %2) #71, !noalias !51082
+  br label %11
+
+7:                                                ; preds = %3
+  call void @llvm.lifetime.start.p0(ptr nonnull %4), !noalias !51085
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(40) %4, ptr noundef nonnull align 4 dereferenceable(40) %2, i32 40, i1 false), !noalias !51082
+; call <purrdf_sparql_eval::scratch::ScratchInterner>::intern_value::<purrdf_core::ir::dataset::RdfDataset>
+  %8 = call fastcc { i32, i32 } @_RINvMs1_NtCs6IhMpzk205x_18purrdf_sparql_eval7scratchNtB6_15ScratchInterner12intern_valueNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir7dataset10RdfDatasetEB8_(ptr noalias nofree noundef nonnull align 8 dereferenceable(64) %1, ptr noundef nonnull align 4 %0, ptr noalias nofree noundef align 4 captures(address) dereferenceable(40) %4) #71
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !noalias !51085
+  %9 = extractvalue { i32, i32 } %8, 0
+  %10 = extractvalue { i32, i32 } %8, 1
+  br label %11
+
+11:                                               ; preds = %7, %6
+  %12 = phi i32 [ %10, %7 ], [ undef, %6 ]
+  %13 = phi i32 [ %9, %7 ], [ 2, %6 ]
+  %14 = insertvalue { i32, i32 } poison, i32 %13, 0
+  %15 = insertvalue { i32, i32 } %14, i32 %12, 1
+  ret { i32, i32 } %15
+}
+
+ASSEMBLY
+_RNCINvNtCs6IhMpzk205x_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir7dataset10RdfDatasetEs3_0B6_:
+.Lfunc_begin647:
+	.functype	_RNCINvNtCs6IhMpzk205x_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir7dataset10RdfDatasetEs3_0B6_ (i32, i32, i32, i32) -> ()
+	.local  	i32
+	global.get	__stack_pointer
+	i32.const	48
+	i32.sub 
+	local.tee	4
+	global.set	__stack_pointer
+	block   	
+	block   	
+	local.get	3
+	call	_RNvNtCs6IhMpzk205x_18purrdf_sparql_eval7scratch25language_tags_well_formed
+	br_if   	0
+	local.get	3
+	call	_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir4term9TermValueECs6IhMpzk205x_18purrdf_sparql_eval
+	i32.const	2
+	local.set	3
+	br      	1
+.LBB647_2:
+	end_block
+	local.get	4
+	local.get	3
+	i64.load	32:p2align=2
+	i64.store	40
+	local.get	4
+	local.get	3
+	i64.load	24:p2align=2
+	i64.store	32
+	local.get	4
+	local.get	3
+	i64.load	16:p2align=2
+	i64.store	24
+	local.get	4
+	local.get	3
+	i64.load	8:p2align=2
+	i64.store	16
+	local.get	4
+	local.get	3
+	i64.load	0:p2align=2
+	i64.store	8
+	local.get	4
+	local.get	2
+	local.get	1
+	local.get	4
+	i32.const	8
+	i32.add 
+	call	_RINvMs1_NtCs6IhMpzk205x_18purrdf_sparql_eval7scratchNtB6_15ScratchInterner12intern_valueNtNtNtCsiNuJh9Q5tLB_11purrdf_core2ir7dataset10RdfDatasetEB8_
+	local.get	4
+	i32.load	4
+	local.set	2
+	local.get	4
+	i32.load	0
+	local.set	3
+.LBB647_3:
+	end_block
+	local.get	0
+	local.get	2
+	i32.store	4
+	local.get	0
+	local.get	3
+	i32.store	0
+	local.get	4
+	i32.const	48
+	i32.add 
+	global.set	__stack_pointer
+	end_function
+.Lfunc_end647:

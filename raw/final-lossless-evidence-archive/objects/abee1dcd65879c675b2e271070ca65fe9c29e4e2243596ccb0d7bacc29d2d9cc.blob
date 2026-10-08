@@ -1,0 +1,222 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "quads": [
+    [
+      "a",
+      "p",
+      "o1",
+      "g1"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "slice-aggregate-delivery-unbound",
+      "dataset": "empty",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT ?driver WHERE { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) } LIMIT 2 } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "6",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 4
+      }
+    },
+    {
+      "name": "slice-aggregate-delivery-bound",
+      "dataset": "empty",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT ?driver WHERE { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) } LIMIT 2 } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "6",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 4
+      }
+    },
+    {
+      "name": "distinct-aggregate-delivery-unbound",
+      "dataset": "empty",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT DISTINCT ?driver WHERE { VALUES ?driver { 1 1 2 } BIND(<http://example.org/counter>(1) AS ?tick) } } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "7",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 5
+      }
+    },
+    {
+      "name": "distinct-aggregate-delivery-bound",
+      "dataset": "empty",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT DISTINCT ?driver WHERE { VALUES ?driver { 1 1 2 } BIND(<http://example.org/counter>(1) AS ?tick) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "7",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 5
+      }
+    },
+    {
+      "name": "reduced-aggregate-delivery-unbound",
+      "dataset": "empty",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT REDUCED ?driver WHERE { VALUES ?driver { 1 1 2 } BIND(<http://example.org/counter>(1) AS ?tick) } } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "7",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 5
+      }
+    },
+    {
+      "name": "reduced-aggregate-delivery-bound",
+      "dataset": "empty",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT REDUCED ?driver WHERE { VALUES ?driver { 1 1 2 } BIND(<http://example.org/counter>(1) AS ?tick) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "7",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 5
+      }
+    },
+    {
+      "name": "graph-aggregate-delivery-unbound",
+      "dataset": "named",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { GRAPH <http://example.org/g1> { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "graph-aggregate-delivery-bound",
+      "dataset": "named",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { GRAPH <http://example.org/g1> { VALUES ?driver { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    }
+  ]
+}

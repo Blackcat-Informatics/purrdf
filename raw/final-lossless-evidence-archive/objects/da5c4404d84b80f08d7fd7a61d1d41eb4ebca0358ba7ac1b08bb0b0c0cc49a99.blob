@@ -1,0 +1,3283 @@
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 1 minute ago
+
+JOBS
+* msrv (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  * Check workspace on MSRV
+  * Assert the MSRV job really ran on 1.98
+  * Post Checkout
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Format
+  * Format the preserve-order consumer
+  * Clippy the preserve-order consumer (deny warnings)
+  * Check workspace
+  * Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Run the distance arithmetic's path and reference-model tests on NEON
+  * Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* wasm-exec (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Set up Node.js
+  * Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  * Install Rust
+  * Install the i686 C library
+  * Type-check the distance kernels and their consumers on six architectures
+  * Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+* doc (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Doc (deny warnings)
+  * Post Checkout
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  * Install the C cross toolchain
+  * Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* miri (ID 113457546190)
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  * Install the C cross toolchain
+  * Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  * Restore assembly build contexts and evidence
+  * Install the C cross toolchain
+  * Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* windows-mtime (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  * Install Rust
+  * Restore file and directory mtimes on Windows
+  * Post Checkout
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* wasm-schema-oracles (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  * TypeScript emitter schema oracle
+  * GraphQL emitter schema oracle
+  * Post Set up Node.js
+  * Post Checkout
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  * Install the C cross toolchain
+  * Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install the C cross toolchain
+  * Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 1 minute ago
+
+JOBS
+✓ msrv in 1m3s (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  ✓ Check workspace on MSRV
+  ✓ Assert the MSRV job really ran on 1.98
+  ✓ Post Checkout
+  ✓ Complete job
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Format
+  ✓ Format the preserve-order consumer
+  ✓ Clippy the preserve-order consumer (deny warnings)
+  * Check workspace
+  * Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Run the distance arithmetic's path and reference-model tests on NEON
+  * Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* wasm-exec (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Set up Node.js
+  * Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  * Post Set up Node.js
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the i686 C library
+  * Type-check the distance kernels and their consumers on six architectures
+  * Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+* doc (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Doc (deny warnings)
+  * Post Checkout
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* miri (ID 113457546190)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Miri (SmallVec unsafe storage)
+  * Post Checkout
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Checkout
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* windows-mtime (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Restore file and directory mtimes on Windows
+  * Post Checkout
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Checkout
+* wasm-schema-oracles (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  * TypeScript emitter schema oracle
+  * GraphQL emitter schema oracle
+  * Post Set up Node.js
+  * Post Checkout
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the C cross toolchain
+  ✓ Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build the optimized wasm package
+  * Set up Node.js
+  * Run npm package gates
+  * Verify exact Dataset and exchange identity ABIs
+  * Run the Worker recipe under workerd
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 2 minutes ago
+
+JOBS
+✓ msrv in 1m3s (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  ✓ Check workspace on MSRV
+  ✓ Assert the MSRV job really ran on 1.98
+  ✓ Post Checkout
+  ✓ Complete job
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Format
+  ✓ Format the preserve-order consumer
+  ✓ Clippy the preserve-order consumer (deny warnings)
+  * Check workspace
+  * Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Run the distance arithmetic's path and reference-model tests on NEON
+  * Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* wasm-exec (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Set up Node.js
+  * Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  * Post Set up Node.js
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the i686 C library
+  * Type-check the distance kernels and their consumers on six architectures
+  * Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+✓ doc in 1m20s (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Doc (deny warnings)
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Checkout
+* miri (ID 113457546190)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Miri (SmallVec unsafe storage)
+  * Post Checkout
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* windows-mtime (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Restore file and directory mtimes on Windows
+  * Post Checkout
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* wasm-schema-oracles (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  * TypeScript emitter schema oracle
+  * GraphQL emitter schema oracle
+  * Post Set up Node.js
+  * Post Checkout
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the C cross toolchain
+  ✓ Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build the optimized wasm package
+  * Set up Node.js
+  * Run npm package gates
+  * Verify exact Dataset and exchange identity ABIs
+  * Run the Worker recipe under workerd
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 3 minutes ago
+
+JOBS
+✓ msrv in 1m3s (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  ✓ Check workspace on MSRV
+  ✓ Assert the MSRV job really ran on 1.98
+  ✓ Post Checkout
+  ✓ Complete job
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Format
+  ✓ Format the preserve-order consumer
+  ✓ Clippy the preserve-order consumer (deny warnings)
+  * Check workspace
+  * Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Run the distance arithmetic's path and reference-model tests on NEON
+  * Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* wasm-exec (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Set up Node.js
+  * Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  * Post Set up Node.js
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the i686 C library
+  * Type-check the distance kernels and their consumers on six architectures
+  * Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+✓ doc in 1m20s (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Doc (deny warnings)
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* miri (ID 113457546190)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Miri (SmallVec unsafe storage)
+  * Post Checkout
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* windows-mtime (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore file and directory mtimes on Windows
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  * Reclaim runner disk before the largest link in CI
+  * Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* wasm-schema-oracles (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  * TypeScript emitter schema oracle
+  * GraphQL emitter schema oracle
+  * Post Set up Node.js
+  * Post Checkout
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the C cross toolchain
+  ✓ Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build the optimized wasm package
+  * Set up Node.js
+  * Run npm package gates
+  * Verify exact Dataset and exchange identity ABIs
+  * Run the Worker recipe under workerd
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 3 minutes ago
+
+JOBS
+✓ msrv in 1m3s (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  ✓ Check workspace on MSRV
+  ✓ Assert the MSRV job really ran on 1.98
+  ✓ Post Checkout
+  ✓ Complete job
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Format
+  ✓ Format the preserve-order consumer
+  ✓ Clippy the preserve-order consumer (deny warnings)
+  ✓ Check workspace
+  * Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Run the distance arithmetic's path and reference-model tests on NEON
+  * Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* wasm-exec (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Set up Node.js
+  * Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  * Post Set up Node.js
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the i686 C library
+  ✓ Type-check the distance kernels and their consumers on six architectures
+  * Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+✓ doc in 1m20s (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Doc (deny warnings)
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* miri (ID 113457546190)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Miri (SmallVec unsafe storage)
+  * Post Checkout
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+✓ windows-mtime in 2m23s (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore file and directory mtimes on Windows
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  * Install Rust
+  * Cache the dependency build (shared by every shard)
+  * Install Node for the Unicode ECMAScript oracle
+  * Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Checkout
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* wasm-schema-oracles (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  * TypeScript emitter schema oracle
+  * GraphQL emitter schema oracle
+  * Post Set up Node.js
+  * Post Checkout
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the C cross toolchain
+  ✓ Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build the optimized wasm package
+  * Set up Node.js
+  * Run npm package gates
+  * Verify exact Dataset and exchange identity ABIs
+  * Run the Worker recipe under workerd
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 4 minutes ago
+
+JOBS
+✓ msrv in 1m3s (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  ✓ Check workspace on MSRV
+  ✓ Assert the MSRV job really ran on 1.98
+  ✓ Post Checkout
+  ✓ Complete job
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Format
+  ✓ Format the preserve-order consumer
+  ✓ Clippy the preserve-order consumer (deny warnings)
+  ✓ Check workspace
+  * Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Run the distance arithmetic's path and reference-model tests on NEON
+  * Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+✓ wasm-exec in 3m27s (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Set up Node.js
+  ✓ Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  ✓ Post Set up Node.js
+  ✓ Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Post Checkout
+  ✓ Complete job
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the i686 C library
+  ✓ Type-check the distance kernels and their consumers on six architectures
+  ✓ Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+✓ doc in 1m20s (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Doc (deny warnings)
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* miri (ID 113457546190)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Miri (SmallVec unsafe storage)
+  * Post Checkout
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+✓ windows-mtime in 2m23s (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore file and directory mtimes on Windows
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  ✓ Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* wasm-schema-oracles (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  * TypeScript emitter schema oracle
+  * GraphQL emitter schema oracle
+  * Post Set up Node.js
+  * Post Checkout
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the C cross toolchain
+  ✓ Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build the optimized wasm package
+  * Set up Node.js
+  * Run npm package gates
+  * Verify exact Dataset and exchange identity ABIs
+  * Run the Worker recipe under workerd
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+
+Refreshing run status every 30 seconds. Press Ctrl+C to quit.
+
+* paudley/454-rdflib-shim-algebra-level-reassignment CI · 37819711271
+Triggered via workflow_dispatch about 5 minutes ago
+
+JOBS
+✓ msrv in 1m3s (ID 113457545489)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install MSRV Rust
+  ✓ Check workspace on MSRV
+  ✓ Assert the MSRV job really ran on 1.98
+  ✓ Post Checkout
+  ✓ Complete job
+* wasm (ID 113457545720)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build release crates on wasm32
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+* workspace (ID 113457545755)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Format
+  ✓ Format the preserve-order consumer
+  ✓ Clippy the preserve-order consumer (deny warnings)
+  ✓ Check workspace
+  ✓ Clippy (deny warnings)
+  * Enforce no Cargo features
+  * Check every workflow installs the toolchain rust-toolchain.toml pins
+  * Check the toolchain-pin gate can still fail
+  * Check the gate-parity gate can still fail
+  * Check `make check` and this workflow run the same hygiene gates
+  * Check the stream-chunk gate can still fail
+  * Check every streamed read names its chunk size
+  * Check the build-profile gate can still fail
+  * Check the gate compiles at opt-level 3 with the runtime checks on
+  * Check RFC 3986 reference resolution is not re-implemented outside purrdf-iri
+  * Check the serializer-rewind gate can still fail
+  * Check no serializer takes back output it already produced
+  * Check no Rust test module hides in the PyO3 extension crate
+  * Check the terminal-predicate gate can still fail
+  * Check no terminal predicate is re-derived outside its owning surface
+  * Check the thread-local ledger gate can still fail
+  * Check every thread-local is in the interleaving ledger with its reason
+  * Check the shapes-parser silent-drop gate can still fail
+  * Check the shapes parser drops no shapes-graph value silently
+  * Check the tracked-path gate can still fail
+  * Check no tracked path is unsafe to pass to a command
+  * Check the test-shard gate can still fail
+  * Check the CI test shards cover every workspace member exactly once
+  * Check the workload acquisition pins and refusals hold (offline)
+  * Check the WatDiv instantiator is deterministic and its cache is sound (offline)
+  * Check the LUBM query normalisation and its controls hold (offline)
+  * Check the license gate can still fail
+  * Check vendored-corpus license hygiene
+  * Fetch all locked platform dependencies for the offline audit
+  * Check the packaged-license audit can still fail
+  * Check C artifact capture refuses stale and mismatched outputs
+  * Check WebAssembly capture refuses stale and ambiguous outputs
+  * Check Python distribution license metadata and wheel integrity
+  * Check all generated recipient notices against provenance and resolved inputs
+  * Check the banned-dependency gate can still fail
+  * Check no replaced dependency re-entered the lock
+  * Check every external dependency carries a census verdict
+  * Check the layering gate can still fail
+  * Check every first-party crate edge is one layers.toml allows
+  * Check the helper census and Rust policy guards can still fail
+  * Check no legacy Python/JS grew and every new file says why it is not Rust
+  * Check the shared-helpers gate can still fail
+  * Check helpers-ledger.toml holds (one home per job, no stale exemption)
+  * Check the hash-domain gate can still fail
+  * Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+  * Check vendored-corpus byte-freeze
+  * Check generated artifacts
+  * Check for stale issue references in comments/docs
+  * Check brand casing (PurRDF in prose, `purrdf` only in identifiers)
+  * Check no first-party extension is attributed to a SPARQL specification
+  * Check hand-written numbers still agree with the artifacts they restate
+  * Check the zh-Hans translation against its glossary
+  * Check cross-registry release coherence
+  * Check reviewed release summary and checksum refusal cases (offline)
+  * Check the current release has a bounded reviewed summary
+  * Check the crates.io release order is publishable and verifiable (offline)
+  * Check the crates.io record preflight refuses every wrong registry state (offline)
+  * Check release publication guards and resumable decisions (offline)
+  * Check exact npm tarball publication guards (offline)
+  * Check draft publication and immutable release verification (offline)
+  * Check isolated empty bootstrap verification and registry refusals (offline)
+  * Check every wasm-bindgen free function is re-exported from the npm package root
+  * Check the conclusion-directed entailment surface reaches all four hosts
+  * Check every PyO3 member the extension exposes is declared in the shipped type stub
+  * Check every scraped conformance row is RED without its scoreboard line
+  * Check the SIMD asm evidence gate can still fail
+  * Check the bench comparison selects bench-harness suites only
+  * Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+  * Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+  * Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+  * Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+  * Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+  * Verify BM25F goldens against the independent integer reference
+  * Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
+  * Post Checkout
+* capi (ID 113457545789)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install cargo-c (the pinned header-contract generator)
+  * Verify purrdf.h is current + the C smoke links and runs
+  * Post Checkout
+✓ python-publisher in 16s (ID 113457545791)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Verify the locked tooling and offline publisher regressions
+  ✓ Post Run astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+  ✓ Post Run actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+  ✓ Post Checkout
+  ✓ Complete job
+* aarch64 (ID 113457545836)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Run the distance arithmetic's path and reference-model tests on NEON
+  ✓ Run the kNN kernels and their pinned cross-target answers on aarch64
+  * Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
+  * Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+  * Run the AES-round FixedHasher path on Arm
+  * Run the DEFLATE NEON kernels against the portable ones on aarch64
+  * Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+  * Post Checkout
+* conformance (shapes) (ID 113457545855)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (sparql) (ID 113457545884)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+✓ wasm-exec in 3m27s (ID 113457545906)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Set up Node.js
+  ✓ Execute WASM dispatch, SIMD kernels, stack and host-interface probes (Node)
+  ✓ Post Set up Node.js
+  ✓ Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  ✓ Post Checkout
+  ✓ Complete job
+* cross-arch-riscv64 (determinism-more-workers) (ID 113457545916)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (suites) (ID 113457545926)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* cross-arch-riscv64 (determinism-serial) (ID 113457545934)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* conformance (core) (ID 113457545935)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  - Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* conformance (python) (ID 113457545966)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Conformance matrix (this shard's suites)
+  * Upload this shard's rows
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* cross-arch (ID 113457545979)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the i686 C library
+  ✓ Type-check the distance kernels and their consumers on six architectures
+  ✓ Type-check gts and cli for Windows
+  * Run BLAKE3, distance, kNN and HNSW suites on i686
+  * Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
+  * Post Checkout
+* simd-asm-config (x86_64-v4) (ID 113457546029)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (x86_64) (ID 113457546049)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* projection-oracles (ID 113457546054)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install uv
+  * W3C CSVW and independent projection oracles
+  * Post Checkout
+✓ doc in 1m20s (ID 113457546063)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Doc (deny warnings)
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (wasm32) (ID 113457546068)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* cross-arch-riscv64 (determinism-one-worker) (ID 113457546173)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the riscv64 cross linker and user-mode emulation
+  * Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
+  * Post Checkout
+* test (integration-3) (ID 113457546177)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* miri (ID 113457546190)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  * Miri (SmallVec unsafe storage)
+  * Post Checkout
+* avx512-sde (ID 113457546201)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install Intel SDE
+  * Build BLAKE3, distance, kNN and HNSW test binaries
+  * Run them on an emulated AVX-512F processor, requiring every x86_64 path
+  * Post Checkout
+* test (integration-1) (ID 113457546213)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* pytest (ID 113457546225)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore the workspace test lane's dependency build
+  ✓ Install uv
+  * Python binding tests (maturin build + pytest)
+  * Pydantic emitter schema oracle
+  * LinkML emitter schema oracle
+  * Post Restore the workspace test lane's dependency build
+  * Post Checkout
+* test (integration-4) (ID 113457546237)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-config (wasm32-simd128) (ID 113457546246)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* simd-asm-config (aarch64-neoverse-v1) (ID 113457546255)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+✓ windows-mtime in 2m23s (ID 113457546271)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Restore file and directory mtimes on Windows
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (x86_64-v3) (ID 113457546284)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  - Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (lib) (ID 113457546328)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  ✓ Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* test (integration-2) (ID 113457546334)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+✓ wasm-schema-oracles in 4m11s (ID 113457546337)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up Node.js
+  ✓ Install npm dependencies for the emitter schema oracles
+  ✓ TypeScript emitter schema oracle
+  ✓ GraphQL emitter schema oracle
+  ✓ Post Set up Node.js
+  ✓ Post Checkout
+  ✓ Complete job
+* simd-asm-config (aarch64) (ID 113457546339)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Identify the actual compiler
+  ✓ Restore assembly build contexts and evidence
+  ✓ Install the C cross toolchain
+  ✓ Record measurement inputs
+  * Measure and check this configuration
+  * Upload checked evidence
+  * Upload failed measurement diagnostics
+  * Post Restore assembly build contexts and evidence
+  * Post Checkout
+* test (doc) (ID 113457546375)
+  ✓ Set up job
+  ✓ Reclaim runner disk before the largest link in CI
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Cache the dependency build (shared by every shard)
+  ✓ Install Node for the Unicode ECMAScript oracle
+  - Install the pinned Binaryen validator for wasm-link tests
+  * Run workspace tests (this shard; the six include the doc tests)
+  * Test downstream preserve-order feature unification
+  * Post Install Node for the Unicode ECMAScript oracle
+  * Post Cache the dependency build (shared by every shard)
+  * Post Checkout
+* simd-asm-projection (ID 113457546464)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Install the C cross toolchain
+  ✓ Record the clean checkout and measurement inputs
+  * Inspect the actual x86-v3 eager seal and mapping bodies
+  * Inspect the actual x86-v4 eager seal and mapping bodies
+  * Generate the complete seven-configuration projection
+  * Qualify the generated projection on all seven configurations
+  * Require complete checked evidence and the same compiler
+  * Record artifact checksums
+  * Upload projection and emitted-body evidence
+  * Post Checkout
+* wasm-package (ID 113457546586)
+  ✓ Set up job
+  ✓ Checkout
+  ✓ Install Rust
+  ✓ Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Build the optimized wasm package
+  * Set up Node.js
+  * Run npm package gates
+  * Verify exact Dataset and exchange identity ABIs
+  * Run the Worker recipe under workerd
+  * Post Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+  * Post Checkout
+
+ANNOTATIONS
+- "The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748"
+python-publisher: .github#1
+

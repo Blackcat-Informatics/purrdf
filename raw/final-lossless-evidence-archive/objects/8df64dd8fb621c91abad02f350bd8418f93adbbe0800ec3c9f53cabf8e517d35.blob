@@ -1,0 +1,3 @@
+528b75e1dd296f588c8e3442f91298a62729d7dc1c2c0f9423c9365387730212  bindings/python/tests/rdflib_suite/vendor/test_nested_filters.py
+7633194ece708a1a9357310d02170d32620710ac66113abb131a2b933d04f6b7  .stage/rdflib-shim-algebra-level-reassignment/raw/native-vendor-witness/Cargo.toml
+977a5f057fd17c01b464b2d237eee21cd1db22f44abc1dab80138a93c7897607  .stage/rdflib-shim-algebra-level-reassignment/raw/native-vendor-witness/src/main.rs

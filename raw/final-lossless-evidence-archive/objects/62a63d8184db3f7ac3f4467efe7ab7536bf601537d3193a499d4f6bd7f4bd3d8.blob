@@ -1,0 +1,85 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error[E0433]: cannot find type `Lift` in this scope
+    --> crates/sparql-eval/src/eval.rs:3110:20
+     |
+3110 |     let mut lift = Lift::at(node);
+     |                    ^^^^ use of undeclared type `Lift`
+     |
+help: consider importing this struct
+     |
+  24 + use crate::governor::lift::Lift;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:3039:10
+     |
+3039 |         &crate::solution::SolutionSeq<<D as DatasetView>::Id>,
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+3039 -         &crate::solution::SolutionSeq<<D as DatasetView>::Id>,
+3039 +         &SolutionSeq<<D as DatasetView>::Id>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:3052:16
+     |
+3052 |         rows: &crate::solution::SolutionSeq<D::Id>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3052 -         rows: &crate::solution::SolutionSeq<D::Id>,
+3052 +         rows: &SolutionSeq<D::Id>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:3063:17
+     |
+3063 |         _rows: &crate::solution::SolutionSeq<D::Id>,
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3063 -         _rows: &crate::solution::SolutionSeq<D::Id>,
+3063 +         _rows: &SolutionSeq<D::Id>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:3081:16
+     |
+3081 |         rows: &crate::solution::SolutionSeq<D::Id>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3081 -         rows: &crate::solution::SolutionSeq<D::Id>,
+3081 +         rows: &SolutionSeq<D::Id>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:3256:18
+     |
+3256 |                 &crate::solution::SolutionSeq {
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3256 -                 &crate::solution::SolutionSeq {
+3256 +                 &SolutionSeq {
+     |
+
+error: unused variable: `left_len`
+   --> crates/sparql-eval/src/binop.rs:894:9
+    |
+894 |     let left_len = left_schema.len();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_left_len`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 7 previous errors

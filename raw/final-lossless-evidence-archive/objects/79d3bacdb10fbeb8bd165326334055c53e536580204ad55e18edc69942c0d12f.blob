@@ -1,0 +1,150 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_algebra-96bf57510f55d7ab.purrdf_sparql_algebra.2d4d4c38e30aca1e-cgu.0.rcgu.o.rcgu.ll:97381
+; <purrdf_sparql_algebra::algebra::Query>::validate_ordinary
+define dso_local void @_RNvMs2_NtCs3T8KIHP36KE_21purrdf_sparql_algebra8validateNtNtB7_7algebra5Query17validate_ordinary(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([32 x i8]) align 4 captures(none) dereferenceable(32) %0, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(132) %1) unnamed_addr #0 !guid !19188 {
+  %3 = alloca [12 x i8], align 4
+  %4 = alloca [36 x i8], align 4
+  %5 = alloca [12 x i8], align 4
+  call void @llvm.lifetime.start.p0(ptr nonnull %5)
+  store ptr null, ptr %5, align 4
+  %6 = getelementptr inbounds nuw i8, ptr %5, i32 8
+  store i32 0, ptr %6, align 4
+; call <purrdf_sparql_algebra::algebra::Query>::walk::<false>
+  call fastcc void @_RINvMs2_NtCs3T8KIHP36KE_21purrdf_sparql_algebra8validateNtNtB8_7algebra5Query4walkKb0_EB8_.llvm.646358101967817734(ptr noalias nofree noundef align 4 captures(address) dereferenceable(32) %0, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(132) %1, ptr noalias nofree noundef align 4 dereferenceable(12) %5) #35
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !19189)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !19192)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !19195)
+  call void @llvm.lifetime.start.p0(ptr nonnull %4), !noalias !19198
+  %7 = load ptr, ptr %5, align 4, !alias.scope !19198
+  %8 = icmp eq ptr %7, null
+  br i1 %8, label %19, label %9
+
+9:                                                ; preds = %2
+  %10 = load i32, ptr %6, align 4, !alias.scope !19198
+  %11 = getelementptr inbounds nuw i8, ptr %5, i32 4
+  %12 = load i32, ptr %11, align 4, !alias.scope !19198
+  %13 = getelementptr inbounds nuw i8, ptr %4, i32 4
+  store ptr null, ptr %13, align 4, !noalias !19198
+  %14 = getelementptr inbounds nuw i8, ptr %4, i32 8
+  store ptr %7, ptr %14, align 4, !noalias !19198
+  %15 = getelementptr inbounds nuw i8, ptr %4, i32 12
+  store i32 %12, ptr %15, align 4, !noalias !19198
+  %16 = getelementptr inbounds nuw i8, ptr %4, i32 20
+  store ptr null, ptr %16, align 4, !noalias !19198
+  %17 = getelementptr inbounds nuw i8, ptr %4, i32 24
+  store ptr %7, ptr %17, align 4, !noalias !19198
+  %18 = getelementptr inbounds nuw i8, ptr %4, i32 28
+  store i32 %12, ptr %18, align 4, !noalias !19198
+  br label %19
+
+19:                                               ; preds = %9, %2
+  %20 = phi i32 [ 1, %9 ], [ 0, %2 ]
+  %21 = phi i32 [ %10, %9 ], [ 0, %2 ]
+  store i32 %20, ptr %4, align 4, !noalias !19198
+  %22 = getelementptr inbounds nuw i8, ptr %4, i32 16
+  store i32 %20, ptr %22, align 4, !noalias !19198
+  %23 = getelementptr inbounds nuw i8, ptr %4, i32 32
+  store i32 %21, ptr %23, align 4, !noalias !19198
+  br label %24
+
+24:                                               ; preds = %24, %19
+  call void @llvm.lifetime.start.p0(ptr nonnull %3), !noalias !19199
+; call <alloc::collections::btree::map::IntoIter<&str, alloc::collections::btree::set_val::SetValZST>>::dying_next
+  call fastcc void @_RNvMsz_NtNtNtCsiymUexJS71D_5alloc11collections5btree3mapINtB5_8IntoIterReNtNtB7_7set_val9SetValZSTE10dying_nextCs3T8KIHP36KE_21purrdf_sparql_algebra.llvm.646358101967817734(ptr noalias nofree noundef align 4 captures(none) dereferenceable(12) %3, ptr noalias nofree noundef nonnull align 4 dereferenceable(36) %4) #35, !noalias !19198
+  %25 = load ptr, ptr %3, align 4, !noalias !19199, !noundef !1046
+  %26 = icmp eq ptr %25, null
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !noalias !19199
+  br i1 %26, label %27, label %24
+
+27:                                               ; preds = %24
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !noalias !19198
+  call void @llvm.lifetime.end.p0(ptr nonnull %5)
+  ret void
+}
+
+ASSEMBLY
+_RNvMs2_NtCs3T8KIHP36KE_21purrdf_sparql_algebra8validateNtNtB7_7algebra5Query17validate_ordinary:
+.Lfunc_begin168:
+	.functype	_RNvMs2_NtCs3T8KIHP36KE_21purrdf_sparql_algebra8validateNtNtB7_7algebra5Query17validate_ordinary (i32, i32) -> ()
+	.local  	i32, i32
+	global.get	__stack_pointer
+	i32.const	64
+	i32.sub 
+	local.tee	2
+	global.set	__stack_pointer
+	i32.const	0
+	local.set	3
+	local.get	2
+	i32.const	0
+	i32.store	12
+	local.get	2
+	i32.const	0
+	i32.store	4
+	local.get	0
+	local.get	1
+	local.get	2
+	i32.const	4
+	i32.add 
+	call	_RINvMs2_NtCs3T8KIHP36KE_21purrdf_sparql_algebra8validateNtNtB8_7algebra5Query4walkKb0_EB8_.llvm.646358101967817734
+	i32.const	0
+	local.set	1
+	block   	
+	local.get	2
+	i32.load	4
+	local.tee	0
+	i32.eqz
+	br_if   	0
+	local.get	2
+	local.get	2
+	i32.load	8
+	local.tee	3
+	i32.store	44
+	local.get	2
+	local.get	0
+	i32.store	40
+	local.get	2
+	i32.const	0
+	i32.store	36
+	local.get	2
+	local.get	3
+	i32.store	28
+	local.get	2
+	local.get	0
+	i32.store	24
+	local.get	2
+	i32.const	0
+	i32.store	20
+	i32.const	1
+	local.set	3
+	local.get	2
+	i32.load	12
+	local.set	1
+.LBB168_2:
+	end_block
+	local.get	2
+	local.get	1
+	i32.store	48
+	local.get	2
+	local.get	3
+	i32.store	32
+	local.get	2
+	local.get	3
+	i32.store	16
+.LBB168_3:
+	loop    	
+	local.get	2
+	i32.const	52
+	i32.add 
+	local.get	2
+	i32.const	16
+	i32.add 
+	call	_RNvMsz_NtNtNtCsiymUexJS71D_5alloc11collections5btree3mapINtB5_8IntoIterReNtNtB7_7set_val9SetValZSTE10dying_nextCs3T8KIHP36KE_21purrdf_sparql_algebra.llvm.646358101967817734
+	local.get	2
+	i32.load	52
+	br_if   	0
+	end_loop
+	local.get	2
+	i32.const	64
+	i32.add 
+	global.set	__stack_pointer
+	end_function
+.Lfunc_end168:

@@ -1,0 +1,19 @@
+Closes #454. Closes #473.
+
+RDFLib reassignment queries now compile through a typed Rust algebra route into the shared evaluator. Graph, processor, Dataset, ConjunctiveGraph and shadow consumers preserve context and initial bindings through nested EXISTS, projection, OPTIONAL, MINUS, grouping and ordered delivery. Single-graph GRAPH operations return the typed dataset-required error.
+
+Python query rows provide checked length, signed positional indexing and a lazy owning iterator. Duplicate labels retain every positional cell and the compatibility route's final-label lookup. Iterators retain their result owner through exhaustion and caller lifetimes.
+
+Integration preserves dated SHACL admission: contextual application has its own typed reason. Project and worker checkpoint paths use the shared bulk and replay homes. No new runtime dependency, semantic feature, second parser or evaluator is introduced. Documentation and Chinese translations describe the shipped interfaces.
+
+Validation at this preparation checkpoint:
+
+- The permanent Rust matrix retains241 genuine RDFLib oracle cases. Current-main integration passed196 focused tests, later lower-path qualification160, shared bulk-home53 and worker45. Caller-owned Lift qualification passed71; final private-kernel source72fa passed35 existing Project/prepared/contextual tests and owning helper hygiene. These are source-qualified executions, not a summed unique test census.
+- A fresh production wheel passed28 irreducible Python boundary tests with zero skips or xfails; all27 installed package entries matched the wheel before and after execution. Subsequent equivalent Rust projection repairs have focused native controls and require the final hosted matrix.
+- Documentation qualification passed nine commands, English and Chinese books,37 HTML outputs per language and3040 active translations with zero lost translations or generated drift.
+- Strict affected all-target Rust lint, formatting, shared-home and layer checks passed within their recorded scopes.
+- Fresh native and host generation85330 exited0 on source72fa: original production dependency checksum cohorts, actual PyO3 inputs, all32 exact untimed records and source/artifact readbacks passed. Independent complete twelve-row analytical cost audit PASS (original row15 MET), accepted by root: no remaining native/host body, caller/callee, SSA work, frame, ABI, capture/drop or worker/numeric finding. Native ThinLTO/host no-LTO proof profiles are distinguished from production fat-LTO; no timing claim is made. Earlier failed projection emissions and diagnostics remain retained history.
+
+Preparation draft only: normal signed commit/push hooks, independent completion assessment, current full hosted qualification, PR feedback, merge-tree acceptance and ghprsq integration/cleanup remain pending. Update these results before final publication.
+
+Plan: [published plan](https://github.com/Blackcat-Informatics/purrdf/issues/454#issuecomment-6027060153). Current evidence and reuse decisions are indexed in `.stage/rdflib-shim-algebra-level-reassignment/validation.md`; selected Stage evidence will be archived by the governed merge workflow.

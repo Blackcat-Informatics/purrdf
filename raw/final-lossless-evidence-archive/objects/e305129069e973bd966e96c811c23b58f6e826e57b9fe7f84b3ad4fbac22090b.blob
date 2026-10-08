@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against 863c75e2c1e1 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/454-rdflib-shim-algebra-level-reassignment 56e636497] fix(rdflib): route graph queries through contextual algebra
+ 25 files changed, 1414 insertions(+), 579 deletions(-)
+ create mode 100644 bindings/python/tests/test_contextual_mappings.py

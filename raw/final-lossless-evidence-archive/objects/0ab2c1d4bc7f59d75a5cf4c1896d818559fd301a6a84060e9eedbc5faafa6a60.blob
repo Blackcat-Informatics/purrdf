@@ -1,0 +1,63 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_algebra-06fbdff6ca78b517.purrdf_sparql_algebra.aab3ba0e27ad4130-cgu.0.rcgu.o.rcgu.ll:200530
+; <purrdf_sparql_algebra::algebra::GraphPattern as core::clone::Clone>::clone
+define dso_local void @_RNvXs4_NtCseEDRShONSVg_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCsb6ASFGx6cXz_4core5clone5Clone5clone(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([72 x i8]) align 4 captures(none) dereferenceable(72) %0, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(72) %1) unnamed_addr #0 !guid !37381 {
+  %3 = alloca [72 x i8], align 4
+  call void @llvm.lifetime.start.p0(ptr nonnull %3)
+; call purrdf_sparql_algebra::owned::clone_tree
+  call fastcc void @_RNvNtCseEDRShONSVg_21purrdf_sparql_algebra5owned10clone_tree.llvm.14034697161088380556(ptr noalias nofree noundef align 4 captures(none) dereferenceable(72) %3, i32 noundef 0, ptr noundef %1) #34
+  %4 = load i32, ptr %3, align 4, !range !6338, !noundef !1022
+  %5 = icmp samesign ult i32 %4, 32
+  br i1 %5, label %7, label %6, !prof !2948
+
+6:                                                ; preds = %2
+; call core::panicking::panic_fmt
+  tail call void @_RNvNtCsb6ASFGx6cXz_4core9panicking9panic_fmt(ptr noundef nonnull @anon.1e04069a939e32b18121040c0fa63409.976.llvm.14034697161088380556, ptr noundef nonnull inttoptr (i32 147 to ptr), ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.1e04069a939e32b18121040c0fa63409.978.llvm.14034697161088380556) #36
+  unreachable
+
+7:                                                ; preds = %2
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(72) %0, ptr noundef nonnull align 4 dereferenceable(72) %3, i32 72, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %3)
+  ret void
+}
+
+ASSEMBLY
+_RNvXs4_NtCseEDRShONSVg_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCsb6ASFGx6cXz_4core5clone5Clone5clone:
+.Lfunc_begin327:
+	.functype	_RNvXs4_NtCseEDRShONSVg_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCsb6ASFGx6cXz_4core5clone5Clone5clone (i32, i32) -> ()
+	.local  	i32
+	global.get	__stack_pointer
+	i32.const	80
+	i32.sub 
+	local.tee	2
+	global.set	__stack_pointer
+	local.get	2
+	i32.const	8
+	i32.add 
+	i32.const	0
+	local.get	1
+	call	_RNvNtCseEDRShONSVg_21purrdf_sparql_algebra5owned10clone_tree.llvm.14034697161088380556
+	block   	
+	local.get	2
+	i32.load	8
+	i32.const	32
+	i32.lt_u
+	br_if   	0
+	i32.const	anon.1e04069a939e32b18121040c0fa63409.976.llvm.14034697161088380556
+	i32.const	147
+	i32.const	anon.1e04069a939e32b18121040c0fa63409.978.llvm.14034697161088380556
+	call	_RNvNtCsb6ASFGx6cXz_4core9panicking9panic_fmt
+	unreachable
+.LBB327_2:
+	end_block
+	local.get	0
+	local.get	2
+	i32.const	8
+	i32.add 
+	i32.const	72
+	memory.copy	0, 0
+	local.get	2
+	i32.const	80
+	i32.add 
+	global.set	__stack_pointer
+	end_function
+.Lfunc_end327:

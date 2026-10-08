@@ -1,0 +1,4 @@
+06275d43821c8351f89f88071af043ce4c4645fe3adcf2126b2f28f031cafc01  bindings/python/uv.lock
+3e0cc4e1844395f9672316dc0f743653e4eff1e6c46ddb01cd8371195faee2dd  bindings/python/tests/test_contextual_mappings.py
+8dadcb532dbf9250264b99b1c0bca6a045ff0dcb3e40d5a98465ecfb714831f6  bindings/python/python/src/purrdf/compat/rdflib/graph.py
+467194bab3f3d02ac6a59d1c334f58e8e540371942600a214f5d546bc68cd96b  bindings/python/python/src/purrdf/__init__.pyi

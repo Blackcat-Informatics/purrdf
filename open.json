@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 454,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment",
+  "branch": "paudley/454-rdflib-shim-algebra-level-reassignment",
+  "slug": "rdflib-shim-algebra-level-reassignment",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "18489a91cb452b1773c60b469d4c30dc33a9a4a4",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment",
+    "branch:paudley/454-rdflib-shim-algebra-level-reassignment",
+    "stage:/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment",
+    "issue:/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-06T16:39:37-0600"
+}

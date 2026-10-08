@@ -1,0 +1,1180 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-python-ir/purrdf_native.ll:902986
+; purrdf_native::shacl::__pyfunction_eval_node_expr
+define void @_RNvNtCseY6IX0djbTh_13purrdf_native5shacl27___pyfunction_eval_node_expr(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([56 x i8]) align 8 captures(none) dereferenceable(56) %result, ptr nofree readnone captures(none) %_slf, ptr nofree noundef readonly captures(address) %_args, i64 noundef %_nargs, ptr noundef %_kwargs) unnamed_addr #1 personality ptr @rust_eh_personality !guid !146737 {
+start:
+  %_9.i.i115 = alloca [48 x i8], align 8
+  %_4.i.i = alloca [56 x i8], align 8
+  %_4.i.i.i.i89 = alloca [56 x i8], align 8
+  %_9.i.i90 = alloca [48 x i8], align 8
+  %_4.i.i.i.i64 = alloca [56 x i8], align 8
+  %_9.i.i65 = alloca [48 x i8], align 8
+  %_4.i.i.i.i = alloca [56 x i8], align 8
+  %_9.i.i = alloca [48 x i8], align 8
+  %_9.i53 = alloca [48 x i8], align 8
+  %_4.i54 = alloca [56 x i8], align 8
+  %_4.i.i.i = alloca [56 x i8], align 8
+  %_9.i50 = alloca [48 x i8], align 8
+  %_9.i41 = alloca [48 x i8], align 8
+  %_4.i42 = alloca [56 x i8], align 8
+  %_9.i = alloca [48 x i8], align 8
+  %_4.i = alloca [56 x i8], align 8
+  %_52 = alloca [56 x i8], align 8
+  %0 = getelementptr inbounds nuw i8, ptr %_52, i64 24
+  %_45 = alloca [56 x i8], align 8
+  %1 = getelementptr inbounds nuw i8, ptr %_45, i64 24
+  %_38 = alloca [56 x i8], align 8
+  %2 = getelementptr inbounds nuw i8, ptr %_38, i64 24
+  %_31 = alloca [56 x i8], align 8
+  %3 = getelementptr inbounds nuw i8, ptr %_31, i64 24
+  %_24 = alloca [56 x i8], align 8
+  %4 = getelementptr inbounds nuw i8, ptr %_24, i64 24
+  %val12 = alloca [24 x i8], align 8
+  %_89 = alloca [56 x i8], align 8
+  %_88.sroa.5 = alloca [48 x i8], align 8
+  %_82 = alloca [56 x i8], align 8
+  %_75 = alloca [56 x i8], align 8
+  %_74.sroa.5 = alloca [48 x i8], align 8
+  %_73 = alloca [32 x i8], align 8
+  %_67 = alloca [56 x i8], align 8
+  %_60 = alloca [56 x i8], align 8
+  %_59.sroa.5 = alloca [48 x i8], align 8
+  %_58 = alloca [24 x i8], align 8
+  %ret = alloca [56 x i8], align 8
+  %_8 = alloca [56 x i8], align 8
+  %output = alloca [80 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %output)
+  call void @llvm.memset.p0.i64(ptr noundef nonnull align 8 dereferenceable(80) %output, i8 0, i64 80, i1 false)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_8)
+; call <pyo3::impl_::extract_argument::FunctionDescription>::extract_arguments_fastcall::<pyo3::impl_::extract_argument::NoVarargs, pyo3::impl_::extract_argument::NoVarkeywords>
+  call fastcc void @_RINvMs5_NtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentNtB6_19FunctionDescription26extract_arguments_fastcallNtB6_9NoVarargsNtB6_13NoVarkeywordsECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 captures(none) dereferenceable(56) %_8, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(80) @alloc_ba98337e135cbdf47846456fb7c5bc2a, ptr noundef %_args, i64 noundef %_nargs, ptr noundef %_kwargs, ptr noalias nofree noundef nonnull align 8 %output, i64 noundef 10)
+  %_97 = load i64, ptr %_8, align 8, !range !4975, !noundef !3914
+  %5 = trunc nuw i64 %_97 to i1
+  br i1 %5, label %bb26, label %bb27
+
+bb26:                                             ; preds = %start
+  %6 = getelementptr inbounds nuw i8, ptr %_8, i64 8
+  %7 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %7, ptr noundef nonnull align 8 dereferenceable(48) %6, i64 48, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_8)
+  store i64 1, ptr %result, align 8
+  br label %bb20
+
+bb27:                                             ; preds = %start
+  call void @llvm.lifetime.end.p0(ptr nonnull %_8)
+  call void @llvm.lifetime.start.p0(ptr nonnull %ret)
+  %8 = load ptr, ptr %output, align 8, !nonnull !3914, !noundef !3914
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i), !noalias !146738
+; call <&str as pyo3::conversion::FromPyObject>::extract
+  call void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i, ptr noundef nonnull %8), !noalias !146738
+  %_5.i = load i64, ptr %_4.i, align 8, !range !4975, !noalias !146738, !noundef !3914
+  %9 = trunc nuw i64 %_5.i to i1
+  %10 = getelementptr inbounds nuw i8, ptr %_4.i, i64 8
+  br i1 %9, label %bb28, label %bb29, !prof !3944
+
+bb28:                                             ; preds = %bb27
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i), !noalias !146738
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_9.i, ptr noundef nonnull align 8 dereferenceable(48) %10, i64 48, i1 false), !noalias !146738
+  %11 = getelementptr inbounds nuw i8, ptr %_24, i64 8
+; call pyo3::impl_::extract_argument::argument_extraction_error
+  call void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %11, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3249deb618efff40901d2d7f725e7955, i64 noundef 10, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i), !noalias !146738
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i), !noalias !146738
+  %_107.sroa.0.0.copyload = load ptr, ptr %11, align 8
+  %_107.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_24, i64 16
+  %_107.sroa.4.0.copyload = load i64, ptr %_107.sroa.4.0..sroa_idx, align 8
+  %12 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_107.sroa.0.0.copyload, ptr %12, align 8
+  %_110.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_107.sroa.4.0.copyload, ptr %_110.sroa.4.0..sroa_idx, align 8
+  %_110.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_110.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %4, i64 32, i1 false)
+  store i64 1, ptr %result, align 8
+  br label %bb18
+
+bb29:                                             ; preds = %bb27
+  %value.0.i = load ptr, ptr %10, align 8, !noalias !146738, !nonnull !3914, !noundef !3914
+  %13 = getelementptr inbounds nuw i8, ptr %_4.i, i64 16
+  %value.1.i = load i64, ptr %13, align 8, !noalias !146738, !noundef !3914
+  %14 = getelementptr inbounds nuw i8, ptr %_24, i64 8
+  store ptr %value.0.i, ptr %14, align 8
+  %15 = getelementptr inbounds nuw i8, ptr %_24, i64 16
+  store i64 %value.1.i, ptr %15, align 8
+  store i64 0, ptr %_24, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i), !noalias !146738
+  %16 = getelementptr inbounds nuw i8, ptr %output, i64 8
+  %17 = load ptr, ptr %16, align 8, !nonnull !3914, !noundef !3914
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i42), !noalias !146742
+; call <&str as pyo3::conversion::FromPyObject>::extract
+  call void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i42, ptr noundef nonnull %17), !noalias !146742
+  %_5.i43 = load i64, ptr %_4.i42, align 8, !range !4975, !noalias !146742, !noundef !3914
+  %18 = trunc nuw i64 %_5.i43 to i1
+  %19 = getelementptr inbounds nuw i8, ptr %_4.i42, i64 8
+  br i1 %18, label %bb30, label %bb31, !prof !3944
+
+bb30:                                             ; preds = %bb29
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i41), !noalias !146742
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_9.i41, ptr noundef nonnull align 8 dereferenceable(48) %19, i64 48, i1 false), !noalias !146742
+  %20 = getelementptr inbounds nuw i8, ptr %_31, i64 8
+; call pyo3::impl_::extract_argument::argument_extraction_error
+  call void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %20, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_7ffa151f6db1eb2649a139b450085a28, i64 noundef 7, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i41)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i41), !noalias !146742
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i42), !noalias !146742
+  %_116.sroa.0.0.copyload = load ptr, ptr %20, align 8
+  %_116.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_31, i64 16
+  %_116.sroa.4.0.copyload = load i64, ptr %_116.sroa.4.0..sroa_idx, align 8
+  %21 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_116.sroa.0.0.copyload, ptr %21, align 8
+  %_119.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_116.sroa.4.0.copyload, ptr %_119.sroa.4.0..sroa_idx, align 8
+  %_119.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_119.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %3, i64 32, i1 false)
+  store i64 1, ptr %result, align 8
+  br label %bb18
+
+bb31:                                             ; preds = %bb29
+  %value.0.i45 = load ptr, ptr %19, align 8, !noalias !146742, !nonnull !3914, !noundef !3914
+  %22 = getelementptr inbounds nuw i8, ptr %_4.i42, i64 16
+  %value.1.i46 = load i64, ptr %22, align 8, !noalias !146742, !noundef !3914
+  %23 = getelementptr inbounds nuw i8, ptr %_31, i64 8
+  store ptr %value.0.i45, ptr %23, align 8
+  %24 = getelementptr inbounds nuw i8, ptr %_31, i64 16
+  store i64 %value.1.i46, ptr %24, align 8
+  store i64 0, ptr %_31, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i42), !noalias !146742
+  %25 = getelementptr inbounds nuw i8, ptr %output, i64 16
+  %26 = load ptr, ptr %25, align 8, !nonnull !3914, !noundef !3914
+  %_9.i.i.i = call noundef ptr @Py_GetConstantBorrowed(i32 noundef 0) #77, !noalias !146746
+  %_2.i.i.i = icmp eq ptr %_9.i.i.i, %26
+  br i1 %_2.i.i.i, label %bb33, label %bb2.i.i.i
+
+bb2.i.i.i:                                        ; preds = %bb31
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i.i.i), !noalias !146746
+; call <&str as pyo3::conversion::FromPyObject>::extract
+  call void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i.i.i, ptr noundef nonnull %26), !noalias !146746
+  %_13.i.i.i = load i64, ptr %_4.i.i.i, align 8, !range !4975, !noalias !146746, !noundef !3914
+  %27 = trunc nuw i64 %_13.i.i.i to i1
+  %28 = getelementptr inbounds nuw i8, ptr %_4.i.i.i, i64 8
+  %_4.sroa.5.8.copyload1.i = load ptr, ptr %28, align 8, !noalias !146754
+  %_4.sroa.9.8..sroa_idx.i = getelementptr inbounds nuw i8, ptr %_4.i.i.i, i64 16
+  %_4.sroa.9.8.copyload2.i = load i64, ptr %_4.sroa.9.8..sroa_idx.i, align 8, !noalias !146754
+  br i1 %27, label %bb32, label %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i
+
+_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i: ; preds = %bb2.i.i.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i), !noalias !146746
+  br label %bb33
+
+bb32:                                             ; preds = %bb2.i.i.i
+  %_4.sroa.11.8..sroa_idx.i = getelementptr inbounds nuw i8, ptr %_4.i.i.i, i64 24
+  %e.sroa.5.0._9.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_9.i50, i64 16
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i50), !noalias !146754
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %e.sroa.5.0._9.sroa_idx.i, ptr noundef nonnull align 8 dereferenceable(32) %_4.sroa.11.8..sroa_idx.i, i64 32, i1 false), !noalias !146754
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i), !noalias !146746
+  store ptr %_4.sroa.5.8.copyload1.i, ptr %_9.i50, align 8, !alias.scope !146755, !noalias !146754
+  %e.sroa.4.0._9.sroa_idx.i = getelementptr inbounds nuw i8, ptr %_9.i50, i64 8
+  store i64 %_4.sroa.9.8.copyload2.i, ptr %e.sroa.4.0._9.sroa_idx.i, align 8, !alias.scope !146755, !noalias !146754
+  %29 = getelementptr inbounds nuw i8, ptr %_38, i64 8
+; call pyo3::impl_::extract_argument::argument_extraction_error
+  call void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %29, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_c4674111d0daef3c436f76552b214d74, i64 noundef 4, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i50)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i50), !noalias !146754
+  %_125.sroa.0.0.copyload = load ptr, ptr %29, align 8
+  %_125.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_38, i64 16
+  %_125.sroa.4.0.copyload = load i64, ptr %_125.sroa.4.0..sroa_idx, align 8
+  %30 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_125.sroa.0.0.copyload, ptr %30, align 8
+  %_128.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_125.sroa.4.0.copyload, ptr %_128.sroa.4.0..sroa_idx, align 8
+  %_128.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_128.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %2, i64 32, i1 false)
+  store i64 1, ptr %result, align 8
+  br label %bb18
+
+bb33:                                             ; preds = %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i, %bb31
+  %_4.sroa.9.17.i = phi i64 [ %_4.sroa.9.8.copyload2.i, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i ], [ undef, %bb31 ]
+  %_4.sroa.5.16.i = phi ptr [ %_4.sroa.5.8.copyload1.i, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i ], [ null, %bb31 ]
+  %31 = getelementptr inbounds nuw i8, ptr %_38, i64 8
+  store ptr %_4.sroa.5.16.i, ptr %31, align 8
+  %32 = getelementptr inbounds nuw i8, ptr %_38, i64 16
+  store i64 %_4.sroa.9.17.i, ptr %32, align 8
+  store i64 0, ptr %_38, align 8
+  %33 = getelementptr inbounds nuw i8, ptr %output, i64 24
+  %34 = load ptr, ptr %33, align 8, !nonnull !3914, !noundef !3914
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i54), !noalias !146762
+; call <&str as pyo3::conversion::FromPyObject>::extract
+  call void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i54, ptr noundef nonnull %34), !noalias !146762
+  %_5.i55 = load i64, ptr %_4.i54, align 8, !range !4975, !noalias !146762, !noundef !3914
+  %35 = trunc nuw i64 %_5.i55 to i1
+  %36 = getelementptr inbounds nuw i8, ptr %_4.i54, i64 8
+  br i1 %35, label %bb34, label %bb35, !prof !3944
+
+bb34:                                             ; preds = %bb33
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i53), !noalias !146762
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_9.i53, ptr noundef nonnull align 8 dereferenceable(48) %36, i64 48, i1 false), !noalias !146762
+  %37 = getelementptr inbounds nuw i8, ptr %_45, i64 8
+; call pyo3::impl_::extract_argument::argument_extraction_error
+  call void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %37, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_e3354acc127f7a0d67c39314a941f32d, i64 noundef 5, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i53)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i53), !noalias !146762
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i54), !noalias !146762
+  %_134.sroa.0.0.copyload = load ptr, ptr %37, align 8
+  %_134.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_45, i64 16
+  %_134.sroa.4.0.copyload = load i64, ptr %_134.sroa.4.0..sroa_idx, align 8
+  %38 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_134.sroa.0.0.copyload, ptr %38, align 8
+  %_137.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_134.sroa.4.0.copyload, ptr %_137.sroa.4.0..sroa_idx, align 8
+  %_137.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_137.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %1, i64 32, i1 false)
+  store i64 1, ptr %result, align 8
+  br label %bb18
+
+bb35:                                             ; preds = %bb33
+  %value.0.i57 = load ptr, ptr %36, align 8, !noalias !146762, !nonnull !3914, !noundef !3914
+  %39 = getelementptr inbounds nuw i8, ptr %_4.i54, i64 16
+  %value.1.i58 = load i64, ptr %39, align 8, !noalias !146762, !noundef !3914
+  %40 = getelementptr inbounds nuw i8, ptr %_45, i64 8
+  store ptr %value.0.i57, ptr %40, align 8
+  %41 = getelementptr inbounds nuw i8, ptr %_45, i64 16
+  store i64 %value.1.i58, ptr %41, align 8
+  store i64 0, ptr %_45, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i54), !noalias !146762
+  %42 = getelementptr inbounds nuw i8, ptr %output, i64 32
+  %_53 = load ptr, ptr %42, align 8, !noundef !3914
+  %.not.i = icmp eq ptr %_53, null
+  br i1 %.not.i, label %bb2.i, label %bb3.i62
+
+bb3.i62:                                          ; preds = %bb35
+  %_9.i.i.i.i = call noundef ptr @Py_GetConstantBorrowed(i32 noundef 0) #77, !noalias !146766
+  %_2.i.i.i.i = icmp eq ptr %_9.i.i.i.i, %_53
+  br i1 %_2.i.i.i.i, label %bb4.i.i, label %bb2.i.i.i.i
+
+bb2.i.i.i.i:                                      ; preds = %bb3.i62
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i.i.i.i), !noalias !146766
+; call <&str as pyo3::conversion::FromPyObject>::extract
+  call void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i.i.i.i, ptr noundef nonnull %_53), !noalias !146766
+  %_13.i.i.i.i = load i64, ptr %_4.i.i.i.i, align 8, !range !4975, !noalias !146766, !noundef !3914
+  %43 = trunc nuw i64 %_13.i.i.i.i to i1
+  %44 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i, i64 8
+  %_4.sroa.5.8.copyload1.i.i = load ptr, ptr %44, align 8, !noalias !146777
+  %_4.sroa.9.8..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i, i64 16
+  %_4.sroa.9.8.copyload2.i.i = load i64, ptr %_4.sroa.9.8..sroa_idx.i.i, align 8, !noalias !146777
+  br i1 %43, label %bb36, label %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i
+
+_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i: ; preds = %bb2.i.i.i.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i.i), !noalias !146766
+  br label %bb4.i.i
+
+bb4.i.i:                                          ; preds = %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i, %bb3.i62
+  %_4.sroa.9.17.i.i = phi i64 [ %_4.sroa.9.8.copyload2.i.i, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i ], [ undef, %bb3.i62 ]
+  %_4.sroa.5.16.i.i = phi ptr [ %_4.sroa.5.8.copyload1.i.i, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i ], [ null, %bb3.i62 ]
+  %45 = getelementptr inbounds nuw i8, ptr %_52, i64 8
+  store ptr %_4.sroa.5.16.i.i, ptr %45, align 8
+  %46 = getelementptr inbounds nuw i8, ptr %_52, i64 16
+  store i64 %_4.sroa.9.17.i.i, ptr %46, align 8
+  br label %bb37
+
+bb2.i:                                            ; preds = %bb35
+  %47 = getelementptr inbounds nuw i8, ptr %_52, i64 8
+  store ptr null, ptr %47, align 8
+  br label %bb37
+
+bb36:                                             ; preds = %bb2.i.i.i.i
+  %_4.sroa.11.8..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i, i64 24
+  %e.sroa.5.0._9.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_9.i.i, i64 16
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i.i), !noalias !146777
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %e.sroa.5.0._9.sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_4.sroa.11.8..sroa_idx.i.i, i64 32, i1 false), !noalias !146777
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i.i), !noalias !146766
+  store ptr %_4.sroa.5.8.copyload1.i.i, ptr %_9.i.i, align 8, !alias.scope !146778, !noalias !146777
+  %e.sroa.4.0._9.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_9.i.i, i64 8
+  store i64 %_4.sroa.9.8.copyload2.i.i, ptr %e.sroa.4.0._9.sroa_idx.i.i, align 8, !alias.scope !146778, !noalias !146777
+  %48 = getelementptr inbounds nuw i8, ptr %_52, i64 8
+; call pyo3::impl_::extract_argument::argument_extraction_error
+  call void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %48, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_15d9d595cf1f96e8c633e3aa451e17d1, i64 noundef range(i64 3, 16) 7, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i.i)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i.i), !noalias !146777
+  %_141.sroa.0.0.copyload = load ptr, ptr %48, align 8
+  %_141.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_52, i64 16
+  %_141.sroa.4.0.copyload = load i64, ptr %_141.sroa.4.0..sroa_idx, align 8
+  %49 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_141.sroa.0.0.copyload, ptr %49, align 8
+  %_144.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_141.sroa.4.0.copyload, ptr %_144.sroa.4.0..sroa_idx, align 8
+  %_144.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_144.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %0, i64 32, i1 false)
+  store i64 1, ptr %result, align 8
+  br label %bb18
+
+bb37:                                             ; preds = %bb2.i, %bb4.i.i
+  %_140.1 = phi i64 [ undef, %bb2.i ], [ %_4.sroa.9.17.i.i, %bb4.i.i ]
+  %_140.0 = phi ptr [ null, %bb2.i ], [ %_4.sroa.5.16.i.i, %bb4.i.i ]
+  store i64 0, ptr %_52, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %_58)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_59.sroa.5)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_60)
+  %50 = getelementptr inbounds nuw i8, ptr %output, i64 40
+  %_61 = load ptr, ptr %50, align 8, !noundef !3914
+; call pyo3::impl_::extract_argument::extract_argument_with_default::<alloc::vec::Vec<alloc::string::String>, true>
+  call fastcc void @_RINvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument29extract_argument_with_defaultINtNtCsc70TAahYccp_5alloc3vec3VecNtNtB1n_6string6StringEKb1_ECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 captures(address) dereferenceable(56) %_60, ptr noundef %_61)
+  %_146 = load i64, ptr %_60, align 8, !range !4975, !noundef !3914
+  %51 = trunc nuw i64 %_146 to i1
+  %52 = getelementptr inbounds nuw i8, ptr %_60, i64 8
+  br i1 %51, label %bb38, label %bb39
+
+bb38:                                             ; preds = %bb37
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_59.sroa.5, ptr noundef nonnull align 8 dereferenceable(48) %52, i64 48, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_60)
+  %53 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %53, ptr noundef nonnull align 8 dereferenceable(48) %_59.sroa.5, i64 48, i1 false)
+  store i64 1, ptr %result, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %_59.sroa.5)
+  br label %bb17
+
+bb39:                                             ; preds = %bb37
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %_59.sroa.5, ptr noundef nonnull align 8 dereferenceable(24) %52, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_60)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %_58, ptr noundef nonnull align 8 dereferenceable(24) %_59.sroa.5, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_59.sroa.5)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_67)
+  %54 = getelementptr inbounds nuw i8, ptr %output, i64 48
+  %_68 = load ptr, ptr %54, align 8, !noundef !3914
+  call void @llvm.experimental.noalias.scope.decl(metadata !146785)
+  %.not.i66 = icmp eq ptr %_68, null
+  br i1 %.not.i66, label %bb41, label %bb3.i67
+
+bb3.i67:                                          ; preds = %bb39
+  call void @llvm.experimental.noalias.scope.decl(metadata !146788)
+  %_9.i.i.i.i68 = call noundef ptr @Py_GetConstantBorrowed(i32 noundef 0) #77, !noalias !146791
+  %_2.i.i.i.i69 = icmp eq ptr %_9.i.i.i.i68, %_68
+  br i1 %_2.i.i.i.i69, label %bb4.i.i76, label %bb2.i.i.i.i70
+
+bb2.i.i.i.i70:                                    ; preds = %bb3.i67
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i.i.i.i64), !noalias !146791
+; invoke <&str as pyo3::conversion::FromPyObject>::extract
+  invoke void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i.i.i.i64, ptr noundef nonnull %_68)
+          to label %.noexc unwind label %cleanup
+
+.noexc:                                           ; preds = %bb2.i.i.i.i70
+  %_13.i.i.i.i71 = load i64, ptr %_4.i.i.i.i64, align 8, !range !4975, !noalias !146791, !noundef !3914
+  %55 = trunc nuw i64 %_13.i.i.i.i71 to i1
+  %56 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i64, i64 8
+  %_4.sroa.5.8.copyload1.i.i72 = load ptr, ptr %56, align 8, !noalias !146798
+  %_4.sroa.9.8..sroa_idx.i.i73 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i64, i64 16
+  %_4.sroa.9.8.copyload2.i.i74 = load i64, ptr %_4.sroa.9.8..sroa_idx.i.i73, align 8, !noalias !146798
+  br i1 %55, label %bb3.i.i80, label %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i75
+
+_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i75: ; preds = %.noexc
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i.i64), !noalias !146791
+  br label %bb4.i.i76
+
+bb3.i.i80:                                        ; preds = %.noexc
+  %_4.sroa.11.8..sroa_idx.i.i81 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i64, i64 24
+  %e.sroa.5.0._9.sroa_idx.i.i82 = getelementptr inbounds nuw i8, ptr %_9.i.i65, i64 16
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i.i65), !noalias !146798
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %e.sroa.5.0._9.sroa_idx.i.i82, ptr noundef nonnull align 8 dereferenceable(32) %_4.sroa.11.8..sroa_idx.i.i81, i64 32, i1 false), !noalias !146798
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i.i64), !noalias !146791
+  store ptr %_4.sroa.5.8.copyload1.i.i72, ptr %_9.i.i65, align 8, !alias.scope !146799, !noalias !146798
+  %e.sroa.4.0._9.sroa_idx.i.i83 = getelementptr inbounds nuw i8, ptr %_9.i.i65, i64 8
+  store i64 %_4.sroa.9.8.copyload2.i.i74, ptr %e.sroa.4.0._9.sroa_idx.i.i83, align 8, !alias.scope !146799, !noalias !146798
+  %57 = getelementptr inbounds nuw i8, ptr %_67, i64 8
+; invoke pyo3::impl_::extract_argument::argument_extraction_error
+  invoke void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %57, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_e9688bb038c9fde7095a4df6ba17cc43, i64 noundef range(i64 3, 16) 11, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i.i65)
+          to label %bb40 unwind label %cleanup
+
+bb4.i.i76:                                        ; preds = %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i75, %bb3.i67
+  %_4.sroa.9.17.i.i77 = phi i64 [ %_4.sroa.9.8.copyload2.i.i74, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i75 ], [ undef, %bb3.i67 ]
+  %_4.sroa.5.16.i.i78 = phi ptr [ %_4.sroa.5.8.copyload1.i.i72, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i75 ], [ null, %bb3.i67 ]
+  %58 = getelementptr inbounds nuw i8, ptr %_67, i64 8
+  store ptr %_4.sroa.5.16.i.i78, ptr %58, align 8, !alias.scope !146806, !noalias !146807
+  br label %bb41
+
+cleanup:                                          ; preds = %bb41, %bb3.i.i80, %bb2.i.i.i.i70, %bb14
+  %59 = landingpad { ptr, i32 }
+          cleanup
+  br label %bb24
+
+bb40:                                             ; preds = %bb3.i.i80
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i.i65), !noalias !146798
+  %_155.sroa.0.0.copyload = load ptr, ptr %57, align 8
+  %_155.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_67, i64 16
+  %_155.sroa.4.0.copyload = load i64, ptr %_155.sroa.4.0..sroa_idx, align 8
+  %_155.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_67, i64 24
+  %_158.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_158.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %_155.sroa.5.0..sroa_idx, i64 32, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_67)
+  %60 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_155.sroa.0.0.copyload, ptr %60, align 8
+  %_158.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_155.sroa.4.0.copyload, ptr %_158.sroa.4.0..sroa_idx, align 8
+  store i64 1, ptr %result, align 8
+  br label %bb16
+
+bb41:                                             ; preds = %bb39, %bb4.i.i76
+  %_154.1 = phi i64 [ %_4.sroa.9.17.i.i77, %bb4.i.i76 ], [ undef, %bb39 ]
+  %_154.0 = phi ptr [ %_4.sroa.5.16.i.i78, %bb4.i.i76 ], [ null, %bb39 ]
+  call void @llvm.lifetime.end.p0(ptr nonnull %_67)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_73)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_74.sroa.5)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_75)
+  %61 = getelementptr inbounds nuw i8, ptr %output, i64 56
+  %_76 = load ptr, ptr %61, align 8, !noundef !3914
+; invoke pyo3::impl_::extract_argument::extract_argument_with_default::<core::option::Option<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>, true>
+  invoke fastcc void @_RINvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument29extract_argument_with_defaultINtNtCs2k2z8Zem4rB_4core6option6OptionINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtB23_6string6StringB2T_EEKb1_ECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 captures(address) dereferenceable(56) %_75, ptr noundef %_76)
+          to label %bb10 unwind label %cleanup
+
+bb10:                                             ; preds = %bb41
+  %_160 = load i64, ptr %_75, align 8, !range !4975, !noundef !3914
+  %62 = trunc nuw i64 %_160 to i1
+  %63 = getelementptr inbounds nuw i8, ptr %_75, i64 8
+  br i1 %62, label %bb42, label %bb43
+
+bb42:                                             ; preds = %bb10
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_74.sroa.5, ptr noundef nonnull align 8 dereferenceable(48) %63, i64 48, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_75)
+  %64 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %64, ptr noundef nonnull align 8 dereferenceable(48) %_74.sroa.5, i64 48, i1 false)
+  store i64 1, ptr %result, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %_74.sroa.5)
+  br label %bb15
+
+bb43:                                             ; preds = %bb10
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_74.sroa.5, ptr noundef nonnull align 8 dereferenceable(32) %63, i64 32, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_75)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_73, ptr noundef nonnull align 8 dereferenceable(32) %_74.sroa.5, i64 32, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_74.sroa.5)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_82)
+  %65 = getelementptr inbounds nuw i8, ptr %output, i64 64
+  %_83 = load ptr, ptr %65, align 8, !noundef !3914
+  call void @llvm.experimental.noalias.scope.decl(metadata !146808)
+  %.not.i91 = icmp eq ptr %_83, null
+  br i1 %.not.i91, label %bb45, label %bb3.i92
+
+bb3.i92:                                          ; preds = %bb43
+  call void @llvm.experimental.noalias.scope.decl(metadata !146811)
+  %_9.i.i.i.i93 = call noundef ptr @Py_GetConstantBorrowed(i32 noundef 0) #77, !noalias !146814
+  %_2.i.i.i.i94 = icmp eq ptr %_9.i.i.i.i93, %_83
+  br i1 %_2.i.i.i.i94, label %bb4.i.i101, label %bb2.i.i.i.i95
+
+bb2.i.i.i.i95:                                    ; preds = %bb3.i92
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i.i.i.i89), !noalias !146814
+; invoke <&str as pyo3::conversion::FromPyObject>::extract
+  invoke void @_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract(ptr noalias nofree noundef nonnull sret([56 x i8]) align 8 captures(address) dereferenceable(56) %_4.i.i.i.i89, ptr noundef nonnull %_83)
+          to label %.noexc112 unwind label %bb22
+
+.noexc112:                                        ; preds = %bb2.i.i.i.i95
+  %_13.i.i.i.i96 = load i64, ptr %_4.i.i.i.i89, align 8, !range !4975, !noalias !146814, !noundef !3914
+  %66 = trunc nuw i64 %_13.i.i.i.i96 to i1
+  %67 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i89, i64 8
+  %_4.sroa.5.8.copyload1.i.i97 = load ptr, ptr %67, align 8, !noalias !146821
+  %_4.sroa.9.8..sroa_idx.i.i98 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i89, i64 16
+  %_4.sroa.9.8.copyload2.i.i99 = load i64, ptr %_4.sroa.9.8..sroa_idx.i.i98, align 8, !noalias !146821
+  br i1 %66, label %bb3.i.i105, label %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i100
+
+_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i100: ; preds = %.noexc112
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i.i89), !noalias !146814
+  br label %bb4.i.i101
+
+bb3.i.i105:                                       ; preds = %.noexc112
+  %_4.sroa.11.8..sroa_idx.i.i106 = getelementptr inbounds nuw i8, ptr %_4.i.i.i.i89, i64 24
+  %e.sroa.5.0._9.sroa_idx.i.i107 = getelementptr inbounds nuw i8, ptr %_9.i.i90, i64 16
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i.i90), !noalias !146821
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %e.sroa.5.0._9.sroa_idx.i.i107, ptr noundef nonnull align 8 dereferenceable(32) %_4.sroa.11.8..sroa_idx.i.i106, i64 32, i1 false), !noalias !146821
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i.i.i89), !noalias !146814
+  store ptr %_4.sroa.5.8.copyload1.i.i97, ptr %_9.i.i90, align 8, !alias.scope !146822, !noalias !146821
+  %e.sroa.4.0._9.sroa_idx.i.i108 = getelementptr inbounds nuw i8, ptr %_9.i.i90, i64 8
+  store i64 %_4.sroa.9.8.copyload2.i.i99, ptr %e.sroa.4.0._9.sroa_idx.i.i108, align 8, !alias.scope !146822, !noalias !146821
+  %68 = getelementptr inbounds nuw i8, ptr %_82, i64 8
+; invoke pyo3::impl_::extract_argument::argument_extraction_error
+  invoke void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %68, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_f7a73692c2350af31907c25ec7c54446, i64 noundef range(i64 3, 16) 11, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i.i90)
+          to label %bb44 unwind label %bb22
+
+bb4.i.i101:                                       ; preds = %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i100, %bb3.i92
+  %_4.sroa.9.17.i.i102 = phi i64 [ %_4.sroa.9.8.copyload2.i.i99, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i100 ], [ undef, %bb3.i92 ]
+  %_4.sroa.5.16.i.i103 = phi ptr [ %_4.sroa.5.8.copyload1.i.i97, %_RNvXNtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentINtNtCs2k2z8Zem4rB_4core6option6OptionReEINtB2_18PyFunctionArgumentKb1_E7extractCseY6IX0djbTh_13purrdf_native.exit.i.i100 ], [ null, %bb3.i92 ]
+  %69 = getelementptr inbounds nuw i8, ptr %_82, i64 8
+  store ptr %_4.sroa.5.16.i.i103, ptr %69, align 8, !alias.scope !146829, !noalias !146830
+  br label %bb45
+
+bb44:                                             ; preds = %bb3.i.i105
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i.i90), !noalias !146821
+  %_169.sroa.0.0.copyload = load ptr, ptr %68, align 8
+  %_169.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_82, i64 16
+  %_169.sroa.4.0.copyload = load i64, ptr %_169.sroa.4.0..sroa_idx, align 8
+  %_169.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %_82, i64 24
+  %_172.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_172.sroa.5.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(32) %_169.sroa.5.0..sroa_idx, i64 32, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_82)
+  %70 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_169.sroa.0.0.copyload, ptr %70, align 8
+  %_172.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  store i64 %_169.sroa.4.0.copyload, ptr %_172.sroa.4.0..sroa_idx, align 8
+  store i64 1, ptr %result, align 8
+  br label %bb14
+
+bb45:                                             ; preds = %bb43, %bb4.i.i101
+  %_168.1 = phi i64 [ %_4.sroa.9.17.i.i102, %bb4.i.i101 ], [ undef, %bb43 ]
+  %_168.0 = phi ptr [ %_4.sroa.5.16.i.i103, %bb4.i.i101 ], [ null, %bb43 ]
+  call void @llvm.lifetime.end.p0(ptr nonnull %_82)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_88.sroa.5)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_89)
+  %71 = getelementptr inbounds nuw i8, ptr %output, i64 72
+  %_90 = load ptr, ptr %71, align 8, !noundef !3914
+  %.not.i116 = icmp eq ptr %_90, null
+  br i1 %.not.i116, label %bb12.thread, label %bb3.i117
+
+bb3.i117:                                         ; preds = %bb45
+  call void @llvm.lifetime.start.p0(ptr nonnull %_4.i.i), !noalias !146831
+; invoke <alloc::vec::Vec<(alloc::string::String, alloc::string::String)> as pyo3::conversion::FromPyObject>::extract
+  invoke fastcc void @_RNvXs0_NtNtNtCsi6I77QypjQC_4pyo311conversions3std3vecINtNtCsc70TAahYccp_5alloc3vec3VecTNtNtBU_6string6StringB1n_EENtNtBb_10conversion12FromPyObject7extractCseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(56) %_4.i.i, ptr noundef nonnull %_90)
+          to label %.noexc121 unwind label %bb22
+
+.noexc121:                                        ; preds = %bb3.i117
+  %_5.i.i = load i64, ptr %_4.i.i, align 8, !range !4975, !noalias !146831, !noundef !3914
+  %72 = trunc nuw i64 %_5.i.i to i1
+  %73 = getelementptr inbounds nuw i8, ptr %_4.i.i, i64 8
+  br i1 %72, label %bb3.i.i119, label %bb12, !prof !3944
+
+bb3.i.i119:                                       ; preds = %.noexc121
+  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i.i115), !noalias !146831
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_9.i.i115, ptr noundef nonnull align 8 dereferenceable(48) %73, i64 48, i1 false), !noalias !146831
+  %74 = getelementptr inbounds nuw i8, ptr %_89, i64 8
+; invoke pyo3::impl_::extract_argument::argument_extraction_error
+  invoke void @_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %74, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_36180b9b9c31ac679e50bb898278b5d4, i64 noundef range(i64 3, 15) 7, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(48) %_9.i.i115)
+          to label %bb46 unwind label %bb22
+
+bb12.thread:                                      ; preds = %bb45
+  %75 = getelementptr inbounds nuw i8, ptr %_89, i64 8
+  store i64 0, ptr %75, align 8, !alias.scope !146838, !noalias !146843
+  %76 = getelementptr inbounds nuw i8, ptr %_89, i64 16
+  store ptr inttoptr (i64 8 to ptr), ptr %76, align 8, !alias.scope !146838, !noalias !146843
+  %77 = getelementptr inbounds nuw i8, ptr %_89, i64 24
+  store i64 0, ptr %77, align 8, !alias.scope !146838, !noalias !146843
+  br label %bb47
+
+bb12:                                             ; preds = %.noexc121
+  %78 = getelementptr inbounds nuw i8, ptr %_89, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %78, ptr noundef nonnull align 8 dereferenceable(24) %73, i64 24, i1 false), !noalias !146844
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i), !noalias !146831
+  br label %bb47
+
+bb46:                                             ; preds = %bb3.i.i119
+  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i.i115), !noalias !146831
+  call void @llvm.lifetime.end.p0(ptr nonnull %_4.i.i), !noalias !146831
+  %79 = getelementptr inbounds nuw i8, ptr %_89, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %_88.sroa.5, ptr noundef nonnull align 8 dereferenceable(48) %79, i64 48, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_89)
+  %80 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(48) %80, ptr noundef nonnull align 8 dereferenceable(48) %_88.sroa.5, i64 48, i1 false)
+  store i64 1, ptr %result, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %_88.sroa.5)
+  br label %bb14
+
+bb47:                                             ; preds = %bb12, %bb12.thread
+  %81 = getelementptr inbounds nuw i8, ptr %_89, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %_88.sroa.5, ptr noundef nonnull align 8 dereferenceable(24) %81, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_89)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %val12, ptr noundef nonnull align 8 dereferenceable(24) %_88.sroa.5, i64 24, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_88.sroa.5)
+; call purrdf_native::shacl::eval_node_expr
+  call fastcc void @_RNvNtCseY6IX0djbTh_13purrdf_native5shacl14eval_node_expr(ptr noalias nofree noundef align 8 captures(none) dereferenceable(56) %ret, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %value.0.i, i64 noundef %value.1.i, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %value.0.i45, i64 noundef %value.1.i46, ptr noalias nofree noundef readonly captures(address, read_provenance) %_4.sroa.5.16.i, i64 %_4.sroa.9.17.i, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %value.0.i57, i64 noundef %value.1.i58, ptr noalias nofree noundef readonly captures(address, read_provenance) %_140.0, i64 %_140.1, ptr noalias nofree noundef align 8 captures(address) dereferenceable(24) %_58, ptr noalias nofree noundef readonly captures(address, read_provenance) %_154.0, i64 %_154.1, ptr noalias nofree noundef align 8 captures(address) dereferenceable(32) %_73, ptr noalias nofree noundef readonly captures(address, read_provenance) %_168.0, i64 %_168.1, ptr noalias nofree noundef align 8 captures(address) dereferenceable(24) %val12)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_73)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_58)
+  %_182 = load i64, ptr %ret, align 8, !range !4975, !noundef !3914
+  %82 = trunc nuw i64 %_182 to i1
+  %83 = getelementptr inbounds nuw i8, ptr %ret, i64 8
+  %_184.sroa.0.0.copyload = load ptr, ptr %83, align 8
+  br i1 %82, label %bb52, label %bb51
+
+bb52:                                             ; preds = %bb47
+  %_184.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %ret, i64 16
+  %_187.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %result, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(40) %_187.sroa.4.0..sroa_idx, ptr noundef nonnull align 8 dereferenceable(40) %_184.sroa.4.0..sroa_idx, i64 40, i1 false)
+  br label %bb51
+
+bb51:                                             ; preds = %bb47, %bb52
+  %.sink = phi i64 [ 1, %bb52 ], [ 0, %bb47 ]
+  %84 = getelementptr inbounds nuw i8, ptr %result, i64 8
+  store ptr %_184.sroa.0.0.copyload, ptr %84, align 8
+  store i64 %.sink, ptr %result, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %ret)
+  br label %bb20
+
+bb20:                                             ; preds = %bb18, %bb26, %bb51
+  call void @llvm.lifetime.end.p0(ptr nonnull %output)
+  ret void
+
+bb14:                                             ; preds = %bb44, %bb46
+; invoke core::ptr::drop_glue::<core::option::Option<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtB16_6string6StringB1W_EEECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 dereferenceable(32) %_73)
+          to label %bb15 unwind label %cleanup
+
+bb15:                                             ; preds = %bb42, %bb14
+  call void @llvm.lifetime.end.p0(ptr nonnull %_73)
+  br label %bb16
+
+bb22:                                             ; preds = %bb3.i.i119, %bb3.i.i105, %bb2.i.i.i.i95, %bb3.i117
+  %lpad.thr_comm = landingpad { ptr, i32 }
+          cleanup
+; invoke core::ptr::drop_glue::<core::option::Option<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtB16_6string6StringB1W_EEECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 dereferenceable(32) %_73) #79
+          to label %bb24 unwind label %terminate
+
+terminate:                                        ; preds = %bb22
+  %85 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #75
+  unreachable
+
+bb16:                                             ; preds = %bb40, %bb15
+; call core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+  call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtBG_6string6StringEECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 dereferenceable(24) %_58)
+  br label %bb17
+
+bb17:                                             ; preds = %bb38, %bb16
+  call void @llvm.lifetime.end.p0(ptr nonnull %_58)
+  br label %bb18
+
+bb24:                                             ; preds = %cleanup, %bb22
+  %.pn.ph = phi { ptr, i32 } [ %lpad.thr_comm, %bb22 ], [ %59, %cleanup ]
+; call core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+  call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtBG_6string6StringEECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 dereferenceable(24) %_58) #79
+  resume { ptr, i32 } %.pn.ph
+
+bb18:                                             ; preds = %bb28, %bb30, %bb32, %bb34, %bb36, %bb17
+  call void @llvm.lifetime.end.p0(ptr nonnull %ret)
+  br label %bb20
+}
+
+ASSEMBLY
+_RNvNtCseY6IX0djbTh_13purrdf_native5shacl27___pyfunction_eval_node_expr:
+.Lfunc_begin2029:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception2029
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$808, %rsp
+	.cfi_def_cfa_offset 864
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	%rdi, %rbx
+	vxorps	%xmm0, %xmm0, %xmm0
+	vmovups	%zmm0, 320(%rsp)
+	vmovups	%zmm0, 304(%rsp)
+	.cfi_escape 0x2e, 0x10
+	subq	$8, %rsp
+	.cfi_adjust_cfa_offset 8
+	leaq	.Lalloc_ba98337e135cbdf47846456fb7c5bc2a(%rip), %rsi
+	leaq	16(%rsp), %rdi
+	leaq	312(%rsp), %r9
+	pushq	$10
+	.cfi_adjust_cfa_offset 8
+	vzeroupper
+	callq	_RINvMs5_NtNtCsi6I77QypjQC_4pyo35impl_16extract_argumentNtB6_19FunctionDescription26extract_arguments_fastcallNtB6_9NoVarargsNtB6_13NoVarkeywordsECseY6IX0djbTh_13purrdf_native
+	addq	$16, %rsp
+	.cfi_adjust_cfa_offset -16
+	cmpl	$1, 8(%rsp)
+	jne	.LBB3208_2
+	vmovups	16(%rsp), %ymm0
+	vmovups	32(%rsp), %ymm1
+	jmp	.LBB3208_20
+.LBB3208_2:
+	movq	304(%rsp), %rsi
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvXs6_NtNtNtCsi6I77QypjQC_4pyo311conversions3std6stringReNtNtBb_10conversion12FromPyObject7extract@GOTPCREL(%rip), %r13
+	leaq	8(%rsp), %rdi
+	callq	*%r13
+	cmpl	$1, 8(%rsp)
+	je	.LBB3208_56
+	movq	16(%rsp), %r14
+	movq	24(%rsp), %rbp
+	movq	312(%rsp), %rsi
+	movq	%r14, 480(%rsp)
+	movq	%rbp, 488(%rsp)
+	movq	$0, 472(%rsp)
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	callq	*%r13
+	cmpl	$1, 8(%rsp)
+	je	.LBB3208_57
+	movq	16(%rsp), %rax
+	movq	24(%rsp), %rcx
+	movq	320(%rsp), %r12
+	movq	%rax, 536(%rsp)
+	movq	%rcx, 544(%rsp)
+	movq	%rax, 184(%rsp)
+	movq	%rcx, 176(%rsp)
+	movq	$0, 528(%rsp)
+	.cfi_escape 0x2e, 0x00
+	movq	Py_GetConstantBorrowed@GOTPCREL(%rip), %rax
+	xorl	%edi, %edi
+	xorl	%r15d, %r15d
+	callq	*%rax
+	cmpq	%r12, %rax
+	je	.LBB3208_8
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	movq	%r12, %rsi
+	callq	*%r13
+	movq	16(%rsp), %r15
+	movq	24(%rsp), %r12
+	cmpb	$0, 8(%rsp)
+	je	.LBB3208_9
+	vmovups	32(%rsp), %ymm0
+	leaq	608(%rsp), %r14
+	leaq	592(%rsp), %rdi
+	vmovups	%ymm0, 80(%rsp)
+	movq	%r15, 64(%rsp)
+	movq	%r12, 72(%rsp)
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_c4674111d0daef3c436f76552b214d74(%rip), %rsi
+	leaq	64(%rsp), %rcx
+	movl	$4, %edx
+	vzeroupper
+	callq	*%rax
+	vmovups	592(%rsp), %xmm0
+.LBB3208_7:
+	vmovups	%xmm0, 8(%rbx)
+	vmovups	(%r14), %ymm0
+	jmp	.LBB3208_14
+.LBB3208_8:
+.LBB3208_9:
+	movq	328(%rsp), %rsi
+	movq	%r15, 592(%rsp)
+	movq	%r12, 600(%rsp)
+	movq	$0, 584(%rsp)
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	callq	*%r13
+	cmpl	$1, 8(%rsp)
+	je	.LBB3208_58
+	movq	16(%rsp), %rax
+	movq	%r12, 152(%rsp)
+	movq	%rbp, 160(%rsp)
+	movq	24(%rsp), %rbp
+	movq	336(%rsp), %r12
+	movq	%r14, 168(%rsp)
+	movq	%rax, 648(%rsp)
+	movq	%rbp, 656(%rsp)
+	movq	%rax, 144(%rsp)
+	movq	$0, 640(%rsp)
+	testq	%r12, %r12
+	je	.LBB3208_15
+	.cfi_escape 0x2e, 0x00
+	movq	Py_GetConstantBorrowed@GOTPCREL(%rip), %rax
+	xorl	%edi, %edi
+	xorl	%r14d, %r14d
+	callq	*%rax
+	cmpq	%r12, %rax
+	je	.LBB3208_16
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	movq	%r12, %rsi
+	callq	*%r13
+	movq	16(%rsp), %r14
+	movq	24(%rsp), %rax
+	cmpb	$0, 8(%rsp)
+	je	.LBB3208_17
+	vmovups	32(%rsp), %ymm0
+	leaq	440(%rsp), %r15
+	leaq	424(%rsp), %rdi
+	vmovups	%ymm0, 80(%rsp)
+	movq	%r14, 64(%rsp)
+	movq	%rax, 72(%rsp)
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_15d9d595cf1f96e8c633e3aa451e17d1(%rip), %rsi
+	leaq	64(%rsp), %rcx
+	movl	$7, %edx
+	vzeroupper
+	callq	*%rax
+	vmovups	424(%rsp), %xmm0
+	vmovups	%xmm0, 8(%rbx)
+	vmovups	(%r15), %ymm0
+.LBB3208_14:
+	vmovups	%ymm0, 24(%rbx)
+	jmp	.LBB3208_21
+.LBB3208_15:
+	xorl	%r14d, %r14d
+	movq	$0, 424(%rsp)
+	jmp	.LBB3208_18
+.LBB3208_16:
+.LBB3208_17:
+	movq	%r14, 424(%rsp)
+	movq	%rax, 136(%rsp)
+	movq	%rax, 432(%rsp)
+.LBB3208_18:
+	movq	344(%rsp), %rsi
+	movq	$0, 416(%rsp)
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	callq	_RINvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument29extract_argument_with_defaultINtNtCsc70TAahYccp_5alloc3vec3VecNtNtB1n_6string6StringEKb1_ECseY6IX0djbTh_13purrdf_native
+	cmpl	$1, 8(%rsp)
+	jne	.LBB3208_23
+	leaq	8(%rsp), %rax
+	vmovups	24(%rax), %ymm1
+	vmovups	8(%rax), %ymm0
+	vmovups	%ymm1, 80(%rsp)
+	vmovups	%ymm0, 64(%rsp)
+	vmovups	64(%rsp), %ymm0
+	vmovups	80(%rsp), %ymm1
+.LBB3208_20:
+	vmovups	%ymm1, 24(%rbx)
+	vmovups	%ymm0, 8(%rbx)
+.LBB3208_21:
+	movq	$1, (%rbx)
+.LBB3208_22:
+	movq	%rbx, %rax
+	addq	$808, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB3208_23:
+	.cfi_def_cfa_offset 864
+	leaq	8(%rsp), %rcx
+	movq	352(%rsp), %r12
+	vmovups	8(%rcx), %xmm0
+	movq	24(%rcx), %rax
+	movq	%rax, 256(%rsp)
+	vmovaps	%xmm0, 240(%rsp)
+	testq	%r12, %r12
+	je	.LBB3208_29
+	.cfi_escape 0x2e, 0x00
+	movq	Py_GetConstantBorrowed@GOTPCREL(%rip), %rax
+	xorl	%edi, %edi
+	callq	*%rax
+	cmpq	%r12, %rax
+	je	.LBB3208_30
+.Ltmp48664:
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	movq	%r12, %rsi
+	callq	*%r13
+.Ltmp48665:
+	movq	16(%rsp), %r12
+	movq	24(%rsp), %rax
+	cmpb	$0, 8(%rsp)
+	je	.LBB3208_31
+	vmovups	32(%rsp), %ymm0
+	leaq	72(%rsp), %rdi
+	vmovups	%ymm0, 208(%rsp)
+	movq	%r12, 192(%rsp)
+	movq	%rax, 200(%rsp)
+.Ltmp48666:
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_e9688bb038c9fde7095a4df6ba17cc43(%rip), %rsi
+	leaq	192(%rsp), %rcx
+	movl	$11, %edx
+	vzeroupper
+	callq	*%rax
+.Ltmp48667:
+	vmovups	88(%rsp), %ymm1
+	vmovups	72(%rsp), %xmm0
+	vmovups	%ymm1, 24(%rbx)
+	vmovups	%xmm0, 8(%rbx)
+	jmp	.LBB3208_36
+.LBB3208_29:
+	xorl	%r12d, %r12d
+	jmp	.LBB3208_33
+.LBB3208_30:
+	xorl	%r12d, %r12d
+	jmp	.LBB3208_32
+.LBB3208_31:
+	movq	%rax, 120(%rsp)
+.LBB3208_32:
+	movq	%r12, 72(%rsp)
+.LBB3208_33:
+	movq	360(%rsp), %rsi
+.Ltmp48668:
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	callq	_RINvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument29extract_argument_with_defaultINtNtCs2k2z8Zem4rB_4core6option6OptionINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtB23_6string6StringB2T_EEKb1_ECseY6IX0djbTh_13purrdf_native
+.Ltmp48669:
+	cmpl	$1, 8(%rsp)
+	jne	.LBB3208_38
+	leaq	8(%rsp), %rax
+	vmovups	24(%rax), %ymm1
+	vmovups	8(%rax), %ymm0
+	vmovups	%ymm1, 80(%rsp)
+	vmovups	%ymm0, 64(%rsp)
+	vmovups	80(%rsp), %ymm1
+	vmovups	64(%rsp), %ymm0
+	vmovups	%ymm1, 24(%rbx)
+	vmovups	%ymm0, 8(%rbx)
+.LBB3208_36:
+	movq	$1, (%rbx)
+.LBB3208_37:
+	.cfi_escape 0x2e, 0x00
+	leaq	240(%rsp), %rdi
+	vzeroupper
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtBG_6string6StringEECseY6IX0djbTh_13purrdf_native
+	jmp	.LBB3208_22
+.LBB3208_38:
+	leaq	8(%rsp), %rax
+	movq	%r12, 128(%rsp)
+	movq	368(%rsp), %r12
+	vmovups	8(%rax), %ymm0
+	vmovups	%ymm0, 384(%rsp)
+	testq	%r12, %r12
+	je	.LBB3208_45
+	.cfi_escape 0x2e, 0x00
+	movq	Py_GetConstantBorrowed@GOTPCREL(%rip), %rax
+	xorl	%edi, %edi
+	vzeroupper
+	callq	*%rax
+	cmpq	%r12, %rax
+	je	.LBB3208_47
+.Ltmp48670:
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	movq	%r12, %rsi
+	callq	*%r13
+.Ltmp48671:
+	movq	16(%rsp), %r13
+	movq	24(%rsp), %r12
+	cmpb	$0, 8(%rsp)
+	je	.LBB3208_48
+	vmovups	32(%rsp), %ymm0
+	leaq	72(%rsp), %rdi
+	vmovups	%ymm0, 208(%rsp)
+	movq	%r13, 192(%rsp)
+	movq	%r12, 200(%rsp)
+.Ltmp48672:
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_f7a73692c2350af31907c25ec7c54446(%rip), %rsi
+	leaq	192(%rsp), %rcx
+	movl	$11, %edx
+	vzeroupper
+	callq	*%rax
+.Ltmp48673:
+	vmovups	88(%rsp), %ymm1
+	vmovups	72(%rsp), %xmm0
+	vmovups	%ymm1, 24(%rbx)
+	vmovups	%xmm0, 8(%rbx)
+.LBB3208_44:
+	movq	$1, (%rbx)
+.Ltmp48682:
+	.cfi_escape 0x2e, 0x00
+	leaq	384(%rsp), %rdi
+	vzeroupper
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtB16_6string6StringB1W_EEECseY6IX0djbTh_13purrdf_native
+.Ltmp48683:
+	jmp	.LBB3208_37
+.LBB3208_45:
+	xorl	%r13d, %r13d
+	movq	376(%rsp), %rsi
+	testq	%rsi, %rsi
+	jne	.LBB3208_49
+.LBB3208_46:
+	movq	$0, 72(%rsp)
+	movq	$8, 80(%rsp)
+	movq	$0, 88(%rsp)
+	jmp	.LBB3208_52
+.LBB3208_47:
+	xorl	%r13d, %r13d
+.LBB3208_48:
+	movq	%r13, 72(%rsp)
+	movq	376(%rsp), %rsi
+	testq	%rsi, %rsi
+	je	.LBB3208_46
+.LBB3208_49:
+.Ltmp48674:
+	.cfi_escape 0x2e, 0x00
+	leaq	8(%rsp), %rdi
+	vzeroupper
+	callq	_RNvXs0_NtNtNtCsi6I77QypjQC_4pyo311conversions3std3vecINtNtCsc70TAahYccp_5alloc3vec3VecTNtNtBU_6string6StringB1n_EENtNtBb_10conversion12FromPyObject7extractCseY6IX0djbTh_13purrdf_native
+.Ltmp48675:
+	cmpl	$1, 8(%rsp)
+	je	.LBB3208_59
+	leaq	8(%rsp), %rcx
+	vmovups	8(%rcx), %xmm0
+	movq	24(%rcx), %rax
+	movq	%rax, 88(%rsp)
+	vmovups	%xmm0, 72(%rsp)
+.LBB3208_52:
+	movq	72(%rsp), %rcx
+	movq	88(%rsp), %rax
+	movq	%rcx, 272(%rsp)
+	movq	80(%rsp), %rcx
+	movq	%rax, 288(%rsp)
+	movq	%rcx, 280(%rsp)
+	.cfi_escape 0x2e, 0x60
+	movq	168(%rsp), %rsi
+	movq	160(%rsp), %rdx
+	movq	184(%rsp), %rcx
+	movq	176(%rsp), %r8
+	leaq	272(%rsp), %rax
+	leaq	384(%rsp), %r10
+	leaq	240(%rsp), %r11
+	leaq	696(%rsp), %rdi
+	movq	%r15, %r9
+	pushq	%rax
+	.cfi_adjust_cfa_offset 8
+	pushq	%r12
+	.cfi_adjust_cfa_offset 8
+	pushq	%r13
+	.cfi_adjust_cfa_offset 8
+	pushq	%r10
+	.cfi_adjust_cfa_offset 8
+	pushq	152(%rsp)
+	.cfi_adjust_cfa_offset 8
+	pushq	168(%rsp)
+	.cfi_adjust_cfa_offset 8
+	pushq	%r11
+	.cfi_adjust_cfa_offset 8
+	pushq	192(%rsp)
+	.cfi_adjust_cfa_offset 8
+	pushq	%r14
+	.cfi_adjust_cfa_offset 8
+	pushq	%rbp
+	.cfi_adjust_cfa_offset 8
+	pushq	224(%rsp)
+	.cfi_adjust_cfa_offset 8
+	pushq	240(%rsp)
+	.cfi_adjust_cfa_offset 8
+	vzeroupper
+	callq	_RNvNtCseY6IX0djbTh_13purrdf_native5shacl14eval_node_expr
+	addq	$96, %rsp
+	.cfi_adjust_cfa_offset -96
+	movq	704(%rsp), %rax
+	cmpl	$1, 696(%rsp)
+	jne	.LBB3208_54
+	vmovups	712(%rsp), %ymm0
+	movq	744(%rsp), %rcx
+	movq	%rcx, 48(%rbx)
+	movl	$1, %ecx
+	vmovups	%ymm0, 16(%rbx)
+	jmp	.LBB3208_55
+.LBB3208_54:
+	xorl	%ecx, %ecx
+.LBB3208_55:
+	movq	%rax, 8(%rbx)
+	movq	%rcx, (%rbx)
+	jmp	.LBB3208_22
+.LBB3208_56:
+	leaq	8(%rsp), %rax
+	leaq	496(%rsp), %r14
+	leaq	480(%rsp), %rdi
+	vmovups	8(%rax), %ymm0
+	vmovups	24(%rax), %ymm1
+	vmovups	%ymm1, 80(%rsp)
+	vmovups	%ymm0, 64(%rsp)
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_3249deb618efff40901d2d7f725e7955(%rip), %rsi
+	leaq	64(%rsp), %rcx
+	movl	$10, %edx
+	vzeroupper
+	callq	*%rax
+	vmovups	480(%rsp), %xmm0
+	jmp	.LBB3208_7
+.LBB3208_57:
+	leaq	8(%rsp), %rax
+	leaq	552(%rsp), %r14
+	leaq	536(%rsp), %rdi
+	vmovups	8(%rax), %ymm0
+	vmovups	24(%rax), %ymm1
+	vmovups	%ymm1, 80(%rsp)
+	vmovups	%ymm0, 64(%rsp)
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_7ffa151f6db1eb2649a139b450085a28(%rip), %rsi
+	leaq	64(%rsp), %rcx
+	movl	$7, %edx
+	vzeroupper
+	callq	*%rax
+	vmovups	536(%rsp), %xmm0
+	jmp	.LBB3208_7
+.LBB3208_58:
+	leaq	8(%rsp), %rax
+	leaq	664(%rsp), %r14
+	leaq	648(%rsp), %rdi
+	vmovups	8(%rax), %ymm0
+	vmovups	24(%rax), %ymm1
+	vmovups	%ymm1, 80(%rsp)
+	vmovups	%ymm0, 64(%rsp)
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_e3354acc127f7a0d67c39314a941f32d(%rip), %rsi
+	leaq	64(%rsp), %rcx
+	movl	$5, %edx
+	vzeroupper
+	callq	*%rax
+	vmovups	648(%rsp), %xmm0
+	jmp	.LBB3208_7
+.LBB3208_59:
+	leaq	8(%rsp), %rax
+	leaq	72(%rsp), %rdi
+	vmovups	24(%rax), %ymm1
+	vmovups	8(%rax), %ymm0
+	vmovups	%ymm1, 208(%rsp)
+	vmovups	%ymm0, 192(%rsp)
+.Ltmp48676:
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtNtCsi6I77QypjQC_4pyo35impl_16extract_argument25argument_extraction_error@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_36180b9b9c31ac679e50bb898278b5d4(%rip), %rsi
+	leaq	192(%rsp), %rcx
+	movl	$7, %edx
+	vzeroupper
+	callq	*%rax
+.Ltmp48677:
+	vmovups	88(%rsp), %ymm1
+	vmovups	72(%rsp), %ymm0
+	vmovups	%ymm1, 768(%rsp)
+	vmovups	%ymm0, 752(%rsp)
+	vmovups	768(%rsp), %ymm1
+	vmovups	752(%rsp), %ymm0
+	vmovups	%ymm1, 24(%rbx)
+	vmovups	%ymm0, 8(%rbx)
+	jmp	.LBB3208_44
+.LBB3208_61:
+.Ltmp48678:
+	movq	%rax, %rbx
+.Ltmp48679:
+	.cfi_escape 0x2e, 0x00
+	leaq	384(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionINtNtNtNtCsc70TAahYccp_5alloc11collections5btree3map8BTreeMapNtNtB16_6string6StringB1W_EEECseY6IX0djbTh_13purrdf_native
+.Ltmp48680:
+	jmp	.LBB3208_64
+.LBB3208_62:
+.Ltmp48681:
+	.cfi_escape 0x2e, 0x00
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB3208_63:
+.Ltmp48684:
+	movq	%rax, %rbx
+.LBB3208_64:
+	.cfi_escape 0x2e, 0x00
+	leaq	240(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtBG_6string6StringEECseY6IX0djbTh_13purrdf_native
+	.cfi_escape 0x2e, 0x00
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end3208:

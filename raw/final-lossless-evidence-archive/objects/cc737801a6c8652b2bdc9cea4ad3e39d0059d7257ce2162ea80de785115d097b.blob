@@ -1,0 +1,61 @@
+      1 <alloc::raw_vec::RawVec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>::grow_one
+      1 <alloc::raw_vec::RawVec<purrdf_sparql_eval::governor::soundness::NodeAnalysis>>::grow_one
+      3 <alloc::sync::Arc<purrdf_sparql_eval::deferred_exists::NestedSites>>::drop_slow
+      9 <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      3 <alloc::sync::Arc<std::collections::hash::map::HashMap<usize, purrdf_sparql_eval::deferred_exists::Deferred, purrdf_hash::fixed::FixedState>>>::drop_slow
+      1 <alloc::sync::Arc<std::collections::hash::map::HashMap<usize, purrdf_sparql_eval::expr::SubstitutionSource, purrdf_hash::fixed::FixedState>>>::drop_slow
+      1 <alloc::vec::Vec<alloc::sync::Arc<std::collections::hash::map::HashMap<usize, purrdf_sparql_eval::expr::SubstitutionSource, purrdf_hash::fixed::FixedState>>>>::push_mut
+      1 <hashbrown::map::HashMap<usize, purrdf_sparql_eval::deferred_exists::Deferred, purrdf_hash::fixed::FixedState>>::get::<usize>
+      1 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
+      1 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
+      1 <purrdf_sparql_eval::deferred_exists::DeferredLateral as core::clone::Clone>::clone
+      1 <purrdf_sparql_eval::deferred_exists::SubstitutionEnv>::layers
+      1 <purrdf_sparql_eval::deferred_exists::SubstitutionEnv>::then
+      1 <purrdf_sparql_eval::error::EvalError>::internal::<&str>
+      1 <purrdf_sparql_eval::eval::EvalCtx>::charge
+      1 <purrdf_sparql_eval::eval::EvalCtx>::enter_node
+      1 <purrdf_sparql_eval::eval::EvalCtx>::enter_substituted_exists
+      1 <purrdf_sparql_eval::eval::EvalCtx>::observe_cells
+      1 <purrdf_sparql_eval::expr::Deferral>::into_placeholders
+      3 <purrdf_sparql_eval::governor::lift::Lift>::absorb::<purrdf_core::ir::term::TermId>
+      1 <purrdf_sparql_eval::governor::lift::Lift>::at
+      1 <purrdf_sparql_eval::governor::lift::Lift>::finish::<purrdf_core::ir::term::TermId>
+      2 <purrdf_sparql_eval::governor::lift::Lift>::withheld::<purrdf_core::ir::term::TermId>
+      4 <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::new
+      1 <purrdf_sparql_eval::solution::VarSchema>::push
+      1 <purrdf_sparql_eval::solution::VarSchema>::union
+      3 __rustc::__rust_alloc
+     11 __rustc::__rust_dealloc
+      1 alloc::boxed::box_new_uninit
+      3 alloc::raw_vec::handle_error
+      2 core::panicking::panic_bounds_check
+      4 core::panicking::panic_in_cleanup
+      1 core::ptr::drop_glue::<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, purrdf_sparql_eval::solution::SolutionSeq)>
+      1 core::ptr::drop_glue::<alloc::boxed::Box<purrdf_sparql_algebra::algebra::GraphPattern>>
+      3 core::ptr::drop_glue::<alloc::vec::Vec<(purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, purrdf_sparql_eval::solution::SolutionSeq)>>
+      3 core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+      3 core::ptr::drop_glue::<core::option::Option<alloc::boxed::Box<purrdf_sparql_algebra::algebra::GraphPattern>>>
+      1 core::ptr::drop_glue::<purrdf_sparql_algebra::algebra::GraphPattern>
+      3 core::ptr::drop_glue::<purrdf_sparql_eval::deferred_exists::DeferredLateral>
+      3 core::ptr::drop_glue::<purrdf_sparql_eval::deferred_exists::SubstitutionEnv>
+      2 core::ptr::drop_glue::<purrdf_sparql_eval::eval::EvalScopeGuard<purrdf_core::ir::dataset::RdfDataset>>
+      7 core::ptr::drop_glue::<purrdf_sparql_eval::expr::SubstitutionRow>
+      1 core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Lift>
+      3 core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+      4 core::ptr::drop_glue::<purrdf_sparql_eval::solution::VarSchema>
+      2 core::ptr::drop_glue::<std::collections::hash::map::HashMap<usize, purrdf_sparql_eval::deferred_exists::Deferred, purrdf_hash::fixed::FixedState>>
+      1 core::slice::copy_from_slice_impl::len_mismatch_fail
+      1 core::slice::index::slice_index_fail
+      1 purrdf_sparql_eval::binop::eval_correlated::<purrdf_core::ir::dataset::RdfDataset>
+      1 purrdf_sparql_eval::binop::eval_substituted_delivered::<purrdf_core::ir::dataset::RdfDataset, false, false, ()>
+      1 purrdf_sparql_eval::binop::right_to_out_map
+      1 purrdf_sparql_eval::deferred_exists::is_lateral_placeholder
+      1 purrdf_sparql_eval::deferred_exists::nested_sites::<purrdf_core::ir::dataset::RdfDataset>
+      2 purrdf_sparql_eval::deferred_exists::with_row
+      2 purrdf_sparql_eval::eval::eval_evaluated_with::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::eval::eval_evaluated<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+      1 purrdf_sparql_eval::eval::syntactic_schema
+      1 purrdf_sparql_eval::expr::outer_bindings_for_substitution::<purrdf_core::ir::dataset::RdfDataset>
+      1 purrdf_sparql_eval::expr::substitute_pattern_deferring::<false>
+      1 purrdf_sparql_eval::property_fn_eval::eval_call_over::<purrdf_core::ir::dataset::RdfDataset>
+      1 purrdf_sparql_eval::service_endpoints::admit_lateral_endpoints::<purrdf_core::ir::dataset::RdfDataset>
+      1 purrdf_stack::is_low_cold

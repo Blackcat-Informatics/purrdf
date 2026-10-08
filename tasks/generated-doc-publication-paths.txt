@@ -1,0 +1,2 @@
+docs/CONFORMANCE.md
+docs/design/purrdf-simd.md

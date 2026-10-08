@@ -1,0 +1,191 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-direct-dispatch-ir/qualification_454_native_cost.gimli-68d0cb78dba1c589.gimli.291de70d2b297ea7-cgu.0.rcgu.o.rcgu.ll:1429
+; <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::Edge>>::insert_fit
+define void @_RNvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_8InternalENtB1m_4EdgeE10insert_fitB1J_(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %0, i64 noundef %1, ptr noalias nofree noundef readonly align 8 captures(none) dead_on_return dereferenceable(112) %2, ptr noundef nonnull %3, i64 %4) unnamed_addr #6 personality ptr @rust_eh_personality !guid !209 {
+  %6 = alloca [112 x i8], align 8
+  %7 = load ptr, ptr %0, align 8, !nonnull !49, !noundef !49
+  %8 = getelementptr inbounds nuw i8, ptr %7, i64 1330
+  %9 = load i16, ptr %8, align 2, !noundef !49
+  %10 = zext i16 %9 to i64
+  %11 = add i16 %9, 1
+  %12 = getelementptr inbounds nuw i8, ptr %7, i64 1240
+  %13 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  %14 = load i64, ptr %13, align 8, !noundef !49
+  %15 = add i64 %14, 1
+  %16 = icmp ugt i64 %15, %10
+  %17 = getelementptr inbounds nuw [8 x i8], ptr %12, i64 %14
+  br i1 %16, label %18, label %19
+
+18:                                               ; preds = %5
+  store i64 %1, ptr %17, align 8, !alias.scope !210
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(112) %6, ptr noundef nonnull align 8 dereferenceable(112) %2, i64 112, i1 false)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !213)
+  br label %26
+
+19:                                               ; preds = %5
+  %20 = getelementptr inbounds nuw [8 x i8], ptr %12, i64 %15
+  %21 = sub nsw i64 %10, %14
+  %22 = shl nuw nsw i64 %21, 3
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %20, ptr nonnull align 8 %17, i64 %22, i1 false), !alias.scope !210
+  store i64 %1, ptr %17, align 8, !alias.scope !210
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(112) %6, ptr noundef nonnull align 8 dereferenceable(112) %2, i64 112, i1 false)
+  %23 = getelementptr inbounds nuw [112 x i8], ptr %7, i64 %14
+  %24 = getelementptr inbounds nuw [112 x i8], ptr %7, i64 %15
+  %25 = mul nuw nsw i64 %21, 112
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %24, ptr nonnull align 8 %23, i64 %25, i1 false), !alias.scope !216, !noalias !213
+  br label %26
+
+26:                                               ; preds = %19, %18
+  %27 = getelementptr inbounds nuw [112 x i8], ptr %7, i64 %14
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(112) %27, ptr noundef nonnull readonly align 8 dereferenceable(112) %6, i64 112, i1 false), !alias.scope !218
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  %28 = add nuw nsw i64 %10, 2
+  %29 = getelementptr inbounds nuw i8, ptr %7, i64 1336
+  %30 = add i64 %14, 2
+  %31 = icmp ugt i64 %28, %30
+  br i1 %31, label %32, label %37
+
+32:                                               ; preds = %26
+  %33 = getelementptr inbounds nuw [8 x i8], ptr %29, i64 %15
+  %34 = getelementptr inbounds nuw [8 x i8], ptr %29, i64 %30
+  %35 = sub nsw i64 %10, %14
+  %36 = shl nuw nsw i64 %35, 3
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %34, ptr nonnull align 8 %33, i64 %36, i1 false), !alias.scope !219
+  br label %37
+
+37:                                               ; preds = %32, %26
+  %38 = getelementptr inbounds nuw [8 x i8], ptr %29, i64 %15
+  store ptr %3, ptr %38, align 8, !alias.scope !219
+  store i16 %11, ptr %8, align 2
+  %39 = icmp ult i64 %15, %28
+  br i1 %39, label %.preheader, label %.loopexit
+
+.preheader:                                       ; preds = %37, %.preheader
+  %40 = phi i64 [ %41, %.preheader ], [ %15, %37 ]
+  %41 = add nuw nsw i64 %40, 1
+  %42 = icmp ult i64 %40, 12
+  tail call void @llvm.assume(i1 %42)
+  %43 = getelementptr inbounds nuw [8 x i8], ptr %29, i64 %40
+  %44 = load ptr, ptr %43, align 8, !noalias !222, !nonnull !49, !noundef !49
+  %45 = getelementptr inbounds nuw i8, ptr %44, i64 1232
+  store ptr %7, ptr %45, align 8, !noalias !222
+  %46 = trunc nuw nsw i64 %40 to i16
+  %47 = getelementptr inbounds nuw i8, ptr %44, i64 1328
+  store i16 %46, ptr %47, align 8, !noalias !222
+  %48 = icmp eq i64 %41, %28
+  br i1 %48, label %.loopexit, label %.preheader
+
+.loopexit:                                        ; preds = %.preheader, %37
+  ret void
+}
+
+ASSEMBLY
+_RNvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_8InternalENtB1m_4EdgeE10insert_fitB1J_:
+.Lfunc_begin18:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r15
+	pushq	%r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%rbx
+	subq	$136, %rsp
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	movq	%rcx, %r15
+	movq	%rdx, %r14
+	movq	%rsi, %rdx
+	movq	(%rdi), %r12
+	movq	16(%rdi), %r13
+	movzwl	1330(%r12), %ebx
+	leal	1(%rbx), %eax
+	movl	%eax, -44(%rbp)
+	leaq	1(%r13), %rcx
+	leaq	(%r12,%r13,8), %rsi
+	addq	$1240, %rsi
+	cmpq	%rbx, %rcx
+	jbe	.LBB18_2
+	movq	%rdx, (%rsi)
+	vmovups	(%r14), %zmm0
+	vmovups	48(%r14), %zmm1
+	vmovups	%zmm1, -128(%rbp)
+	vmovups	%zmm0, -176(%rbp)
+	jmp	.LBB18_3
+.LBB18_2:
+	leaq	1240(%r12), %rax
+	leaq	(%rax,%rcx,8), %rdi
+	movq	%r15, -64(%rbp)
+	movq	%rbx, %r15
+	subq	%r13, %r15
+	movq	%rdx, -56(%rbp)
+	leaq	(,%r15,8), %rdx
+	callq	*memmove@GOTPCREL(%rip)
+	movq	-56(%rbp), %rax
+	movq	%rax, 1240(%r12,%r13,8)
+	vmovups	(%r14), %zmm0
+	vmovups	48(%r14), %zmm1
+	vmovups	%zmm1, -128(%rbp)
+	vmovups	%zmm0, -176(%rbp)
+	imulq	$112, %r13, %rsi
+	addq	%r12, %rsi
+	leaq	1(%r13), %rax
+	imulq	$112, %rax, %rdi
+	addq	%r12, %rdi
+	imulq	$112, %r15, %rdx
+	movq	-64(%rbp), %r15
+	vzeroupper
+	callq	*memmove@GOTPCREL(%rip)
+.LBB18_3:
+	imulq	$112, %r13, %rax
+	vmovups	-176(%rbp), %zmm0
+	vmovups	-128(%rbp), %zmm1
+	vmovups	%zmm1, 48(%r12,%rax)
+	vmovups	%zmm0, (%r12,%rax)
+	leaq	2(%rbx), %r14
+	leaq	2(%r13), %rax
+	cmpq	%rax, %r14
+	jbe	.LBB18_5
+	leaq	1336(%r12), %rcx
+	leaq	1(%r13), %rdx
+	leaq	(%rcx,%rdx,8), %rsi
+	leaq	(%rcx,%rax,8), %rdi
+	movq	%rbx, %rdx
+	subq	%r13, %rdx
+	shlq	$3, %rdx
+	vzeroupper
+	callq	*memmove@GOTPCREL(%rip)
+.LBB18_5:
+	movq	%r15, 1344(%r12,%r13,8)
+	movl	-44(%rbp), %eax
+	movw	%ax, 1330(%r12)
+	leaq	1(%r13), %rax
+	cmpq	%r14, %rax
+	jae	.LBB18_8
+	incq	%rbx
+.LBB18_7:
+	movq	1344(%r12,%r13,8), %rax
+	movq	%r12, 1232(%rax)
+	incq	%r13
+	movw	%r13w, 1328(%rax)
+	cmpq	%r13, %rbx
+	jne	.LBB18_7
+.LBB18_8:
+	addq	$136, %rsp
+	popq	%rbx
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	vzeroupper
+	retq
+.Lfunc_end18:

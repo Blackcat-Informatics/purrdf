@@ -1,0 +1,38 @@
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+____________ test_nested_exists_preserves_enclosing_context[False] _____________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+matching = False
+
+    @pytest.mark.parametrize("matching", [False, True])
+    def test_nested_exists_preserves_enclosing_context(compat, oracle, matching):
+        fixture = {
+            "triples": [
+                ["a", "p", "b"],
+                ["a", "p", "c"],
+                ["a", "q", "z"],
+                ["z", "r", "b"],
+                ["z" if matching else "other", "r", "c"],
+            ]
+        }
+        case = {
+            "initial": {},
+            "query": "SELECT ?s WHERE { ?s <http://example.org/q> ?z . "
+            "?s <http://example.org/p> ?x FILTER NOT EXISTS { "
+            "?s <http://example.org/p> ?y FILTER(?x != ?y) "
+            "FILTER NOT EXISTS { ?z <http://example.org/r> ?y } } }",
+        }
+        expected = run(oracle, fixture, case, "Graph")
+>       assert sum(expected[2].values()) == 2 * int(matching)
+E       AssertionError: assert 1 == (2 * 0)
+E        +  where 1 = sum(dict_values([1]))
+E        +    where dict_values([1]) = <built-in method values of Counter object at 0x7fb2dbda7840>()
+E        +      where <built-in method values of Counter object at 0x7fb2dbda7840> = Counter({(('iri', 'http://example.org/a'),): 1}).values
+E        +  and   0 = int(False)
+
+tests/test_contextual_mappings.py:152: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_contextual_mappings.py::test_nested_exists_preserves_enclosing_context[False]
+1 failed, 1 passed, 809 deselected in 0.18s

@@ -1,0 +1,69 @@
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking cipher v0.5.2
+    Checking universal-hash v0.6.1
+    Checking twox-hash v2.1.2
+    Checking polyval v0.7.3
+    Checking fastrand v2.4.1
+    Checking ghash v0.6.0
+    Checking structured-zstd v0.0.49
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking aead v0.6.1
+    Checking aes-gcm v0.11.1
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/ed25519)
+    Checking visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf)
+   Compiling quote v1.0.46
+    Checking unicode-ident v1.0.24
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/jsonschema)
+    Checking syn v2.0.118
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/slice)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/datalog)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shapes)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/entail)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/retrieval)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/validate)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/columnar)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/geo)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/json)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/purrdf)
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/shapes/tests/sparql_path_alloc.rs:835:46
+    |
+835 |     rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:197:20
+    |
+196 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+197 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/shapes/tests/sparql_path_alloc.rs:842:46
+    |
+842 |     rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:197:20
+    |
+196 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+197 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-shapes` (test "sparql_path_alloc") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

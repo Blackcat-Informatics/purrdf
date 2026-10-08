@@ -1,0 +1,47 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/baseline-host-materialize-normalized.s	2026-10-08 08:55:57.791053601 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/candidate-host-materialize-normalized.s	2026-10-08 08:55:59.985016816 -0600
+@@ -198,7 +198,7 @@
+ 	leaq	624(%rsp), %r13
+ 	movq	%r14, 440(%rsp)
+ 	movq	%rax, 272(%rsp)
+-	leaq	.Lvtable.1R(%rip), %rax
++	leaq	.Lvtable.22(%rip), %rax
+ 	vmovq	%rax, %xmm0
+ 	vmovdqa	%xmm0, 576(%rsp)
+ 	.p2align	4
+@@ -292,7 +292,7 @@
+ 	movq	$1, 304(%rsp)
+ 	movq	$0, 312(%rsp)
+ 	movq	%rax, 552(%rsp)
+-	leaq	.Lvtable.1J(%rip), %rax
++	leaq	.Lvtable.1T(%rip), %rax
+ 	movq	%rax, 560(%rsp)
+ .LtmpID:
+ 	movq	<purrdf_core::ir::term::NonIriPredicate as core::fmt::Display>::fmt@GOTPCREL(%rip), %rax
+@@ -359,7 +359,7 @@
+ 	vpxor	%xmm0, %xmm0, %xmm0
+ 	vmovdqu	%xmm0, (%rax)
+ 	vpbroadcastd	.LCPIID_3(%rip), %xmm0
+-	leaq	.Lvtable.1R(%rip), %rax
++	leaq	.Lvtable.22(%rip), %rax
+ 	movq	$1, 112(%rsp)
+ 	movq	%r12, 120(%rsp)
+ 	movq	%rax, 128(%rsp)
+@@ -916,7 +916,7 @@
+ 	movq	core::result::unwrap_failed@GOTPCREL(%rip), %rax
+ 	movq	16(%rsp), %rbx
+ 	leaq	.LALLOCIDf75969399c3f4b1ad3de4(%rip), %rdi
+-	leaq	.Lvtable.2c(%rip), %rcx
++	leaq	.Lvtable.2q(%rip), %rcx
+ 	leaq	.LALLOCIDc8062c4f28c49e31e589e7f415a063(%rip), %r8
+ 	leaq	15(%rsp), %rdx
+ 	movl	$55, %esi
+@@ -1015,7 +1015,7 @@
+ .LBBID_146:
+ 	movl	80(%rsp), %ecx
+ 	leaq	96(%rsp), %rax
+-	leaq	.Lvtable.1R(%rip), %rdx
++	leaq	.Lvtable.22(%rip), %rdx
+ 	movq	$1, 88(%rsp)
+ 	vpxor	%xmm0, %xmm0, %xmm0
+ 	vmovdqu	%xmm0, (%rax)

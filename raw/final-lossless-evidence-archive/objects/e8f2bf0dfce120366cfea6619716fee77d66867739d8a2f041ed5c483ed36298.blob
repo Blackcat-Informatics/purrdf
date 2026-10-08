@@ -1,0 +1,111 @@
+Uninstalled 1 package in 9ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 19ms
+........................................................................ [  8%]
+........................................................................ [ 17%]
+........................................................................ [ 26%]
+........................................................................ [ 35%]
+........................................................................ [ 43%]
+........................................................................ [ 52%]
+........................................................................ [ 61%]
+........................................................................ [ 70%]
+........................................................................ [ 79%]
+........................................................................ [ 87%]
+........................................................................ [ 96%]
+..FF.......................                                              [100%]
+=================================== FAILURES ===================================
+_________ test_nested_exists_context_survives_local_projection[False] __________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+negated = False
+
+    @pytest.mark.parametrize("negated", [False, True])
+    def test_nested_exists_context_survives_local_projection(compat, oracle, negated):
+        case = {
+            "initial": {},
+            "query": "PREFIX ex: <http://example.org/> SELECT ?outer WHERE { "
+            "VALUES ?outer { ex:a ex:b } FILTER EXISTS { "
+            "{ SELECT ?local WHERE { VALUES ?local { ex:v } } } FILTER "
+            + ("NOT " if negated else "")
+            + "EXISTS { ?outer ex:p ?local } } }",
+        }
+        fixture = {"triples": [["a", "p", "v"]]}
+        expected = run(oracle, fixture, case, "Graph")
+        assert expected[2] == Counter({(("iri", EX + ("b" if negated else "a")),): 1})
+>       assert run(compat, fixture, case, "Graph") == expected
+E       AssertionError: assert ('SELECT', ('...rg/b'),): 1})) == ('SELECT', ('...rg/a'),): 1}))
+E         
+E         At index 2 diff: Counter({(('iri', 'http://example.org/a'),): 1, (('iri', 'http://example.org/b'),): 1}) != Counter({(('iri', 'http://example.org/a'),): 1})
+E         Use -v to get more diff
+
+tests/test_contextual_mappings.py:169: AssertionError
+__________ test_nested_exists_context_survives_local_projection[True] __________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+negated = True
+
+    @pytest.mark.parametrize("negated", [False, True])
+    def test_nested_exists_context_survives_local_projection(compat, oracle, negated):
+        case = {
+            "initial": {},
+            "query": "PREFIX ex: <http://example.org/> SELECT ?outer WHERE { "
+            "VALUES ?outer { ex:a ex:b } FILTER EXISTS { "
+            "{ SELECT ?local WHERE { VALUES ?local { ex:v } } } FILTER "
+            + ("NOT " if negated else "")
+            + "EXISTS { ?outer ex:p ?local } } }",
+        }
+        fixture = {"triples": [["a", "p", "v"]]}
+        expected = run(oracle, fixture, case, "Graph")
+        assert expected[2] == Counter({(("iri", EX + ("b" if negated else "a")),): 1})
+>       assert run(compat, fixture, case, "Graph") == expected
+E       AssertionError: assert ('SELECT', ('...,), Counter()) == ('SELECT', ('...rg/b'),): 1}))
+E         
+E         At index 2 diff: Counter() != Counter({(('iri', 'http://example.org/b'),): 1})
+E         Use -v to get more diff
+
+tests/test_contextual_mappings.py:169: AssertionError
+=============================== warnings summary ===============================
+tests/test_contextual_mappings.py: 482 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    c = self.default_context if default else None
+
+tests/test_contextual_mappings.py: 233 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:1721: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    query_graph = self.default_context.identifier
+
+tests/test_contextual_mappings.py: 433 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2344: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    context = self.default_context
+
+tests/test_contextual_mappings.py: 396 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:30: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    graph = getattr(module, "Graph" if route == "processor" else route)()
+
+tests/test_contextual_mappings.py: 15 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:233: DeprecationWarning: Dataset.contexts is deprecated, use Dataset.graphs instead.
+    for graph in ctx.dataset.contexts():
+
+tests/test_contextual_mappings.py: 45 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:235: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if graph == ctx.dataset.default_context:
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-ConjunctiveGraph]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:427: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    dataset = getattr(module, kind)()
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-Dataset]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2340: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if context == self.default_context:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_contextual_mappings.py::test_nested_exists_context_survives_local_projection[False]
+FAILED tests/test_contextual_mappings.py::test_nested_exists_context_survives_local_projection[True]
+2 failed, 817 passed, 1609 warnings in 6.58s

@@ -1,0 +1,19 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-8d88597f61c9805d.purrdf_sparql_eval.3390c597aa620bea-cgu.0.rcgu.o.rcgu.ll:357768
+; <purrdf_sparql_eval::eval::yield_transform<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>, purrdf_sparql_eval::modifier::eval_dedup_yielding<purrdf_core::ir::dataset::RdfDataset, false, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&purrdf_sparql_eval::solution::SolutionSeq, &mut purrdf_sparql_eval::eval::EvalCtx)>>::call_once::{shim:vtable#0}
+define internal void @_RNSNvYNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval4eval15yield_transformNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtB9_11RowConsumerB15_ENCINvNtBb_8modifier19eval_dedup_yieldingB15_Kb0_B1Z_E0E0INtNtNtCsb6ASFGx6cXz_4core3ops8function6FnOnceTRNtNtBb_8solution11SolutionSeqQNtB9_7EvalCtxEE9call_once6vtableBb_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([48 x i8]) align 8 captures(none) dereferenceable(48) %0, ptr nofree noundef nonnull readonly captures(none) %1, ptr noalias nofree noundef readonly align 4 captures(none) dereferenceable(16) %2, ptr noalias nofree noundef align 16 dereferenceable(576) %3) unnamed_addr #1 !guid !65562 {
+; call purrdf_sparql_eval::eval::yield_transform::<purrdf_core::ir::dataset::RdfDataset, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>, purrdf_sparql_eval::modifier::eval_dedup_yielding<purrdf_core::ir::dataset::RdfDataset, false, &mut purrdf_sparql_eval::eval::RowConsumer<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}>::{closure#0}
+  tail call void @_RNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval4eval15yield_transformNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtB4_11RowConsumerB10_ENCINvNtB6_8modifier19eval_dedup_yieldingB10_Kb0_B1U_E0E0B6_(ptr noalias nofree noundef nonnull sret([48 x i8]) align 8 captures(none) dereferenceable(48) %0, ptr noalias nofree noundef nonnull readonly align 4 dereferenceable(20) %1, ptr noalias nofree noundef nonnull readonly align 4 captures(address, read_provenance) dereferenceable(16) %2, ptr noalias nofree noundef nonnull align 16 dereferenceable(576) %3) #77
+  ret void
+}
+
+ASSEMBLY
+_RNSNvYNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval4eval15yield_transformNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtB9_11RowConsumerB15_ENCINvNtBb_8modifier19eval_dedup_yieldingB15_Kb0_B1Z_E0E0INtNtNtCsb6ASFGx6cXz_4core3ops8function6FnOnceTRNtNtBb_8solution11SolutionSeqQNtB9_7EvalCtxEE9call_once6vtableBb_:
+.Lfunc_begin787:
+	.functype	_RNSNvYNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval4eval15yield_transformNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtB9_11RowConsumerB15_ENCINvNtBb_8modifier19eval_dedup_yieldingB15_Kb0_B1Z_E0E0INtNtNtCsb6ASFGx6cXz_4core3ops8function6FnOnceTRNtNtBb_8solution11SolutionSeqQNtB9_7EvalCtxEE9call_once6vtableBb_ (i32, i32, i32, i32) -> ()
+	local.get	0
+	local.get	1
+	local.get	2
+	local.get	3
+	call	_RNCINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval4eval15yield_transformNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetQINtB4_11RowConsumerB10_ENCINvNtB6_8modifier19eval_dedup_yieldingB10_Kb0_B1U_E0E0B6_
+	end_function
+.Lfunc_end787:

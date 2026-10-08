@@ -1,0 +1,11 @@
+# ApplicationPolicy fixture compilation correction source review
+
+Actual scoped delta: one explicit `dataset_required` initializer in each of `crates/purrdf/src/reasoning.rs`, `crates/rdf/src/projections/dataset_description.rs` and `crates/slice/src/ownership.rs`. All are inside `#[cfg(test)]` modules. No shipping function body, Cargo manifest, layout or production artifact input changes are introduced by these initializer additions. Existing72fa production cost proof therefore remains applicable to shipping bodies; this does not claim fresh emission for the changed test tree or current CI PASS.
+
+The first two false values are correct for their manually assembled contextual structural visitor fixtures. The ownership fixture currently sets true because its right operand contains a nested GRAPH, but that deserves correction to false: `sparql-algebra/src/validate.rs` checks `dataset_required` as a specialized uncorrelated Graph application, requiring empty driver BGP, direct Graph right operand, no inputs and no other modes. This fixture instead has a BIND driver, a Filter/Exists/Graph operand and an explicit input mapping. It only walks IRIs and is deliberately not contextual-prepared; its nested graph is still visited with false. The flag is not a recursive contains-GRAPH summary. Setting false repairs compilation while avoiding an unintended invalid policy declaration.
+
+Verdict: two initializers PASS; ownership true is a bounded source finding, recommend false before owning fixture qualification. No build or source edit performed by this reviewer. Owning tests/current hosted qualification remain necessary for the actual compilation failure; no broad cost/wheel/docs rerun follows from these cfg(test)-only additions.
+
+## Corrected checkpoint
+
+Actual corrected three-file cached diff at root/G checkpoint `1905c6847912d5ee3d6f7de618a575d7cb5bd2f2` contains exactly three added `dataset_required: false` lines, with no other staged delta. Ownership now represents the synthetic structural application without claiming the specialized dataset-required Graph operator. All three modules remain cfg(test). Independent corrected source verdict: PASS; the sole finding above is resolved. Earlier true checkpoint remains historical. Owning runtime/clippy/compile qualification is separately required and not executed or inferred by this reviewer.

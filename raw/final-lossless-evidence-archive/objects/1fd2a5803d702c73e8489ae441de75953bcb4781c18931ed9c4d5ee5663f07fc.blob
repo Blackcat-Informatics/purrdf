@@ -1,0 +1,23 @@
+      2 ; call <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      1 ; call <purrdf_sparql_eval::governor::lift::Lift>::at
+      2 ; call <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::new
+      2 ; call __rustc::__rust_dealloc
+      6 ; call core::panicking::panic_in_cleanup
+      1 ; call core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+      1 ; invoke <alloc::raw_vec::RawVec<purrdf_sparql_eval::service_endpoints::EndpointFrame<purrdf_core::ir::term::TermId>>>::grow_one
+      2 ; invoke <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+      2 ; invoke <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      2 ; invoke <alloc::sync::Arc<str>>::drop_slow
+      1 ; invoke <alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>> as alloc::vec::spec_from_iter::SpecFromIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, purrdf_sparql_eval::modifier::eval_project_sequence<purrdf_core::ir::term::TermId>::{closure#1}>>>::from_iter
+      1 ; invoke <purrdf_sparql_eval::governor::lift::Lift>::absorb::<purrdf_core::ir::term::TermId>
+      1 ; invoke <purrdf_sparql_eval::solution::VarSchema>::index_of
+      2 ; invoke <purrdf_sparql_eval::solution::VarSchema>::interned
+      2 ; invoke alloc::raw_vec::handle_error
+      1 ; invoke core::ptr::drop_glue::<[purrdf_sparql_eval::service_endpoints::EndpointFrame<purrdf_core::ir::term::TermId>]>
+      1 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_algebra::ast::Variable>>
+      2 ; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<purrdf_sparql_algebra::ast::Variable>>
+      1 ; invoke core::ptr::drop_glue::<core::result::Result<purrdf_sparql_eval::governor::lift::Evaluated<purrdf_core::ir::term::TermId>, purrdf_sparql_eval::error::EvalError>>
+      2 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Lift>
+      1 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::service_endpoints::EndpointFrame<purrdf_core::ir::term::TermId>>
+      1 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+      2 ; invoke purrdf_sparql_eval::eval::eval_evaluated_with::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::eval::eval_evaluated<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>

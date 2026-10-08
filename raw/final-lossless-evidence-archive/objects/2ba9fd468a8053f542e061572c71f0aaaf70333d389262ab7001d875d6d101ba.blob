@@ -1,0 +1,50 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 27.40s
+     Running tests/governed_query.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/ff41f05bfcbe270c/out/governed_query-ff41f05bfcbe270c)
+
+running 27 tests
+test ac1_query_governors_accepts_every_governor_and_reaches_evaluation ... ok
+test a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters ... ok
+test ac2_trip_is_neither_complete_nor_error ... ok
+test ac2_ask_with_a_nonempty_certain_set_keeps_the_trip_and_carries_true ... ok
+test admission_refuses_an_estimated_ceiling_breach_before_evaluating ... ok
+test answer_cap_boundary_is_inclusive ... ok
+test a_withheld_bound_names_the_barrier_that_withheld_it ... ok
+test a_fallible_federated_view_composes_page_and_remote_evidence ... ok
+test budget_trip_can_never_masquerade_as_an_empty_complete_result ... ok
+test bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer ... ok
+test an_earlier_fuel_trip_cannot_bypass_the_answer_cap_on_any_result_sequence ... ok
+test every_complete_outcome_has_complete_evidence ... ok
+test bookkeeping_cell_limit_retains_saturated_forecast_refusal ... ok
+test d6_precedence_order ... ok
+test construct_blank_reservations_obey_scratch_bytes_after_where_completes ... ok
+test ledger_attributes_lateral_rhs_work_to_the_rhs_nodes ... ok
+test metered_governors_measure_an_execution_without_bounding_it ... ok
+test prepared_plans_do_not_share_a_budget_across_runs ... ok
+test explain_reports_a_deterministic_per_node_ledger ... ok
+test cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound ... ok
+test ledger_attributes_nested_lateral_rhs_rows_to_the_true_output ... ok
+test public_blank_node_filter_cannot_forge_an_upper_bound ... ok
+test the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary ... ok
+test the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundary ... ok
+test stop_only_governors_checkpoint_inside_large_bgp_path_and_expression_loops ... ok
+test answer_cap_stops_the_scan_rather_than_materializing_everything ... ok
+test plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/governor_correctness.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-sparql-eval/6eb994d846bb5046/out/governor_correctness-6eb994d846bb5046)
+
+running 9 tests
+test an_early_where_trip_is_sound_for_ask_construct_and_describe ... ok
+test every_non_select_result_form_matches_the_ungoverned_oracle ... ok
+test an_ungoverned_run_keeps_the_fork_it_always_had ... ok
+test a_governed_union_reports_one_outcome_however_it_is_scheduled ... ok
+test filter_exists_fuel_is_invariant_under_worker_count ... ok
+test possible_answers_always_contain_the_ungoverned_answers ... ok
+test certain_answers_are_always_a_subset_of_the_ungoverned_answers ... ok
+test certified_prefix_is_stable_across_budget_increases ... ok
+test a_larger_budget_never_yields_fewer_certain_answers ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+

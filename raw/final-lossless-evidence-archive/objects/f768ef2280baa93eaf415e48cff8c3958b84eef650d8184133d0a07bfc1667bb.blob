@@ -1,0 +1,23 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/prior-group-call-inventory.txt	2026-10-08 10:07:10.725295886 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-smallvec-cost-body-review/current-group-call-inventory.txt	2026-10-08 10:07:10.729295823 -0600
+@@ -14,9 +14,8 @@
+       1 <hashbrown::raw::RawTable<usize>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::reserve_ghosts::{closure#0}>
+       1 <purrdf_alloc_probe::CountingAllocator as core::alloc::global::GlobalAlloc>::realloc
+       1 <purrdf_core::small::IntoIter<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger); 1]> as core::iter::traits::iterator::Iterator>::unzip::<purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::ItemLedger, purrdf_core::small::SmallVec<[purrdf_sparql_eval::witness::RelationWitness; 1]>, purrdf_core::small::SmallVec<[purrdf_sparql_eval::row_checkpoint::ItemLedger; 1]>>
+-      1 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]> as core::iter::traits::collect::Extend<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>::extend::<core::iter::sources::repeat_n::RepeatN<core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>>>
+-      1 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::from_elem
+-      3 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
++      2 <purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>::from_elem
++      2 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
+       1 <purrdf_sparql_eval::agg_fn::AggregateRegistry>::resolve
+       1 <purrdf_sparql_eval::eval::EvalCtx>::absorb_worker_witnesses::<purrdf_core::small::SmallVec<[purrdf_sparql_eval::witness::RelationWitness; 1]>>
+       2 <purrdf_sparql_eval::eval::EvalCtx>::charge_scratch_growth
+@@ -36,7 +35,7 @@
+       2 <purrdf_sparql_eval::solution::VarSchema>::push
+       1 <std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>::initialize::<<std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>::get_or_init<<std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>::try_insert::{closure#0}>::{closure#0}, !>
+       2 __rustc::__rust_alloc
+-     35 __rustc::__rust_dealloc
++     36 __rustc::__rust_dealloc
+       3 alloc::alloc::handle_alloc_error
+       5 alloc::raw_vec::handle_error
+       1 core::panicking::panic

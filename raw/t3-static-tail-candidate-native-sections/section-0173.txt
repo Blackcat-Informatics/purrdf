@@ -1,0 +1,1670 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:456057
+; purrdf_sparql_eval::parallel::par_chunk_try_map_init::<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#0}, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#1}, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#2}>
+define internal fastcc void @_RINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel22par_chunk_try_map_initINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecAINtNtCs2k2z8Zem4rB_4core6option6OptionNtNtB4_7scratch12SolutionTermEj4_ETNtNtB4_4eval7EvalCtxNtNtB4_14row_checkpoint13RowCheckpointINtNtB4_2vm6LinkedNtNtNtB1e_2ir4term6TermIdEENtB2_9MintedRowTNtNtB4_7witness15RelationWitnessB3q_ENCINvNtB4_4expr20eval_extend_sequenceNtNtB4o_7dataset10RdfDatasetE0NCB5E_s_0NCB5E_s0_0EB4_(ptr dead_on_unwind noalias nofree noundef nonnull writable writeonly align 8 captures(none) dereferenceable(256) %0, i1 noundef zeroext %1, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %2, i64 noundef range(i64 0, 230584300921369396) %3, ptr noalias nofree noundef nonnull readonly align 8 captures(address) dead_on_return dereferenceable(32) %4, ptr noalias nofree noundef nonnull readonly align 8 captures(address) dead_on_return dereferenceable(48) %5, ptr noundef nonnull align 8 %6) unnamed_addr #0 personality ptr @rust_eh_personality !guid !54764 {
+  %8 = alloca [24 x i8], align 8
+  %9 = alloca [24 x i8], align 8
+  %10 = alloca [48 x i8], align 8
+  %11 = alloca [32 x i8], align 8
+  %12 = alloca [8 x i8], align 8
+  %13 = alloca [24 x i8], align 8
+  %14 = alloca [8 x i8], align 8
+  %15 = alloca [232 x i8], align 8
+  %16 = alloca [24 x i8], align 8
+  %17 = alloca [32 x i8], align 8
+  %18 = alloca [224 x i8], align 8
+  %19 = alloca [256 x i8], align 8
+  %20 = alloca [224 x i8], align 8
+  %21 = alloca [32 x i8], align 8
+  %22 = alloca [232 x i8], align 8
+  %23 = alloca [24 x i8], align 8
+  %24 = alloca [32 x i8], align 8
+  %25 = alloca [8 x i8], align 8
+  %26 = alloca [16 x i8], align 8
+  store ptr %2, ptr %26, align 8
+  %27 = getelementptr inbounds nuw i8, ptr %26, i64 8
+  store i64 %3, ptr %27, align 8
+  store ptr %6, ptr %25, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %24)
+  store ptr %4, ptr %24, align 8
+  %28 = getelementptr inbounds nuw i8, ptr %24, i64 8
+  store ptr %26, ptr %28, align 8
+  %29 = getelementptr inbounds nuw i8, ptr %24, i64 16
+  store ptr %5, ptr %29, align 8
+  %30 = getelementptr inbounds nuw i8, ptr %24, i64 24
+  store ptr %25, ptr %30, align 8
+  %31 = icmp samesign ult i64 %3, 1025
+  %32 = or i1 %1, %31
+  br i1 %32, label %33, label %34
+
+33:                                               ; preds = %7
+; call purrdf_sparql_eval::parallel::par_chunk_try_map_init::<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#0}, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#1}, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#2}>::{closure#0}
+  call fastcc void @_RNCINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel22par_chunk_try_map_initINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecAINtNtCs2k2z8Zem4rB_4core6option6OptionNtNtB6_7scratch12SolutionTermEj4_ETNtNtB6_4eval7EvalCtxNtNtB6_14row_checkpoint13RowCheckpointINtNtB6_2vm6LinkedNtNtNtB1g_2ir4term6TermIdEENtB4_9MintedRowTNtNtB6_7witness15RelationWitnessB3s_ENCINvNtB6_4expr20eval_extend_sequenceNtNtB4q_7dataset10RdfDatasetE0NCB5G_s_0NCB5G_s0_0E0B6_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(256) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(32) %24) #93
+  br label %259
+
+34:                                               ; preds = %7
+  %35 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvNtCs5QxqJf20S2H_10rayon_core8registry19WORKER_THREAD_STATE0s_023___RUST_STD_INTERNAL_VAL)
+  %36 = load ptr, ptr %35, align 8, !noundef !1703
+  %37 = icmp eq ptr %36, null
+  br i1 %37, label %40, label %38
+
+38:                                               ; preds = %34
+  %39 = getelementptr inbounds nuw i8, ptr %36, i64 272
+  br label %_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit
+
+40:                                               ; preds = %34
+; call rayon_core::registry::global_registry
+  %41 = call noundef nonnull align 8 ptr @_RNvNtCs5QxqJf20S2H_10rayon_core8registry15global_registry()
+  %.pre = load ptr, ptr %26, align 8
+  %.pre50 = load i64, ptr %27, align 8
+  br label %_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit
+
+_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit: ; preds = %38, %40
+  %42 = phi i64 [ %.pre50, %40 ], [ %3, %38 ]
+  %43 = phi ptr [ %.pre, %40 ], [ %2, %38 ]
+  %44 = phi ptr [ %41, %40 ], [ %39, %38 ]
+  %45 = load ptr, ptr %44, align 8, !nonnull !1703, !noundef !1703
+  %46 = getelementptr inbounds nuw i8, ptr %45, i64 520
+  %47 = load i64, ptr %46, align 8, !noundef !1703
+  %48 = icmp ult i64 %47, 192153584101141163
+  call void @llvm.assume(i1 %48)
+  %49 = call i64 @llvm.umax.i64(i64 %47, i64 1)
+  %50 = shl nuw nsw i64 %49, 2
+  %51 = udiv i64 %3, %50
+  %52 = call noundef range(i64 16, 0) i64 @llvm.umax.i64(i64 %51, i64 16)
+  call void @llvm.lifetime.start.p0(ptr nonnull %16), !noalias !54765
+  store i64 0, ptr %16, align 8, !alias.scope !54769, !noalias !54765
+  %53 = getelementptr inbounds nuw i8, ptr %16, i64 8
+  store ptr inttoptr (i64 8 to ptr), ptr %53, align 8, !alias.scope !54769, !noalias !54765
+  %54 = getelementptr inbounds nuw i8, ptr %16, i64 16
+  store i64 0, ptr %54, align 8, !alias.scope !54769, !noalias !54765
+  %55 = udiv i64 %42, %52
+  %56 = urem i64 %42, %52
+  %57 = icmp ne i64 %56, 0
+  %58 = zext i1 %57 to i64
+  %59 = add nuw nsw i64 %55, %58
+  call void @llvm.lifetime.start.p0(ptr nonnull %14), !noalias !54772
+  store i64 %59, ptr %14, align 8, !noalias !54776
+  %60 = icmp eq i64 %59, 0
+  br i1 %60, label %65, label %61, !prof !1860
+
+61:                                               ; preds = %_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit
+; invoke <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+  invoke fastcc void @_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs7veJbOBHQwe_18purrdf_sparql_eval.llvm.14007767151641398955(ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %16, i64 noundef 0, i64 noundef %59, i64 noundef 8, i64 noundef 248)
+          to label %62 unwind label %111
+
+62:                                               ; preds = %61
+  %63 = load i64, ptr %54, align 8, !alias.scope !54780
+  %64 = load i64, ptr %16, align 8, !alias.scope !54780
+  br label %65
+
+65:                                               ; preds = %62, %_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit
+  %66 = phi i64 [ %64, %62 ], [ 0, %_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit ]
+  %67 = phi i64 [ %63, %62 ], [ 0, %_RNvCs5QxqJf20S2H_10rayon_core19current_num_threads.exit ]
+  call void @llvm.lifetime.start.p0(ptr nonnull %13), !noalias !54776
+  %68 = icmp ult i64 %67, 37191016277640226
+  call void @llvm.assume(i1 %68)
+  %69 = sub nsw i64 %66, %67
+  %70 = icmp ult i64 %69, %59
+  br i1 %70, label %71, label %73, !prof !1727
+
+71:                                               ; preds = %65
+; invoke core::panicking::panic
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.d93b065c2763fb0250ff43fdc196fa20.1047, i64 noundef 47, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.d93b065c2763fb0250ff43fdc196fa20.1049) #92
+          to label %72 unwind label %111
+
+72:                                               ; preds = %71
+  unreachable
+
+73:                                               ; preds = %65
+  %74 = load ptr, ptr %53, align 8, !alias.scope !54780, !nonnull !1703, !noundef !1703
+  call void @llvm.lifetime.start.p0(ptr nonnull %10), !noalias !54783
+  store ptr %43, ptr %10, align 8, !noalias !54787
+  %75 = getelementptr inbounds nuw i8, ptr %10, i64 8
+  store i64 %42, ptr %75, align 8, !noalias !54787
+  %76 = getelementptr inbounds nuw i8, ptr %10, i64 16
+  store i64 %52, ptr %76, align 8, !noalias !54787
+  %77 = getelementptr inbounds nuw i8, ptr %10, i64 24
+  store ptr %4, ptr %77, align 8, !noalias !54787
+  %78 = getelementptr inbounds nuw i8, ptr %10, i64 32
+  store ptr %5, ptr %78, align 8, !noalias !54787
+  %79 = getelementptr inbounds nuw i8, ptr %10, i64 40
+  store ptr %25, ptr %79, align 8, !noalias !54787
+  call void @llvm.lifetime.start.p0(ptr nonnull %9), !noalias !54788
+  %80 = getelementptr inbounds nuw i8, ptr %9, i64 16
+  store i64 %52, ptr %80, align 8, !noalias !54788
+  store ptr %43, ptr %9, align 8, !noalias !54788
+  %81 = getelementptr inbounds nuw i8, ptr %9, i64 8
+  store i64 %42, ptr %81, align 8, !noalias !54788
+  %82 = load ptr, ptr %35, align 8, !noundef !1703
+  %83 = icmp eq ptr %82, null
+  br i1 %83, label %86, label %84
+
+84:                                               ; preds = %73
+  %85 = getelementptr inbounds nuw i8, ptr %82, i64 272
+  br label %88
+
+86:                                               ; preds = %73
+; invoke rayon_core::registry::global_registry
+  %87 = invoke noundef nonnull align 8 ptr @_RNvNtCs5QxqJf20S2H_10rayon_core8registry15global_registry()
+          to label %88 unwind label %111
+
+88:                                               ; preds = %84, %86
+  %89 = phi ptr [ %85, %84 ], [ %87, %86 ]
+  %90 = load ptr, ptr %89, align 8, !nonnull !1703, !noundef !1703
+  %91 = getelementptr inbounds nuw i8, ptr %90, i64 520
+  %92 = load i64, ptr %91, align 8, !noundef !1703
+  %93 = icmp ult i64 %92, 192153584101141163
+  call void @llvm.assume(i1 %93)
+  %94 = getelementptr inbounds nuw [248 x i8], ptr %74, i64 %67
+  call void @llvm.lifetime.start.p0(ptr nonnull %8), !noalias !54793
+  store ptr %77, ptr %8, align 8, !noalias !54798
+  %95 = getelementptr inbounds nuw i8, ptr %8, i64 8
+  store ptr %94, ptr %95, align 8, !noalias !54798
+  %96 = getelementptr inbounds nuw i8, ptr %8, i64 16
+  store i64 %59, ptr %96, align 8, !noalias !54798
+; invoke rayon::iter::plumbing::bridge_producer_consumer::helper::<rayon::slice::chunks::ChunksProducer<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, (purrdf_sparql_eval::eval::EvalCtx, purrdf_sparql_eval::row_checkpoint::RowCheckpoint, purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>), purrdf_sparql_eval::parallel::MintedRow, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint), purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#0}, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#1}, purrdf_sparql_eval::expr::eval_extend_sequence<purrdf_core::ir::dataset::RdfDataset>::{closure#2}>::{closure#1}>>
+  invoke fastcc void @_RINvNvNtNtCs6mr9Vv4y4sq_5rayon4iter8plumbing24bridge_producer_consumer6helperINtNtNtB8_5slice6chunks14ChunksProducerINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecAINtNtCs2k2z8Zem4rB_4core6option6OptionNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7scratch12SolutionTermEj4_EEINtNtB6_3map11MapConsumerINtNtNtB6_7collect8consumer15CollectConsumerINtNtB2H_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtB3i_8parallel9MintedRowETNtNtB3i_7witness15RelationWitnessNtNtB3i_14row_checkpoint13RowCheckpointEENtNtB3i_5error9EvalErrorEENCINvB6m_22par_chunk_try_map_initB1Q_TNtNtB3i_4eval7EvalCtxB7k_INtNtB3i_2vm6LinkedNtNtNtB1V_2ir4term6TermIdEEB6k_B6M_NCINvNtB3i_4expr20eval_extend_sequenceNtNtB9N_7dataset10RdfDatasetE0NCBak_s_0NCBak_s0_0Es_0EEB3i_(ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(24) %13, i64 noundef %59, i1 noundef zeroext false, i64 noundef %92, i64 noundef 1, ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(24) %9, ptr noalias nofree noundef readonly align 8 captures(address) dereferenceable(24) %8)
+          to label %97 unwind label %111, !inline_history !54799
+
+97:                                               ; preds = %88
+  call void @llvm.lifetime.end.p0(ptr nonnull %8), !noalias !54793
+  call void @llvm.lifetime.end.p0(ptr nonnull %9), !noalias !54788
+  call void @llvm.lifetime.end.p0(ptr nonnull %10), !noalias !54783
+  call void @llvm.lifetime.start.p0(ptr nonnull %12), !noalias !54776
+  %98 = getelementptr inbounds nuw i8, ptr %13, i64 16
+  %99 = load i64, ptr %98, align 8, !noalias !54776, !noundef !1703
+  store i64 %99, ptr %12, align 8, !noalias !54776
+  %100 = icmp eq i64 %99, %59
+  br i1 %100, label %119, label %101, !prof !1860
+
+101:                                              ; preds = %97
+  call void @llvm.lifetime.start.p0(ptr nonnull %11), !noalias !54776
+  store ptr %14, ptr %11, align 8, !noalias !54776
+  %102 = getelementptr inbounds nuw i8, ptr %11, i64 8
+  store ptr @_RNvXsi_NtNtNtCs2k2z8Zem4rB_4core3fmt3num3impjNtB9_7Display3fmt, ptr %102, align 8, !noalias !54776
+  %103 = getelementptr inbounds nuw i8, ptr %11, i64 16
+  store ptr %12, ptr %103, align 8, !noalias !54776
+  %104 = getelementptr inbounds nuw i8, ptr %11, i64 24
+  store ptr @_RNvXsi_NtNtNtCs2k2z8Zem4rB_4core3fmt3num3impjNtB9_7Display3fmt, ptr %104, align 8, !noalias !54776
+; invoke core::panicking::panic_fmt
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt(ptr noundef nonnull @anon.d93b065c2763fb0250ff43fdc196fa20.603, ptr noundef nonnull %11, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.d93b065c2763fb0250ff43fdc196fa20.605) #91
+          to label %108 unwind label %105, !noalias !54776, !inline_history !54800
+
+105:                                              ; preds = %101
+  %106 = landingpad { ptr, i32 }
+          cleanup
+  %107 = load ptr, ptr %13, align 8, !noalias !54776, !noundef !1703
+; invoke core::ptr::drop_glue::<rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtNtCs6mr9Vv4y4sq_5rayon4iter7collect8consumer13CollectResultINtNtB4_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB2D_7witness15RelationWitnessNtNtB2D_14row_checkpoint13RowCheckpointEENtNtB2D_5error9EvalErrorEEEB2D_(ptr %107, i64 %99) #88
+          to label %113 unwind label %109, !noalias !54776, !inline_history !54800
+
+108:                                              ; preds = %101
+  unreachable
+
+109:                                              ; preds = %105
+  %110 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #89, !noalias !54776, !inline_history !54800
+  unreachable
+
+111:                                              ; preds = %86, %88, %71, %61
+  %112 = landingpad { ptr, i32 }
+          cleanup
+  br label %113
+
+113:                                              ; preds = %111, %105
+  %114 = phi { ptr, i32 } [ %112, %111 ], [ %106, %105 ]
+; invoke core::ptr::drop_glue::<alloc::vec::Vec<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecINtNtB4_6result6ResultTIBC_NtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB1D_7witness15RelationWitnessNtNtB1D_14row_checkpoint13RowCheckpointEENtNtB1D_5error9EvalErrorEEEB1D_(ptr noalias nofree noundef align 8 dereferenceable(24) %16) #88
+          to label %117 unwind label %115, !noalias !54765, !inline_history !54801
+
+115:                                              ; preds = %113
+  %116 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #89, !noalias !54765, !inline_history !54801
+  unreachable
+
+117:                                              ; preds = %_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit, %._crit_edge, %155, %113
+  %118 = phi { ptr, i32 } [ %114, %113 ], [ %225, %155 ], [ %305, %._crit_edge ], [ %305, %_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit ]
+  resume { ptr, i32 } %118
+
+119:                                              ; preds = %97
+  %120 = add nuw nsw i64 %67, %59
+  call void @llvm.lifetime.end.p0(ptr nonnull %12), !noalias !54776
+  call void @llvm.lifetime.end.p0(ptr nonnull %13), !noalias !54776
+  call void @llvm.lifetime.end.p0(ptr nonnull %14), !noalias !54772
+  call void @llvm.lifetime.end.p0(ptr nonnull %16), !noalias !54765
+  call void @llvm.lifetime.start.p0(ptr nonnull %23)
+  %121 = mul nuw nsw i64 %120, 248
+  %122 = getelementptr inbounds nuw i8, ptr %74, i64 %121
+  %123 = icmp eq i64 %120, 0
+  br i1 %123, label %204, label %iter.check
+
+iter.check:                                       ; preds = %119
+  %min.iters.check = icmp ult i64 %120, 8
+  br i1 %min.iters.check, label %.preheader.preheader, label %vector.main.loop.iter.check
+
+vector.main.loop.iter.check:                      ; preds = %iter.check
+  %min.iters.check112 = icmp ult i64 %120, 32
+  br i1 %min.iters.check112, label %vec.epilog.ph, label %vector.ph
+
+vector.ph:                                        ; preds = %vector.main.loop.iter.check
+  %n.mod.vf = and i64 %120, 24
+  %n.vec = and i64 %120, -32
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %vector.ph
+  %index = phi i64 [ 0, %vector.ph ], [ %index.next, %vector.body ]
+  %vec.ind = phi <8 x i64> [ <i64 0, i64 1, i64 2, i64 3, i64 4, i64 5, i64 6, i64 7>, %vector.ph ], [ %vec.ind.next, %vector.body ]
+  %vec.phi = phi <8 x i64> [ zeroinitializer, %vector.ph ], [ %132, %vector.body ]
+  %vec.phi113 = phi <8 x i64> [ zeroinitializer, %vector.ph ], [ %133, %vector.body ]
+  %vec.phi114 = phi <8 x i64> [ zeroinitializer, %vector.ph ], [ %134, %vector.body ]
+  %vec.phi115 = phi <8 x i64> [ zeroinitializer, %vector.ph ], [ %135, %vector.body ]
+  %step.add = add nuw <8 x i64> %vec.ind, splat (i64 8)
+  %step.add.2 = add nuw <8 x i64> %vec.ind, splat (i64 16)
+  %step.add.3 = add nuw <8 x i64> %vec.ind, splat (i64 24)
+  %wide.gep = getelementptr inbounds nuw [248 x i8], ptr %74, <8 x i64> %vec.ind
+  %wide.gep116 = getelementptr inbounds nuw [248 x i8], ptr %74, <8 x i64> %step.add
+  %wide.gep117 = getelementptr inbounds nuw [248 x i8], ptr %74, <8 x i64> %step.add.2
+  %wide.gep118 = getelementptr inbounds nuw [248 x i8], ptr %74, <8 x i64> %step.add.3
+  %wide.masked.gather = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.masked.gather119 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep116, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.masked.gather120 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep117, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.masked.gather121 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep118, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.gep122 = getelementptr i8, <8 x ptr> %wide.gep, i64 16
+  %wide.gep123 = getelementptr i8, <8 x ptr> %wide.gep116, i64 16
+  %wide.gep124 = getelementptr i8, <8 x ptr> %wide.gep117, i64 16
+  %wide.gep125 = getelementptr i8, <8 x ptr> %wide.gep118, i64 16
+  %wide.masked.gather126 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep122, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.masked.gather127 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep123, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.masked.gather128 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep124, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.masked.gather129 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep125, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %124 = icmp eq <8 x i64> %wide.masked.gather, splat (i64 -1)
+  %125 = icmp eq <8 x i64> %wide.masked.gather119, splat (i64 -1)
+  %126 = icmp eq <8 x i64> %wide.masked.gather120, splat (i64 -1)
+  %127 = icmp eq <8 x i64> %wide.masked.gather121, splat (i64 -1)
+  %128 = select <8 x i1> %124, <8 x i64> zeroinitializer, <8 x i64> %wide.masked.gather126
+  %129 = select <8 x i1> %125, <8 x i64> zeroinitializer, <8 x i64> %wide.masked.gather127
+  %130 = select <8 x i1> %126, <8 x i64> zeroinitializer, <8 x i64> %wide.masked.gather128
+  %131 = select <8 x i1> %127, <8 x i64> zeroinitializer, <8 x i64> %wide.masked.gather129
+  %132 = add <8 x i64> %128, %vec.phi
+  %133 = add <8 x i64> %129, %vec.phi113
+  %134 = add <8 x i64> %130, %vec.phi114
+  %135 = add <8 x i64> %131, %vec.phi115
+  %index.next = add nuw i64 %index, 32
+  %vec.ind.next = add nuw <8 x i64> %vec.ind, splat (i64 32)
+  %136 = icmp eq i64 %index.next, %n.vec
+  br i1 %136, label %middle.block, label %vector.body, !llvm.loop !54805
+
+middle.block:                                     ; preds = %vector.body
+  %bin.rdx = add <8 x i64> %133, %132
+  %bin.rdx130 = add <8 x i64> %134, %bin.rdx
+  %bin.rdx131 = add <8 x i64> %135, %bin.rdx130
+  %137 = call i64 @llvm.vector.reduce.add.v8i64(<8 x i64> %bin.rdx131)
+  %cmp.n = icmp eq i64 %120, %n.vec
+  br i1 %cmp.n, label %.loopexit145, label %vec.epilog.iter.check
+
+vec.epilog.iter.check:                            ; preds = %middle.block
+  %min.epilog.iters.check = icmp eq i64 %n.mod.vf, 0
+  br i1 %min.epilog.iters.check, label %.preheader.preheader, label %vec.epilog.ph, !prof !5104
+
+vec.epilog.ph:                                    ; preds = %vector.main.loop.iter.check, %vec.epilog.iter.check
+  %vec.epilog.resume.val = phi i64 [ %n.vec, %vec.epilog.iter.check ], [ 0, %vector.main.loop.iter.check ]
+  %bc.merge.rdx = phi i64 [ %137, %vec.epilog.iter.check ], [ 0, %vector.main.loop.iter.check ]
+  %n.vec133 = and i64 %120, -8
+  %138 = insertelement <8 x i64> <i64 poison, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0, i64 0>, i64 %bc.merge.rdx, i64 0
+  %broadcast.splatinsert = insertelement <8 x i64> poison, i64 %vec.epilog.resume.val, i64 0
+  %broadcast.splat = shufflevector <8 x i64> %broadcast.splatinsert, <8 x i64> poison, <8 x i32> zeroinitializer
+  %induction = or disjoint <8 x i64> %broadcast.splat, <i64 0, i64 1, i64 2, i64 3, i64 4, i64 5, i64 6, i64 7>
+  br label %vec.epilog.vector.body
+
+vec.epilog.vector.body:                           ; preds = %vec.epilog.vector.body, %vec.epilog.ph
+  %index134 = phi i64 [ %vec.epilog.resume.val, %vec.epilog.ph ], [ %index.next141, %vec.epilog.vector.body ]
+  %vec.ind135 = phi <8 x i64> [ %induction, %vec.epilog.ph ], [ %vec.ind.next142, %vec.epilog.vector.body ]
+  %vec.phi136 = phi <8 x i64> [ %138, %vec.epilog.ph ], [ %141, %vec.epilog.vector.body ]
+  %wide.gep137 = getelementptr inbounds nuw [248 x i8], ptr %74, <8 x i64> %vec.ind135
+  %wide.masked.gather138 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep137, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %wide.gep139 = getelementptr i8, <8 x ptr> %wide.gep137, i64 16
+  %wide.masked.gather140 = call <8 x i64> @llvm.masked.gather.v8i64.v8p0(<8 x ptr> align 8 %wide.gep139, <8 x i1> splat (i1 true), <8 x i64> poison), !alias.scope !54802
+  %139 = icmp eq <8 x i64> %wide.masked.gather138, splat (i64 -1)
+  %140 = select <8 x i1> %139, <8 x i64> zeroinitializer, <8 x i64> %wide.masked.gather140
+  %141 = add <8 x i64> %140, %vec.phi136
+  %index.next141 = add nuw i64 %index134, 8
+  %vec.ind.next142 = add nuw nsw <8 x i64> %vec.ind135, splat (i64 8)
+  %142 = icmp eq i64 %index.next141, %n.vec133
+  br i1 %142, label %vec.epilog.middle.block, label %vec.epilog.vector.body, !llvm.loop !54806
+
+vec.epilog.middle.block:                          ; preds = %vec.epilog.vector.body
+  %143 = call i64 @llvm.vector.reduce.add.v8i64(<8 x i64> %141)
+  %cmp.n143 = icmp eq i64 %120, %n.vec133
+  br i1 %cmp.n143, label %.loopexit145, label %.preheader.preheader
+
+.preheader.preheader:                             ; preds = %iter.check, %vec.epilog.iter.check, %vec.epilog.middle.block
+  %.ph165 = phi i64 [ 0, %iter.check ], [ %n.vec, %vec.epilog.iter.check ], [ %n.vec133, %vec.epilog.middle.block ]
+  %.ph166 = phi i64 [ 0, %iter.check ], [ %137, %vec.epilog.iter.check ], [ %143, %vec.epilog.middle.block ]
+  br label %.preheader
+
+.preheader:                                       ; preds = %.preheader.preheader, %.preheader
+  %144 = phi i64 [ %153, %.preheader ], [ %.ph165, %.preheader.preheader ]
+  %145 = phi i64 [ %152, %.preheader ], [ %.ph166, %.preheader.preheader ]
+  %146 = getelementptr inbounds nuw [248 x i8], ptr %74, i64 %144
+  %147 = load i64, ptr %146, align 8, !range !2119, !alias.scope !54802, !noundef !1703
+  %148 = getelementptr i8, ptr %146, i64 16
+  %149 = load i64, ptr %148, align 8, !alias.scope !54802
+  %150 = icmp eq i64 %147, -1
+  %151 = select i1 %150, i64 0, i64 %149
+  %152 = add i64 %151, %145
+  %153 = add nuw nsw i64 %144, 1
+  %154 = icmp eq i64 %153, %120
+  br i1 %154, label %.loopexit145, label %.preheader, !llvm.loop !54807
+
+155:                                              ; preds = %223
+  br i1 %224, label %304, label %117
+
+.loopexit145:                                     ; preds = %.preheader, %vec.epilog.middle.block, %middle.block
+  %.lcssa108 = phi i64 [ %143, %vec.epilog.middle.block ], [ %137, %middle.block ], [ %152, %.preheader ]
+  %156 = mul i64 %.lcssa108, 40
+  %157 = icmp ugt i64 %.lcssa108, 230584300921369395
+  br i1 %157, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread, label %158, !prof !30582
+
+158:                                              ; preds = %.loopexit145
+  %159 = icmp eq i64 %156, 0
+  br i1 %159, label %204, label %160
+
+160:                                              ; preds = %158
+  %161 = call noundef ptr @malloc(i64 noundef range(i64 1, 0) %156) #90, !noalias !54808
+  %162 = icmp eq ptr %161, null
+  br i1 %162, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread, label %163
+
+163:                                              ; preds = %160
+  %164 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %165 = load i64, ptr %164, align 8, !noalias !54808, !noundef !1703
+  %166 = call i64 @llvm.uadd.sat.i64(i64 %165, i64 1)
+  store i64 %166, ptr %164, align 8, !noalias !54808
+  %167 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %168 = load i64, ptr %167, align 8, !noalias !54808, !noundef !1703
+  %169 = call i64 @llvm.uadd.sat.i64(i64 %168, i64 %156)
+  store i64 %169, ptr %167, align 8, !noalias !54808
+  %170 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %171 = load i64, ptr %170, align 8, !noalias !54808, !noundef !1703
+  %172 = call i64 @llvm.umin.i64(i64 %156, i64 9223372036854775807)
+  %173 = call i64 @llvm.sadd.sat.i64(i64 %171, i64 %172)
+  store i64 %173, ptr %170, align 8, !noalias !54808
+  %174 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %175 = load i64, ptr %174, align 8, !noalias !54808, !noundef !1703
+  %176 = icmp sgt i64 %173, %175
+  br i1 %176, label %177, label %.preheader164
+
+177:                                              ; preds = %163
+  store i64 %173, ptr %174, align 8, !noalias !54808
+  br label %.preheader164
+
+.preheader164:                                    ; preds = %177, %163
+  br label %178
+
+178:                                              ; preds = %.preheader164, %181
+  %179 = load atomic i64, ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601 acquire, align 8, !noalias !54808
+  %180 = icmp slt i64 %179, 0
+  br i1 %180, label %181, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+
+181:                                              ; preds = %178
+  %182 = add nsw i64 %179, 1
+  %183 = cmpxchg weak ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601, i64 %179, i64 %182 acq_rel acquire, align 8, !noalias !54808
+  %184 = extractvalue { i64, i1 } %183, 1
+  br i1 %184, label %185, label %178
+
+185:                                              ; preds = %181
+  %186 = atomicrmw add ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS, i64 1 monotonic, align 8, !noalias !54808
+  %187 = atomicrmw add ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES, i64 %156 monotonic, align 8, !noalias !54808
+  %188 = atomicrmw add ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES, i64 %172 monotonic, align 8, !noalias !54808
+  %189 = call i64 @llvm.sadd.sat.i64(i64 %188, i64 %172)
+  %190 = load atomic i64, ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES monotonic, align 8, !noalias !54808
+  br label %191
+
+191:                                              ; preds = %194, %185
+  %192 = phi i64 [ %190, %185 ], [ %197, %194 ]
+  %193 = icmp sgt i64 %189, %192
+  br i1 %193, label %194, label %198
+
+194:                                              ; preds = %191
+  %195 = cmpxchg weak ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES, i64 %192, i64 %189 monotonic monotonic, align 8, !noalias !54808
+  %196 = extractvalue { i64, i1 } %195, 1
+  %197 = extractvalue { i64, i1 } %195, 0
+  br i1 %196, label %198, label %191
+
+198:                                              ; preds = %194, %191
+  %199 = atomicrmw sub ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601, i64 1 release, align 8, !noalias !54808
+  br label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit:  ; preds = %178, %198
+  %200 = ptrtoint ptr %161 to i64
+  br label %204
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread: ; preds = %160, %.loopexit145
+  %201 = phi i64 [ 8, %160 ], [ 0, %.loopexit145 ]
+; invoke alloc::raw_vec::handle_error
+  invoke void @_RNvNtCsc70TAahYccp_5alloc7raw_vec12handle_error(i64 noundef %201, i64 %156) #91
+          to label %303 unwind label %202
+
+202:                                              ; preds = %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread
+  %203 = landingpad { ptr, i32 }
+          cleanup
+  br label %304
+
+204:                                              ; preds = %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit, %158, %119
+  %205 = phi i64 [ %.lcssa108, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit ], [ %.lcssa108, %158 ], [ 0, %119 ]
+  %206 = phi i64 [ %.lcssa108, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit ], [ 0, %158 ], [ 0, %119 ]
+  %207 = phi i64 [ %200, %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit ], [ 8, %158 ], [ 8, %119 ]
+  %208 = inttoptr i64 %207 to ptr
+  %209 = icmp samesign ule i64 %205, %206
+  call void @llvm.assume(i1 %209)
+  store i64 %206, ptr %23, align 8
+  %210 = getelementptr inbounds nuw i8, ptr %23, i64 8
+  store ptr %208, ptr %210, align 8
+  %211 = getelementptr inbounds nuw i8, ptr %23, i64 16
+  store i64 0, ptr %211, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %22)
+  %212 = icmp samesign ult i64 %120, 37191016277640226
+  call void @llvm.assume(i1 %212)
+  call void @llvm.lifetime.start.p0(ptr nonnull %15), !noalias !54811
+  store i64 1, ptr %15, align 8, !noalias !54811
+  %213 = icmp samesign ugt i64 %120, 1
+  br i1 %213, label %214, label %228, !prof !1727
+
+214:                                              ; preds = %204
+; invoke <purrdf_core::small::SmallVec<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint); 1]>>::grow
+  invoke void @_RNvMs5_NtCscvKzUMJsXPo_11purrdf_core5smallINtB5_8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBZ_14row_checkpoint13RowCheckpointEj1_E4growBZ_(ptr noalias nofree noundef nonnull align 8 dereferenceable(232) %15, i64 noundef 0, i64 noundef range(i64 0, 37191016277640226) %120, i1 noundef zeroext false) #87
+          to label %215 unwind label %219, !noalias !54811
+
+215:                                              ; preds = %214
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(232) %22, ptr noundef nonnull align 8 dereferenceable(232) %15, i64 232, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %15), !noalias !54811
+  call void @llvm.lifetime.start.p0(ptr nonnull %21)
+  store ptr %74, ptr %21, align 8
+  %216 = getelementptr inbounds nuw i8, ptr %21, i64 8
+  %217 = getelementptr inbounds nuw i8, ptr %21, i64 16
+  store i64 %66, ptr %217, align 8
+  %218 = getelementptr inbounds nuw i8, ptr %21, i64 24
+  store ptr %122, ptr %218, align 8
+  br label %232
+
+219:                                              ; preds = %214
+  %220 = landingpad { ptr, i32 }
+          cleanup
+; invoke core::ptr::drop_glue::<purrdf_core::small::SmallVec<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint); 1]>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtB1s_14row_checkpoint13RowCheckpointEj1_EEB1s_(ptr noalias nofree noundef align 8 dereferenceable(232) %15) #88
+          to label %223 unwind label %221, !noalias !54811
+
+221:                                              ; preds = %219
+  %222 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #89, !noalias !54811
+  unreachable
+
+223:                                              ; preds = %253, %226, %219
+  %224 = phi i1 [ false, %253 ], [ false, %226 ], [ true, %219 ]
+  %225 = phi { ptr, i32 } [ %254, %253 ], [ %227, %226 ], [ %220, %219 ]
+; invoke core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowEEB1c_(ptr noalias nofree noundef align 8 dereferenceable(24) %23) #88
+          to label %155 unwind label %298
+
+226:                                              ; preds = %301
+  %227 = landingpad { ptr, i32 }
+          cleanup
+  br label %223
+
+228:                                              ; preds = %204
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(232) %22, ptr noundef nonnull align 8 dereferenceable(232) %15, i64 232, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %15), !noalias !54811
+  call void @llvm.lifetime.start.p0(ptr nonnull %21)
+  store ptr %74, ptr %21, align 8
+  %229 = getelementptr inbounds nuw i8, ptr %21, i64 8
+  %230 = getelementptr inbounds nuw i8, ptr %21, i64 16
+  store i64 %66, ptr %230, align 8
+  %231 = getelementptr inbounds nuw i8, ptr %21, i64 24
+  store ptr %122, ptr %231, align 8
+  br i1 %123, label %.loopexit, label %232
+
+232:                                              ; preds = %228, %215
+  %233 = phi ptr [ %216, %215 ], [ %229, %228 ]
+  %234 = getelementptr inbounds nuw i8, ptr %18, i64 80
+  %235 = getelementptr inbounds nuw i8, ptr %17, i64 16
+  %236 = getelementptr inbounds nuw i8, ptr %17, i64 8
+  %237 = getelementptr inbounds nuw i8, ptr %17, i64 24
+  %238 = getelementptr inbounds nuw i8, ptr %22, i64 8
+  %239 = getelementptr inbounds nuw i8, ptr %22, i64 16
+  br label %242
+
+240:                                              ; preds = %296, %280
+  %241 = phi { ptr, i32 } [ %297, %296 ], [ %281, %280 ]
+; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCsc70TAahYccp_5alloc3vec9into_iter8IntoIterINtNtB4_6result6ResultTINtBG_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB20_7witness15RelationWitnessNtNtB20_14row_checkpoint13RowCheckpointEENtNtB20_5error9EvalErrorEEEB20_(ptr noalias nofree noundef align 8 dereferenceable(32) %21) #88
+          to label %253 unwind label %298
+
+242:                                              ; preds = %290, %232
+  %243 = phi ptr [ %74, %232 ], [ %244, %290 ]
+  %244 = getelementptr inbounds nuw i8, ptr %243, i64 248
+  %245 = load i64, ptr %243, align 8, !noalias !54814
+  %246 = getelementptr inbounds nuw i8, ptr %243, i64 8
+  %247 = load ptr, ptr %246, align 8, !noalias !54814
+  %248 = getelementptr inbounds nuw i8, ptr %243, i64 16
+  %249 = load i64, ptr %248, align 8, !noalias !54814
+  %250 = getelementptr inbounds nuw i8, ptr %243, i64 24
+  switch i64 %245, label %264 [
+    i64 -2, label %.loopexit
+    i64 -1, label %260
+  ]
+
+.loopexit:                                        ; preds = %290, %242, %228
+  %251 = phi ptr [ %229, %228 ], [ %233, %242 ], [ %233, %290 ]
+  %252 = phi ptr [ %74, %228 ], [ %122, %290 ], [ %244, %242 ]
+  store ptr %252, ptr %251, align 1
+; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCsc70TAahYccp_5alloc3vec9into_iter8IntoIterINtNtB4_6result6ResultTINtBG_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB20_7witness15RelationWitnessNtNtB20_14row_checkpoint13RowCheckpointEENtNtB20_5error9EvalErrorEEEB20_(ptr noalias nofree noundef align 8 dereferenceable(32) %21)
+          to label %257 unwind label %255
+
+253:                                              ; preds = %255, %240
+  %254 = phi { ptr, i32 } [ %256, %255 ], [ %241, %240 ]
+; invoke core::ptr::drop_glue::<purrdf_core::small::SmallVec<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint); 1]>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtB1s_14row_checkpoint13RowCheckpointEj1_EEB1s_(ptr noalias nofree noundef align 8 dereferenceable(232) %22) #88
+          to label %223 unwind label %298
+
+255:                                              ; preds = %260, %.loopexit
+  %256 = landingpad { ptr, i32 }
+          cleanup
+  br label %253
+
+257:                                              ; preds = %.loopexit
+  call void @llvm.lifetime.end.p0(ptr nonnull %21)
+  call void @llvm.lifetime.start.p0(ptr nonnull %19)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %19, ptr noundef nonnull align 8 dereferenceable(24) %23, i64 24, i1 false)
+  %258 = getelementptr inbounds nuw i8, ptr %19, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(232) %258, ptr noundef nonnull align 8 dereferenceable(232) %22, i64 232, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(256) %0, ptr noundef nonnull align 8 dereferenceable(256) %19, i64 256, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %19)
+  call void @llvm.lifetime.end.p0(ptr nonnull %22)
+  call void @llvm.lifetime.end.p0(ptr nonnull %23)
+  br label %259
+
+259:                                              ; preds = %302, %257, %33
+  call void @llvm.lifetime.end.p0(ptr nonnull %24)
+  ret void
+
+260:                                              ; preds = %242
+  store ptr %244, ptr %233, align 1
+  %261 = getelementptr inbounds nuw i8, ptr %0, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(80) %261, ptr noundef nonnull align 8 dereferenceable(80) %250, i64 80, i1 false)
+  %262 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store ptr %247, ptr %262, align 8
+  %263 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i64 %249, ptr %263, align 8
+  store i64 -1, ptr %0, align 8
+; invoke core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCsc70TAahYccp_5alloc3vec9into_iter8IntoIterINtNtB4_6result6ResultTINtBG_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB20_7witness15RelationWitnessNtNtB20_14row_checkpoint13RowCheckpointEENtNtB20_5error9EvalErrorEEEB20_(ptr noalias nofree noundef align 8 dereferenceable(32) %21)
+          to label %301 unwind label %255
+
+264:                                              ; preds = %242
+  %265 = getelementptr inbounds nuw i8, ptr %243, i64 104
+  call void @llvm.lifetime.start.p0(ptr nonnull %18)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(80) %18, ptr noundef nonnull align 8 dereferenceable(80) %250, i64 80, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(144) %234, ptr noundef nonnull align 8 dereferenceable(144) %265, i64 144, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(224) %20, ptr noundef nonnull align 8 dereferenceable(224) %18, i64 224, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %18)
+  call void @llvm.lifetime.start.p0(ptr nonnull %17)
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %247) ]
+  %266 = icmp ult i64 %249, 230584300921369396
+  call void @llvm.assume(i1 %266)
+  %267 = getelementptr inbounds nuw [40 x i8], ptr %247, i64 %249
+  store ptr %247, ptr %17, align 8
+  store i64 %245, ptr %235, align 8
+  store ptr %247, ptr %236, align 8
+  store ptr %267, ptr %237, align 8
+; invoke <alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow> as alloc::vec::spec_extend::SpecExtend<purrdf_sparql_eval::parallel::MintedRow, alloc::vec::into_iter::IntoIter<purrdf_sparql_eval::parallel::MintedRow>>>::spec_extend
+  invoke fastcc void @_RNvXs0_NtNtCsc70TAahYccp_5alloc3vec11spec_extendINtB7_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowEINtB5_10SpecExtendBU_INtNtB7_9into_iter8IntoIterBU_EE11spec_extendBY_(ptr noalias nofree noundef align 8 dereferenceable(24) %23, ptr noalias nofree noundef align 8 captures(address) dereferenceable(32) %17)
+          to label %268 unwind label %296
+
+268:                                              ; preds = %264
+  call void @llvm.lifetime.end.p0(ptr nonnull %17)
+  %269 = load i64, ptr %22, align 8, !range !1874, !alias.scope !54817, !noalias !54820, !noundef !1703
+  %270 = add i64 %269, -1
+  %271 = icmp ugt i64 %270, 1
+  %272 = load ptr, ptr %238, align 8, !alias.scope !54817, !noalias !54820, !nonnull !1703
+  %273 = select i1 %271, ptr %272, ptr %238
+  %274 = select i1 %271, ptr %239, ptr %22
+  %275 = call i64 @llvm.umax.i64(i64 %270, i64 1)
+  %276 = load i64, ptr %274, align 8, !alias.scope !54817, !noalias !54820, !noundef !1703
+  %277 = add i64 %276, -1
+  %278 = icmp eq i64 %277, %275
+  br i1 %278, label %279, label %290, !prof !1727
+
+279:                                              ; preds = %268
+; invoke <purrdf_core::small::SmallVec<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint); 1]>>::grow
+  invoke void @_RNvMs5_NtCscvKzUMJsXPo_11purrdf_core5smallINtB5_8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBZ_14row_checkpoint13RowCheckpointEj1_E4growBZ_(ptr noalias nofree noundef nonnull align 8 dereferenceable(232) %22, i64 noundef %275, i64 noundef 1, i1 noundef zeroext true)
+          to label %282 unwind label %280, !noalias !54820
+
+280:                                              ; preds = %279
+  %281 = landingpad { ptr, i32 }
+          cleanup
+  store ptr %244, ptr %233, align 1
+; invoke core::ptr::drop_glue::<(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBG_14row_checkpoint13RowCheckpointEEBG_(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(224) %20) #88
+          to label %240 unwind label %288
+
+282:                                              ; preds = %279
+  %283 = load i64, ptr %22, align 8, !range !1874, !alias.scope !54817, !noalias !54820, !noundef !1703
+  %284 = icmp ugt i64 %283, 2
+  %285 = load ptr, ptr %238, align 8, !alias.scope !54817, !noalias !54820, !nonnull !1703
+  %286 = select i1 %284, ptr %285, ptr %238
+  %287 = select i1 %284, ptr %239, ptr %22
+  br label %290
+
+288:                                              ; preds = %280
+  %289 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #89, !noalias !54820
+  unreachable
+
+290:                                              ; preds = %282, %268
+  %291 = phi ptr [ %286, %282 ], [ %273, %268 ]
+  %292 = phi ptr [ %287, %282 ], [ %274, %268 ]
+  %293 = getelementptr inbounds nuw [224 x i8], ptr %291, i64 %277
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(224) %293, ptr noundef nonnull align 8 dereferenceable(224) %20, i64 224, i1 false)
+  %294 = add i64 %276, 1
+  store i64 %294, ptr %292, align 8, !alias.scope !54817, !noalias !54820
+  %295 = icmp eq ptr %244, %122
+  br i1 %295, label %.loopexit, label %242
+
+296:                                              ; preds = %264
+  %297 = landingpad { ptr, i32 }
+          cleanup
+  store ptr %244, ptr %233, align 1
+; invoke core::ptr::drop_glue::<(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBG_14row_checkpoint13RowCheckpointEEBG_(ptr noalias nofree noundef align 8 dereferenceable(224) %20) #88
+          to label %240 unwind label %298
+
+298:                                              ; preds = %296, %253, %240, %223
+  %299 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+  br label %300
+
+300:                                              ; preds = %323, %._crit_edge111, %298
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #89
+  unreachable
+
+301:                                              ; preds = %260
+  call void @llvm.lifetime.end.p0(ptr nonnull %21)
+; invoke core::ptr::drop_glue::<purrdf_core::small::SmallVec<[(purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint); 1]>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtB1s_14row_checkpoint13RowCheckpointEj1_EEB1s_(ptr noalias nofree noundef align 8 dereferenceable(232) %22)
+          to label %302 unwind label %226
+
+302:                                              ; preds = %301
+  call void @llvm.lifetime.end.p0(ptr nonnull %22)
+; call core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>>
+  call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowEEB1c_(ptr noalias nofree noundef align 8 dereferenceable(24) %23)
+  call void @llvm.lifetime.end.p0(ptr nonnull %23)
+  br label %259
+
+303:                                              ; preds = %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread
+  unreachable
+
+304:                                              ; preds = %202, %155
+  %305 = phi { ptr, i32 } [ %203, %202 ], [ %225, %155 ]
+  %306 = icmp eq i64 %120, 0
+  br i1 %306, label %._crit_edge, label %.lr.ph
+
+307:                                              ; preds = %.lr.ph
+  %308 = icmp eq i64 %311, %120
+  br i1 %308, label %._crit_edge, label %.lr.ph
+
+.lr.ph:                                           ; preds = %304, %307
+  %309 = phi i64 [ %311, %307 ], [ 0, %304 ]
+  %310 = getelementptr inbounds nuw [248 x i8], ptr %74, i64 %309
+  %311 = add nuw nsw i64 %309, 1
+; invoke core::ptr::drop_glue::<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB1z_7witness15RelationWitnessNtNtB1z_14row_checkpoint13RowCheckpointEENtNtB1z_5error9EvalErrorEEB1z_(ptr noalias nofree noundef readonly align 8 dereferenceable(248) %310)
+          to label %307 unwind label %315, !noalias !54822
+
+312:                                              ; preds = %.lr.ph110
+  %313 = add i64 %318, 1
+  %314 = icmp eq i64 %313, %120
+  br i1 %314, label %._crit_edge111, label %.lr.ph110
+
+315:                                              ; preds = %.lr.ph
+  %316 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+  %317 = icmp eq i64 %311, %120
+  br i1 %317, label %._crit_edge111, label %.lr.ph110
+
+.lr.ph110:                                        ; preds = %315, %312
+  %318 = phi i64 [ %313, %312 ], [ %311, %315 ]
+  %319 = getelementptr inbounds nuw [248 x i8], ptr %74, i64 %318
+; invoke core::ptr::drop_glue::<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, (purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::row_checkpoint::RowCheckpoint)), purrdf_sparql_eval::error::EvalError>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB1z_7witness15RelationWitnessNtNtB1z_14row_checkpoint13RowCheckpointEENtNtB1z_5error9EvalErrorEEB1z_(ptr noalias nofree noundef readonly align 8 dereferenceable(248) %319) #88
+          to label %312 unwind label %320, !noalias !54822
+
+320:                                              ; preds = %.lr.ph110
+  %321 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #89, !noalias !54825
+  unreachable
+
+._crit_edge111:                                   ; preds = %312, %315
+  %322 = icmp eq i64 %66, 0
+  br i1 %322, label %300, label %323
+
+323:                                              ; preds = %._crit_edge111
+  %324 = mul nuw i64 %66, 248
+; call __rustc::__rust_dealloc
+  call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %74, i64 noundef %324, i64 noundef range(i64 1, -9223372036854775807) 8) #90, !noalias !54822
+  br label %300
+
+._crit_edge:                                      ; preds = %307, %304
+  %325 = icmp eq i64 %66, 0
+  br i1 %325, label %117, label %326
+
+326:                                              ; preds = %._crit_edge
+  %327 = mul nuw i64 %66, 248
+  %328 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %329 = load i64, ptr %328, align 8, !noalias !54822, !noundef !1703
+  %330 = call i64 @llvm.umin.i64(i64 %327, i64 9223372036854775807)
+  %331 = call i64 @llvm.ssub.sat.i64(i64 %329, i64 %330)
+  store i64 %331, ptr %328, align 8, !noalias !54822
+  %332 = call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+  %333 = load i64, ptr %332, align 8, !noalias !54822, !noundef !1703
+  %334 = icmp slt i64 %331, %333
+  br i1 %334, label %335, label %.preheader146
+
+335:                                              ; preds = %326
+  store i64 %331, ptr %332, align 8, !noalias !54822
+  br label %.preheader146
+
+.preheader146:                                    ; preds = %335, %326
+  br label %336
+
+336:                                              ; preds = %.preheader146, %339
+  %337 = load atomic i64, ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601 acquire, align 8, !noalias !54822
+  %338 = icmp slt i64 %337, 0
+  br i1 %338, label %339, label %_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit
+
+339:                                              ; preds = %336
+  %340 = add nsw i64 %337, 1
+  %341 = cmpxchg weak ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601, i64 %337, i64 %340 acq_rel acquire, align 8, !noalias !54822
+  %342 = extractvalue { i64, i1 } %341, 1
+  br i1 %342, label %343, label %336
+
+343:                                              ; preds = %339
+  %344 = atomicrmw sub ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES, i64 %330 monotonic, align 8, !noalias !54822
+  %345 = call i64 @llvm.ssub.sat.i64(i64 %344, i64 %330)
+  %346 = load atomic i64, ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES monotonic, align 8, !noalias !54822
+  br label %347
+
+347:                                              ; preds = %350, %343
+  %348 = phi i64 [ %346, %343 ], [ %353, %350 ]
+  %349 = icmp slt i64 %345, %348
+  br i1 %349, label %350, label %354
+
+350:                                              ; preds = %347
+  %351 = cmpxchg weak ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES, i64 %348, i64 %345 monotonic monotonic, align 8, !noalias !54822
+  %352 = extractvalue { i64, i1 } %351, 1
+  %353 = extractvalue { i64, i1 } %351, 0
+  br i1 %352, label %354, label %347
+
+354:                                              ; preds = %350, %347
+  %355 = atomicrmw sub ptr @_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601, i64 1 release, align 8, !noalias !54822
+  br label %_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit
+
+_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc.exit: ; preds = %336, %354
+  call void @free(ptr noundef nonnull %74) #90, !noalias !54822
+  br label %117
+}
+
+ASSEMBLY
+_RINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel22par_chunk_try_map_initINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecAINtNtCs2k2z8Zem4rB_4core6option6OptionNtNtB4_7scratch12SolutionTermEj4_ETNtNtB4_4eval7EvalCtxNtNtB4_14row_checkpoint13RowCheckpointINtNtB4_2vm6LinkedNtNtNtB1e_2ir4term6TermIdEENtB2_9MintedRowTNtNtB4_7witness15RelationWitnessB3q_ENCINvNtB4_4expr20eval_extend_sequenceNtNtB4o_7dataset10RdfDatasetE0NCB5E_s_0NCB5E_s0_0EB4_:
+.Lfunc_begin1079:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception730
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$936, %rsp
+	.cfi_def_cfa_offset 992
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	cmpq	$1025, %rcx
+	notb	%sil
+	leaq	144(%rsp), %rax
+	leaq	992(%rsp), %r11
+	movq	%rdx, 144(%rsp)
+	movq	%r8, 432(%rsp)
+	movq	%rcx, 152(%rsp)
+	setae	%r10b
+	movq	%rax, 440(%rsp)
+	movq	%r9, 448(%rsp)
+	movq	%r11, 456(%rsp)
+	testb	%r10b, %sil
+	jne	.LBB1079_2
+	leaq	432(%rsp), %rsi
+	callq	_RNCINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel22par_chunk_try_map_initINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecAINtNtCs2k2z8Zem4rB_4core6option6OptionNtNtB6_7scratch12SolutionTermEj4_ETNtNtB6_4eval7EvalCtxNtNtB6_14row_checkpoint13RowCheckpointINtNtB6_2vm6LinkedNtNtNtB1g_2ir4term6TermIdEENtB4_9MintedRowTNtNtB6_7witness15RelationWitnessB3s_ENCINvNtB6_4expr20eval_extend_sequenceNtNtB4q_7dataset10RdfDatasetE0NCB5G_s_0NCB5G_s0_0E0B6_
+	jmp	.LBB1079_66
+.LBB1079_2:
+	movq	_RNvNCNKNvNtCs5QxqJf20S2H_10rayon_core8registry19WORKER_THREAD_STATE0s_023___RUST_STD_INTERNAL_VAL@GOTTPOFF(%rip), %rax
+	movq	%r9, %r12
+	movq	%r8, %r13
+	movq	%fs:(%rax), %rax
+	testq	%rax, %rax
+	je	.LBB1079_4
+	movq	%rdx, %r14
+	addq	$272, %rax
+	movq	%rcx, %r15
+	jmp	.LBB1079_5
+.LBB1079_4:
+	movq	_RNvNtCs5QxqJf20S2H_10rayon_core8registry15global_registry@GOTPCREL(%rip), %rax
+	movq	%rdi, %r14
+	movq	%rcx, %rbx
+	callq	*%rax
+	movq	%r14, %rdi
+	movq	144(%rsp), %r14
+	movq	152(%rsp), %r15
+	movq	%rbx, %rcx
+.LBB1079_5:
+	movq	(%rax), %rax
+	movq	%rdi, 104(%rsp)
+	movq	520(%rax), %rsi
+	movq	%rcx, %rax
+	cmpq	$1, %rsi
+	adcq	$0, %rsi
+	shlq	$2, %rsi
+	orq	%rsi, %rax
+	shrq	$32, %rax
+	je	.LBB1079_7
+	movq	%rcx, %rax
+	xorl	%edx, %edx
+	divq	%rsi
+	jmp	.LBB1079_8
+.LBB1079_7:
+	movl	%ecx, %eax
+	xorl	%edx, %edx
+	divl	%esi
+.LBB1079_8:
+	cmpq	$17, %rax
+	movl	$16, %ebx
+	movq	$0, 120(%rsp)
+	movq	$8, 128(%rsp)
+	movq	$0, 136(%rsp)
+	cmovaeq	%rax, %rbx
+	movq	%r15, %rax
+	orq	%rbx, %rax
+	shrq	$32, %rax
+	je	.LBB1079_10
+	movq	%r15, %rax
+	xorl	%edx, %edx
+	divq	%rbx
+	jmp	.LBB1079_11
+.LBB1079_10:
+	movl	%r15d, %eax
+	xorl	%edx, %edx
+	divl	%ebx
+.LBB1079_11:
+	xorl	%esi, %esi
+	testq	%rdx, %rdx
+	movq	%rax, 64(%rsp)
+	setne	%sil
+	addq	%rsi, %rax
+	movq	%rsi, 112(%rsp)
+	movq	%rax, %rbp
+	movq	%rax, 168(%rsp)
+	jne	.LBB1079_67
+	xorl	%ecx, %ecx
+	xorl	%edx, %edx
+.LBB1079_13:
+	movq	%rcx, %rax
+	subq	%rdx, %rax
+	movq	%rdx, 72(%rsp)
+	cmpq	%rbp, %rax
+	jb	.LBB1079_69
+	movq	%rcx, 24(%rsp)
+	movq	_RNvNCNKNvNtCs5QxqJf20S2H_10rayon_core8registry19WORKER_THREAD_STATE0s_023___RUST_STD_INTERNAL_VAL@GOTTPOFF(%rip), %rcx
+	movq	%r12, %rax
+	movq	%r14, 176(%rsp)
+	movq	%r15, 184(%rsp)
+	movq	%rbx, 192(%rsp)
+	movq	%r13, 200(%rsp)
+	movq	%rax, 208(%rsp)
+	movq	128(%rsp), %r12
+	leaq	992(%rsp), %rdx
+	movq	%rbx, 48(%rsp)
+	movq	%r14, 32(%rsp)
+	movq	%r15, 40(%rsp)
+	movq	%rdx, 216(%rsp)
+	movq	%fs:(%rcx), %rax
+	testq	%rax, %rax
+	je	.LBB1079_16
+	movq	72(%rsp), %r13
+	addq	$272, %rax
+	jmp	.LBB1079_17
+.LBB1079_16:
+.Ltmp21033:
+	movq	_RNvNtCs5QxqJf20S2H_10rayon_core8registry15global_registry@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Ltmp21034:
+	movq	72(%rsp), %r13
+.LBB1079_17:
+	movq	(%rax), %rax
+	leaq	200(%rsp), %rdx
+	movq	520(%rax), %rcx
+	imulq	$248, %r13, %rax
+	movq	%rdx, 464(%rsp)
+	addq	%r12, %rax
+	movq	%rax, 472(%rsp)
+	movq	%rbp, 480(%rsp)
+.Ltmp21035:
+	leaq	464(%rsp), %r15
+	leaq	80(%rsp), %rdi
+	leaq	32(%rsp), %r9
+	movl	$1, %r8d
+	movq	%rbp, %rsi
+	xorl	%edx, %edx
+	movq	%r15, (%rsp)
+	callq	_RINvNvNtNtCs6mr9Vv4y4sq_5rayon4iter8plumbing24bridge_producer_consumer6helperINtNtNtB8_5slice6chunks14ChunksProducerINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecAINtNtCs2k2z8Zem4rB_4core6option6OptionNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7scratch12SolutionTermEj4_EEINtNtB6_3map11MapConsumerINtNtNtB6_7collect8consumer15CollectConsumerINtNtB2H_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtB3i_8parallel9MintedRowETNtNtB3i_7witness15RelationWitnessNtNtB3i_14row_checkpoint13RowCheckpointEENtNtB3i_5error9EvalErrorEENCINvB6m_22par_chunk_try_map_initB1Q_TNtNtB3i_4eval7EvalCtxB7k_INtNtB3i_2vm6LinkedNtNtNtB1V_2ir4term6TermIdEEB6k_B6M_NCINvNtB3i_4expr20eval_extend_sequenceNtNtB9N_7dataset10RdfDatasetE0NCBak_s_0NCBak_s0_0Es_0EEB3i_
+.Ltmp21036:
+	movq	96(%rsp), %r14
+	movq	%r14, 464(%rsp)
+	cmpq	%rbp, %r14
+	jne	.LBB1079_70
+	addq	%r13, %rbp
+	movl	$8, %ecx
+	je	.LBB1079_22
+	cmpq	$8, %rbp
+	jae	.LBB1079_37
+	xorl	%eax, %eax
+	xorl	%r14d, %r14d
+	jmp	.LBB1079_46
+.LBB1079_37:
+	cmpq	$32, %rbp
+	jae	.LBB1079_39
+	xorl	%eax, %eax
+	xorl	%r14d, %r14d
+	jmp	.LBB1079_43
+.LBB1079_39:
+	vmovdqa64	.LCPI1079_0(%rip), %zmm1
+	vpbroadcastq	.LCPI1079_1(%rip), %zmm2
+	vpbroadcastq	.LCPI1079_2(%rip), %zmm4
+	movq	%rbp, %rax
+	andq	$-32, %rax
+	vpternlogd	$255, %zmm3, %zmm3, %zmm3
+	vpxor	%xmm0, %xmm0, %xmm0
+	vpxor	%xmm5, %xmm5, %xmm5
+	vpxor	%xmm6, %xmm6, %xmm6
+	vpxor	%xmm7, %xmm7, %xmm7
+	movq	%rax, %rdx
+	.p2align	4
+.LBB1079_40:
+	vpmullq	%zmm2, %zmm1, %zmm8
+	kxnorb	%k0, %k0, %k1
+	vpxor	%xmm9, %xmm9, %xmm9
+	vpxor	%xmm10, %xmm10, %xmm10
+	vpxor	%xmm11, %xmm11, %xmm11
+	vpxor	%xmm12, %xmm12, %xmm12
+	vpxor	%xmm13, %xmm13, %xmm13
+	vpxor	%xmm14, %xmm14, %xmm14
+	vpxor	%xmm15, %xmm15, %xmm15
+	vpxord	%xmm16, %xmm16, %xmm16
+	vpaddq	%zmm4, %zmm1, %zmm1
+	addq	$-32, %rdx
+	vpgatherqq	(%r12,%zmm8), %zmm9 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	1984(%r12,%zmm8), %zmm10 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	3968(%r12,%zmm8), %zmm11 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	5952(%r12,%zmm8), %zmm12 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	16(%r12,%zmm8), %zmm13 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	2000(%r12,%zmm8), %zmm14 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	3984(%r12,%zmm8), %zmm15 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpcmpneqq	%zmm3, %zmm10, %k2
+	vpgatherqq	5968(%r12,%zmm8), %zmm16 {%k1}
+	vpcmpneqq	%zmm3, %zmm9, %k1
+	vpcmpneqq	%zmm3, %zmm11, %k3
+	vpcmpneqq	%zmm3, %zmm12, %k4
+	vpaddq	%zmm13, %zmm0, %zmm0 {%k1}
+	vpaddq	%zmm14, %zmm5, %zmm5 {%k2}
+	vpaddq	%zmm15, %zmm6, %zmm6 {%k3}
+	vpaddq	%zmm16, %zmm7, %zmm7 {%k4}
+	jne	.LBB1079_40
+	vpaddq	%zmm0, %zmm5, %zmm0
+	vpaddq	%zmm6, %zmm7, %zmm1
+	vpaddq	%zmm0, %zmm1, %zmm0
+	vextracti64x4	$1, %zmm0, %ymm1
+	vpaddq	%zmm1, %zmm0, %zmm0
+	vextracti128	$1, %ymm0, %xmm1
+	vpaddq	%xmm1, %xmm0, %xmm0
+	vpshufd	$238, %xmm0, %xmm1
+	vpaddq	%xmm1, %xmm0, %xmm0
+	vmovq	%xmm0, %r14
+	cmpq	%rax, %rbp
+	je	.LBB1079_50
+	testb	$24, %bpl
+	je	.LBB1079_46
+.LBB1079_43:
+	movq	%rax, %rdx
+	vpbroadcastq	%rdx, %zmm1
+	vporq	.LCPI1079_0(%rip), %zmm1, %zmm1
+	vpbroadcastq	.LCPI1079_1(%rip), %zmm2
+	vpbroadcastq	.LCPI1079_3(%rip), %zmm4
+	movq	%rbp, %rax
+	andq	$-8, %rax
+	vmovq	%r14, %xmm0
+	vpternlogd	$255, %zmm3, %zmm3, %zmm3
+	subq	%rax, %rdx
+	.p2align	4
+.LBB1079_44:
+	vpmullq	%zmm2, %zmm1, %zmm5
+	kxnorb	%k0, %k0, %k1
+	vpxor	%xmm6, %xmm6, %xmm6
+	vpxor	%xmm7, %xmm7, %xmm7
+	vpaddq	%zmm4, %zmm1, %zmm1
+	addq	$8, %rdx
+	vpgatherqq	(%r12,%zmm5), %zmm6 {%k1}
+	kxnorb	%k0, %k0, %k1
+	vpgatherqq	16(%r12,%zmm5), %zmm7 {%k1}
+	vpcmpneqq	%zmm3, %zmm6, %k1
+	vpaddq	%zmm7, %zmm0, %zmm0 {%k1}
+	jne	.LBB1079_44
+	vextracti64x4	$1, %zmm0, %ymm1
+	vpaddq	%zmm1, %zmm0, %zmm0
+	vextracti128	$1, %ymm0, %xmm1
+	vpaddq	%xmm1, %xmm0, %xmm0
+	vpshufd	$238, %xmm0, %xmm1
+	vpaddq	%xmm1, %xmm0, %xmm0
+	vmovq	%xmm0, %r14
+	cmpq	%rax, %rbp
+	je	.LBB1079_50
+.LBB1079_46:
+	movq	64(%rsp), %rdx
+	addq	%r13, %rdx
+	addq	112(%rsp), %rdx
+	subq	%rax, %rdx
+	imulq	$248, %rax, %rax
+	leaq	16(%rax,%r12), %rax
+	jmp	.LBB1079_48
+	.p2align	4
+.LBB1079_47:
+	movq	(%rax), %rsi
+	addq	%rsi, %r14
+	addq	$248, %rax
+	decq	%rdx
+	je	.LBB1079_50
+.LBB1079_48:
+	cmpq	$-1, -16(%rax)
+	jne	.LBB1079_47
+	xorl	%esi, %esi
+	addq	%rsi, %r14
+	addq	$248, %rax
+	decq	%rdx
+	jne	.LBB1079_48
+.LBB1079_50:
+	leaq	(,%r14,8), %rax
+	leaq	(%rax,%rax,4), %rsi
+	movabsq	$230584300921369395, %rax
+	cmpq	%rax, %r14
+	jbe	.LBB1079_53
+	xorl	%edi, %edi
+.LBB1079_52:
+.Ltmp21043:
+	movq	_RNvNtCsc70TAahYccp_5alloc7raw_vec12handle_error@GOTPCREL(%rip), %rax
+	movq	64(%rsp), %rbx
+	vzeroupper
+	callq	*%rax
+.Ltmp21044:
+	jmp	.LBB1079_71
+.LBB1079_53:
+	testq	%rsi, %rsi
+	je	.LBB1079_22
+	movq	malloc@GOTPCREL(%rip), %rax
+	movq	%rsi, %rdi
+	movq	%rsi, %rbx
+	vzeroupper
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB1079_74
+	movq	%rax, %rcx
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movq	$-1, %rdx
+	movabsq	$9223372036854775807, %rdi
+	movq	%rbx, %rsi
+	incq	%rax
+	cmoveq	%rdx, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	addq	%rbx, %rax
+	cmovbq	%rdx, %rax
+	cmpq	%rdi, %rbx
+	movq	%rdi, %rdx
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	cmovbq	%rbx, %rdx
+	addq	%rdx, %rax
+	cmovoq	%rdi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jle	.LBB1079_57
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB1079_57:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB1079_23
+	leaq	1(%rax), %rdi
+	lock		cmpxchgq	%rdi, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB1079_57
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %r8
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rdi
+	lock		incq	(%rax)
+	lock		addq	%rsi, (%r8)
+	movq	%rdx, %rsi
+	lock		xaddq	%rsi, (%rdi)
+	movabsq	$-9223372036854775808, %rdi
+	leaq	(%rsi,%rdx), %rax
+	sarq	$63, %rax
+	xorq	%rax, %rdi
+	addq	%rdx, %rsi
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rdx
+	cmovoq	%rdi, %rsi
+	movq	(%rdx), %rax
+	.p2align	4
+.LBB1079_60:
+	cmpq	%rax, %rsi
+	jle	.LBB1079_62
+	lock		cmpxchgq	%rsi, (%rdx)
+	jne	.LBB1079_60
+.LBB1079_62:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jmp	.LBB1079_23
+.LBB1079_22:
+	xorl	%r14d, %r14d
+.LBB1079_23:
+	imulq	$248, %rbp, %r13
+	movq	%r14, 80(%rsp)
+	movq	%rcx, 88(%rsp)
+	movq	$0, 96(%rsp)
+	movq	$1, 176(%rsp)
+	leaq	(%r12,%r13), %rbx
+	movq	%rbx, 160(%rsp)
+	cmpq	$2, %rbp
+	jae	.LBB1079_72
+	vmovdqu64	176(%rsp), %zmm0
+	vmovdqu64	240(%rsp), %zmm1
+	vmovdqu64	344(%rsp), %zmm3
+	vmovdqu64	304(%rsp), %zmm2
+	movq	24(%rsp), %rax
+	movq	%r12, 32(%rsp)
+	movq	%rax, 48(%rsp)
+	movq	%rbx, 56(%rsp)
+	movq	%r12, %rbx
+	vmovdqu64	%zmm3, 632(%rsp)
+	vmovdqu64	%zmm2, 592(%rsp)
+	vmovdqu64	%zmm1, 528(%rsp)
+	vmovdqu64	%zmm0, 464(%rsp)
+	testq	%rbp, %rbp
+	je	.LBB1079_33
+.LBB1079_25:
+	leaq	248(%r12), %rbx
+	movq	%rbp, 16(%rsp)
+	.p2align	4
+.LBB1079_26:
+	movq	-248(%rbx), %rdx
+	movq	-240(%rbx), %rax
+	movq	-232(%rbx), %rcx
+	cmpq	$-1, %rdx
+	je	.LBB1079_63
+	cmpq	$-2, %rdx
+	je	.LBB1079_32
+	leaq	-224(%rbx), %rsi
+	leaq	(%rcx,%rcx,4), %rcx
+	vmovups	(%rsi), %zmm0
+	vmovups	16(%rsi), %zmm1
+	leaq	256(%rsp), %rsi
+	leaq	(%rax,%rcx,8), %rcx
+	vmovups	%zmm1, 192(%rsp)
+	vmovups	%zmm0, 176(%rsp)
+	vmovups	-144(%rbx), %zmm0
+	vmovups	-80(%rbx), %zmm1
+	vmovups	-64(%rbx), %zmm2
+	vmovups	%zmm2, 80(%rsi)
+	vmovups	%zmm1, 64(%rsi)
+	vmovups	%zmm0, (%rsi)
+	vmovups	176(%rsp), %zmm0
+	vmovups	240(%rsp), %zmm1
+	vmovups	336(%rsp), %zmm3
+	vmovups	304(%rsp), %zmm2
+	movq	%rax, 176(%rsp)
+	movq	%rdx, 192(%rsp)
+	movq	%rax, 184(%rsp)
+	movq	%rcx, 200(%rsp)
+	vmovups	%zmm3, 864(%rsp)
+	vmovups	%zmm2, 832(%rsp)
+	vmovups	%zmm1, 768(%rsp)
+	vmovups	%zmm0, 704(%rsp)
+.Ltmp21057:
+	leaq	80(%rsp), %rdi
+	leaq	176(%rsp), %rsi
+	vzeroupper
+	callq	_RNvXs0_NtNtCsc70TAahYccp_5alloc3vec11spec_extendINtB7_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowEINtB5_10SpecExtendBU_INtNtB7_9into_iter8IntoIterBU_EE11spec_extendBY_
+.Ltmp21058:
+	movq	464(%rsp), %rsi
+	movq	472(%rsp), %rax
+	xorl	%edx, %edx
+	leaq	472(%rsp), %rcx
+	leaq	480(%rsp), %rdi
+	movq	%r15, %rbp
+	decq	%rsi
+	cmpq	$2, %rsi
+	cmovbq	%rcx, %rax
+	movq	%r15, %rcx
+	cmovaeq	%rdi, %rcx
+	movl	$1, %edi
+	setae	%dl
+	cmovbq	%rdi, %rsi
+	shll	$4, %edx
+	movq	464(%rsp,%rdx), %r14
+	leaq	-1(%r14), %r15
+	cmpq	%rsi, %r15
+	je	.LBB1079_35
+.LBB1079_30:
+	vmovdqu64	704(%rsp), %zmm0
+	vmovdqu64	768(%rsp), %zmm1
+	vmovdqu64	832(%rsp), %zmm2
+	vmovdqu64	864(%rsp), %zmm3
+	imulq	$224, %r15, %rdx
+	incq	%r14
+	addq	$248, %rbx
+	addq	$-248, %r13
+	movq	%rbp, %r15
+	vmovdqu64	%zmm3, 160(%rax,%rdx)
+	vmovdqu64	%zmm2, 128(%rax,%rdx)
+	vmovdqu64	%zmm1, 64(%rax,%rdx)
+	vmovdqu64	%zmm0, (%rax,%rdx)
+	movq	%r14, (%rcx)
+	jne	.LBB1079_26
+	jmp	.LBB1079_31
+.LBB1079_35:
+.Ltmp21062:
+	movq	_RNvMs5_NtCscvKzUMJsXPo_11purrdf_core5smallINtB5_8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBZ_14row_checkpoint13RowCheckpointEj1_E4growBZ_@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	movl	$1, %ecx
+	movq	%rbp, %rdi
+	callq	*%rax
+.Ltmp21063:
+	cmpq	$3, 464(%rsp)
+	movq	472(%rsp), %rax
+	leaq	472(%rsp), %rcx
+	leaq	480(%rsp), %rdx
+	cmovbq	%rcx, %rax
+	leaq	464(%rsp), %rcx
+	cmovaeq	%rdx, %rcx
+	jmp	.LBB1079_30
+.LBB1079_63:
+	movq	%rbx, 40(%rsp)
+	movq	104(%rsp), %rdx
+	vmovdqu64	-224(%rbx), %zmm0
+	vmovdqu64	-208(%rbx), %zmm1
+	vmovdqu64	%zmm1, 40(%rdx)
+	vmovdqu64	%zmm0, 24(%rdx)
+	movq	%rax, 8(%rdx)
+	movq	%rcx, 16(%rdx)
+	movq	$-1, (%rdx)
+.Ltmp21052:
+	movq	16(%rsp), %rbp
+	leaq	32(%rsp), %rdi
+	vzeroupper
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCsc70TAahYccp_5alloc3vec9into_iter8IntoIterINtNtB4_6result6ResultTINtBG_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB20_7witness15RelationWitnessNtNtB20_14row_checkpoint13RowCheckpointEENtNtB20_5error9EvalErrorEEEB20_
+.Ltmp21053:
+.Ltmp21054:
+	leaq	464(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtB1s_14row_checkpoint13RowCheckpointEj1_EEB1s_
+.Ltmp21055:
+	leaq	80(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowEEB1c_
+	jmp	.LBB1079_66
+.LBB1079_31:
+	movq	160(%rsp), %rbx
+.LBB1079_32:
+	movq	16(%rsp), %rbp
+.LBB1079_33:
+	movq	%rbx, 40(%rsp)
+.Ltmp21070:
+	leaq	32(%rsp), %rdi
+	vzeroupper
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCsc70TAahYccp_5alloc3vec9into_iter8IntoIterINtNtB4_6result6ResultTINtBG_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB20_7witness15RelationWitnessNtNtB20_14row_checkpoint13RowCheckpointEENtNtB20_5error9EvalErrorEEEB20_
+.Ltmp21071:
+	vmovups	80(%rsp), %xmm0
+	vmovdqu64	464(%rsp), %zmm4
+	vmovups	528(%rsp), %zmm1
+	vmovups	592(%rsp), %zmm2
+	vmovdqu64	632(%rsp), %zmm3
+	movq	96(%rsp), %rax
+	movq	%rax, 192(%rsp)
+	movq	104(%rsp), %rax
+	vmovaps	%xmm0, 176(%rsp)
+	vmovdqu64	%zmm3, 368(%rsp)
+	vmovups	%zmm2, 328(%rsp)
+	vmovups	%zmm1, 264(%rsp)
+	vmovdqu64	%zmm4, 200(%rsp)
+	vmovups	176(%rsp), %zmm1
+	vmovdqu64	368(%rsp), %zmm0
+	vmovdqu64	240(%rsp), %zmm2
+	vmovups	%zmm1, (%rax)
+	vmovdqu64	304(%rsp), %zmm1
+	vmovdqu64	%zmm0, 192(%rax)
+	vmovdqu64	%zmm2, 64(%rax)
+	vmovdqu64	%zmm1, 128(%rax)
+.LBB1079_66:
+	addq	$936, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB1079_67:
+	.cfi_def_cfa_offset 992
+.Ltmp21031:
+	leaq	120(%rsp), %rdi
+	movl	$8, %ecx
+	movl	$248, %r8d
+	xorl	%esi, %esi
+	movq	%rbp, %rdx
+	callq	_RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECs7veJbOBHQwe_18purrdf_sparql_eval.llvm.14007767151641398955
+.Ltmp21032:
+	movq	120(%rsp), %rcx
+	movq	136(%rsp), %rdx
+	jmp	.LBB1079_13
+.LBB1079_69:
+.Ltmp21084:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip), %rax
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.1047(%rip), %rdi
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.1049(%rip), %rdx
+	movl	$47, %esi
+	callq	*%rax
+.Ltmp21085:
+	jmp	.LBB1079_71
+.LBB1079_70:
+	leaq	168(%rsp), %rax
+	movq	%rax, 176(%rsp)
+	movq	_RNvXsi_NtNtNtCs2k2z8Zem4rB_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rax
+	movq	%rax, 184(%rsp)
+	movq	%r15, 192(%rsp)
+	movq	%rax, 200(%rsp)
+.Ltmp21037:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt@GOTPCREL(%rip), %rax
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.603(%rip), %rdi
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.605(%rip), %rdx
+	leaq	176(%rsp), %rsi
+	callq	*%rax
+.Ltmp21038:
+.LBB1079_71:
+	ud2
+.LBB1079_72:
+.Ltmp21046:
+	movq	_RNvMs5_NtCscvKzUMJsXPo_11purrdf_core5smallINtB5_8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBZ_14row_checkpoint13RowCheckpointEj1_E4growBZ_@GOTPCREL(%rip), %rax
+	leaq	176(%rsp), %rdi
+	xorl	%esi, %esi
+	movq	%rbp, %rdx
+	xorl	%ecx, %ecx
+	vzeroupper
+	callq	*%rax
+.Ltmp21047:
+	vmovdqu64	176(%rsp), %zmm0
+	vmovdqu64	240(%rsp), %zmm1
+	vmovdqu64	344(%rsp), %zmm3
+	vmovdqu64	304(%rsp), %zmm2
+	movq	24(%rsp), %rax
+	movq	%r12, 32(%rsp)
+	movq	%rax, 48(%rsp)
+	movq	%rbx, 56(%rsp)
+	vmovdqu64	%zmm3, 632(%rsp)
+	vmovdqu64	%zmm2, 592(%rsp)
+	vmovdqu64	%zmm1, 528(%rsp)
+	vmovdqu64	%zmm0, 464(%rsp)
+	jmp	.LBB1079_25
+.LBB1079_74:
+	movl	$8, %edi
+	movq	%rbx, %rsi
+	jmp	.LBB1079_52
+.LBB1079_75:
+.Ltmp21048:
+	movq	%rax, %r15
+	movq	%rbp, 16(%rsp)
+.Ltmp21049:
+	leaq	176(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtB1s_14row_checkpoint13RowCheckpointEj1_EEB1s_
+.Ltmp21050:
+	movb	$1, %bl
+	jmp	.LBB1079_86
+.LBB1079_77:
+.Ltmp21051:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB1079_78:
+.Ltmp21064:
+	movq	%rax, %r15
+	movq	%rbx, 40(%rsp)
+.Ltmp21065:
+	leaq	704(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBG_14row_checkpoint13RowCheckpointEEBG_
+.Ltmp21066:
+	jmp	.LBB1079_83
+.LBB1079_79:
+.Ltmp21067:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB1079_80:
+.Ltmp21056:
+	movq	%rax, %r15
+	jmp	.LBB1079_85
+.LBB1079_81:
+.Ltmp21072:
+	movq	%rbp, 16(%rsp)
+	movq	%rax, %r15
+	jmp	.LBB1079_84
+.LBB1079_82:
+.Ltmp21059:
+	movq	%rax, %r15
+	movq	%rbx, 40(%rsp)
+.Ltmp21060:
+	leaq	704(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtBG_14row_checkpoint13RowCheckpointEEBG_
+.Ltmp21061:
+.LBB1079_83:
+.Ltmp21068:
+	leaq	32(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtCsc70TAahYccp_5alloc3vec9into_iter8IntoIterINtNtB4_6result6ResultTINtBG_3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB20_7witness15RelationWitnessNtNtB20_14row_checkpoint13RowCheckpointEENtNtB20_5error9EvalErrorEEEB20_
+.Ltmp21069:
+.LBB1079_84:
+.Ltmp21073:
+	leaq	464(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscvKzUMJsXPo_11purrdf_core5small8SmallVecATNtNtCs7veJbOBHQwe_18purrdf_sparql_eval7witness15RelationWitnessNtNtB1s_14row_checkpoint13RowCheckpointEj1_EEB1s_
+.Ltmp21074:
+.LBB1079_85:
+	xorl	%ebx, %ebx
+.LBB1079_86:
+.Ltmp21075:
+	leaq	80(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowEEB1c_
+.Ltmp21076:
+	movq	16(%rsp), %rbp
+	movq	72(%rsp), %r13
+	testb	%bl, %bl
+	movq	64(%rsp), %rbx
+	jne	.LBB1079_96
+	jmp	.LBB1079_88
+.LBB1079_89:
+.Ltmp21077:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB1079_90:
+.Ltmp21039:
+	movq	80(%rsp), %rdi
+	movq	%rax, %r15
+.Ltmp21040:
+	movq	%r14, %rsi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtNtNtCs6mr9Vv4y4sq_5rayon4iter7collect8consumer13CollectResultINtNtB4_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB2D_7witness15RelationWitnessNtNtB2D_14row_checkpoint13RowCheckpointEENtNtB2D_5error9EvalErrorEEEB2D_
+.Ltmp21041:
+	jmp	.LBB1079_93
+.LBB1079_91:
+.Ltmp21042:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB1079_92:
+.Ltmp21086:
+	movq	%rax, %r15
+.LBB1079_93:
+.Ltmp21087:
+	leaq	120(%rsp), %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecINtNtB4_6result6ResultTIBC_NtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB1D_7witness15RelationWitnessNtNtB1D_14row_checkpoint13RowCheckpointEENtNtB1D_5error9EvalErrorEEEB1D_
+.Ltmp21088:
+	jmp	.LBB1079_88
+.LBB1079_94:
+.Ltmp21089:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB1079_95:
+.Ltmp21045:
+	movq	%rax, %r15
+.LBB1079_96:
+	testq	%rbp, %rbp
+	je	.LBB1079_100
+	movq	112(%rsp), %rax
+	addq	%rbx, %r13
+	movq	%r12, %r14
+	leaq	-1(%rax,%r13), %rbx
+	.p2align	4
+.LBB1079_98:
+.Ltmp21078:
+	movq	%r14, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB1z_7witness15RelationWitnessNtNtB1z_14row_checkpoint13RowCheckpointEENtNtB1z_5error9EvalErrorEEB1z_
+.Ltmp21079:
+	addq	$248, %r14
+	addq	$-1, %rbx
+	jb	.LBB1079_98
+.LBB1079_100:
+	movq	24(%rsp), %rax
+	testq	%rax, %rax
+	jne	.LBB1079_101
+.LBB1079_88:
+	movq	%r15, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB1079_101:
+	imulq	$248, %rax, %rcx
+	movq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	movabsq	$9223372036854775807, %rdx
+	cmpq	%rdx, %rcx
+	cmovaeq	%rdx, %rcx
+	xorl	%esi, %esi
+	cmpq	%rcx, %rax
+	setns	%sil
+	addq	%rdx, %rsi
+	subq	%rcx, %rax
+	cmovoq	%rsi, %rax
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	cmpq	%fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF, %rax
+	jge	.LBB1079_103
+	movq	%rax, %fs:_RNvNCNKNvCs2911K1BwAFx_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601@TPOFF
+	.p2align	4
+.LBB1079_103:
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB1079_109
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+	jne	.LBB1079_103
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+	movq	%rcx, %rsi
+	negq	%rsi
+	lock		xaddq	%rsi, (%rax)
+	xorl	%eax, %eax
+	cmpq	%rcx, %rsi
+	setns	%al
+	addq	%rdx, %rax
+	subq	%rcx, %rsi
+	movq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe20PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %rcx
+	cmovoq	%rax, %rsi
+	movq	(%rcx), %rax
+	.p2align	4
+.LBB1079_106:
+	cmpq	%rax, %rsi
+	jge	.LBB1079_108
+	lock		cmpxchgq	%rsi, (%rcx)
+	jne	.LBB1079_106
+.LBB1079_108:
+	lock		decq	_RNvCs2911K1BwAFx_18purrdf_alloc_probe13PROCESS_STATE.llvm.6551227014246703601(%rip)
+.LBB1079_109:
+	movq	free@GOTPCREL(%rip), %rax
+	movq	%r12, %rdi
+	callq	*%rax
+	movq	%r15, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB1079_110:
+.Ltmp21080:
+	testq	%rbx, %rbx
+	je	.LBB1079_114
+	addq	$248, %r14
+	.p2align	4
+.LBB1079_112:
+.Ltmp21081:
+	movq	%r14, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6result6ResultTINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCs7veJbOBHQwe_18purrdf_sparql_eval8parallel9MintedRowETNtNtB1z_7witness15RelationWitnessNtNtB1z_14row_checkpoint13RowCheckpointEENtNtB1z_5error9EvalErrorEEB1z_
+.Ltmp21082:
+	addq	$248, %r14
+	decq	%rbx
+	jne	.LBB1079_112
+.LBB1079_114:
+	movq	24(%rsp), %rax
+	testq	%rax, %rax
+	je	.LBB1079_117
+	imulq	$248, %rax, %rsi
+	movl	$8, %edx
+	movq	%r12, %rdi
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.LBB1079_116:
+.Ltmp21083:
+.LBB1079_117:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end1079:

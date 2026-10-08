@@ -1,0 +1,124 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "optional-volatile-condition-interleaving",
+      "query": "SELECT ?tick WHERE { VALUES ?driver { 1 } OPTIONAL { VALUES ?y { 1 2 3 } BIND(<http://example.org/counter>(1) AS ?tick) FILTER(<http://example.org/counter>(1)>?tick) } }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tick"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "5",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      },
+      "count_callback": true
+    },
+    {
+      "name": "reduced-reassignment-separated-duplicates-unbound",
+      "query": "SELECT REDUCED ?x WHERE { VALUES ?x { 2 1 2 } BIND(IF(?x=2,0,1) AS ?x) }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "reduced-reassignment-separated-duplicates-bound",
+      "query": "SELECT REDUCED ?x WHERE { VALUES ?x { 2 1 2 } BIND(IF(?x=2,0,1) AS ?x) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "literal",
+              "0",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

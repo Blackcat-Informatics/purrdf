@@ -1,0 +1,806 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/baseline-dedup-normalized.s	2026-10-08 08:51:02.011012701 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-cost-body-review/candidate-dedup-normalized.s	2026-10-08 08:51:02.582003128 -0600
+@@ -47,7 +47,7 @@
+ 	cmpq	$6, %rax
+ 	jb	.LBBID_12
+ 	leaq	-3(%rax,%rax,2), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movabsq	$9223372036854775807, %rdx
+ 	movq	584(%rsp), %rdi
+ 	cmpq	%rdx, %rcx
+@@ -58,17 +58,17 @@
+ 	addq	%rdx, %rsi
+ 	subq	%rcx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_5
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_5:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_11
+ 	leaq	1(%rax), %rsi
+-	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_5
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rsi
+@@ -89,7 +89,7 @@
+ 	lock		cmpxchgq	%rsi, (%rcx)
+ 	jne	.LBBID_8
+ .LBBID_10:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_11:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -99,7 +99,7 @@
+ 	testq	%rax, %rax
+ 	jle	.LBBID_22
+ 	leaq	(%rax,%rax,2), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movabsq	$9223372036854775807, %rdx
+ 	movq	512(%rsp), %rdi
+ 	cmpq	%rdx, %rcx
+@@ -110,17 +110,17 @@
+ 	addq	%rdx, %rsi
+ 	subq	%rcx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_15
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_15:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_21
+ 	leaq	1(%rax), %rsi
+-	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_15
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rsi
+@@ -141,7 +141,7 @@
+ 	lock		cmpxchgq	%rsi, (%rcx)
+ 	jne	.LBBID_18
+ .LBBID_20:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_21:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -212,7 +212,7 @@
+ 	xorl	%r15d, %r15d
+ 	jmp	.LBBID_34
+ .LBBID_31:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_32:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -422,7 +422,7 @@
+ 	movq	8(%rsp), %r15
+ 	cmpq	$6, %rbx
+ 	jb	.LBBID_33
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	leaq	-8(,%rbx,8), %rcx
+ 	movabsq	$9223372036854775807, %rsi
+ 	cmpq	%rsi, %rcx
+@@ -433,20 +433,20 @@
+ 	addq	%rsi, %rdx
+ 	subq	%rcx, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_74
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ .LBBID_74:
+ 	movq	purrdf_alloc_probe::PROCESS_TROUGH_BYTES@GOTPCREL(%rip), %r8
+ 	movq	16(%rsp), %rdi
+ 	.p2align	4
+ .LBBID_75:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_32
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_75
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -638,7 +638,7 @@
+ 	jmp	.LBBID_104
+ 	.p2align	4
+ .LBBID_101:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_102:
+ 	vzeroupper
+ 	callq	*%r13
+@@ -653,7 +653,7 @@
+ 	jb	.LBBID_103
+ 	leaq	(%rbp,%rcx,8), %rdx
+ 	leaq	-8(,%rax,8), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	cmpq	%r14, %rcx
+ 	movq	8(%rdx), %rdi
+ 	cmovaeq	%r14, %rcx
+@@ -663,17 +663,17 @@
+ 	addq	%r14, %rsi
+ 	subq	%rcx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_107
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_107:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_102
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_107
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -700,7 +700,7 @@
+ 	shlq	$3, %rax
+ 	movabsq	$9223372036854775807, %rdx
+ 	leaq	(%rax,%rax,4), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	cmpq	%rdx, %rcx
+ 	cmovaeq	%rdx, %rcx
+ 	xorl	%esi, %esi
+@@ -709,17 +709,17 @@
+ 	addq	%rdx, %rsi
+ 	subq	%rcx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_115
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_115:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_121
+ 	leaq	1(%rax), %rsi
+-	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_115
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rsi
+@@ -740,7 +740,7 @@
+ 	lock		cmpxchgq	%rsi, (%rcx)
+ 	jne	.LBBID_118
+ .LBBID_120:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_121:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	movq	(%rsp), %rdi
+@@ -796,7 +796,7 @@
+ 	je	.LBBID_140
+ 	testq	%rsi, %rsi
+ 	je	.LBBID_140
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	xorl	%edx, %edx
+ 	movabsq	$9223372036854775807, %rcx
+ 	cmpq	%rsi, %rax
+@@ -804,17 +804,17 @@
+ 	addq	%rcx, %rdx
+ 	subq	%rsi, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_133
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_133:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_139
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_133
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rsi, %rdx
+@@ -835,7 +835,7 @@
+ 	lock		cmpxchgq	%rdx, (%rcx)
+ 	jne	.LBBID_136
+ .LBBID_138:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_139:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	movq	32(%rsp), %rdi
+@@ -906,7 +906,7 @@
+ 	jmp	.LBBID_153
+ 	.p2align	4
+ .LBBID_150:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_151:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -936,7 +936,7 @@
+ 	movq	-48(%rbp,%rax), %rcx
+ 	cmpq	$6, %rcx
+ 	jb	.LBBID_152
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	leaq	-8(,%rcx,8), %rcx
+ 	addq	%rbp, %rax
+ 	movq	-40(%rax), %rdi
+@@ -948,17 +948,17 @@
+ 	addq	%r15, %rsi
+ 	subq	%rcx, %rdx
+ 	cmovoq	%rsi, %rdx
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	jge	.LBBID_159
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_159:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_151
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_159
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -991,37 +991,37 @@
+ 	testq	%rax, %rax
+ 	je	.LBBID_295
+ 	movq	%rax, %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_ALLOCATIONS::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_ALLOCATIONS::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movq	$-1, %rdx
+ 	movabsq	$9223372036854775807, %rsi
+ 	incq	%rax
+ 	cmoveq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_ALLOCATIONS::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	movq	%fs:purrdf_alloc_probe::THREAD_REQUESTED_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_ALLOCATIONS::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	movq	%fs:purrdf_alloc_probe::THREAD_REQUESTED_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	addq	%r13, %rax
+ 	cmovbq	%rdx, %rax
+ 	cmpq	%rsi, %r13
+ 	movq	%rsi, %rdx
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_REQUESTED_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_REQUESTED_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	cmovbq	%r13, %rdx
+ 	addq	%rdx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_PEAK_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_PEAK_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jle	.LBBID_168
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_PEAK_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_PEAK_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ .LBBID_168:
+ 	movq	(%rsp), %r8
+ 	movq	208(%rsp), %r9
+ 	movq	312(%rsp), %r10
+ 	.p2align	4
+ .LBBID_169:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_176
+ 	leaq	1(%rax), %rsi
+-	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_169
+ 	movq	purrdf_alloc_probe::PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+ 	movq	purrdf_alloc_probe::PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rsi
+@@ -1045,7 +1045,7 @@
+ 	lock		cmpxchgq	%rsi, (%rdx)
+ 	jne	.LBBID_172
+ .LBBID_174:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jmp	.LBBID_176
+ .LBBID_175:
+ 	movl	$8, %ecx
+@@ -1138,7 +1138,7 @@
+ 	leaq	216(%rsp), %rdi
+ 	movq	%r15, %rsi
+ 	vzeroupper
+-	callq	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global> (.llvm.13412714042204560522)
++	callq	<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global> (.llvm.12908414067662811932)
+ .LtmpID:
+ 	movq	224(%rsp), %rcx
+ 	movq	24(%rsp), %rsi
+@@ -1155,7 +1155,7 @@
+ 	movabsq	$9223372036854775807, %r15
+ 	jmp	.LBBID_191
+ .LBBID_188:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_189:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -1185,7 +1185,7 @@
+ 	movq	-48(%rbp,%rax), %rcx
+ 	cmpq	$6, %rcx
+ 	jb	.LBBID_190
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	leaq	-8(,%rcx,8), %rcx
+ 	addq	%rbp, %rax
+ 	movq	-40(%rax), %rdi
+@@ -1197,17 +1197,17 @@
+ 	addq	%r15, %rsi
+ 	subq	%rcx, %rdx
+ 	cmovoq	%rsi, %rdx
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	jge	.LBBID_197
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_197:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_189
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_197
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -1234,7 +1234,7 @@
+ 	je	.LBBID_213
+ 	testq	%rsi, %rsi
+ 	je	.LBBID_213
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	xorl	%edx, %edx
+ 	movabsq	$9223372036854775807, %rcx
+ 	cmpq	%rsi, %rax
+@@ -1242,17 +1242,17 @@
+ 	addq	%rcx, %rdx
+ 	subq	%rsi, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_206
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_206:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_212
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_206
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rsi, %rdx
+@@ -1273,7 +1273,7 @@
+ 	lock		cmpxchgq	%rdx, (%rcx)
+ 	jne	.LBBID_209
+ .LBBID_211:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_212:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	movq	32(%rsp), %rdi
+@@ -1400,7 +1400,7 @@
+ 	jmp	.LBBID_227
+ 	.p2align	4
+ .LBBID_224:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_225:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -1415,7 +1415,7 @@
+ 	movq	8(%rbx,%rax), %rcx
+ 	cmpq	$6, %rcx
+ 	jb	.LBBID_226
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	leaq	-8(,%rcx,8), %rcx
+ 	addq	%rbx, %rax
+ 	movq	16(%rax), %rdi
+@@ -1427,17 +1427,17 @@
+ 	addq	%rbp, %rsi
+ 	subq	%rcx, %rdx
+ 	cmovoq	%rsi, %rdx
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	jge	.LBBID_230
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_230:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_225
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_230
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -1474,7 +1474,7 @@
+ 	movl	$8, %r12d
+ 	testq	%rcx, %rcx
+ 	je	.LBBID_250
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	xorl	%edx, %edx
+ 	movabsq	$9223372036854775807, %rsi
+ 	cmpq	%rcx, %rax
+@@ -1482,19 +1482,19 @@
+ 	addq	%rsi, %rdx
+ 	subq	%rcx, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_240
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ .LBBID_240:
+ 	movq	32(%rsp), %rdi
+ 	.p2align	4
+ .LBBID_241:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_247
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_241
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -1515,7 +1515,7 @@
+ 	lock		cmpxchgq	%rdx, (%rcx)
+ 	jne	.LBBID_244
+ .LBBID_246:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_247:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -1527,7 +1527,7 @@
+ .LBBID_249:
+ 	movq	<purrdf_alloc_probe::CountingAllocator as core::alloc::global::GlobalAlloc>::realloc@GOTPCREL(%rip), %rax
+ 	movq	32(%rsp), %rsi
+-	leaq	qualification_454_native_cost::GLOBAL (.llvm.11174181910260379007)(%rip), %rdi
++	leaq	qualification_454_native_cost::GLOBAL (.llvm.1577329767756756036)(%rip), %rdi
+ 	movl	$8, %edx
+ 	movq	%r13, %r8
+ 	vzeroupper
+@@ -1569,7 +1569,7 @@
+ 	jb	.LBBID_262
+ .LBBID_253:
+ 	leaq	-3(%rax,%rax,2), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movabsq	$9223372036854775807, %rdx
+ 	movq	432(%rsp), %rdi
+ 	cmpq	%rdx, %rcx
+@@ -1580,17 +1580,17 @@
+ 	addq	%rdx, %rsi
+ 	subq	%rcx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_255
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_255:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_261
+ 	leaq	1(%rax), %rsi
+-	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_255
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rsi
+@@ -1611,7 +1611,7 @@
+ 	lock		cmpxchgq	%rsi, (%rcx)
+ 	jne	.LBBID_258
+ .LBBID_260:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_261:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	vzeroupper
+@@ -1789,7 +1789,7 @@
+ 	ud2
+ .LBBID_294:
+ .LtmpID:
+-	movq	core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#1}>::{closure#0}>@GOTPCREL(%rip), %rax
++	movq	core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#1}>::{closure#0}>@GOTPCREL(%rip), %rax
+ 	movq	%r13, %rdi
+ 	movq	%r12, %rsi
+ 	vzeroupper
+@@ -1837,7 +1837,7 @@
+ 	callq	__rustc::__rust_dealloc
+ .LBBID_302:
+ 	leaq	112(%rsp), %rdi
+-	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#0}>>
++	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<std::collections::hash::map::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, usize>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#0}>>
+ 	leaq	216(%rsp), %rdi
+ .LBBID_303:
+ 	callq	core::ptr::drop_glue::<alloc::vec::Vec<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>>
+@@ -1865,7 +1865,7 @@
+ 	movq	%rax, (%rsp)
+ 	callq	core::ptr::drop_glue::<alloc::vec::in_place_drop::InPlaceDstDataSrcBufDrop<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>), purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+ 	leaq	112(%rsp), %rdi
+-	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId>::{closure#2}>>
++	callq	core::ptr::drop_glue::<core::iter::adapters::map::Map<alloc::vec::into_iter::IntoIter<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>)>, purrdf_sparql_eval::modifier::dedup<purrdf_core::ir::term::TermId, false>::{closure#2}>>
+ 	movq	8(%rsp), %rax
+ 	lock		decq	(%rax)
+ 	jne	.LBBID_336
+@@ -1883,7 +1883,7 @@
+ 	cmpq	$6, %rax
+ 	jb	.LBBID_319
+ 	leaq	-8(,%rax,8), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movabsq	$9223372036854775807, %rdx
+ 	cmpq	%rdx, %rcx
+ 	cmovaeq	%rdx, %rcx
+@@ -1893,17 +1893,17 @@
+ 	addq	%rdx, %rsi
+ 	subq	%rcx, %rax
+ 	cmovoq	%rsi, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_312
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_312:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_318
+ 	leaq	1(%rax), %rsi
+-	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rsi, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_312
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rsi
+@@ -1924,7 +1924,7 @@
+ 	lock		cmpxchgq	%rsi, (%rcx)
+ 	jne	.LBBID_315
+ .LBBID_317:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_318:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	movq	16(%rsp), %rdi
+@@ -1939,7 +1939,7 @@
+ 	movq	40(%rsp), %rsi
+ 	testq	%rsi, %rsi
+ 	je	.LBBID_332
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	xorl	%edx, %edx
+ 	movabsq	$9223372036854775807, %rcx
+ 	cmpq	%rsi, %rax
+@@ -1947,17 +1947,17 @@
+ 	addq	%rcx, %rdx
+ 	subq	%rsi, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_324
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_324:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_330
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_324
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rsi, %rdx
+@@ -1978,7 +1978,7 @@
+ 	lock		cmpxchgq	%rdx, (%rcx)
+ 	jne	.LBBID_327
+ .LBBID_329:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_330:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	movq	32(%rsp), %rdi
+@@ -2006,7 +2006,7 @@
+ 	cmpq	$6, %rax
+ 	jb	.LBBID_337
+ 	leaq	-3(%rax,%rax,2), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movq	432(%rsp), %rdi
+ 	cmpq	%rbx, %rcx
+ 	cmovaeq	%rbx, %rcx
+@@ -2016,17 +2016,17 @@
+ 	addq	%rbx, %rdx
+ 	subq	%rcx, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_341
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_341:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_347
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_341
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -2047,7 +2047,7 @@
+ 	lock		cmpxchgq	%rdx, (%rcx)
+ 	jne	.LBBID_344
+ .LBBID_346:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_347:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	callq	*%rax
+@@ -2065,7 +2065,7 @@
+ 	jle	.LBBID_338
+ .LBBID_348:
+ 	leaq	(%rax,%rax,2), %rcx
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	movq	360(%rsp), %rdi
+ 	cmpq	%rbx, %rcx
+ 	cmovaeq	%rbx, %rcx
+@@ -2075,17 +2075,17 @@
+ 	addq	%rbx, %rdx
+ 	subq	%rcx, %rax
+ 	cmovoq	%rdx, %rax
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rax
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rax
+ 	jge	.LBBID_350
+-	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rax, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_350:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_356
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_350
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx
+@@ -2106,7 +2106,7 @@
+ 	lock		cmpxchgq	%rdx, (%rcx)
+ 	jne	.LBBID_353
+ .LBBID_355:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_356:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	callq	*%rax
+@@ -2132,7 +2132,7 @@
+ 	jmp	.LBBID_364
+ 	.p2align	4
+ .LBBID_361:
+-	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		decq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ .LBBID_362:
+ 	movq	free@GOTPCREL(%rip), %rax
+ 	callq	*%rax
+@@ -2161,7 +2161,7 @@
+ 	movq	-48(%rbp,%rax), %rcx
+ 	cmpq	$6, %rcx
+ 	jb	.LBBID_363
+-	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	leaq	-8(,%rcx,8), %rcx
+ 	addq	%rbp, %rax
+ 	movq	-40(%rax), %rdi
+@@ -2173,17 +2173,17 @@
+ 	addq	%r15, %rsi
+ 	subq	%rcx, %rdx
+ 	cmovoq	%rsi, %rdx
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
+-	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF, %rdx
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_LIVE_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
++	cmpq	%fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF, %rdx
+ 	jge	.LBBID_370
+-	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.11284292287820896952)@TPOFF
++	movq	%rdx, %fs:purrdf_alloc_probe::THREAD_TROUGH_BYTES::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL (.llvm.6551227014246703601)@TPOFF
+ 	.p2align	4
+ .LBBID_370:
+-	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip), %rax
++	movq	purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip), %rax
+ 	testq	%rax, %rax
+ 	jns	.LBBID_362
+ 	leaq	1(%rax), %rdx
+-	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.11284292287820896952)(%rip)
++	lock		cmpxchgq	%rdx, purrdf_alloc_probe::PROCESS_STATE (.llvm.6551227014246703601)(%rip)
+ 	jne	.LBBID_370
+ 	movq	purrdf_alloc_probe::PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rax
+ 	movq	%rcx, %rdx

@@ -1,0 +1,843 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-native-ir/qualification_454_native_cost.qualification_454_native_cost.258b1530d971e06d-cgu.0.rcgu.ll:42963
+; purrdf_sparql_eval::eval::eval_node::<purrdf_core::ir::dataset::RdfDataset>
+define internal fastcc void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval9eval_nodeNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetECs3dQcT9XZUpl_29qualification_454_native_cost(ptr dead_on_unwind noalias nofree noundef nonnull writable align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) unnamed_addr #0 personality ptr @rust_eh_personality !guid !6489 {
+start:
+  %_25.i.i = alloca [96 x i8], align 8
+  %_24.sroa.6.i.i = alloca [32 x i8], align 8
+  %_18.i.i = alloca [96 x i8], align 8
+  %_17.sroa.6.i.i = alloca [32 x i8], align 8
+  %_8.i.i = alloca [96 x i8], align 8
+  %_7.sroa.6.i.i = alloca [32 x i8], align 8
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !6490)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !6493)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !6495)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !6498)
+  %0 = load i32, ptr %pattern, align 8, !range !672, !alias.scope !6500, !noalias !6501, !noundef !556
+  %1 = icmp ne i32 %0, 11
+  tail call void @llvm.assume(i1 %1)
+  %2 = add nsw i32 %0, -10
+  %3 = icmp samesign ugt i32 %0, 9
+  %narrow.i.i = select i1 %3, i32 %2, i32 1
+  switch i32 %narrow.i.i, label %bb1.i.i [
+    i32 0, label %bb22.i.i
+    i32 1, label %bb21.i.i
+    i32 2, label %bb19.i.i
+    i32 3, label %bb17.i.i
+    i32 4, label %bb4.i.i
+    i32 5, label %bb15.i.i
+    i32 6, label %bb18.i.i
+    i32 7, label %bb7.i.i
+    i32 8, label %bb14.i.i
+    i32 9, label %bb16.i.i
+    i32 10, label %bb5.i.i
+    i32 11, label %bb20.i.i
+    i32 12, label %bb8.i.i
+    i32 13, label %bb12.i.i
+    i32 14, label %bb40.i.i
+    i32 15, label %bb40.i.i
+    i32 16, label %bb9.i.i
+    i32 17, label %bb6.i.i
+    i32 18, label %bb2.i.i
+    i32 19, label %bb13.i.i
+    i32 20, label %bb3.i.i
+  ]
+
+bb1.i.i:                                          ; preds = %start
+  unreachable
+
+bb22.i.i:                                         ; preds = %start
+  call void @llvm.lifetime.start.p0(ptr nonnull %_7.sroa.6.i.i)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_8.i.i), !noalias !6505
+  %4 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_178.i.i = load ptr, ptr %4, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %5 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %_177.i.i = load i64, ptr %5, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+; call purrdf_sparql_eval::bgp::eval_bgp::<purrdf_core::ir::dataset::RdfDataset>
+  call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval3bgp8eval_bgpNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([96 x i8]) align 8 captures(address) dereferenceable(96) %_8.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_178.i.i, i64 noundef %_177.i.i, ptr noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6506
+  %6 = load i64, ptr %_8.i.i, align 8, !range !740, !noalias !6505, !noundef !556
+  %.not34.i.i = icmp eq i64 %6, -1
+  %7 = getelementptr inbounds nuw i8, ptr %_8.i.i, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_7.sroa.6.i.i, ptr noundef nonnull align 8 dereferenceable(32) %7, i64 32, i1 false), !noalias !6505
+  br i1 %.not34.i.i, label %bb84.i.i, label %bb83.i.i
+
+bb21.i.i:                                         ; preds = %start
+  %subject.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 32
+  %object.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 88
+  call void @llvm.lifetime.start.p0(ptr nonnull %_17.sroa.6.i.i)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_18.i.i), !noalias !6505
+; call purrdf_sparql_eval::path::eval_path::<purrdf_core::ir::dataset::RdfDataset>
+  call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4path9eval_pathNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([96 x i8]) align 8 captures(none) dereferenceable(96) %_18.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(56) %subject.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(56) %object.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6506
+  %8 = load i64, ptr %_18.i.i, align 8, !range !740, !noalias !6505, !noundef !556
+  %.not33.i.i = icmp eq i64 %8, -1
+  %9 = getelementptr inbounds nuw i8, ptr %_18.i.i, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_17.sroa.6.i.i, ptr noundef nonnull align 8 dereferenceable(32) %9, i64 32, i1 false), !noalias !6505
+  br i1 %.not33.i.i, label %bb86.i.i, label %bb85.i.i
+
+bb19.i.i:                                         ; preds = %start
+  %10 = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %11 = load ptr, ptr %10, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not31.i.i = icmp eq ptr %11, null
+  br i1 %.not31.i.i, label %bb81.i.i, label %bb82.i.i, !prof !612
+
+bb17.i.i:                                         ; preds = %start
+  %12 = getelementptr inbounds nuw i8, ptr %pattern, i64 72
+  %13 = load ptr, ptr %12, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not28.i.i = icmp eq ptr %13, null
+  br i1 %.not28.i.i, label %bb79.i.i, label %bb80.i.i, !prof !612
+
+bb4.i.i:                                          ; preds = %start
+  %14 = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %15 = load ptr, ptr %14, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not26.i.i = icmp eq ptr %15, null
+  br i1 %.not26.i.i, label %bb57.i.i, label %bb58.i.i, !prof !612
+
+bb15.i.i:                                         ; preds = %start
+  %16 = getelementptr inbounds nuw i8, ptr %pattern, i64 72
+  %17 = load ptr, ptr %16, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not25.i.i = icmp eq ptr %17, null
+  br i1 %.not25.i.i, label %bb75.i.i, label %bb76.i.i, !prof !612
+
+bb18.i.i:                                         ; preds = %start
+  %18 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_166.i.i = load ptr, ptr %18, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %19 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %_165.i.i = load i64, ptr %19, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+; call purrdf_sparql_eval::binop::eval_union::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop10eval_unionNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_166.i.i, i64 noundef range(i64 0, 64051194700380388) %_165.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb7.i.i:                                          ; preds = %start
+  %20 = getelementptr inbounds nuw i8, ptr %pattern, i64 32
+  %21 = load ptr, ptr %20, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not24.i.i = icmp eq ptr %21, null
+  br i1 %.not24.i.i, label %bb63.i.i, label %bb64.i.i, !prof !612
+
+bb14.i.i:                                         ; preds = %start
+  %22 = getelementptr inbounds nuw i8, ptr %pattern, i64 88
+  %23 = load ptr, ptr %22, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not23.i.i = icmp eq ptr %23, null
+  br i1 %.not23.i.i, label %bb73.i.i, label %bb74.i.i, !prof !612
+
+bb16.i.i:                                         ; preds = %start
+  %24 = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %25 = load ptr, ptr %24, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not21.i.i = icmp eq ptr %25, null
+  br i1 %.not21.i.i, label %bb77.i.i, label %bb78.i.i, !prof !612
+
+bb5.i.i:                                          ; preds = %start
+  %26 = getelementptr inbounds nuw i8, ptr %pattern, i64 32
+  %27 = load ptr, ptr %26, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not20.i.i = icmp eq ptr %27, null
+  br i1 %.not20.i.i, label %bb59.i.i, label %bb60.i.i, !prof !612
+
+bb20.i.i:                                         ; preds = %start
+  call void @llvm.lifetime.start.p0(ptr nonnull %_24.sroa.6.i.i)
+  call void @llvm.lifetime.start.p0(ptr nonnull %_25.i.i), !noalias !6505
+  %28 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_174.i.i = load ptr, ptr %28, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %29 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %_173.i.i = load i64, ptr %29, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+  %30 = getelementptr inbounds nuw i8, ptr %pattern, i64 40
+  %_196.i.i = load ptr, ptr %30, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %31 = getelementptr inbounds nuw i8, ptr %pattern, i64 48
+  %_195.i.i = load i64, ptr %31, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+; call purrdf_sparql_eval::modifier::eval_values::<purrdf_core::ir::dataset::RdfDataset>
+  call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier11eval_valuesNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([96 x i8]) align 8 captures(none) dereferenceable(96) %_25.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_174.i.i, i64 noundef %_173.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_196.i.i, i64 noundef %_195.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6506
+  %32 = load i64, ptr %_25.i.i, align 8, !range !740, !noalias !6505, !noundef !556
+  %.not19.i.i = icmp eq i64 %32, -1
+  %33 = getelementptr inbounds nuw i8, ptr %_25.i.i, i64 8
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_24.sroa.6.i.i, ptr noundef nonnull align 8 dereferenceable(32) %33, i64 32, i1 false), !noalias !6505
+  br i1 %.not19.i.i, label %bb88.i.i, label %bb87.i.i
+
+bb8.i.i:                                          ; preds = %start
+  %34 = getelementptr inbounds nuw i8, ptr %pattern, i64 32
+  %35 = load ptr, ptr %34, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not18.i.i = icmp eq ptr %35, null
+  br i1 %.not18.i.i, label %bb65.i.i, label %bb66.i.i, !prof !612
+
+bb12.i.i:                                         ; preds = %start
+  %36 = getelementptr inbounds nuw i8, ptr %pattern, i64 32
+  %37 = load ptr, ptr %36, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not17.i.i = icmp eq ptr %37, null
+  br i1 %.not17.i.i, label %bb69.i.i, label %bb70.i.i, !prof !612
+
+bb9.i.i:                                          ; preds = %start
+  %38 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %39 = load ptr, ptr %38, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not15.i.i = icmp eq ptr %39, null
+  br i1 %.not15.i.i, label %bb67.i.i, label %bb68.i.i, !prof !612
+
+bb6.i.i:                                          ; preds = %start
+  %40 = getelementptr inbounds nuw i8, ptr %pattern, i64 56
+  %41 = load ptr, ptr %40, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not14.i.i = icmp eq ptr %41, null
+  br i1 %.not14.i.i, label %bb61.i.i, label %bb62.i.i, !prof !612
+
+bb2.i.i:                                          ; preds = %start
+  %call.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+; call purrdf_sparql_eval::property_fn_eval::eval_property_function::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval16property_fn_eval22eval_property_functionNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(72) %call.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb13.i.i:                                         ; preds = %start
+  %42 = getelementptr inbounds nuw i8, ptr %pattern, i64 88
+  %43 = load ptr, ptr %42, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not12.i.i = icmp eq ptr %43, null
+  br i1 %.not12.i.i, label %bb71.i.i, label %bb72.i.i, !prof !612
+
+bb3.i.i:                                          ; preds = %start
+  %44 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %45 = load ptr, ptr %44, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not.i.i = icmp eq ptr %45, null
+  br i1 %.not.i.i, label %bb55.i.i, label %bb56.i.i, !prof !612
+
+bb83.i.i:                                         ; preds = %bb22.i.i
+  %_181.sroa.5.0._8.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_8.i.i, i64 40
+  %_184.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 48
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(56) %_184.sroa.5.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(56) %_181.sroa.5.0._8.sroa_idx.i.i, i64 56, i1 false), !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_8.i.i), !noalias !6505
+  %_184.sroa.4.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_184.sroa.4.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_7.sroa.6.i.i, i64 32, i1 false), !noalias !6508
+  %46 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  store i64 %6, ptr %46, align 8, !alias.scope !6509, !noalias !6508
+  store i64 1, ptr %_0, align 8, !alias.scope !6509, !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_7.sroa.6.i.i)
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb84.i.i:                                         ; preds = %bb22.i.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_8.i.i), !noalias !6505
+  %_6.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_6.sroa.5.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_7.sroa.6.i.i, i64 32, i1 false), !noalias !6508
+  %47 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  store i64 -1, ptr %47, align 8, !alias.scope !6509, !noalias !6508
+  store i64 0, ptr %_0, align 8, !alias.scope !6509, !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_7.sroa.6.i.i)
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb85.i.i:                                         ; preds = %bb21.i.i
+  %_188.sroa.5.0._18.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_18.i.i, i64 40
+  %_191.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 48
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(56) %_191.sroa.5.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(56) %_188.sroa.5.0._18.sroa_idx.i.i, i64 56, i1 false), !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_18.i.i), !noalias !6505
+  %_191.sroa.4.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_191.sroa.4.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_17.sroa.6.i.i, i64 32, i1 false), !noalias !6508
+  %48 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  store i64 %8, ptr %48, align 8, !alias.scope !6509, !noalias !6508
+  store i64 1, ptr %_0, align 8, !alias.scope !6509, !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_17.sroa.6.i.i)
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb86.i.i:                                         ; preds = %bb21.i.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_18.i.i), !noalias !6505
+  %_16.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_16.sroa.5.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_17.sroa.6.i.i, i64 32, i1 false), !noalias !6508
+  %49 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  store i64 -1, ptr %49, align 8, !alias.scope !6509, !noalias !6508
+  store i64 0, ptr %_0, align 8, !alias.scope !6509, !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_17.sroa.6.i.i)
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb82.i.i:                                         ; preds = %bb19.i.i
+  %50 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %51 = load ptr, ptr %50, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not32.i.i = icmp eq ptr %51, null
+  br i1 %.not32.i.i, label %bb89.i.i, label %bb90.i.i, !prof !612
+
+bb81.i.i:                                         ; preds = %bb19.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb90.i.i:                                         ; preds = %bb82.i.i
+; call purrdf_sparql_eval::binop::eval_join::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop9eval_joinNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %11, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %51, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb89.i.i:                                         ; preds = %bb82.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb80.i.i:                                         ; preds = %bb17.i.i
+  %52 = getelementptr inbounds nuw i8, ptr %pattern, i64 80
+  %53 = load ptr, ptr %52, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not29.i.i = icmp eq ptr %53, null
+  br i1 %.not29.i.i, label %bb91.i.i, label %bb92.i.i, !prof !612
+
+bb79.i.i:                                         ; preds = %bb17.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb92.i.i:                                         ; preds = %bb80.i.i
+  %54 = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %55 = load i64, ptr %54, align 8, !range !5346, !alias.scope !6500, !noalias !6501, !noundef !556
+  %.not30.i.i = icmp eq i64 %55, -1
+  %..i.i = select i1 %.not30.i.i, ptr null, ptr %54
+; call purrdf_sparql_eval::binop::eval_left_join::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop14eval_left_joinNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %13, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %53, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable_or_null(64) %..i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb91.i.i:                                         ; preds = %bb80.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb58.i.i:                                         ; preds = %bb4.i.i
+  %56 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %57 = load ptr, ptr %56, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not27.i.i = icmp eq ptr %57, null
+  br i1 %.not27.i.i, label %bb103.i.i, label %bb104.i.i, !prof !612
+
+bb57.i.i:                                         ; preds = %bb4.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb104.i.i:                                        ; preds = %bb58.i.i
+; call purrdf_sparql_eval::binop::eval_application::<purrdf_core::ir::dataset::RdfDataset, ()>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop16eval_applicationNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %15, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %57, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb103.i.i:                                        ; preds = %bb58.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb76.i.i:                                         ; preds = %bb15.i.i
+  %expr.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+; call purrdf_sparql_eval::expr::eval_filter::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4expr11eval_filterNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(64) %expr.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %17, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb75.i.i:                                         ; preds = %bb15.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb64.i.i:                                         ; preds = %bb7.i.i
+  %name.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+; call purrdf_sparql_eval::modifier::eval_graph_with::<purrdf_core::ir::dataset::RdfDataset, ()>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier15eval_graph_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(24) %name.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %21, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb63.i.i:                                         ; preds = %bb7.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb74.i.i:                                         ; preds = %bb14.i.i
+  %expression.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %variable.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 72
+; call purrdf_sparql_eval::expr::eval_extend::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4expr11eval_extendNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %23, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(16) %variable.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(64) %expression.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb73.i.i:                                         ; preds = %bb14.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb78.i.i:                                         ; preds = %bb16.i.i
+  %58 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %59 = load ptr, ptr %58, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not22.i.i = icmp eq ptr %59, null
+  br i1 %.not22.i.i, label %bb96.i.i, label %bb97.i.i, !prof !612
+
+bb77.i.i:                                         ; preds = %bb16.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb97.i.i:                                         ; preds = %bb78.i.i
+; call purrdf_sparql_eval::binop::eval_minus::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop10eval_minusNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %25, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %59, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb96.i.i:                                         ; preds = %bb78.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb60.i.i:                                         ; preds = %bb5.i.i
+  %name5.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %60 = getelementptr inbounds nuw i8, ptr %pattern, i64 40
+  %61 = load i8, ptr %60, align 8, !range !748, !alias.scope !6500, !noalias !6501, !noundef !556
+  %_97.i.i = trunc nuw i8 %61 to i1
+; call purrdf_sparql_eval::remote::eval_service::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval6remote12eval_serviceNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(24) %name5.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %27, i1 noundef zeroext %_97.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb59.i.i:                                         ; preds = %bb5.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb87.i.i:                                         ; preds = %bb20.i.i
+  %_199.sroa.5.0._25.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_25.i.i, i64 40
+  %_202.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 48
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(56) %_202.sroa.5.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(56) %_199.sroa.5.0._25.sroa_idx.i.i, i64 56, i1 false), !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_25.i.i), !noalias !6505
+  %_202.sroa.4.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_202.sroa.4.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_24.sroa.6.i.i, i64 32, i1 false), !noalias !6508
+  %62 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  store i64 %32, ptr %62, align 8, !alias.scope !6509, !noalias !6508
+  store i64 1, ptr %_0, align 8, !alias.scope !6509, !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_24.sroa.6.i.i)
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb88.i.i:                                         ; preds = %bb20.i.i
+  call void @llvm.lifetime.end.p0(ptr nonnull %_25.i.i), !noalias !6505
+  %_23.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %_0, i64 16
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %_23.sroa.5.0..sroa_idx.i.i, ptr noundef nonnull align 8 dereferenceable(32) %_24.sroa.6.i.i, i64 32, i1 false), !noalias !6508
+  %63 = getelementptr inbounds nuw i8, ptr %_0, i64 8
+  store i64 -1, ptr %63, align 8, !alias.scope !6509, !noalias !6508
+  store i64 0, ptr %_0, align 8, !alias.scope !6509, !noalias !6508
+  call void @llvm.lifetime.end.p0(ptr nonnull %_24.sroa.6.i.i)
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb66.i.i:                                         ; preds = %bb8.i.i
+  %64 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_231.i.i = load ptr, ptr %64, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %65 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %_230.i.i = load i64, ptr %65, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+; call purrdf_sparql_eval::modifier::eval_order_by::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier13eval_order_byNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %35, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_231.i.i, i64 noundef %_230.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb65.i.i:                                         ; preds = %bb8.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb70.i.i:                                         ; preds = %bb12.i.i
+  %66 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_223.i.i = load ptr, ptr %66, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %67 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %_222.i.i = load i64, ptr %67, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+; call purrdf_sparql_eval::modifier::eval_project::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier12eval_projectNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %37, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_223.i.i, i64 noundef range(i64 0, 576460752303423488) %_222.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb69.i.i:                                         ; preds = %bb12.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb40.i.i:                                         ; preds = %start, %start
+  %inner.sroa.0.0.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %68 = load ptr, ptr %inner.sroa.0.0.i.i, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not16.i.i = icmp eq ptr %68, null
+  br i1 %.not16.i.i, label %bb101.i.i, label %bb102.i.i, !prof !612
+
+bb102.i.i:                                        ; preds = %bb40.i.i
+; call purrdf_sparql_eval::modifier::eval_dedup_with::<purrdf_core::ir::dataset::RdfDataset, false>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier15eval_dedup_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetKb0_EB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %68, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb101.i.i:                                        ; preds = %bb40.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb68.i.i:                                         ; preds = %bb9.i.i
+  %69 = getelementptr inbounds nuw i8, ptr %pattern, i64 32
+  %_76.i.i = load i64, ptr %69, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+  %70 = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %_77.0.i.i = load i64, ptr %70, align 8, !range !679, !alias.scope !6500, !noalias !6501, !noundef !556
+  %71 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_77.1.i.i = load i64, ptr %71, align 8, !alias.scope !6500, !noalias !6501
+; call purrdf_sparql_eval::modifier::eval_slice::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier10eval_sliceNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %39, i64 noundef %_76.i.i, i64 noundef range(i64 0, 2) %_77.0.i.i, i64 %_77.1.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb67.i.i:                                         ; preds = %bb9.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb62.i.i:                                         ; preds = %bb6.i.i
+  %72 = getelementptr inbounds nuw i8, ptr %pattern, i64 16
+  %_235.i.i = load ptr, ptr %72, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %73 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %_234.i.i = load i64, ptr %73, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+  %74 = getelementptr inbounds nuw i8, ptr %pattern, i64 40
+  %_239.i.i = load ptr, ptr %74, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+  %75 = getelementptr inbounds nuw i8, ptr %pattern, i64 48
+  %_238.i.i = load i64, ptr %75, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+; call purrdf_sparql_eval::modifier::eval_group_with::<purrdf_core::ir::dataset::RdfDataset, ()>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier15eval_group_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %41, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_235.i.i, i64 noundef range(i64 0, 576460752303423488) %_234.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %_239.i.i, i64 noundef range(i64 0, 76861433640456466) %_238.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb61.i.i:                                         ; preds = %bb6.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb72.i.i:                                         ; preds = %bb13.i.i
+  %element.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 72
+  %expression6.i.i = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %76 = getelementptr inbounds nuw i8, ptr %pattern, i64 96
+  %77 = load ptr, ptr %76, align 8, !alias.scope !6500, !noalias !6501, !noundef !556
+  %.not13.i.i = icmp eq ptr %77, null
+  %.35.i.i = select i1 %.not13.i.i, ptr null, ptr %76
+; call purrdf_sparql_eval::cdt_unfold::eval_unfold::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval10cdt_unfold11eval_unfoldNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(none) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %43, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(64) %expression6.i.i, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(16) %element.i.i, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable_or_null(16) %.35.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48, !noalias !6507
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb71.i.i:                                         ; preds = %bb13.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb56.i.i:                                         ; preds = %bb3.i.i
+  %78 = getelementptr inbounds nuw i8, ptr %pattern, i64 24
+  %79 = load ptr, ptr %78, align 8, !alias.scope !6500, !noalias !6501, !align !750, !noundef !556
+  %.not11.i.i = icmp eq ptr %79, null
+  br i1 %.not11.i.i, label %bb105.i.i, label %bb106.i.i, !prof !612
+
+bb55.i.i:                                         ; preds = %bb3.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+bb106.i.i:                                        ; preds = %bb56.i.i
+  %80 = getelementptr inbounds nuw i8, ptr %pattern, i64 8
+  %_248.i.i = load ptr, ptr %80, align 8, !alias.scope !6500, !noalias !6501, !nonnull !556, !noundef !556
+; call purrdf_sparql_eval::binop::eval_apply::<purrdf_core::ir::dataset::RdfDataset>
+  tail call void @_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop10eval_applyNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %pattern, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %45, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(144) %79, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(88) %_248.i.i, ptr noalias nofree noundef nonnull align 16 dereferenceable(944) %ctx) #48
+  br label %_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit
+
+bb105.i.i:                                        ; preds = %bb56.i.i
+; call core::option::expect_failed
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_3520ecca3c1410886a1093aa5b6a9ef0, i64 noundef 48, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_5859ee0f5c59513e79ab854290ba9f13) #50, !noalias !6501
+  unreachable
+
+_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval14eval_node_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuECs3dQcT9XZUpl_29qualification_454_native_cost.exit: ; preds = %bb106.i.i, %bb72.i.i, %bb62.i.i, %bb68.i.i, %bb102.i.i, %bb70.i.i, %bb66.i.i, %bb88.i.i, %bb87.i.i, %bb60.i.i, %bb97.i.i, %bb74.i.i, %bb64.i.i, %bb76.i.i, %bb104.i.i, %bb92.i.i, %bb90.i.i, %bb86.i.i, %bb85.i.i, %bb84.i.i, %bb83.i.i, %bb2.i.i, %bb18.i.i
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4eval9eval_nodeNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetECs3dQcT9XZUpl_29qualification_454_native_cost:
+.Lfunc_begin22:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$144, %rsp
+	.cfi_def_cfa_offset 160
+	.cfi_offset %rbx, -16
+	movl	(%rsi), %eax
+	movl	$1, %ecx
+	movq	%rdx, %r10
+	leaq	.LJTI22_0(%rip), %rdx
+	subl	$10, %eax
+	cmovael	%eax, %ecx
+	movslq	(%rdx,%rcx,4), %rcx
+	addq	%rdx, %rcx
+	jmpq	*%rcx
+.LBB22_34:
+	movq	8(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	%r10, %rcx
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier15eval_dedup_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetKb0_EB4_@GOTPCREL(%rip)
+.LBB22_36:
+	.cfi_def_cfa_offset 160
+	movq	24(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	32(%rsi), %rcx
+	movq	8(%rsi), %r8
+	movq	16(%rsi), %r9
+	movq	_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier10eval_sliceNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip), %rax
+	movq	%r10, (%rsp)
+	callq	*%rax
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB22_28:
+	.cfi_def_cfa_offset 160
+	movq	16(%rsi), %rax
+	movq	24(%rsi), %rdx
+	movq	40(%rsi), %rcx
+	movq	48(%rsi), %r8
+	movq	_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier11eval_valuesNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip), %r11
+	movq	%rdi, %rbx
+	leaq	48(%rsp), %rdi
+	movq	%r10, %r9
+	movq	%rax, %rsi
+	callq	*%r11
+	jmp	.LBB22_4
+.LBB22_14:
+	movq	8(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	16(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	movq	%r10, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop16eval_applicationNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuEB4_@GOTPCREL(%rip)
+.LBB22_30:
+	.cfi_def_cfa_offset 160
+	movq	32(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	16(%rsi), %rcx
+	movq	24(%rsi), %r8
+	movq	%r10, %r9
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier13eval_order_byNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_23:
+	.cfi_def_cfa_offset 160
+	movq	8(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	16(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	movq	%r10, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop10eval_minusNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_8:
+	.cfi_def_cfa_offset 160
+	movq	8(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	16(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	movq	%r10, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop9eval_joinNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_11:
+	.cfi_def_cfa_offset 160
+	movq	72(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	80(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	xorl	%r8d, %r8d
+	cmpl	$-1, 8(%rsi)
+	leaq	8(%rsi), %rax
+	movq	%r10, %r9
+	cmovneq	%rax, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop14eval_left_joinNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_19:
+	.cfi_def_cfa_offset 160
+	movq	32(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	leaq	8(%rsi), %rdx
+	movq	%r10, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier15eval_graph_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuEB4_@GOTPCREL(%rip)
+.LBB22_3:
+	.cfi_def_cfa_offset 160
+	movq	16(%rsi), %rax
+	movq	24(%rsi), %rdx
+	movq	_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval3bgp8eval_bgpNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip), %r8
+	movq	%rdi, %rbx
+	leaq	48(%rsp), %rdi
+	movq	%r10, %rcx
+	movq	%rax, %rsi
+	callq	*%r8
+	jmp	.LBB22_4
+.LBB22_7:
+	movq	_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4path9eval_pathNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip), %r9
+	movq	%rdi, %rbx
+	leaq	32(%rsi), %rax
+	leaq	88(%rsi), %rcx
+	leaq	48(%rsp), %rdi
+	movq	%rsi, %rdx
+	movq	%r10, %r8
+	movq	%rax, %rsi
+	callq	*%r9
+.LBB22_4:
+	vmovups	56(%rsp), %ymm0
+	movq	48(%rsp), %rax
+	vmovups	%ymm0, 16(%rsp)
+	cmpq	$-1, %rax
+	je	.LBB22_29
+	vmovups	112(%rsp), %ymm1
+	vmovups	88(%rsp), %ymm0
+	vmovups	%ymm1, 72(%rbx)
+	vmovups	16(%rsp), %ymm1
+	vmovups	%ymm0, 48(%rbx)
+	vmovups	%ymm1, 16(%rbx)
+	movq	%rax, 8(%rbx)
+	movq	$1, (%rbx)
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB22_29:
+	.cfi_def_cfa_offset 160
+	vmovups	16(%rsp), %ymm0
+	vmovups	%ymm0, 16(%rbx)
+	movq	$-1, 8(%rbx)
+	movq	$0, (%rbx)
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB22_39:
+	.cfi_def_cfa_offset 160
+	movq	56(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	16(%rsi), %rcx
+	movq	24(%rsi), %r8
+	movq	40(%rsi), %r9
+	movq	48(%rsi), %rax
+	movq	_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier15eval_group_withNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetuEB4_@GOTPCREL(%rip), %rbx
+	movq	%r10, 8(%rsp)
+	movq	%rax, (%rsp)
+	callq	*%rbx
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB22_17:
+	.cfi_def_cfa_offset 160
+	movq	72(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	leaq	8(%rsi), %rdx
+	movq	%r10, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4expr11eval_filterNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_32:
+	.cfi_def_cfa_offset 160
+	movq	32(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	16(%rsi), %rcx
+	movq	24(%rsi), %r8
+	movq	%r10, %r9
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval8modifier12eval_projectNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_1:
+	.cfi_def_cfa_offset 160
+	movq	16(%rsi), %rdx
+	movq	24(%rsi), %rcx
+	movq	%r10, %r8
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop10eval_unionNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_43:
+	.cfi_def_cfa_offset 160
+	movq	16(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	24(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	movq	8(%rsi), %r8
+	movq	%r10, %r9
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval5binop10eval_applyNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_26:
+	.cfi_def_cfa_offset 160
+	movq	32(%rsi), %rcx
+	testq	%rcx, %rcx
+	je	.LBB22_45
+	movzbl	40(%rsi), %r8d
+	leaq	8(%rsi), %rdx
+	movq	%r10, %r9
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval6remote12eval_serviceNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_21:
+	.cfi_def_cfa_offset 160
+	movq	88(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	leaq	8(%rsi), %r8
+	leaq	72(%rsi), %rcx
+	movq	%r10, %r9
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval4expr11eval_extendNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_2:
+	.cfi_def_cfa_offset 160
+	addq	$8, %rsi
+	movq	%r10, %rdx
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	jmpq	*_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval16property_fn_eval22eval_property_functionNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip)
+.LBB22_41:
+	.cfi_def_cfa_offset 160
+	movq	88(%rsi), %rdx
+	testq	%rdx, %rdx
+	je	.LBB22_45
+	movq	96(%rsi), %rax
+	movq	_RINvNtCs2BgzKN3npkD_18purrdf_sparql_eval10cdt_unfold11eval_unfoldNtNtNtCshJhwfSmZINs_11purrdf_core2ir7dataset10RdfDatasetEB4_@GOTPCREL(%rip), %rbx
+	leaq	96(%rsi), %r9
+	leaq	72(%rsi), %r8
+	leaq	8(%rsi), %rcx
+	movq	%r10, (%rsp)
+	testq	%rax, %rax
+	cmoveq	%rax, %r9
+	callq	*%rbx
+	addq	$144, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.LBB22_45:
+	.cfi_def_cfa_offset 160
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_3520ecca3c1410886a1093aa5b6a9ef0(%rip), %rdi
+	leaq	.Lalloc_5859ee0f5c59513e79ab854290ba9f13(%rip), %rdx
+	movl	$48, %esi
+	callq	*%rax
+.Lfunc_end22:

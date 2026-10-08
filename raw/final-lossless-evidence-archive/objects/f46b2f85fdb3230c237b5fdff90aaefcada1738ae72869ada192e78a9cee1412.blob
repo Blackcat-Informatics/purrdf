@@ -1,0 +1,40 @@
+[
+  {
+    "package_id": "registry+https://github.com/rust-lang/crates.io-index#pyo3-ffi@0.29.0",
+    "linked_libs": [],
+    "linked_paths": [],
+    "cfgs": [
+      "Py_3_8",
+      "Py_3_9",
+      "Py_3_10",
+      "Py_3_11",
+      "Py_3_12",
+      "Py_3_13",
+      "Py_LIMITED_API",
+      "const_is_null",
+      "fn_ptr_eq",
+      "from_bytes_with_nul_error",
+      "cfg_select"
+    ],
+    "env": []
+  },
+  {
+    "package_id": "registry+https://github.com/rust-lang/crates.io-index#pyo3@0.29.0",
+    "linked_libs": [],
+    "linked_paths": [],
+    "cfgs": [
+      "Py_3_8",
+      "Py_3_9",
+      "Py_3_10",
+      "Py_3_11",
+      "Py_3_12",
+      "Py_3_13",
+      "Py_LIMITED_API",
+      "const_is_null",
+      "fn_ptr_eq",
+      "from_bytes_with_nul_error",
+      "cfg_select"
+    ],
+    "env": []
+  }
+]

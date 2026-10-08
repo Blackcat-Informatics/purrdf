@@ -1,0 +1,13 @@
+# Current lower-repair production-wheel qualification
+
+VERDICT: PASS for the admitted current production wheel and28 irreducible Python boundary cases. Full emitted native-cost acceptance remains NOT MET; no whole-completion/publication claim.
+
+Actual session86805 terminal0 observed through tools.write_stdin. Driver.exit0/all seven child commands0 retained under `/opt/purrdf-454-current-qualification-20261008/final-lower-python-1`. Scope purrdf-454-final-lower-python-20261008.scope invocation45e6d066dd3247bf8a9a5c2d0687bb97 inactive/dead; lane FREE. Live active64GiB/SwapMax0 snapshot and actual compiler process/cgroup argv retained: O3/codegen1 with inherited kache wrapper; private active SDK/target/build/tmp/jobs8. Release assertions/overflow follow matched production defaults, not a fabricated ON profile. No timing claim.
+
+Bound staged source2f3ee2d75b30145ac053be6587223d892b26368c, HEADfd963c263/MERGE_HEADdf2cec88 unchanged with full tracked source readback0/no unstaged shipping source. One actual locked PEP517 production wheel was built, installed with exact no-deps reinstall into the existing WTvenv and exercised using Python-I. No editable auto-resync or former wheel promotion.
+
+Actual wheel `purrdf-3.0.1-cp313-abi3-linux_x86_64.whl` SHA256 `5ade0a6d37b298357e9434dc1f454eecd50b28f6d9768d9a6907defc3a064f7e`. Installed real native module is WT `bindings/python/.venv/lib/python3.13/site-packages/purrdf/purrdf_native.abi3.so`,35872960 bytes, SHA256 `f37e9346b7eabd85f43b51b02b955029c9255ed838939319d43955005c105075`. Identity probe binds the isolated absolute Python3.13 interpreter and exact wheel/native/package paths. All27 purrdf package entries match wheel bytes before and after execution; identity JSON comparison and wheel/source/binding readbacks0.
+
+Actual collection28 and execution28PASS/0fail/0skip/0xfail/0xpass:15 existing contextual/host-boundary cases and13 existing lazy row-protocol cases. Three expected ConjunctiveGraph deprecation warnings are retained, not failures or hidden skips. Exact raw outputs/commands/exits are retained. No broad Python/vendor/oracle/WASM/benchmark suite ran; source semantics are owned by the separately qualified160 Rust controls and unchanged prior typed Shapes/parser evidence.
+
+Docs/current Rust and wheel acceptance now PASS in their scopes. Fresh native/host production-checksum admitted artifacts and exact32 untimed records still require independent full body/ABI/frame/capture/drop/old-arm/numeric/worker proof. Frozen300e body failures remain intact; annotations and passing boundary tests are not native-cost acceptance. No cost phase, source edit, commit, push or external repository action occurred.

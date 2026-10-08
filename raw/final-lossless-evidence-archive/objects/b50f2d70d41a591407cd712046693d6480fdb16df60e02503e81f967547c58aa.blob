@@ -1,0 +1,55 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:3093
+; <core::option::Option<&purrdf_sparql_eval::property_fn::DepthPlacement>>::map_or_else::<alloc::string::String, <alloc::string::String>::new, purrdf_sparql_eval::property_fn::validate_exclusion::{closure#3}>
+define internal fastcc void @_RINvMNtCs2k2z8Zem4rB_4core6optionINtB3_6OptionRNtNtCs7veJbOBHQwe_18purrdf_sparql_eval11property_fn14DepthPlacementE11map_or_elseNtNtCsc70TAahYccp_5alloc6string6StringNvMB24_B22_3newNCNvBL_18validate_exclusions1_0EBN_(ptr dead_on_unwind noalias nofree noundef nonnull writable align 8 captures(none) dereferenceable(24) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable_or_null(32) %1) unnamed_addr #2 personality ptr @rust_eh_personality !guid !1940 {
+  %3 = alloca [16 x i8], align 8
+  %4 = icmp eq ptr %1, null
+  br i1 %4, label %8, label %5
+
+5:                                                ; preds = %2
+  %6 = getelementptr inbounds nuw i8, ptr %1, i64 24
+  call void @llvm.lifetime.start.p0(ptr nonnull %3), !noalias !1941
+  store ptr %6, ptr %3, align 8, !noalias !1941
+  %7 = getelementptr inbounds nuw i8, ptr %3, i64 8
+  store ptr @_RNvXsi_NtNtNtCs2k2z8Zem4rB_4core3fmt3num3impjNtB9_7Display3fmt, ptr %7, align 8, !noalias !1941
+; call alloc::fmt::format::format_inner
+  call void @_RNvNvNtCsc70TAahYccp_5alloc3fmt6format12format_inner(ptr noalias nofree noundef nonnull sret([24 x i8]) align 8 captures(none) dereferenceable(24) %0, ptr noundef nonnull @anon.d93b065c2763fb0250ff43fdc196fa20.897, ptr noundef nonnull %3)
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !noalias !1941
+  br label %11
+
+8:                                                ; preds = %2
+  store i64 0, ptr %0, align 8, !alias.scope !1945
+  %9 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store ptr inttoptr (i64 1 to ptr), ptr %9, align 8, !alias.scope !1945
+  %10 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  store i64 0, ptr %10, align 8, !alias.scope !1945
+  br label %11
+
+11:                                               ; preds = %8, %5
+  ret void
+}
+
+ASSEMBLY
+_RINvMNtCs2k2z8Zem4rB_4core6optionINtB3_6OptionRNtNtCs7veJbOBHQwe_18purrdf_sparql_eval11property_fn14DepthPlacementE11map_or_elseNtNtCsc70TAahYccp_5alloc6string6StringNvMB24_B22_3newNCNvBL_18validate_exclusions1_0EBN_:
+.Lfunc_begin5:
+	.cfi_startproc
+	testq	%rsi, %rsi
+	je	.LBB5_2
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 32
+	movq	_RNvXsi_NtNtNtCs2k2z8Zem4rB_4core3fmt3num3impjNtB9_7Display3fmt@GOTPCREL(%rip), %rax
+	addq	$24, %rsi
+	leaq	8(%rsp), %rdx
+	movq	%rsi, 8(%rsp)
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.897(%rip), %rsi
+	movq	%rax, 16(%rsp)
+	movq	_RNvNvNtCsc70TAahYccp_5alloc3fmt6format12format_inner@GOTPCREL(%rip), %rax
+	callq	*%rax
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB5_2:
+	movq	$0, (%rdi)
+	movq	$1, 8(%rdi)
+	movq	$0, 16(%rdi)
+	retq
+.Lfunc_end5:

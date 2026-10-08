@@ -1,0 +1,381 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-extended-ir/qualification_454_native_cost.purrdf_sparql_eval-0ecc65cc8c2d1ea3.purrdf_sparql_eval.85e4f8f062a88157-cgu.0.rcgu.o.rcgu.ll:387405
+; core::slice::sort::unstable::ipnsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+define void @_RINvNtNtNtCs2k2z8Zem4rB_4core5slice4sort8unstable7ipnsortTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtB8_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB6_SBT_20sort_unstable_by_keyjNCINvNtB26_8modifier10eval_groupNtNtNtB10_2ir7dataset10RdfDatasetEs1_0E0EB26_(ptr noalias nofree noundef nonnull align 8 %0, i64 noundef range(i64 0, 128102389400760776) %1, ptr noalias nofree readnone align 8 captures(none) %2) unnamed_addr #10 personality ptr @rust_eh_personality !guid !46803 {
+  %4 = icmp samesign ult i64 %1, 2
+  br i1 %4, label %.loopexit, label %5
+
+5:                                                ; preds = %3
+  %6 = getelementptr i8, ptr %0, i64 112
+  %7 = load i64, ptr %6, align 8, !noundef !1641
+  %8 = getelementptr i8, ptr %0, i64 40
+  %9 = load i64, ptr %8, align 8, !noundef !1641
+  %10 = icmp ult i64 %7, %9
+  %11 = icmp eq i64 %1, 2
+  br i1 %10, label %13, label %12
+
+12:                                               ; preds = %5
+  br i1 %11, label %.loopexit7, label %.preheader9
+
+13:                                               ; preds = %5
+  br i1 %11, label %.loopexit7, label %.preheader
+
+.preheader9:                                      ; preds = %12, %20
+  %14 = phi i64 [ %18, %20 ], [ %7, %12 ]
+  %15 = phi i64 [ %21, %20 ], [ 2, %12 ]
+  %16 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %15
+  %17 = getelementptr i8, ptr %16, i64 40
+  %18 = load i64, ptr %17, align 8, !noundef !1641
+  %19 = icmp ult i64 %18, %14
+  br i1 %19, label %.loopexit7, label %20
+
+20:                                               ; preds = %.preheader9
+  %21 = add nuw nsw i64 %15, 1
+  %22 = icmp eq i64 %21, %1
+  br i1 %22, label %.loopexit8, label %.preheader9
+
+.preheader:                                       ; preds = %13, %29
+  %23 = phi i64 [ %27, %29 ], [ %7, %13 ]
+  %24 = phi i64 [ %30, %29 ], [ 2, %13 ]
+  %25 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %24
+  %26 = getelementptr i8, ptr %25, i64 40
+  %27 = load i64, ptr %26, align 8, !noundef !1641
+  %28 = icmp ult i64 %27, %23
+  br i1 %28, label %29, label %.loopexit7
+
+29:                                               ; preds = %.preheader
+  %30 = add nuw nsw i64 %24, 1
+  %31 = icmp eq i64 %30, %1
+  br i1 %31, label %.loopexit8, label %.preheader
+
+.loopexit7:                                       ; preds = %.preheader9, %.preheader, %13, %12
+  %32 = phi i64 [ 2, %12 ], [ 2, %13 ], [ %24, %.preheader ], [ %15, %.preheader9 ]
+  %33 = icmp samesign ule i64 %32, %1
+  tail call void @llvm.assume(i1 %33)
+  %34 = icmp eq i64 %32, %1
+  br i1 %34, label %.loopexit8, label %35
+
+.loopexit8:                                       ; preds = %20, %29, %.loopexit7
+  br i1 %10, label %53, label %.loopexit
+
+35:                                               ; preds = %.loopexit7
+  %36 = or i64 %1, 1
+  %37 = tail call range(i64 7, 64) i64 @llvm.ctlz.i64(i64 %36, i1 true)
+  %38 = trunc nuw nsw i64 %37 to i32
+  %39 = shl nuw nsw i32 %38, 1
+  %40 = xor i32 %39, 126
+; call core::slice::sort::unstable::quicksort::quicksort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+  tail call fastcc void @_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort8unstable9quicksort9quicksortTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB17_20sort_unstable_by_keyjNCINvNtB2k_8modifier10eval_groupNtNtNtB1e_2ir7dataset10RdfDatasetEs1_0E0EB2k_(ptr noalias nofree noundef nonnull align 8 %0, i64 noundef %1, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable_or_null(72) null, i32 noundef %40)
+  br label %.loopexit
+
+.loopexit.loopexit.unr-lcssa:                     ; preds = %58
+  %lcmp.mod.not = icmp eq i64 %xtraiter, 0
+  br i1 %lcmp.mod.not, label %.loopexit, label %.epil.preheader
+
+.epil.preheader:                                  ; preds = %.loopexit.loopexit.unr-lcssa, %53
+  %.epil.init = phi i64 [ 0, %53 ], [ %99, %.loopexit.loopexit.unr-lcssa ]
+  %lcmp.mod40 = icmp ne i64 %xtraiter, 0
+  tail call void @llvm.assume(i1 %lcmp.mod40)
+  br label %41
+
+41:                                               ; preds = %41, %.epil.preheader
+  %42 = phi i64 [ %52, %41 ], [ %.epil.init, %.epil.preheader ]
+  %epil.iter = phi i64 [ %epil.iter.next, %41 ], [ 0, %.epil.preheader ]
+  %43 = xor i64 %42, -1
+  %44 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %42
+  %45 = getelementptr [72 x i8], ptr %55, i64 %43
+  %46 = load <8 x i64>, ptr %44, align 8, !alias.scope !46804, !noalias !46818
+  %47 = load <8 x i64>, ptr %45, align 8, !alias.scope !46820, !noalias !46829
+  store <8 x i64> %47, ptr %44, align 8, !alias.scope !46804, !noalias !46818
+  store <8 x i64> %46, ptr %45, align 8, !alias.scope !46820, !noalias !46829
+  %48 = getelementptr inbounds nuw i8, ptr %44, i64 64
+  %49 = getelementptr inbounds nuw i8, ptr %45, i64 64
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46830)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46832)
+  %50 = load i64, ptr %48, align 8, !alias.scope !46834, !noalias !46835
+  %51 = load i64, ptr %49, align 8, !alias.scope !46836, !noalias !46837
+  store i64 %51, ptr %48, align 8, !alias.scope !46834, !noalias !46835
+  store i64 %50, ptr %49, align 8, !alias.scope !46836, !noalias !46837
+  %52 = add nuw nsw i64 %42, 1
+  %epil.iter.next = add i64 %epil.iter, 1
+  %epil.iter.cmp.not = icmp eq i64 %epil.iter.next, %xtraiter
+  br i1 %epil.iter.cmp.not, label %.loopexit, label %41, !llvm.loop !46838
+
+.loopexit:                                        ; preds = %.loopexit.loopexit.unr-lcssa, %41, %35, %.loopexit8, %3
+  ret void
+
+53:                                               ; preds = %.loopexit8
+  %54 = lshr i64 %1, 1
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46829)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46818)
+  %55 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %1
+  %56 = add nsw i64 %54, -1
+  %xtraiter = and i64 %54, 3
+  %57 = icmp ult i64 %56, 3
+  br i1 %57, label %.epil.preheader, label %.new
+
+.new:                                             ; preds = %53
+  %unroll_iter = and i64 %54, 72057594037927932
+  br label %58
+
+58:                                               ; preds = %58, %.new
+  %59 = phi i64 [ 0, %.new ], [ %99, %58 ]
+  %niter = phi i64 [ 0, %.new ], [ %niter.next.3, %58 ]
+  %60 = xor i64 %59, -1
+  %61 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %59
+  %62 = getelementptr [72 x i8], ptr %55, i64 %60
+  %63 = load <8 x i64>, ptr %61, align 8, !alias.scope !46804, !noalias !46818
+  %64 = load <8 x i64>, ptr %62, align 8, !alias.scope !46820, !noalias !46829
+  store <8 x i64> %64, ptr %61, align 8, !alias.scope !46804, !noalias !46818
+  store <8 x i64> %63, ptr %62, align 8, !alias.scope !46820, !noalias !46829
+  %65 = getelementptr inbounds nuw i8, ptr %61, i64 64
+  %66 = getelementptr inbounds nuw i8, ptr %62, i64 64
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46830)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46832)
+  %67 = load i64, ptr %65, align 8, !alias.scope !46834, !noalias !46835
+  %68 = load i64, ptr %66, align 8, !alias.scope !46836, !noalias !46837
+  store i64 %68, ptr %65, align 8, !alias.scope !46834, !noalias !46835
+  store i64 %67, ptr %66, align 8, !alias.scope !46836, !noalias !46837
+  %69 = xor i64 %59, -2
+  %70 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %59
+  %71 = getelementptr inbounds nuw i8, ptr %70, i64 72
+  %72 = getelementptr [72 x i8], ptr %55, i64 %69
+  %73 = load <8 x i64>, ptr %71, align 8, !alias.scope !46804, !noalias !46818
+  %74 = load <8 x i64>, ptr %72, align 8, !alias.scope !46820, !noalias !46829
+  store <8 x i64> %74, ptr %71, align 8, !alias.scope !46804, !noalias !46818
+  store <8 x i64> %73, ptr %72, align 8, !alias.scope !46820, !noalias !46829
+  %75 = getelementptr inbounds nuw i8, ptr %70, i64 136
+  %76 = getelementptr inbounds nuw i8, ptr %72, i64 64
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46839)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46841)
+  %77 = load i64, ptr %75, align 8, !alias.scope !46843, !noalias !46844
+  %78 = load i64, ptr %76, align 8, !alias.scope !46845, !noalias !46846
+  store i64 %78, ptr %75, align 8, !alias.scope !46843, !noalias !46844
+  store i64 %77, ptr %76, align 8, !alias.scope !46845, !noalias !46846
+  %79 = xor i64 %59, -3
+  %80 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %59
+  %81 = getelementptr inbounds nuw i8, ptr %80, i64 144
+  %82 = getelementptr [72 x i8], ptr %55, i64 %79
+  %83 = load <8 x i64>, ptr %81, align 8, !alias.scope !46804, !noalias !46818
+  %84 = load <8 x i64>, ptr %82, align 8, !alias.scope !46820, !noalias !46829
+  store <8 x i64> %84, ptr %81, align 8, !alias.scope !46804, !noalias !46818
+  store <8 x i64> %83, ptr %82, align 8, !alias.scope !46820, !noalias !46829
+  %85 = getelementptr inbounds nuw i8, ptr %80, i64 208
+  %86 = getelementptr inbounds nuw i8, ptr %82, i64 64
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46847)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46849)
+  %87 = load i64, ptr %85, align 8, !alias.scope !46851, !noalias !46852
+  %88 = load i64, ptr %86, align 8, !alias.scope !46853, !noalias !46854
+  store i64 %88, ptr %85, align 8, !alias.scope !46851, !noalias !46852
+  store i64 %87, ptr %86, align 8, !alias.scope !46853, !noalias !46854
+  %89 = xor i64 %59, -4
+  %90 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %59
+  %91 = getelementptr inbounds nuw i8, ptr %90, i64 216
+  %92 = getelementptr [72 x i8], ptr %55, i64 %89
+  %93 = load <8 x i64>, ptr %91, align 8, !alias.scope !46804, !noalias !46818
+  %94 = load <8 x i64>, ptr %92, align 8, !alias.scope !46820, !noalias !46829
+  store <8 x i64> %94, ptr %91, align 8, !alias.scope !46804, !noalias !46818
+  store <8 x i64> %93, ptr %92, align 8, !alias.scope !46820, !noalias !46829
+  %95 = getelementptr inbounds nuw i8, ptr %90, i64 280
+  %96 = getelementptr inbounds nuw i8, ptr %92, i64 64
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46855)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !46857)
+  %97 = load i64, ptr %95, align 8, !alias.scope !46859, !noalias !46860
+  %98 = load i64, ptr %96, align 8, !alias.scope !46861, !noalias !46862
+  store i64 %98, ptr %95, align 8, !alias.scope !46859, !noalias !46860
+  store i64 %97, ptr %96, align 8, !alias.scope !46861, !noalias !46862
+  %99 = add nuw nsw i64 %59, 4
+  %niter.next.3 = add i64 %niter, 4
+  %niter.ncmp.3 = icmp eq i64 %niter.next.3, %unroll_iter
+  br i1 %niter.ncmp.3, label %.loopexit.loopexit.unr-lcssa, label %58
+}
+
+ASSEMBLY
+_RINvNtNtNtCs2k2z8Zem4rB_4core5slice4sort8unstable7ipnsortTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtB8_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB6_SBT_20sort_unstable_by_keyjNCINvNtB26_8modifier10eval_groupNtNtNtB10_2ir7dataset10RdfDatasetEs1_0E0EB26_:
+.Lfunc_begin967:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r13
+	.cfi_def_cfa_offset 32
+	pushq	%r12
+	.cfi_def_cfa_offset 40
+	pushq	%rbx
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -48
+	.cfi_offset %r12, -40
+	.cfi_offset %r13, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	cmpq	$2, %rsi
+	jb	.LBB967_18
+	movq	40(%rdi), %rax
+	movq	112(%rdi), %rcx
+	movl	$2, %edx
+	cmpq	%rax, %rcx
+	jae	.LBB967_2
+	cmpq	$2, %rsi
+	je	.LBB967_10
+	leaq	184(%rdi), %r8
+	movq	%rcx, %r9
+	.p2align	4
+.LBB967_8:
+	movq	%r9, %r10
+	movq	(%r8), %r9
+	cmpq	%r10, %r9
+	jae	.LBB967_10
+	incq	%rdx
+	addq	$72, %r8
+	cmpq	%rdx, %rsi
+	jne	.LBB967_8
+	jmp	.LBB967_11
+.LBB967_2:
+	cmpq	$2, %rsi
+	jne	.LBB967_3
+.LBB967_10:
+	cmpq	%rsi, %rdx
+	je	.LBB967_11
+	movq	%rsi, %rax
+	orq	$1, %rax
+	xorl	%edx, %edx
+	lzcntq	%rax, %rcx
+	addl	%ecx, %ecx
+	xorl	$126, %ecx
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r13
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	jmp	_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort8unstable9quicksort9quicksortTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB17_20sort_unstable_by_keyjNCINvNtB2k_8modifier10eval_groupNtNtNtB1e_2ir7dataset10RdfDatasetEs1_0E0EB2k_
+.LBB967_3:
+	.cfi_def_cfa_offset 48
+	leaq	184(%rdi), %r8
+	movq	%rcx, %r9
+	.p2align	4
+.LBB967_4:
+	movq	%r9, %r10
+	movq	(%r8), %r9
+	cmpq	%r10, %r9
+	jb	.LBB967_10
+	incq	%rdx
+	addq	$72, %r8
+	cmpq	%rdx, %rsi
+	jne	.LBB967_4
+.LBB967_11:
+	cmpq	%rax, %rcx
+	jae	.LBB967_18
+	movq	%rsi, %rcx
+	shrq	%rcx
+	movl	%ecx, %eax
+	leaq	-1(%rcx), %rdx
+	andl	$3, %eax
+	cmpq	$3, %rdx
+	jae	.LBB967_19
+	xorl	%edx, %edx
+	jmp	.LBB967_16
+.LBB967_19:
+	leaq	(%rsi,%rsi,8), %rdx
+	movabsq	$72057594037927932, %r9
+	movabsq	$2305843009213693950, %r11
+	movabsq	$2305843009213693949, %rbx
+	movabsq	$2305843009213693948, %r14
+	andq	%r9, %rcx
+	leaq	280(%rdi), %r9
+	leaq	(%rdi,%rdx,8), %r8
+	leaq	-8(%rdi,%rdx,8), %r10
+	xorl	%edx, %edx
+	.p2align	4
+.LBB967_20:
+	vmovups	-280(%r9), %zmm0
+	vmovups	-64(%r10), %zmm1
+	vmovups	%zmm1, -280(%r9)
+	vmovups	%zmm0, -64(%r10)
+	movq	-216(%r9), %r15
+	movq	(%r10), %r12
+	movq	%r12, -216(%r9)
+	movq	%r15, (%r10)
+	movq	%rdx, %r15
+	xorq	%r11, %r15
+	addq	$-288, %r10
+	leaq	(%r15,%r15,8), %r15
+	vmovups	-208(%r9), %zmm0
+	vmovups	(%r8,%r15,8), %zmm1
+	vmovups	%zmm1, -208(%r9)
+	vmovups	%zmm0, (%r8,%r15,8)
+	movq	-144(%r9), %r12
+	movq	64(%r8,%r15,8), %r13
+	movq	%r13, -144(%r9)
+	movq	%r12, 64(%r8,%r15,8)
+	movq	%rdx, %r15
+	xorq	%rbx, %r15
+	leaq	(%r15,%r15,8), %r15
+	vmovups	-136(%r9), %zmm0
+	vmovups	(%r8,%r15,8), %zmm1
+	vmovups	%zmm1, -136(%r9)
+	vmovups	%zmm0, (%r8,%r15,8)
+	movq	-72(%r9), %r12
+	movq	64(%r8,%r15,8), %r13
+	movq	%r13, -72(%r9)
+	movq	%r12, 64(%r8,%r15,8)
+	movq	%rdx, %r15
+	xorq	%r14, %r15
+	addq	$4, %rdx
+	leaq	(%r15,%r15,8), %r15
+	vmovups	-64(%r9), %zmm0
+	vmovups	(%r8,%r15,8), %zmm1
+	vmovups	%zmm1, -64(%r9)
+	vmovups	%zmm0, (%r8,%r15,8)
+	movq	64(%r8,%r15,8), %r13
+	movq	(%r9), %r12
+	movq	%r13, (%r9)
+	addq	$288, %r9
+	movq	%r12, 64(%r8,%r15,8)
+	cmpq	%rdx, %rcx
+	jne	.LBB967_20
+	testq	%rax, %rax
+	je	.LBB967_18
+.LBB967_16:
+	shlq	$3, %rdx
+	shlq	$3, %rsi
+	shll	$3, %eax
+	leaq	(%rdx,%rdx,8), %rdx
+	leaq	(%rsi,%rsi,8), %rsi
+	leaq	(%rax,%rax,8), %rax
+	subq	%rdx, %rsi
+	leaq	64(%rdi,%rdx), %rcx
+	leaq	-8(%rsi,%rdi), %rdx
+	xorl	%esi, %esi
+	.p2align	4
+.LBB967_17:
+	vmovups	-64(%rcx,%rsi), %zmm0
+	vmovups	-64(%rdx), %zmm1
+	vmovups	%zmm1, -64(%rcx,%rsi)
+	vmovups	%zmm0, -64(%rdx)
+	movq	(%rcx,%rsi), %rdi
+	movq	(%rdx), %r8
+	movq	%r8, (%rcx,%rsi)
+	movq	%rdi, (%rdx)
+	addq	$72, %rsi
+	addq	$-72, %rdx
+	cmpq	%rsi, %rax
+	jne	.LBB967_17
+.LBB967_18:
+	popq	%rbx
+	.cfi_def_cfa_offset 40
+	popq	%r12
+	.cfi_def_cfa_offset 32
+	popq	%r13
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.Lfunc_end967:

@@ -1,0 +1,7 @@
+[package]
+name = "qualification-454-fixture-freezer"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[dependencies]
+purrdf-lex = { path = "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/lex" }

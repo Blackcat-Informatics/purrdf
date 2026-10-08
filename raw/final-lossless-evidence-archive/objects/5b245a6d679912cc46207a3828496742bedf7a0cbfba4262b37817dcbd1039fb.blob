@@ -1,0 +1,180 @@
+	.att_syntax
+	.file	"purrdf_deflate.6eefda1deb5ae95f-cgu.0"
+	.section	.text.unlikely._RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecmE8grow_oneCs9wvUfjgHxjT_14purrdf_deflate,"ax",@progbits
+	.globl	_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecmE8grow_oneCs9wvUfjgHxjT_14purrdf_deflate
+	.prefalign	4, .Lfunc_end0, nop
+	.type	_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecmE8grow_oneCs9wvUfjgHxjT_14purrdf_deflate,@function
+_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecmE8grow_oneCs9wvUfjgHxjT_14purrdf_deflate:
+.Lfunc_begin0:
+	.cfi_startproc
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 48
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	(%rdi), %rsi
+	movq	8(%rdi), %rdx
+	movl	$4, %r14d
+	movq	%rdi, %rbx
+	movq	%rsp, %rdi
+	leaq	(%rsi,%rsi), %rax
+	cmpq	$5, %rax
+	cmovaeq	%rax, %r14
+	movq	%r14, %rcx
+	callq	_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs9wvUfjgHxjT_14purrdf_deflate
+	cmpl	$1, (%rsp)
+	je	.LBB0_2
+	movq	8(%rsp), %rax
+	movq	%rax, 8(%rbx)
+	movq	%r14, (%rbx)
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	retq
+.LBB0_2:
+	.cfi_def_cfa_offset 48
+	movq	8(%rsp), %rdi
+	movq	16(%rsp), %rsi
+	movq	_RNvNtCsc70TAahYccp_5alloc7raw_vec12handle_error@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end0:
+	.size	_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecmE8grow_oneCs9wvUfjgHxjT_14purrdf_deflate, .Lfunc_end0-_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecmE8grow_oneCs9wvUfjgHxjT_14purrdf_deflate
+	.cfi_endproc
+
+	.section	.text.unlikely._RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs9wvUfjgHxjT_14purrdf_deflate,"ax",@progbits
+	.prefalign	4, .Lfunc_end1, nop
+	.type	_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs9wvUfjgHxjT_14purrdf_deflate,@function
+_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs9wvUfjgHxjT_14purrdf_deflate:
+.Lfunc_begin1:
+	.cfi_startproc
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%rbx
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	leaq	(,%rcx,4), %r14
+	shrq	$62, %rcx
+	movabsq	$9223372036854775804, %rcx
+	movl	$1, %r15d
+	movq	%rdi, %rbx
+	setne	%al
+	cmpq	%rcx, %r14
+	seta	%cl
+	orb	%al, %cl
+	je	.LBB1_2
+	movl	$8, %eax
+	xorl	%r14d, %r14d
+	jmp	.LBB1_16
+.LBB1_2:
+	testq	%rsi, %rsi
+	je	.LBB1_4
+	movq	_RNvXCscZeUgkR9L6J_18purrdf_alloc_probeNtB2_17CountingAllocatorNtNtNtCs2k2z8Zem4rB_4core5alloc6global11GlobalAlloc7realloc@GOTPCREL(%rip), %r9
+	shlq	$2, %rsi
+	movq	%rdx, %rax
+	leaq	_RNvCshI9zw314oUL_29qualification_454_native_cost6GLOBAL.llvm.11174181910260379007(%rip), %rdi
+	movl	$4, %edx
+	movq	%r14, %r8
+	movq	%rsi, %rcx
+	movq	%rax, %rsi
+	callq	*%r9
+	movq	%rax, %rcx
+.LBB1_13:
+	testq	%rcx, %rcx
+	je	.LBB1_14
+	movl	$16, %eax
+	xorl	%r15d, %r15d
+	movq	%rcx, 8(%rbx)
+	jmp	.LBB1_16
+.LBB1_4:
+	movq	malloc@GOTPCREL(%rip), %rax
+	movq	%r14, %rdi
+	callq	*%rax
+	testq	%rax, %rax
+	je	.LBB1_14
+	movq	%rax, %rcx
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rdi
+	movq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %r8
+	movabsq	$-9223372036854775808, %rdx
+	movq	$-1, %r9
+	leaq	(%r14,%rax), %rsi
+	sarq	$63, %rsi
+	xorq	%rdx, %rsi
+	addq	%r14, %rax
+	cmovoq	%rsi, %rax
+	incq	%rdi
+	cmoveq	%r9, %rdi
+	addq	%r14, %r8
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmovbq	%r9, %r8
+	movq	%rdi, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	movq	%r8, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	cmpq	%fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF, %rax
+	jle	.LBB1_7
+	movq	%rax, %fs:_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952@TPOFF
+	.p2align	4
+.LBB1_7:
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip), %rax
+	testq	%rax, %rax
+	jns	.LBB1_13
+	leaq	1(%rax), %rsi
+	lock		cmpxchgq	%rsi, _RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jne	.LBB1_7
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe19PROCESS_ALLOCATIONS@GOTPCREL(%rip), %rax
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES@GOTPCREL(%rip), %rsi
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_LIVE_BYTES@GOTPCREL(%rip), %rdi
+	lock		incq	(%rax)
+	lock		addq	%r14, (%rsi)
+	movq	%r14, %rsi
+	lock		xaddq	%rsi, (%rdi)
+	leaq	(%rsi,%r14), %rax
+	sarq	$63, %rax
+	xorq	%rdx, %rax
+	movq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe18PROCESS_PEAK_BYTES@GOTPCREL(%rip), %rdx
+	addq	%r14, %rsi
+	cmovoq	%rax, %rsi
+	movq	(%rdx), %rax
+	.p2align	4
+.LBB1_10:
+	cmpq	%rax, %rsi
+	jle	.LBB1_12
+	lock		cmpxchgq	%rsi, (%rdx)
+	jne	.LBB1_10
+.LBB1_12:
+	lock		decq	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952(%rip)
+	jmp	.LBB1_13
+.LBB1_14:
+	movq	$4, 8(%rbx)
+	movl	$16, %eax
+.LBB1_16:
+	movq	%r14, (%rbx,%rax)
+	movq	%r15, (%rbx)
+	popq	%rbx
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end1:
+	.size	_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs9wvUfjgHxjT_14purrdf_deflate, .Lfunc_end1-_RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs9wvUfjgHxjT_14purrdf_deflate
+	.cfi_endproc
+
+	.hidden	_RNvCscZeUgkR9L6J_18purrdf_alloc_probe13PROCESS_STATE.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe17THREAD_PEAK_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe18THREAD_ALLOCATIONS0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvNCNKNvCscZeUgkR9L6J_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.11284292287820896952
+	.hidden	_RNvCshI9zw314oUL_29qualification_454_native_cost6GLOBAL.llvm.11174181910260379007
+	.ident	"rustc version 1.100.0-nightly (4b6d04e70 2026-09-13)"
+	.section	".note.GNU-stack","",@progbits

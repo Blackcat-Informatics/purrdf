@@ -1,0 +1,127 @@
+in function _RNvNtCsCRATE_18purrdf_sparql_eval8modifier22aggregate_numeric_cost:
+  in block %205 / %205:
+    >   %206 = load i256, ptr @anon.8c4c8f20c49bb342a4ce83ac1e804353.131.llvm.9305710216504555276, align 1
+    <   %206 = load i256, ptr @anon.68e54fe914401d215082e13051b35391.131.llvm.9705834826983864253, align 1
+        %207 = load i256, ptr %201, align 1
+    >   %208 = xor i256 %206, %207
+    <   %208 = xor i256 %206, %207
+        %209 = getelementptr i8, ptr %201, i64 32
+    >   %210 = load i8, ptr getelementptr (i8, ptr @anon.8c4c8f20c49bb342a4ce83ac1e804353.131.llvm.9305710216504555276, i64 32), align 1
+    <   %210 = load i8, ptr getelementptr (i8, ptr @anon.68e54fe914401d215082e13051b35391.131.llvm.9705834826983864253, i64 32), align 1
+        %211 = load i8, ptr %209, align 1
+    >   %212 = zext i8 %210 to i256
+    <   %212 = zext i8 %210 to i256
+        %213 = zext i8 %211 to i256
+    >   %214 = xor i256 %212, %213
+    >   %215 = or i256 %208, %214
+    >   %216 = icmp ne i256 %215, 0
+    >   %217 = zext i1 %216 to i32
+    >   %218 = icmp eq i32 %217, 0
+    >   br i1 %218, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit18, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit18.thread
+    <   %214 = xor i256 %212, %213
+    <   %215 = or i256 %208, %214
+    <   %216 = icmp ne i256 %215, 0
+    <   %217 = zext i1 %216 to i32
+    <   %218 = icmp eq i32 %217, 0
+    <   br i1 %218, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit18, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit18.thread
+  in block %47 / %47:
+    >   %.sroa.060.0 = phi i64 [ %.sroa.075.0, %182 ], [ undef, %.preheader ]
+    >   %.sroa.862.0 = phi i64 [ %.sroa.676.0, %182 ], [ undef, %.preheader ]
+    >   %.sroa.1065.0 = phi i64 [ %.sroa.977.0, %182 ], [ undef, %.preheader ]
+    >   %.sroa.1268.0 = phi i32 [ %.sroa.13.0, %182 ], [ undef, %.preheader ]
+    >   %.sroa.1471.0 = phi i32 [ %.sroa.15.0.copyload, %182 ], [ undef, %.preheader ]
+    <   %.sroa.073.0 = phi i64 [ %.sroa.060.0, %106 ], [ undef, %.preheader ]
+    <   %.sroa.774.0 = phi i64 [ %.sroa.962.0, %106 ], [ undef, %.preheader ]
+    <   %.sroa.975.0 = phi i64 [ %.sroa.1265.0, %106 ], [ undef, %.preheader ]
+    <   %.sroa.1176.0 = phi i32 [ %.sroa.16.0, %106 ], [ undef, %.preheader ]
+    <   %.sroa.13.0 = phi i32 [ %.sroa.18.0.copyload, %106 ], [ undef, %.preheader ]
+    <   %48 = phi i64 [ %101, %106 ], [ 0, %.preheader ]
+    <   %49 = phi i64 [ %102, %106 ], [ 0, %.preheader ]
+    <   %50 = phi i64 [ %99, %106 ], [ 0, %.preheader ]
+        %51 = phi i1 [ true, %106 ], [ false, %.preheader ]
+    >   %49 = phi i64 [ %184, %182 ], [ 0, %.preheader ]
+    >   %50 = phi i64 [ %183, %182 ], [ 0, %.preheader ]
+    >   %51 = phi i64 [ %101, %182 ], [ 0, %.preheader ]
+    >   %52 = phi i64 [ %102, %182 ], [ 0, %.preheader ]
+    >   %53 = phi i64 [ %99, %182 ], [ 0, %.preheader ]
+    >   %54 = phi ptr [ %57, %182 ], [ %1, %.preheader ]
+    <   %52 = phi i64 [ %108, %106 ], [ 0, %.preheader ]
+    <   %53 = phi i64 [ %107, %106 ], [ 0, %.preheader ]
+    <   %54 = phi ptr [ %57, %106 ], [ %1, %.preheader ]
+  in block %461 / %460:
+    >   %462 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCsCRATE_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+    >   %463 = load i64, ptr %462, align 8, !noundef !1736
+    <   %463 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCsCRATE_18purrdf_alloc_probe17THREAD_LIVE_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.7972336046345193745)
+    <   %464 = load i64, ptr %463, align 8, !noundef !1691
+        %465 = tail call i64 @llvm.umin.i64(i64 %462, i64 9223372036854775807)
+    >   %465 = tail call i64 @llvm.ssub.sat.i64(i64 %463, i64 %464)
+    >   store i64 %465, ptr %462, align 8
+    >   %466 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCsCRATE_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.6551227014246703601)
+    >   %467 = load i64, ptr %466, align 8, !noundef !1736
+    >   %468 = icmp slt i64 %465, %467
+    >   br i1 %468, label %469, label %.preheader310
+    <   %466 = tail call i64 @llvm.ssub.sat.i64(i64 %464, i64 %465)
+    <   store i64 %466, ptr %463, align 8
+    <   %467 = tail call noundef nonnull align 8 ptr @llvm.threadlocal.address.p0(ptr @_RNvNCNKNvCsCRATE_18purrdf_alloc_probe19THREAD_TROUGH_BYTES0s_023___RUST_STD_INTERNAL_VAL.llvm.7972336046345193745)
+    <   %468 = load i64, ptr %467, align 8, !noundef !1691
+    <   %469 = icmp slt i64 %466, %468
+    <   br i1 %469, label %470, label %.preheader305
+  in block %.loopexit:
+    >   %347 = phi ptr [ %276, %321 ], [ %233, %_RNvCsCRATE_7___rustc12___rust_alloc.exit ], [ %331, %330 ]
+    <   %347 = phi ptr [ %276, %321 ], [ %233, %_RNvCsCRATE_7___rustc12___rust_alloc.exit ], [ %331, %330 ]
+  in block %.preheader83 / %.preheader88:
+    >   %276 = phi ptr [ %331, %330 ], [ %233, %_RNvCsCRATE_7___rustc12___rust_alloc.exit ]
+    <   %276 = phi ptr [ %331, %330 ], [ %233, %_RNvCsCRATE_7___rustc12___rust_alloc.exit ]
+  in block %299 / %299:
+    >   %300 = load i256, ptr @anon.8c4c8f20c49bb342a4ce83ac1e804353.131.llvm.9305710216504555276, align 1
+    <   %300 = load i256, ptr @anon.68e54fe914401d215082e13051b35391.131.llvm.9705834826983864253, align 1
+        %301 = load i256, ptr %295, align 1
+    >   %302 = xor i256 %300, %301
+    <   %302 = xor i256 %300, %301
+        %303 = getelementptr i8, ptr %295, i64 32
+    >   %304 = load i8, ptr getelementptr (i8, ptr @anon.8c4c8f20c49bb342a4ce83ac1e804353.131.llvm.9305710216504555276, i64 32), align 1
+    <   %304 = load i8, ptr getelementptr (i8, ptr @anon.68e54fe914401d215082e13051b35391.131.llvm.9705834826983864253, i64 32), align 1
+        %305 = load i8, ptr %303, align 1
+    >   %306 = zext i8 %304 to i256
+    <   %306 = zext i8 %304 to i256
+        %307 = zext i8 %305 to i256
+    >   %308 = xor i256 %306, %307
+    >   %309 = or i256 %302, %308
+    >   %310 = icmp ne i256 %309, 0
+    >   %311 = zext i1 %310 to i32
+    >   %312 = icmp eq i32 %311, 0
+    >   br i1 %312, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit19, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit19.thread
+    <   %308 = xor i256 %306, %307
+    <   %309 = or i256 %302, %308
+    <   %310 = icmp ne i256 %309, 0
+    <   %311 = zext i1 %310 to i32
+    <   %312 = icmp eq i32 %311, 0
+    <   br i1 %312, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit19, label %_RNvMNtCsCRATE_10purrdf_xsd8datatypeNtB2_11XsdDatatype8from_iri.exit19.thread
+  in block %327 / %327:
+    >   invoke fastcc void @_RINvNvMs2_NtCsCRATE_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsCRATE_18purrdf_sparql_eval.llvm.1794586459888082020(ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %7, i64 noundef %277, i64 noundef 1, i64 noundef 8, i64 noundef 32)
+          to label %328 unwind label %337, !noalias !1781
+    <   invoke fastcc void @_RINvNvMs2_NtCsCRATE_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsCRATE_18purrdf_sparql_eval.llvm.2908892455657212669(ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %7, i64 noundef %277, i64 noundef 1, i64 noundef 8, i64 noundef 32)
+          to label %328 unwind label %337, !noalias !1732
+  in block %_RNvCsCRATE_7___rustc12___rust_alloc.exit:
+    >   call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %233, ptr noundef nonnull align 8 dereferenceable(32) %271, i64 32, i1 false), !noalias !1781
+    <   call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %233, ptr noundef nonnull align 8 dereferenceable(32) %271, i64 32, i1 false), !noalias !1732
+        store i64 4, ptr %7, align 8, !noalias !1732
+        %272 = getelementptr inbounds nuw i8, ptr %7, i64 8
+    >   store ptr %233, ptr %272, align 8, !noalias !1781
+    <   store ptr %233, ptr %272, align 8, !noalias !1732
+  in block %349 / %349:
+    >   %350 = phi { ptr, i32 } [ %340, %339 ], [ %394, %393 ], [ %340, %343 ], [ %452, %454 ], [ %452, %451 ]
+    >   resume { ptr, i32 } %350
+    <   %350 = phi { ptr, i32 } [ %340, %339 ], [ %340, %343 ], [ %396, %395 ], [ %453, %452 ], [ %453, %455 ]
+    <   resume { ptr, i32 } %350
+  in block %_RNvMs_NtNtCsCRATE_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit / %446:
+    >   %447 = phi i64 [ 0, %38 ], [ %457, %_RNvCsCRATE_7___rustc14___rust_dealloc.exit ], [ %444, %_RNvMs_NtNtCsCRATE_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit ], [ 0, %._crit_edge ], [ 0, %30 ], [ %457, %456 ], [ %49, %187 ], [ 0, %46 ], [ %356, %361 ]
+    >   %448 = phi i64 [ 0, %38 ], [ %458, %_RNvCsCRATE_7___rustc14___rust_dealloc.exit ], [ %445, %_RNvMs_NtNtCsCRATE_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit ], [ 0, %._crit_edge ], [ 0, %30 ], [ %458, %456 ], [ %50, %187 ], [ 0, %46 ], [ %357, %361 ]
+    >   %449 = insertvalue { i64, i64 } poison, i64 %447, 0
+    >   %450 = insertvalue { i64, i64 } %449, i64 %448, 1
+    >   ret { i64, i64 } %450
+    <   %448 = phi i64 [ 0, %38 ], [ %458, %_RNvCsCRATE_7___rustc14___rust_dealloc.exit ], [ -1, %382 ], [ 0, %._crit_edge ], [ 0, %30 ], [ %458, %457 ], [ 0, %46 ], [ %53, %187 ], [ %357, %361 ], [ %393, %386 ], [ %444, %439 ], [ -1, %435 ]
+    <   %449 = phi i64 [ 0, %38 ], [ %459, %_RNvCsCRATE_7___rustc14___rust_dealloc.exit ], [ -1, %382 ], [ 0, %._crit_edge ], [ 0, %30 ], [ %459, %457 ], [ 0, %46 ], [ %52, %187 ], [ %356, %361 ], [ %394, %386 ], [ %445, %439 ], [ -1, %435 ]
+    <   %450 = insertvalue { i64, i64 } poison, i64 %448, 0
+    <   %451 = insertvalue { i64, i64 } %450, i64 %449, 1
+    <   ret { i64, i64 } %451

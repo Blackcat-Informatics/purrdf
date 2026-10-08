@@ -1,0 +1,20 @@
+Owned source synchronization, completed without source conflicts.
+Old issue/base HEAD: 18489a91cb452b1773c60b469d4c30dc33a9a4a4
+Old base tree: 5d150fa4076cc75e293b517f79dd080b6ea807ed
+New issue/base HEAD: 863c75e2c1e13001bcbe025820d257bd0ee49c4f
+New base tree: 42cce1fededb04e9a7283bfa589b61e1ca34203c
+Named exact-path stash: t1-454-core-before-sync-863c75
+Stash commit: f753f029e29fd59f16119306a09fd54251e121a5
+32 task-owned shipping paths (29 tracked, 3 untracked); .stage excluded.
+git stash push --include-untracked --message t1-454-core-before-sync-863c75 -- <exact 32 paths>: exit0
+Clean shipping status after stash: only ?? .stage/
+git merge --ff-only origin/main in issue worktree: exit0, fast-forward
+git stash apply f753f029e29fd59f16119306a09fd54251e121a5: exit0
+Git automatically merged engine.rs and substitute.rs with no conflict markers.
+Read complete resulting delta against new main: retained main's removal of
+localization, contextual VALUES assignment joins and seed_every_sub_select;
+retained task's typed contextual admission and shared mutable-expression home.
+No changes to execution.rs or prebound_grouping.rs beyond their new-main blobs.
+git merge --ff-only origin/main in owned clean detached baseline: exit0
+Baseline status afterward: clean.
+Stash retained pending synchronized validation; no commit, staging or push.

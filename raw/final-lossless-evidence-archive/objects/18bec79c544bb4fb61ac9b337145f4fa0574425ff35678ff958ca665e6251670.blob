@@ -1,0 +1,233 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-ir/qualification_454_native_cost.gimli-68d0cb78dba1c589.gimli.291de70d2b297ea7-cgu.0.rcgu.o.rcgu.ll:185
+; <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::Edge>>::insert::<alloc::alloc::Global>
+define void @_RINvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_6HandleINtB6_7NodeRefNtNtB6_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1n_8InternalENtB1n_4EdgeE6insertNtNtBc_5alloc6GlobalEB1K_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([152 x i8]) align 8 captures(none) dereferenceable(152) %0, ptr noalias nofree noundef readonly align 8 captures(none) dead_on_return dereferenceable(24) %1, i64 noundef %2, ptr noalias nofree noundef readonly align 8 captures(none) dead_on_return dereferenceable(112) %3, ptr noundef nonnull %4, i64 noundef %5) unnamed_addr #0 personality ptr @rust_eh_personality !guid !56 {
+  %7 = alloca [24 x i8], align 8
+  %8 = alloca [152 x i8], align 8
+  %9 = alloca [24 x i8], align 8
+  %10 = getelementptr inbounds nuw i8, ptr %1, i64 8
+  %11 = load i64, ptr %10, align 8, !noundef !49
+  %12 = add i64 %11, -1
+  %13 = icmp eq i64 %5, %12
+  br i1 %13, label %15, label %14, !prof !57
+
+14:                                               ; preds = %6
+; invoke core::panicking::panic
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.886c1caabaaea59b9677b076c74ddc9f.4, i64 noundef 53, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.886c1caabaaea59b9677b076c74ddc9f.5) #23
+          to label %20 unwind label %43
+
+15:                                               ; preds = %6
+  %16 = load ptr, ptr %1, align 8, !nonnull !49, !noundef !49
+  %17 = getelementptr inbounds nuw i8, ptr %16, i64 1330
+  %18 = load i16, ptr %17, align 2, !noundef !49
+  %19 = icmp ult i16 %18, 11
+  br i1 %19, label %25, label %21
+
+20:                                               ; preds = %14
+  unreachable
+
+21:                                               ; preds = %15
+  %22 = getelementptr inbounds nuw i8, ptr %1, i64 16
+  %23 = load i64, ptr %22, align 8, !noundef !49
+  %24 = icmp ult i64 %23, 5
+  br i1 %24, label %31, label %27
+
+25:                                               ; preds = %15
+; call <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::Edge>>::insert_fit
+  tail call void @_RNvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_8InternalENtB1m_4EdgeE10insert_fitB1J_(ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %1, i64 noundef %2, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(112) %3, ptr noundef nonnull %4, i64 poison)
+  %26 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  store i64 2, ptr %26, align 8
+  br label %42
+
+27:                                               ; preds = %21
+  switch i64 %23, label %28 [
+    i64 5, label %31
+    i64 6, label %30
+  ]
+
+28:                                               ; preds = %27
+  %29 = add i64 %23, -7
+  br label %31
+
+30:                                               ; preds = %27
+  br label %31
+
+31:                                               ; preds = %30, %28, %27, %21
+  %32 = phi i64 [ 5, %30 ], [ 6, %28 ], [ 4, %21 ], [ %23, %27 ]
+  %33 = phi i64 [ 0, %30 ], [ %29, %28 ], [ %23, %21 ], [ %23, %27 ]
+  %34 = phi i1 [ true, %30 ], [ true, %28 ], [ false, %21 ], [ false, %27 ]
+  call void @llvm.lifetime.start.p0(ptr nonnull %9)
+  store ptr %16, ptr %9, align 8
+  %35 = getelementptr inbounds nuw i8, ptr %9, i64 8
+  store i64 %11, ptr %35, align 8
+  %36 = getelementptr inbounds nuw i8, ptr %9, i64 16
+  store i64 %32, ptr %36, align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %8)
+; invoke <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::KV>>::split::<alloc::alloc::Global>
+  invoke void @_RINvMsW_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_6HandleINtB6_7NodeRefNtNtB6_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1n_8InternalENtB1n_2KVE5splitNtNtBc_5alloc6GlobalEB1K_(ptr noalias nofree noundef nonnull sret([152 x i8]) align 8 captures(none) dereferenceable(152) %8, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(24) %9)
+          to label %37 unwind label %43
+
+37:                                               ; preds = %31
+  call void @llvm.lifetime.start.p0(ptr nonnull %7)
+  %.sroa.sel.v.sroa.sel.v.sroa.sel.v = select i1 %34, i64 136, i64 120
+  %.sroa.sel.v.sroa.sel.v.sroa.sel = getelementptr inbounds nuw i8, ptr %8, i64 %.sroa.sel.v.sroa.sel.v.sroa.sel.v
+  %.sroa.sel4.v.sroa.sel.v.sroa.sel.v = select i1 %34, i64 144, i64 128
+  %.sroa.sel4.v.sroa.sel.v.sroa.sel = getelementptr inbounds nuw i8, ptr %8, i64 %.sroa.sel4.v.sroa.sel.v.sroa.sel.v
+  %38 = load i64, ptr %.sroa.sel4.v.sroa.sel.v.sroa.sel, align 8, !noundef !49
+  %39 = load ptr, ptr %.sroa.sel.v.sroa.sel.v.sroa.sel, align 8, !nonnull !49, !noundef !49
+  store ptr %39, ptr %7, align 8
+  %40 = getelementptr inbounds nuw i8, ptr %7, i64 8
+  store i64 %38, ptr %40, align 8
+  %41 = getelementptr inbounds nuw i8, ptr %7, i64 16
+  store i64 %33, ptr %41, align 8
+; call <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::Edge>>::insert_fit
+  call void @_RNvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_8InternalENtB1m_4EdgeE10insert_fitB1J_(ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %7, i64 noundef %2, ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(112) %3, ptr noundef nonnull %4, i64 poison)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(152) %0, ptr noundef nonnull align 8 dereferenceable(152) %8, i64 152, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %7)
+  call void @llvm.lifetime.end.p0(ptr nonnull %8)
+  call void @llvm.lifetime.end.p0(ptr nonnull %9)
+  br label %42
+
+42:                                               ; preds = %37, %25
+  ret void
+
+43:                                               ; preds = %31, %14
+  %44 = landingpad { ptr, i32 }
+          cleanup
+  %45 = load i64, ptr %3, align 8, !range !50, !alias.scope !58, !noundef !49
+  %46 = icmp eq i64 %45, 0
+  br i1 %46, label %49, label %47
+
+47:                                               ; preds = %43
+  %48 = getelementptr inbounds nuw i8, ptr %3, i64 8
+; call <alloc::raw_vec::RawVecInner>::deallocate
+  tail call void @_RNvMs3_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner10deallocateCs3wRyrdzSNKt_5gimli(ptr noalias nofree noundef nonnull readonly align 8 dereferenceable(24) %48, i64 noundef 8, i64 noundef 16)
+  br label %49
+
+49:                                               ; preds = %47, %43
+  resume { ptr, i32 } %44
+}
+
+ASSEMBLY
+_RINvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_6HandleINtB6_7NodeRefNtNtB6_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1n_8InternalENtB1n_4EdgeE6insertNtNtBc_5alloc6GlobalEB1K_:
+.Lfunc_begin2:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception2
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r15
+	pushq	%r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%rbx
+	subq	$216, %rsp
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	movq	%rdx, %r12
+	movq	8(%rsi), %rax
+	leaq	-1(%rax), %rdx
+	cmpq	%rdx, %r9
+	jne	.LBB2_1
+	movq	%r8, %r15
+	movq	%rdi, %r14
+	movq	(%rsi), %rdi
+	cmpw	$11, 1330(%rdi)
+	jae	.LBB2_4
+	movq	%rsi, %rdi
+	movq	%r12, %rsi
+	movq	%rcx, %rdx
+	movq	%r15, %rcx
+	callq	*_RNvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_8InternalENtB1m_4EdgeE10insert_fitB1J_@GOTPCREL(%rip)
+	movq	$2, 8(%r14)
+	jmp	.LBB2_14
+.LBB2_4:
+	movq	16(%rsi), %r13
+	cmpq	$5, %r13
+	movq	%rcx, -48(%rbp)
+	jae	.LBB2_7
+	movl	$4, %edx
+	xorl	%ebx, %ebx
+	jmp	.LBB2_12
+.LBB2_7:
+	je	.LBB2_8
+	cmpq	$6, %r13
+	jne	.LBB2_10
+	movb	$1, %bl
+	movl	$5, %edx
+	xorl	%r13d, %r13d
+	jmp	.LBB2_12
+.LBB2_8:
+	xorl	%ebx, %ebx
+	movq	%r13, %rdx
+	jmp	.LBB2_12
+.LBB2_10:
+	addq	$-7, %r13
+	movb	$1, %bl
+	movl	$6, %edx
+.LBB2_12:
+	leaq	-72(%rbp), %rsi
+	movq	%rdi, (%rsi)
+	movq	%rax, 8(%rsi)
+	movq	%rdx, 16(%rsi)
+.Ltmp8:
+	leaq	-248(%rbp), %rdi
+	callq	*_RINvMsW_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_6HandleINtB6_7NodeRefNtNtB6_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1n_8InternalENtB1n_2KVE5splitNtNtBc_5alloc6GlobalEB1K_@GOTPCREL(%rip)
+.Ltmp9:
+	movzbl	%bl, %eax
+	shll	$4, %eax
+	vmovups	-128(%rbp,%rax), %xmm0
+	leaq	-96(%rbp), %rdi
+	vmovups	%xmm0, (%rdi)
+	movq	%r13, 16(%rdi)
+	movq	%r12, %rsi
+	movq	-48(%rbp), %rdx
+	movq	%r15, %rcx
+	callq	*_RNvMsM_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB5_6HandleINtB5_7NodeRefNtNtB5_6marker3MutyNtNtNtCs3wRyrdzSNKt_5gimli4read6abbrev12AbbreviationNtB1m_8InternalENtB1m_4EdgeE10insert_fitB1J_@GOTPCREL(%rip)
+	vmovups	-248(%rbp), %zmm0
+	vmovups	-184(%rbp), %zmm1
+	vmovups	-160(%rbp), %zmm2
+	vmovups	%zmm2, 88(%r14)
+	vmovups	%zmm1, 64(%r14)
+	vmovups	%zmm0, (%r14)
+.LBB2_14:
+	movq	%r14, %rax
+	addq	$216, %rsp
+	popq	%rbx
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	vzeroupper
+	retq
+.LBB2_1:
+	.cfi_def_cfa %rbp, 16
+.Ltmp6:
+	movq	%rcx, -48(%rbp)
+	leaq	.Lanon.886c1caabaaea59b9677b076c74ddc9f.4(%rip), %rdi
+	leaq	.Lanon.886c1caabaaea59b9677b076c74ddc9f.5(%rip), %rdx
+	movl	$53, %esi
+	callq	*_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip)
+.Ltmp7:
+	ud2
+.LBB2_15:
+.Ltmp10:
+	movq	%rax, %r14
+	movq	-48(%rbp), %rdi
+	cmpq	$0, (%rdi)
+	je	.LBB2_17
+	addq	$8, %rdi
+	movl	$8, %esi
+	movl	$16, %edx
+	callq	*_RNvMs3_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner10deallocateCs3wRyrdzSNKt_5gimli@GOTPCREL(%rip)
+.LBB2_17:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end2:

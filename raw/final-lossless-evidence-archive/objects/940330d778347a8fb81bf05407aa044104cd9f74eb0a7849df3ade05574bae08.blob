@@ -1,0 +1,48 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0 -- /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python
+configfile: pyproject.toml
+collecting ... collected 28 items
+
+bindings/python/tests/test_contextual_mappings.py::test_python_division_keyword_error_precedes_term_extraction PASSED [  3%]
+bindings/python/tests/test_contextual_mappings.py::test_python_contextual_dispatch[Graph] PASSED [  7%]
+bindings/python/tests/test_contextual_mappings.py::test_python_contextual_dispatch[Dataset] PASSED [ 10%]
+bindings/python/tests/test_contextual_mappings.py::test_python_contextual_dispatch[ConjunctiveGraph] PASSED [ 14%]
+bindings/python/tests/test_contextual_mappings.py::test_python_contextual_dispatch[processor] PASSED [ 17%]
+bindings/python/tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[False-Dataset] PASSED [ 21%]
+bindings/python/tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[False-ConjunctiveGraph] PASSED [ 25%]
+bindings/python/tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[True-Dataset] PASSED [ 28%]
+bindings/python/tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[True-ConjunctiveGraph] PASSED [ 32%]
+bindings/python/tests/test_contextual_mappings.py::test_python_shadow_dispatch PASSED [ 35%]
+bindings/python/tests/test_contextual_mappings.py::test_duplicate_column_cells PASSED [ 39%]
+bindings/python/tests/test_contextual_mappings.py::test_contextual_relation_configuration PASSED [ 42%]
+bindings/python/tests/test_contextual_mappings.py::test_native_contextual_term_boundary PASSED [ 46%]
+bindings/python/tests/test_contextual_mappings.py::test_duplicate_unbound_row_access PASSED [ 50%]
+bindings/python/tests/test_contextual_mappings.py::test_contextual_aggregate_and_standpoint_configuration PASSED [ 53%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_iteration_is_repeatable_independent_and_retains_row PASSED [ 57%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_named_signed_integer_and_type_neighbors PASSED [ 60%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_outside_positions_raise_index_error[3] PASSED [ 64%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_outside_positions_raise_index_error[-4] PASSED [ 67%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_outside_positions_raise_index_error[1267650600228229401496703205376] PASSED [ 71%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_outside_positions_raise_index_error[-1267650600228229401496703205376] PASSED [ 75%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_outside_positions_raise_index_error[-9223372036854775808] PASSED [ 78%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_outside_positions_raise_index_error[9223372036854775808] PASSED [ 82%]
+bindings/python/tests/test_solution_row_protocol.py::test_zero_width_native_and_compat_tuple_protocol PASSED [ 85%]
+bindings/python/tests/test_solution_row_protocol.py::test_select_star_projects_actual_public_column_order PASSED [ 89%]
+bindings/python/tests/test_solution_row_protocol.py::test_native_duplicate_projection_retains_every_position PASSED [ 92%]
+bindings/python/tests/test_solution_row_protocol.py::test_compat_duplicate_positions_keep_last_label_access[False] PASSED [ 96%]
+bindings/python/tests/test_solution_row_protocol.py::test_compat_duplicate_positions_keep_last_label_access[True] PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/test_contextual_mappings.py::test_python_contextual_dispatch[ConjunctiveGraph]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:41: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    graph = getattr(compat, "Graph" if route == "processor" else route)()
+
+tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[True-ConjunctiveGraph]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:64: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    dataset = getattr(compat, kind)()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 28 passed, 3 warnings in 0.19s ========================

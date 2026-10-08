@@ -1,0 +1,13 @@
+# Private lossless preparation, not selected publication
+
+Every original represented path is recorded in path-map.tsv: original absolute path, original mode, original byte size, original SHA256, relative stored object, stored byte size, stored SHA256 and codec. Each SHA/size group was compared in full before deduplication. Original bytes/modes are reconstructible; original filenames need not be flattened to object names.
+
+For codec `gzip`, decode the named object with gzip -dc into a NEW task-owned replay destination, verify original SHA/size and apply the recorded mode. For codecs `raw` and `raw-gzip`, copy the named object's bytes unchanged, verify original SHA/size and apply the recorded mode. In particular raw-gzip preserves an originally compressed record's exact bytes, rather than replacing it with decompressed content. Never restore over a protected live worktree or original artifact without separate authorization.
+
+The generated rendered-support.tar is an explicit data role, mapped to its deterministic gzip object. rendered-members.txt contains exactly164 allowed book-output member paths; rendered-modes-sizes.tsv and the original rendered source hash manifest qualify their exact mode/content. tar member list and tar --compare passed without extraction. Reconstruct this archive into a new owned replay location; do not publish its member JavaScript files as newly added live Stage tooling.
+
+stored-objects.sha256 and receipts/stored-object-final-readback.txt validate every stored object. compression-qualification.tsv records actual gzip/copy validation for canonical groups; large-preimage-final-readbacks.tsv retains original large byte identity. Existing original gzip groups also have complete decompressed readbacks. The full source tar and shipping-source byte copies are excluded: use canonical Git baseline/head/audit ancestry with the preserved original source path/hash manifests. This package does not change proof roles or claim fresh emissions.
+
+Two small live hosted-monitor inputs changed while preparing copies; their actual captured hashes and initial hashes are recorded in small-input-drift.tsv. Forty-one new conformance evidence files were added and scanned/read back separately. Writer freeze and final report/metadata refresh remain separate requirements. Existing Stage originals have not been replaced or removed.
+
+Measured stored file-byte fit is not actual Git pack acceptance. Capture preview/pack measurement and final relocation/publication require root admission; no Git objects, refs, capture, forge publication, LFS or alternate repository operation was performed.

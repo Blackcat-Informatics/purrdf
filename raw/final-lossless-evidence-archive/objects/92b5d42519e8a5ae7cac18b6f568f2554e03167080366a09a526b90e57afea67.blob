@@ -1,0 +1,65 @@
+   Compiling qualification-454-fixture-freezer v0.0.0 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/fixture-freezer)
+error[E0308]: mismatched types
+  --> src/main.rs:20:37
+   |
+20 |           fixtures.push(Value::Object(vec![
+   |  _______________________-------------_^
+   | |                       |
+   | |                       arguments to this enum variant are incorrect
+21 | |             ("triples".into(), source["triples"].clone()),
+22 | |             ("cases".into(), Value::Array(plain)),
+23 | |         ]));
+   | |_________^ expected `Object`, found `Vec<(_, Value)>`
+   |
+   = note: expected struct `purrdf_lex::json::Object`
+              found struct `Vec<(_, purrdf_lex::json::Value)>`
+note: tuple variant defined here
+  --> /proc/self/cwd/src/json/value.rs:58:4
+help: call `Into::into` on this expression to convert `Vec<(_, purrdf_lex::json::Value)>` into `purrdf_lex::json::Object`
+   |
+23 |         ].into()));
+   |          +++++++
+
+error[E0308]: mismatched types
+  --> src/main.rs:26:37
+   |
+26 |           fixtures.push(Value::Object(vec![
+   |  _______________________-------------_^
+   | |                       |
+   | |                       arguments to this enum variant are incorrect
+27 | |             ("triples".into(), source["triples"].clone()),
+28 | |             ("quads".into(), source["quads"].clone()),
+29 | |             ("cases".into(), Value::Array(named)),
+30 | |         ]));
+   | |_________^ expected `Object`, found `Vec<(_, Value)>`
+   |
+   = note: expected struct `purrdf_lex::json::Object`
+              found struct `Vec<(_, purrdf_lex::json::Value)>`
+note: tuple variant defined here
+  --> /proc/self/cwd/src/json/value.rs:58:4
+help: call `Into::into` on this expression to convert `Vec<(_, purrdf_lex::json::Value)>` into `purrdf_lex::json::Object`
+   |
+30 |         ].into()));
+   |          +++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `qualification-454-fixture-freezer` (bin "qualification-454-fixture-freezer") due to 2 previous errors
+   Compiling qualification-454-fixture-freezer v0.0.0 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/fixture-freezer)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.64s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/count-distinct-logical-domain-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 2 primary oracle answers, preserving ordered rows and RDF terms
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/graph-projection-relational-facts-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 4 primary oracle answers, preserving ordered rows and RDF terms
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/retry-exists-clause-facts-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 5 primary oracle answers, preserving ordered rows and RDF terms
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/group-only-having-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 2 primary oracle answers, preserving ordered rows and RDF terms
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/volatile-interleaving-reduced-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 3 primary oracle answers, preserving ordered rows and RDF terms
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/298a72c6e96b3084/0/target/debug/qualification-454-fixture-freezer .stage/rdflib-shim-algebra-level-reassignment/raw/successive-bind-volatile-oracle.json crates/sparql-eval/tests/fixtures/contextual-mappings.json`
+froze 3 primary oracle answers, preserving ordered rows and RDF terms

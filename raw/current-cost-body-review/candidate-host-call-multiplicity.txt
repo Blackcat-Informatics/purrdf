@@ -1,0 +1,131 @@
+      1   br i1 %217, label %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread.i.i.i.i.i), label %bb8.i.i.i.i.i.i.i.i
+      1   br i1 %221, label %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread.i.i.i.i.i), label %bb8.i.i.i.i.1.i.i.i.i
+      1   br i1 %_16.i.i.i.i.1.i.i.i.i, label %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread11.i.1.i.i.i.i), label %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.1.i.i.i.i)
+      1   br i1 %_16.i.i.i.i.i.i.i.i, label %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread11.i.i.i.i.i), label %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.i.i.i.i)
+      1   invoke void %228(ptr noundef nonnull %_13.sroa.5.0.copyload.i.i.i.i)
+      1 .noexc.1.i.i.i.i:                                 ; preds = %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.1.i.i.i.i)
+      1 .noexc.i.i.i.i:                                   ; preds = %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.i.i.i.i)
+      1 ; call <pyo3::internal::state::AttachGuard as core::ops::drop::Drop>::drop
+      1 ; call __rustc::__rust_alloc
+     33 ; call __rustc::__rust_dealloc
+      1 ; call __rustc::__rust_no_alloc_shim_is_unstable_v2
+     12 ; call core::panicking::panic_in_cleanup
+      1 ; call core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+      4 ; call core::ptr::drop_glue::<core::option::Option<alloc::vec::Vec<alloc::string::String>>>
+      2 ; call core::ptr::drop_glue::<core::option::Option<purrdf_sparql_results::model::ProvenanceNamespace>>
+      3 ; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+      1 ; call core::ptr::drop_glue::<purrdf_sparql_algebra::parser::ParserOptions>
+      1 ; call core::ptr::drop_glue::<purrdf_sparql_eval::engine::AdmittedSubstitutions>
+      3 ; invoke <alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow
+      2 ; invoke <alloc::sync::Arc<purrdf_sparql_eval::engine::PreparedQuery>>::drop_slow
+      2 ; invoke <alloc::vec::Vec<alloc::string::String> as core::clone::Clone>::clone
+      1 ; invoke <purrdf_core::ir::mutable::MutableDataset>::freeze
+      1 ; invoke <purrdf_sparql_eval::engine::AdmittedSubstitutions>::requested
+      1 ; invoke <purrdf_sparql_eval::engine::NativeSparqlEngine>::prepare_request
+      1 ; invoke <purrdf_sparql_eval::engine::NativeSparqlEngine>::query_prepared_admitted::<purrdf_core::ir::dataset::RdfDataset, purrdf_core::dataset_view::NoopReservation<!>>
+      1 ; invoke <pyo3::err::PyErr>::get_type
+      1 ; invoke <pyo3::err::PyErr>::value
+      2 ; invoke <pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::hasattr::inner
+      2 ; invoke <pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::setattr::<&str, pyo3::instance::Py<pyo3::types::any::PyAny>>
+      1 ; invoke <pyo3::instance::Py<_> as core::ops::drop::Drop>::drop::drop_slow
+      1 ; invoke <pyo3::internal::state::AttachGuard as core::ops::drop::Drop>::drop
+      1 ; invoke <pyo3::internal::state::AttachGuard>::attach
+      2 ; invoke <pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+      1 ; invoke <pyo3::internal::state::SuspendAttach>::new
+      2 ; invoke <pyo3::types::string::PyString>::new
+      1 ; invoke alloc::alloc::handle_alloc_error
+      2 ; invoke alloc::fmt::format::format_inner
+      4 ; invoke core::ptr::drop_glue::<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>
+      1 ; invoke core::ptr::drop_glue::<<purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}::{closure#0}>
+      6 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<(alloc::string::String, purrdf_core::ir::term::TermValue)>>
+      2 ; invoke core::ptr::drop_glue::<alloc::vec::Vec<(alloc::string::String, purrdf_native::py_store::query::RelationSpec, purrdf_native::attestation::Attestation)>>
+      1 ; invoke core::ptr::drop_glue::<core::option::Option<purrdf_sparql_eval::property_fn::PropertyFunctionRegistry>>
+      3 ; invoke core::ptr::drop_glue::<hashbrown::raw::RawTable<(alloc::string::String, alloc::sync::Arc<dyn purrdf_sparql_eval::agg_fn::CustomAggregate>)>>
+      2 ; invoke core::ptr::drop_glue::<hashbrown::raw::RawTable<(alloc::string::String, alloc::sync::Arc<dyn purrdf_sparql_eval::property_fn::PropertyFunction>)>>
+      4 ; invoke core::ptr::drop_glue::<hashbrown::raw::RawTable<(alloc::string::String, purrdf_sparql_eval::property_fn::RankedDeclaration)>>
+      4 ; invoke core::ptr::drop_glue::<purrdf_core::diagnostic::RdfDiagnostic>
+      3 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::engine::NativeSparqlEngine>
+      2 ; invoke core::ptr::drop_glue::<purrdf_sparql_eval::extension_env::ExtensionEnv>
+      2 ; invoke core::ptr::drop_glue::<pyo3::err::PyErr>
+      1 ; invoke purrdf_native::py_store::env::division_policy
+      1 ; invoke purrdf_native::py_store::env::extension_env
+      1 ; invoke purrdf_native::py_store::presentation::presented_value_error
+      1 ; invoke purrdf_native::py_store::presentation::refusal_value_error
+      1 ; invoke purrdf_native::py_store::quad_store::collect_substitutions
+      1 ; invoke purrdf_native::py_store::query::build_engine
+      1 ; invoke purrdf_native::py_store::query::build_relations
+      1 ; invoke purrdf_native::py_store::query::collect_relations
+      1 ; invoke purrdf_native::py_store::query::materialize_results
+      1 ; invoke purrdf_native::xpath_regex::selection
+      1 ; invoke purrdf_validate::query::statistical_aggregates
+      1 ; invoke purrdf_validate::xpath_regex::diagnostic_refusal_code
+      3 <alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::drop_slow
+      2 <alloc::sync::Arc<purrdf_sparql_eval::engine::PreparedQuery>>::drop_slow
+      2 <alloc::vec::Vec<alloc::string::String> as core::clone::Clone>::clone
+      1 <core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.1.i.i.i.i): ; preds = %bb8.i.i.i.i.1.i.i.i.i
+      1 <core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.i.i.i.i): ; preds = %bb8.i.i.i.i.i.i.i.i
+      1 <core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread.i.i.i.i.i): ; preds = %<pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::hasattr::<&str> (.exit.i.i.i.i.1.i.i.i.i), %<pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::hasattr::<&str> (.exit.i.i.i.i.i.i.i.i)
+      1 <core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread11.i.1.i.i.i.i): ; preds = %bb8.i.i.i.i.1.i.i.i.i
+      1 <core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread11.i.i.i.i.i): ; preds = %bb8.i.i.i.i.i.i.i.i
+      1 <purrdf_core::ir::mutable::MutableDataset>::freeze
+      1 <purrdf_sparql_eval::engine::AdmittedSubstitutions>::requested
+      1 <purrdf_sparql_eval::engine::NativeSparqlEngine>::prepare_request
+      1 <purrdf_sparql_eval::engine::NativeSparqlEngine>::query_prepared_admitted::<purrdf_core::ir::dataset::RdfDataset, purrdf_core::dataset_view::NoopReservation<!>>
+      1 <pyo3::err::PyErr>::get_type
+      1 <pyo3::err::PyErr>::value
+      2 <pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::hasattr::inner
+      2 <pyo3::instance::Bound<pyo3::types::any::PyAny> as pyo3::types::any::PyAnyMethods>::setattr::<&str, pyo3::instance::Py<pyo3::types::any::PyAny>>
+      1 <pyo3::instance::Py<_> as core::ops::drop::Drop>::drop::drop_slow
+      2 <pyo3::internal::state::AttachGuard as core::ops::drop::Drop>::drop
+      1 <pyo3::internal::state::AttachGuard>::attach
+      2 <pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+      1 <pyo3::internal::state::SuspendAttach>::new
+      2 <pyo3::types::string::PyString>::new
+      1 PyErr_GivenExceptionMatches
+      2 Py_GetConstantBorrowed
+      7 _Py_DecRef
+      3 _Py_IncRef
+      1 __rustc::__rust_alloc
+     33 __rustc::__rust_dealloc
+      1 __rustc::__rust_no_alloc_shim_is_unstable_v2
+      1 alloc::alloc::handle_alloc_error
+      2 alloc::fmt::format::format_inner
+      1 bb4.i6.i.i.i.i:                                   ; preds = %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread11.i.1.i.i.i.i), %.noexc.1.i.i.i.i
+      1 bb5.i.i.i12.i.i:                                  ; preds = %.noexc.1.i.i.i.i, %.noexc.i.i.i.i, %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread.i.i.i.i.i)
+      1 bb6.i.i.i11.i.i:                                  ; preds = %.noexc.i.i.i.i, %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.thread11.i.i.i.i.i)
+      1 cleanup1.i.i10.i.i:                               ; preds = %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.1.i.i.i.i), %bb6.i.i.i11.i.i, %<core::array::iter::iter_inner::PolymorphicIter<[core::mem::maybe_uninit::MaybeUninit<&str>]>>::try_fold::<(), core::iter::traits::iterator::Iterator::try_for_each::call<&str, core::result::Result<(), pyo3::err::PyErr>, purrdf_native::py_store::presentation::settled<pyo3::instance::Py<pyo3::types::any::PyAny>, <purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<()>::{closure#0}>::{closure#0}::{closure#0}::{closure#0}>::{closure#0}, core::result::Result<(), pyo3::err::PyErr>>::{closure#0} (.exit.i.i.i.i.i), %bb2.lr.ph.i.i.i.i.i
+     12 core::panicking::panic_in_cleanup
+      4 core::ptr::drop_glue::<
+      1 core::ptr::drop_glue::<<purrdf_native::py_store::quad_store::PyQuadStore>::query_impl<
+      8 core::ptr::drop_glue::<alloc::vec::Vec<
+      1 core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+      4 core::ptr::drop_glue::<core::option::Option<alloc::vec::Vec<alloc::string::String>>>
+      1 core::ptr::drop_glue::<core::option::Option<purrdf_sparql_eval::property_fn::PropertyFunctionRegistry>>
+      2 core::ptr::drop_glue::<core::option::Option<purrdf_sparql_results::model::ProvenanceNamespace>>
+      9 core::ptr::drop_glue::<hashbrown::raw::RawTable<
+      4 core::ptr::drop_glue::<purrdf_core::diagnostic::RdfDiagnostic>
+      3 core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+      1 core::ptr::drop_glue::<purrdf_sparql_algebra::parser::ParserOptions>
+      1 core::ptr::drop_glue::<purrdf_sparql_eval::engine::AdmittedSubstitutions>
+      3 core::ptr::drop_glue::<purrdf_sparql_eval::engine::NativeSparqlEngine>
+      2 core::ptr::drop_glue::<purrdf_sparql_eval::extension_env::ExtensionEnv>
+      2 core::ptr::drop_glue::<pyo3::err::PyErr>
+      8 llvm.assume
+     56 llvm.experimental.noalias.scope.decl
+     77 llvm.lifetime.end.p0
+     49 llvm.lifetime.start.p0
+     52 llvm.memcpy.p0.p0.i64
+      1 llvm.memset.p0.i64
+      1 llvm.threadlocal.address.p0
+      1 purrdf_native::py_store::env::division_policy
+      1 purrdf_native::py_store::env::extension_env
+      1 purrdf_native::py_store::presentation::presented_value_error
+      1 purrdf_native::py_store::presentation::refusal_value_error
+      1 purrdf_native::py_store::quad_store::collect_substitutions
+      1 purrdf_native::py_store::query::build_engine
+      1 purrdf_native::py_store::query::build_relations
+      1 purrdf_native::py_store::query::collect_relations
+      1 purrdf_native::py_store::query::materialize_results
+      1 purrdf_native::xpath_regex::selection
+      1 purrdf_validate::query::statistical_aggregates
+      1 purrdf_validate::xpath_regex::diagnostic_refusal_code

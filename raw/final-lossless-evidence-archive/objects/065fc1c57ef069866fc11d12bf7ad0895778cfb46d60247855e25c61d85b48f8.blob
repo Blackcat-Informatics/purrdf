@@ -1,0 +1,111 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/testkit)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error[E0277]: the trait bound `&mut EvalCtx<'_, D>: GroupDomain` is not satisfied
+    --> crates/sparql-eval/src/modifier.rs:1883:81
+     |
+1883 |                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
+     |                         --------------                                          ^^^ the trait `GroupDomain` is not implemented for `&mut EvalCtx<'_, D>`
+     |                         |
+     |                         required by a bound introduced by this call
+     |
+help: the following other types implement trait `GroupDomain`
+    --> crates/sparql-eval/src/modifier.rs:1715:1
+     |
+1715 | impl GroupDomain for () {
+     | ^^^^^^^^^^^^^^^^^^^^^^^ `()`
+...
+1722 | impl GroupDomain for &[Variable] {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `&[purrdf_sparql_algebra::Variable]`
+note: required by a bound in `eval_aggregate`
+    --> crates/sparql-eval/src/modifier.rs:2282:45
+     |
+2282 | fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+     |                                             ^^^^^^^^^^^ required by this bound in `eval_aggregate`
+
+error[E0061]: this function takes 7 arguments but 6 arguments were supplied
+    --> crates/sparql-eval/src/modifier.rs:1883:25
+     |
+1883 |                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
+     |                         ^^^^^^^^^^^^^^---------------------------------------------- argument #7 of type `&mut EvalCtx<'_, _>` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/modifier.rs:2282:4
+     |
+2282 | fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+     |    ^^^^^^^^^^^^^^
+...
+2289 |     ctx: &mut EvalCtx<'_, D>,
+     |     ------------------------
+help: provide the argument
+     |
+1883 |                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx, /* ctx */)?;
+     |                                                                                    +++++++++++
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+    --> crates/sparql-eval/src/modifier.rs:1986:21
+     |
+1986 |                     crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals)?,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^----------------------------------- argument #4 of type `DivisionPolicy` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/agg_fn.rs:506:15
+     |
+ 506 | pub(crate) fn init_contained(
+     |               ^^^^^^^^^^^^^^
+...
+ 510 |     division: purrdf_xsd::exact::DivisionPolicy,
+     |     -------------------------------------------
+help: provide the argument
+     |
+1986 |                     crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals, /* DivisionPolicy */)?,
+     |                                                                                    ++++++++++++++++++++++
+
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+    --> crates/sparql-eval/src/modifier.rs:2016:39
+     |
+2016 |             Self::Custom(acc, iri) => crate::agg_fn::finish_contained(acc, &iri),
+     |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^----------- argument #3 of type `&mut dyn FnMut(ErrorCode)` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/agg_fn.rs:591:15
+     |
+ 591 | pub(crate) fn finish_contained(
+     |               ^^^^^^^^^^^^^^^^
+...
+ 594 |     absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+     |     ---------------------------------------------
+help: provide the argument
+     |
+2016 |             Self::Custom(acc, iri) => crate::agg_fn::finish_contained(acc, &iri, /* &mut dyn FnMut(ErrorCode) */),
+     |                                                                                +++++++++++++++++++++++++++++++++
+
+error[E0061]: this method takes 2 arguments but 0 arguments were supplied
+    --> crates/sparql-eval/src/modifier.rs:2022:47
+     |
+2022 |                 NumericAggregate::Avg => fold.finish_avg(),
+     |                                               ^^^^^^^^^^-- two arguments of type `DivisionPolicy` and `&mut dyn FnMut(ErrorCode)` are missing
+     |
+note: method defined here
+    --> crates/sparql-eval/src/modifier.rs:3185:8
+     |
+3185 |     fn finish_avg(
+     |        ^^^^^^^^^^
+3186 |         self,
+3187 |         division: DivisionPolicy,
+     |         ------------------------
+3188 |         absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+     |         ---------------------------------------------
+help: provide the arguments
+     |
+2022 |                 NumericAggregate::Avg => fold.finish_avg(/* DivisionPolicy */, /* &mut dyn FnMut(ErrorCode) */),
+     |                                                          +++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0277.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...

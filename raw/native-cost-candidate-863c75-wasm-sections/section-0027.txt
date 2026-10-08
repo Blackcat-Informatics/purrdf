@@ -1,0 +1,706 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_algebra-96bf57510f55d7ab.purrdf_sparql_algebra.2d4d4c38e30aca1e-cgu.0.rcgu.o.rcgu.ll:190019
+; purrdf_sparql_algebra::validate::iri
+define internal fastcc void @_RNvNtCs3T8KIHP36KE_21purrdf_sparql_algebra8validate3iri(ptr dead_on_unwind noalias nofree noundef nonnull writable writeonly align 4 captures(none) dereferenceable(32) %0, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %1, i32 noundef %2) unnamed_addr #0 !guid !33326 {
+  %4 = alloca [0 x i8], align 1
+  %5 = alloca [56 x i8], align 8
+  %6 = alloca [12 x i8], align 8
+  %7 = alloca [12 x i8], align 4
+  %8 = alloca [35 x i8], align 1
+  %9 = alloca [16 x i8], align 4
+  %10 = alloca [12 x i8], align 4
+  %11 = alloca [11 x i8], align 1
+  %12 = alloca [48 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %8)
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  call void @llvm.lifetime.start.p0(ptr nonnull %7)
+  call void @llvm.lifetime.start.p0(ptr nonnull %5), !noalias !33327
+; call purrdf_iri::parse::scan
+  call fastcc void @_RNvNtCse684nB32suR_10purrdf_iri5parse4scan.llvm.11037361828496240790(ptr noalias nofree noundef align 8 captures(none) dereferenceable(56) %5, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) %1, i32 noundef %2, i1 noundef zeroext false) #35, !noalias !33334
+  %13 = load i32, ptr %5, align 8, !range !4744, !noalias !33327, !noundef !1046
+  %14 = icmp eq i32 %13, 2
+  br i1 %14, label %16, label %15
+
+15:                                               ; preds = %3
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !noalias !33327
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  call void @llvm.lifetime.end.p0(ptr nonnull %7)
+  %.not = icmp eq i32 %13, 1
+  call void @llvm.lifetime.end.p0(ptr nonnull %8)
+  br i1 %.not, label %112, label %77
+
+16:                                               ; preds = %3
+  %17 = getelementptr inbounds nuw i8, ptr %5, i32 8
+  %18 = load i32, ptr %17, align 8, !noalias !33327
+  %19 = getelementptr inbounds nuw i8, ptr %5, i32 12
+  %20 = load i8, ptr %19, align 4, !noalias !33327
+  %21 = getelementptr inbounds nuw i8, ptr %5, i32 13
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(11) %8, ptr noundef nonnull align 1 dereferenceable(11) %21, i32 11, i1 false), !noalias !33335
+  %22 = getelementptr inbounds nuw i8, ptr %5, i32 24
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 8 dereferenceable(12) %6, ptr noundef nonnull align 8 dereferenceable(12) %22, i32 12, i1 false), !noalias !33327
+  %23 = getelementptr inbounds nuw i8, ptr %5, i32 36
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(12) %7, ptr noundef nonnull align 4 dereferenceable(12) %23, i32 12, i1 false), !noalias !33327
+  %24 = getelementptr inbounds nuw i8, ptr %5, i32 48
+  %25 = load i32, ptr %24, align 8, !noalias !33327
+  %26 = getelementptr inbounds nuw i8, ptr %5, i32 52
+  %27 = load i32, ptr %26, align 4, !noalias !33327
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !noalias !33327
+  %28 = getelementptr inbounds nuw i8, ptr %8, i32 11
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(12) %28, ptr noundef nonnull align 8 dereferenceable(12) %6, i32 12, i1 false), !noalias !33335
+  %29 = getelementptr inbounds nuw i8, ptr %8, i32 23
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(12) %29, ptr noundef nonnull align 4 dereferenceable(12) %7, i32 12, i1 false), !noalias !33335
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  call void @llvm.lifetime.end.p0(ptr nonnull %7)
+  %30 = icmp eq i32 %18, -1
+  br i1 %30, label %76, label %31
+
+31:                                               ; preds = %16
+  %.sroa.10.0..sroa_idx = getelementptr inbounds nuw i8, ptr %12, i32 5
+  call void @llvm.lifetime.start.p0(ptr nonnull %12)
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(35) %.sroa.10.0..sroa_idx, ptr noundef nonnull align 1 dereferenceable(35) %8, i32 35, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %8)
+  %32 = getelementptr inbounds nuw i8, ptr %12, i32 8
+  %33 = getelementptr inbounds nuw i8, ptr %12, i32 24
+  store i32 %18, ptr %12, align 8
+  %.sroa.7.0..sroa_idx = getelementptr inbounds nuw i8, ptr %12, i32 4
+  store i8 %20, ptr %.sroa.7.0..sroa_idx, align 4
+  %.sroa.11.0..sroa_idx = getelementptr inbounds nuw i8, ptr %12, i32 40
+  store i32 %25, ptr %.sroa.11.0..sroa_idx, align 8
+  %.sroa.12.0..sroa_idx = getelementptr inbounds nuw i8, ptr %12, i32 44
+  store i32 %27, ptr %.sroa.12.0..sroa_idx, align 4
+  call void @llvm.lifetime.start.p0(ptr nonnull %10), !noalias !33336
+  store i32 0, ptr %10, align 4, !noalias !33336
+  %34 = getelementptr inbounds nuw i8, ptr %10, i32 4
+  store ptr inttoptr (i32 1 to ptr), ptr %34, align 4, !noalias !33336
+  %35 = getelementptr inbounds nuw i8, ptr %10, i32 8
+  store i32 0, ptr %35, align 4, !noalias !33336
+  call void @llvm.lifetime.start.p0(ptr nonnull %9), !noalias !33336
+  %36 = getelementptr inbounds nuw i8, ptr %9, i32 8
+  store i64 1610612768, ptr %36, align 4, !noalias !33336
+  store ptr %10, ptr %9, align 4, !noalias !33336
+  %37 = getelementptr inbounds nuw i8, ptr %9, i32 4
+  store ptr @anon.1d9cf62883a5469cf92f8f6bff73d9bd.382, ptr %37, align 4, !noalias !33336
+; call <purrdf_iri::error::IriError as core::fmt::Display>::fmt
+  %38 = call noundef zeroext i1 @_RNvXs0_NtCse684nB32suR_10purrdf_iri5errorNtB5_8IriErrorNtNtCsb6ASFGx6cXz_4core3fmt7Display3fmt(ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(48) %12, ptr noalias nofree noundef nonnull align 4 dereferenceable(16) %9) #35, !noalias !33340
+  br i1 %38, label %39, label %40, !prof !1140
+
+39:                                               ; preds = %31
+; call core::result::unwrap_failed
+  call void @_RNvNtCsb6ASFGx6cXz_4core6result13unwrap_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.1d9cf62883a5469cf92f8f6bff73d9bd.1051, i32 noundef 55, ptr noundef nonnull %4, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.1d9cf62883a5469cf92f8f6bff73d9bd.1050, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.1d9cf62883a5469cf92f8f6bff73d9bd.1053) #37, !noalias !33340
+  unreachable
+
+40:                                               ; preds = %31
+  %41 = load i8, ptr %10, align 4, !noalias !33341
+  %42 = getelementptr inbounds nuw i8, ptr %10, i32 1
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(11) %11, ptr noundef nonnull align 1 dereferenceable(11) %42, i32 11, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %9), !noalias !33336
+  call void @llvm.lifetime.end.p0(ptr nonnull %10), !noalias !33336
+  call void @llvm.experimental.noalias.scope.decl(metadata !33342)
+  switch i32 %18, label %43 [
+    i32 0, label %72
+    i32 1, label %72
+    i32 2, label %60
+    i32 3, label %72
+    i32 4, label %72
+    i32 5, label %63
+    i32 6, label %66
+    i32 7, label %69
+  ]
+
+43:                                               ; preds = %40
+  call void @llvm.experimental.noalias.scope.decl(metadata !33345)
+  call void @llvm.experimental.noalias.scope.decl(metadata !33348)
+  %44 = load i32, ptr %.sroa.7.0..sroa_idx, align 4, !range !1151, !alias.scope !33351, !noundef !1046
+  %45 = icmp eq i32 %44, 0
+  br i1 %45, label %48, label %46
+
+46:                                               ; preds = %43
+  %47 = load ptr, ptr %32, align 8, !alias.scope !33351, !nonnull !1046, !noundef !1046
+; call __rustc::__rust_dealloc
+  call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %47, i32 noundef %44, i32 noundef range(i32 1, -2147483647) 1) #35, !noalias !33351
+  br label %48
+
+48:                                               ; preds = %46, %43
+  %49 = getelementptr inbounds nuw i8, ptr %12, i32 16
+  %50 = load i32, ptr %49, align 8, !range !1047, !alias.scope !33352, !noundef !1046
+  %51 = icmp eq i32 %50, 0
+  %52 = getelementptr inbounds nuw i8, ptr %12, i32 20
+  %53 = load i32, ptr %52, align 4, !range !1151
+  %54 = icmp eq i32 %53, 0
+  %55 = select i1 %51, i1 true, i1 %54
+  br i1 %55, label %72, label %56
+
+56:                                               ; preds = %69, %66, %63, %60, %48
+  %57 = phi ptr [ %32, %66 ], [ %32, %63 ], [ %32, %60 ], [ %32, %69 ], [ %33, %48 ]
+  %58 = phi i32 [ %67, %66 ], [ %64, %63 ], [ %61, %60 ], [ %70, %69 ], [ %53, %48 ]
+  %59 = load ptr, ptr %57, align 4, !alias.scope !33342, !nonnull !1046, !noundef !1046
+; call __rustc::__rust_dealloc
+  call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %59, i32 noundef %58, i32 noundef range(i32 1, -2147483647) 1) #35, !noalias !33342
+  br label %72
+
+60:                                               ; preds = %40
+  %61 = load i32, ptr %.sroa.7.0..sroa_idx, align 4, !range !1151, !alias.scope !33355, !noundef !1046
+  %62 = icmp eq i32 %61, 0
+  br i1 %62, label %72, label %56
+
+63:                                               ; preds = %40
+  %64 = load i32, ptr %.sroa.7.0..sroa_idx, align 4, !range !1151, !alias.scope !33360, !noundef !1046
+  %65 = icmp eq i32 %64, 0
+  br i1 %65, label %72, label %56
+
+66:                                               ; preds = %40
+  %67 = load i32, ptr %.sroa.7.0..sroa_idx, align 4, !range !1151, !alias.scope !33365, !noundef !1046
+  %68 = icmp eq i32 %67, 0
+  br i1 %68, label %72, label %56
+
+69:                                               ; preds = %40
+  %70 = load i32, ptr %.sroa.7.0..sroa_idx, align 4, !range !1151, !alias.scope !33370, !noundef !1046
+  %71 = icmp eq i32 %70, 0
+  br i1 %71, label %72, label %56
+
+72:                                               ; preds = %69, %66, %63, %60, %56, %48, %40, %40, %40, %40
+  call void @llvm.lifetime.end.p0(ptr nonnull %12)
+  store i32 -2147483647, ptr %0, align 4
+  %73 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  store i8 %41, ptr %73, align 4
+  %74 = getelementptr inbounds nuw i8, ptr %0, i32 5
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(11) %74, ptr noundef nonnull align 1 dereferenceable(11) %11, i32 11, i1 false)
+  %75 = getelementptr inbounds nuw i8, ptr %0, i32 16
+  store i32 0, ptr %75, align 4
+  br label %117
+
+76:                                               ; preds = %16
+  %extract.t12 = trunc i8 %20 to i1
+  call void @llvm.lifetime.end.p0(ptr nonnull %8)
+  br i1 %extract.t12, label %77, label %112
+
+77:                                               ; preds = %15, %76
+; call <dlmalloc::dlmalloc::Dlmalloc<dlmalloc::sys::System>>::malloc
+  %78 = tail call fastcc noundef ptr @_RNvMs0_NtCsdvL56Lvsrr_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCs51WbWHd1ipx_18purrdf_alloc_probe.llvm.18113153652620469488(i32 noundef range(i32 1, 0) 29) #35, !noalias !33375
+  %79 = icmp eq ptr %78, null
+  br i1 %79, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread, label %80
+
+80:                                               ; preds = %77
+  %81 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375, !noundef !1046
+  %82 = tail call i64 @llvm.uadd.sat.i64(i64 %81, i64 1)
+  store i64 %82, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375
+  %83 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375, !noundef !1046
+  %84 = tail call i64 @llvm.uadd.sat.i64(i64 %83, i64 29)
+  store i64 %84, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375
+  %85 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375, !noundef !1046
+  %86 = tail call i64 @llvm.sadd.sat.i64(i64 %85, i64 29)
+  store i64 %86, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375
+  %87 = load i64, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375, !noundef !1046
+  %88 = icmp sgt i64 %86, %87
+  br i1 %88, label %89, label %.preheader
+
+89:                                               ; preds = %80
+  store i64 %86, ptr @_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488, align 8, !noalias !33375
+  br label %.preheader
+
+.preheader:                                       ; preds = %89, %80
+  br label %90
+
+90:                                               ; preds = %.preheader, %93
+  %91 = load atomic i64, ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488 acquire, align 8, !noalias !33375
+  %92 = icmp slt i64 %91, 0
+  br i1 %92, label %93, label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+
+93:                                               ; preds = %90
+  %94 = add nsw i64 %91, 1
+  %95 = cmpxchg weak ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488, i64 %91, i64 %94 acq_rel acquire, align 8, !noalias !33378
+  %96 = extractvalue { i64, i1 } %95, 1
+  br i1 %96, label %97, label %90
+
+97:                                               ; preds = %93
+  %98 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS, i64 1 monotonic, align 8, !noalias !33375
+  %99 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES, i64 29 monotonic, align 8, !noalias !33375
+  %100 = atomicrmw add ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES, i64 29 monotonic, align 8, !noalias !33375
+  %101 = tail call i64 @llvm.sadd.sat.i64(i64 %100, i64 29)
+  %102 = load atomic i64, ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES monotonic, align 8, !noalias !33375
+  br label %103
+
+103:                                              ; preds = %106, %97
+  %104 = phi i64 [ %102, %97 ], [ %109, %106 ]
+  %105 = icmp sgt i64 %101, %104
+  br i1 %105, label %106, label %110
+
+106:                                              ; preds = %103
+  %107 = cmpxchg weak ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES, i64 %104, i64 %101 monotonic monotonic, align 8, !noalias !33381
+  %108 = extractvalue { i64, i1 } %107, 1
+  %109 = extractvalue { i64, i1 } %107, 0
+  br i1 %108, label %110, label %103
+
+110:                                              ; preds = %106, %103
+  %111 = atomicrmw sub ptr @_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488, i64 1 release, align 8, !noalias !33375
+  br label %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit
+
+112:                                              ; preds = %15, %76
+  store i32 -1, ptr %0, align 4
+  br label %117
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit.thread: ; preds = %77
+; call alloc::raw_vec::handle_error
+  tail call void @_RNvNtCsiymUexJS71D_5alloc7raw_vec12handle_error(i32 noundef 1, i32 29) #36
+  unreachable
+
+_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit:  ; preds = %90, %110
+  tail call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 1 dereferenceable(29) %78, ptr noundef nonnull align 1 dereferenceable(29) @anon.1d9cf62883a5469cf92f8f6bff73d9bd.735, i32 29, i1 false)
+  store i32 -2147483647, ptr %0, align 4
+  %113 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  store i32 29, ptr %113, align 4
+  %114 = getelementptr inbounds nuw i8, ptr %0, i32 8
+  store ptr %78, ptr %114, align 4
+  %115 = getelementptr inbounds nuw i8, ptr %0, i32 12
+  store i32 29, ptr %115, align 4
+  %116 = getelementptr inbounds nuw i8, ptr %0, i32 16
+  store i32 0, ptr %116, align 4
+  br label %117
+
+117:                                              ; preds = %_RNvCs2NWS7XDLE6y_7___rustc12___rust_alloc.exit, %112, %72
+  ret void
+}
+
+ASSEMBLY
+_RNvNtCs3T8KIHP36KE_21purrdf_sparql_algebra8validate3iri:
+.Lfunc_begin291:
+	.functype	_RNvNtCs3T8KIHP36KE_21purrdf_sparql_algebra8validate3iri (i32, i32, i32) -> ()
+	.local  	i32, i64, i32, i32, i64, i64
+	global.get	__stack_pointer
+	i32.const	160
+	i32.sub 
+	local.tee	3
+	global.set	__stack_pointer
+	local.get	3
+	i32.const	96
+	i32.add 
+	local.get	1
+	local.get	2
+	i32.const	0
+	call	_RNvNtCse684nB32suR_10purrdf_iri5parse4scan.llvm.11037361828496240790
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	local.get	3
+	i32.load	96
+	local.tee	2
+	i32.const	2
+	i32.eq  
+	br_if   	0
+	local.get	2
+	i32.const	1
+	i32.ne  
+	br_if   	1
+	br      	6
+.LBB291_2:
+	end_block
+	local.get	3
+	local.get	3
+	i64.load	109:p2align=0
+	i64.store	24
+	local.get	3
+	local.get	3
+	i32.load	116:p2align=0
+	i32.store	31:p2align=0
+	local.get	3
+	local.get	3
+	i64.load	120
+	local.tee	4
+	i64.store	80
+	local.get	3
+	local.get	3
+	i32.load	128
+	local.tee	2
+	i32.store	88
+	local.get	3
+	local.get	3
+	i64.load	132:p2align=2
+	i64.store	64
+	local.get	3
+	local.get	3
+	i32.load	140
+	i32.store	72
+	local.get	3
+	local.get	4
+	i64.store	35:p2align=0
+	local.get	3
+	local.get	2
+	i32.store	43:p2align=0
+	local.get	3
+	i32.load8_u	108
+	local.set	1
+	local.get	3
+	i32.load	144
+	local.set	5
+	local.get	3
+	i32.load	148
+	local.set	6
+	local.get	3
+	i32.load	104
+	local.set	2
+	local.get	3
+	local.get	3
+	i32.load	72
+	i32.store	55:p2align=0
+	local.get	3
+	local.get	3
+	i64.load	64
+	i64.store	47:p2align=0
+	block   	
+	local.get	2
+	i32.const	-1
+	i32.eq  
+	br_if   	0
+	local.get	3
+	local.get	3
+	i32.load	55:p2align=0
+	i32.store	132:p2align=0
+	local.get	3
+	local.get	3
+	i64.load	48
+	i64.store	125:p2align=0
+	local.get	3
+	local.get	3
+	i64.load	40
+	i64.store	117:p2align=0
+	local.get	3
+	local.get	3
+	i64.load	32
+	i64.store	109:p2align=0
+	local.get	3
+	local.get	3
+	i64.load	24
+	i64.store	101:p2align=0
+	local.get	3
+	local.get	6
+	i32.store	140
+	local.get	3
+	local.get	5
+	i32.store	136
+	local.get	3
+	local.get	1
+	i32.store8	100
+	local.get	3
+	local.get	2
+	i32.store	96
+	local.get	3
+	i32.const	0
+	i32.store	88
+	local.get	3
+	i64.const	4294967296
+	i64.store	80:p2align=2
+	local.get	3
+	i32.const	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.382
+	i32.store	28
+	local.get	3
+	i64.const	1610612768
+	i64.store	32:p2align=2
+	local.get	3
+	local.get	3
+	i32.const	80
+	i32.add 
+	i32.store	24
+	local.get	3
+	i32.const	96
+	i32.add 
+	local.get	3
+	i32.const	24
+	i32.add 
+	call	_RNvXs0_NtCse684nB32suR_10purrdf_iri5errorNtB5_8IriErrorNtNtCsb6ASFGx6cXz_4core3fmt7Display3fmt
+	br_if   	2
+	local.get	3
+	i32.const	104
+	i32.add 
+	local.set	5
+	local.get	3
+	local.get	3
+	i64.load	81:p2align=0
+	i64.store	8
+	local.get	3
+	local.get	3
+	i32.load	88:p2align=0
+	i32.store	15:p2align=0
+	local.get	3
+	i32.load8_u	80
+	local.set	1
+	block   	
+	block   	
+	local.get	2
+	br_table 	{7, 7, 1, 7, 7, 1, 1, 1, 0}
+.LBB291_5:
+	end_block
+	block   	
+	local.get	3
+	i32.load	100
+	local.tee	2
+	i32.eqz
+	br_if   	0
+	local.get	3
+	i32.load	104
+	local.get	2
+	i32.const	1
+	call	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB291_7:
+	end_block
+	local.get	3
+	i32.load	112
+	i32.eqz
+	br_if   	6
+	local.get	3
+	i32.load	116
+	local.tee	2
+	i32.eqz
+	br_if   	6
+	local.get	3
+	i32.const	120
+	i32.add 
+	local.set	5
+	br      	5
+.LBB291_10:
+	end_block
+	local.get	3
+	i32.load	100
+	local.tee	2
+	br_if   	4
+	br      	5
+.LBB291_11:
+	end_block
+	local.get	1
+	i32.const	1
+	i32.and 
+	i32.eqz
+	br_if   	5
+.LBB291_12:
+	end_block
+	i32.const	29
+	call	_RNvMs0_NtCsdvL56Lvsrr_8dlmalloc8dlmallocINtB5_8DlmallocNtNtB7_3sys6SystemE6mallocCs51WbWHd1ipx_18purrdf_alloc_probe.llvm.18113153652620469488
+	local.tee	1
+	i32.eqz
+	br_if   	1
+	i32.const	0
+	i64.const	-1
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i64.const	1
+	i64.add 
+	local.tee	4
+	local.get	4
+	i64.eqz
+	i64.select
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe18THREAD_ALLOCATIONS023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i32.const	0
+	i64.const	-1
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	local.tee	4
+	i64.const	29
+	i64.add 
+	local.tee	7
+	local.get	7
+	local.get	4
+	i64.lt_u
+	i64.select
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe22THREAD_REQUESTED_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i32.const	0
+	i64.const	9223372036854775807
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	local.tee	4
+	i64.const	29
+	i64.add 
+	local.tee	7
+	local.get	7
+	local.get	4
+	i64.lt_s
+	i64.select
+	local.tee	4
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_LIVE_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	block   	
+	local.get	4
+	i32.const	0
+	i64.load	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+	i64.le_s
+	br_if   	0
+	i32.const	0
+	local.get	4
+	i64.store	_RNvNCNvCs51WbWHd1ipx_18purrdf_alloc_probe17THREAD_PEAK_BYTES023___RUST_STD_INTERNAL_VAL.0.llvm.18113153652620469488
+.LBB291_15:
+	end_block
+	block   	
+	loop    	
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.tee	4
+	i64.const	-1
+	i64.gt_s
+	br_if   	1
+	i32.const	0
+	local.get	4
+	i64.const	1
+	i64.add 
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.tee	7
+	local.get	7
+	local.get	4
+	i64.eq  
+	i64.select
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	local.get	7
+	local.get	4
+	i64.ne  
+	br_if   	0
+	end_loop
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS
+	i64.const	1
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe19PROCESS_ALLOCATIONS
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES
+	i64.const	29
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe23PROCESS_REQUESTED_BYTES
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES
+	local.tee	7
+	i64.const	29
+	i64.add 
+	local.tee	4
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_LIVE_BYTES
+	i64.const	9223372036854775807
+	local.get	4
+	local.get	4
+	local.get	7
+	i64.lt_s
+	i64.select
+	local.set	8
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.set	4
+.LBB291_18:
+	block   	
+	loop    	
+	local.get	8
+	local.get	4
+	i64.le_s
+	br_if   	1
+	i32.const	0
+	local.get	8
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.tee	7
+	local.get	7
+	local.get	4
+	i64.eq  
+	i64.select
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe18PROCESS_PEAK_BYTES
+	local.get	7
+	local.get	4
+	i64.ne  
+	local.set	2
+	local.get	7
+	local.set	4
+	local.get	2
+	br_if   	0
+.LBB291_20:
+	end_loop
+	end_block
+	i32.const	0
+	i32.const	0
+	i64.load	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+	i64.const	-1
+	i64.add 
+	i64.store	_RNvCs51WbWHd1ipx_18purrdf_alloc_probe13PROCESS_STATE.llvm.18113153652620469488
+.LBB291_21:
+	end_block
+	local.get	0
+	i64.const	29
+	i64.store	12:p2align=2
+	local.get	0
+	local.get	1
+	i32.store	8
+	local.get	0
+	i64.const	126701535233
+	i64.store	0:p2align=2
+	local.get	1
+	i32.const	0
+	i64.load	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.735+21:p2align=0
+	i64.store	21:p2align=0
+	local.get	1
+	i32.const	0
+	i64.load	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.735+16:p2align=0
+	i64.store	16:p2align=0
+	local.get	1
+	i32.const	0
+	i64.load	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.735+8:p2align=0
+	i64.store	8:p2align=0
+	local.get	1
+	i32.const	0
+	i64.load	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.735:p2align=0
+	i64.store	0:p2align=0
+	br      	5
+.LBB291_22:
+	end_block
+	i32.const	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.1051
+	i32.const	55
+	local.get	3
+	i32.const	159
+	i32.add 
+	i32.const	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.1050
+	i32.const	.Lanon.1d9cf62883a5469cf92f8f6bff73d9bd.1053
+	call	_RNvNtCsb6ASFGx6cXz_4core6result13unwrap_failed
+	unreachable
+.LBB291_23:
+	end_block
+	i32.const	1
+	i32.const	29
+	call	_RNvNtCsiymUexJS71D_5alloc7raw_vec12handle_error
+	unreachable
+.LBB291_24:
+	end_block
+	local.get	5
+	i32.load	0
+	local.get	2
+	i32.const	1
+	call	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.LBB291_25:
+	end_block
+	local.get	0
+	local.get	1
+	i32.store8	4
+	local.get	0
+	i32.const	-2147483647
+	i32.store	0
+	local.get	0
+	local.get	3
+	i64.load	8
+	i64.store	5:p2align=0
+	local.get	0
+	local.get	3
+	i32.load	15:p2align=0
+	i32.store	12:p2align=0
+	local.get	0
+	i32.const	0
+	i32.store	16
+	br      	1
+.LBB291_26:
+	end_block
+	local.get	0
+	i32.const	-1
+	i32.store	0
+.LBB291_27:
+	end_block
+	local.get	3
+	i32.const	160
+	i32.add 
+	global.set	__stack_pointer
+	end_function
+.Lfunc_end291:

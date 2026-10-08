@@ -1,0 +1,34 @@
+      2 <alloc::raw_vec::RawVec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>::grow_one
+      1 <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+     14 <alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>::drop_slow
+      1 <core::iter::adapters::filter::Filter<core::iter::adapters::flatten::FlatMap<core::option::IntoIter<purrdf_core::ir::term::TermId>, core::iter::adapters::map::Map<core::iter::adapters::copied::Copied<core::slice::iter::Iter<(purrdf_core::ir::term::TermId, purrdf_core::ir::term::TermId, core::option::Option<purrdf_core::ir::term::TermId>)>>, <purrdf_core::ir::dataset::RdfDataset>::reifier_quads::{closure#0}::{closure#0}>, <purrdf_core::ir::dataset::RdfDataset>::reifier_quads::{closure#0}>, <purrdf_core::ir::dataset::RdfDataset as purrdf_core::dataset_view::DatasetView>::reifier_quads_in_graph::{closure#0}> as core::iter::traits::iterator::Iterator>::next
+      1 <purrdf_core::ir::dataset::QuadMatches as core::iter::traits::iterator::Iterator>::next
+      1 <purrdf_core::ir::dataset::RdfDataset>::probe_plan
+      1 <purrdf_core::ir::dataset::RdfDataset>::quads_for_pattern_with_plan
+      2 <purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri
+      1 <purrdf_core::ir::dataset::RdfDataset>::term_id_by_value
+      2 <purrdf_core::small::SmallVec<[purrdf_sparql_eval::vm::ConstCell<purrdf_core::ir::term::TermId>; 4]>>::grow
+      3 <purrdf_sparql_eval::governor::lift::Lift>::absorb::<purrdf_core::ir::term::TermId>
+      2 <purrdf_sparql_eval::governor::lift::Lift>::at
+      3 <purrdf_sparql_eval::governor::lift::Lift>::withheld::<purrdf_core::ir::term::TermId>
+      3 <purrdf_sparql_eval::governor::lift::Truncation<purrdf_core::ir::term::TermId>>::new
+      5 <purrdf_sparql_eval::solution::VarSchema as core::clone::Clone>::clone
+      1 <purrdf_sparql_eval::solution::VarSchema>::index_of
+      5 <purrdf_sparql_eval::solution::VarSchema>::push
+      9 __rustc::__rust_dealloc
+      4 alloc::alloc::handle_alloc_error
+      1 alloc::boxed::box_new_uninit
+      2 alloc::raw_vec::handle_error
+      2 core::panicking::panic_bounds_check
+      1 core::panicking::panic_fmt
+     10 core::panicking::panic_in_cleanup
+      2 core::ptr::drop_glue::<alloc::vec::Vec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+      2 core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>>>
+      4 core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+      1 core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Evaluated<purrdf_core::ir::term::TermId>>
+      2 core::ptr::drop_glue::<purrdf_sparql_eval::governor::lift::Lift>
+      4 core::ptr::drop_glue::<purrdf_sparql_eval::solution::SolutionSeq>
+     13 core::ptr::drop_glue::<purrdf_sparql_eval::solution::VarSchema>
+      3 purrdf_sparql_eval::eval::eval_evaluated_with::<purrdf_core::ir::dataset::RdfDataset, purrdf_sparql_eval::eval::eval_evaluated<purrdf_core::ir::dataset::RdfDataset>::{closure#0}>
+      3 purrdf_sparql_eval::eval::syntactic_schema
+      1 purrdf_sparql_eval::modifier::yields_nothing_without_rows_in_the_active_graph

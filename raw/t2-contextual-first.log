@@ -1,0 +1,229 @@
+........................................................................ [  8%]
+........................................................................ [ 17%]
+........................................................................ [ 26%]
+........................................................................ [ 35%]
+........................................................................ [ 44%]
+........................................................................ [ 53%]
+........................................................................ [ 62%]
+........................................................................ [ 71%]
+........................................................................ [ 80%]
+........................................................................ [ 89%]
+..................F...F...F...F
+=================================== FAILURES ===================================
+_ test_contextual_matrix[graph-outer-filter-context-unbound-ConjunctiveGraph] __
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+fixture = {'cases': [{'dataset': 'named', 'initial': {}, 'name': 'graph-outer-filter-context-unbound', 'oracle': {'columns': ['d...': {'columns': ['this'], 'rows': [[[...]]], 'type': 'SELECT'}, ...}], 'quads': [['a', 'p', 'o1', 'g1']], 'triples': []}
+case = {'dataset': 'named', 'initial': {}, 'name': 'graph-outer-filter-context-unbound', 'oracle': {'columns': ['driver'], 'rows': [], 'type': 'SELECT'}, ...}
+route = 'ConjunctiveGraph'
+
+    @pytest.mark.parametrize("route", ["Graph", "Dataset", "ConjunctiveGraph", "processor"])
+    @pytest.mark.parametrize("fixture,case", CASES, ids=[case["name"] for _, case in CASES])
+    def test_contextual_matrix(compat, oracle, fixture, case, route):
+        assert oracle.__version__ == "7.6.0"
+        assert compat is not oracle
+        if fixture.get("quads") and route in ("Graph", "processor"):
+            # Named datasets require a dataset consumer, while all other inputs run
+            # through every graph/processor route.
+            route = "Dataset"
+        expected = run(oracle, fixture, case, route)
+        actual = run(compat, fixture, case, route)
+        if expected[0] in ("CONSTRUCT", "DESCRIBE"):
+            from rdflib.compare import isomorphic
+    
+            converted = oracle.Graph()
+            for triple in actual[1]:
+                converted.add(
+                    tuple(
+                        oracle.URIRef(str(term))
+                        if isinstance(term, compat.URIRef)
+                        else oracle.BNode(str(term))
+                        if isinstance(term, compat.BNode)
+                        else oracle.Literal(
+                            str(term), lang=term.language, datatype=term.datatype
+                        )
+                        for term in triple
+                    )
+                )
+            assert actual[0] == expected[0]
+            assert isomorphic(converted, expected[1])
+        else:
+>           assert actual == expected
+E           AssertionError: assert ('SELECT', ('...,), Counter()) == ('SELECT', ('... None),): 1}))
+E             
+E             At index 2 diff: Counter() != Counter({(('literal', '1', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1, (('literal', '2', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1, (('literal', '3', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1})
+E             Use -v to get more diff
+
+tests/test_contextual_mappings.py:128: AssertionError
+__ test_contextual_matrix[graph-outer-filter-context-bound-ConjunctiveGraph] ___
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+fixture = {'cases': [{'dataset': 'named', 'initial': {}, 'name': 'graph-outer-filter-context-unbound', 'oracle': {'columns': ['d...': {'columns': ['this'], 'rows': [[[...]]], 'type': 'SELECT'}, ...}], 'quads': [['a', 'p', 'o1', 'g1']], 'triples': []}
+case = {'dataset': 'named', 'initial': {'this': 'http://example.org/a'}, 'name': 'graph-outer-filter-context-bound', 'oracle': {'columns': ['driver'], 'rows': [], 'type': 'SELECT'}, ...}
+route = 'ConjunctiveGraph'
+
+    @pytest.mark.parametrize("route", ["Graph", "Dataset", "ConjunctiveGraph", "processor"])
+    @pytest.mark.parametrize("fixture,case", CASES, ids=[case["name"] for _, case in CASES])
+    def test_contextual_matrix(compat, oracle, fixture, case, route):
+        assert oracle.__version__ == "7.6.0"
+        assert compat is not oracle
+        if fixture.get("quads") and route in ("Graph", "processor"):
+            # Named datasets require a dataset consumer, while all other inputs run
+            # through every graph/processor route.
+            route = "Dataset"
+        expected = run(oracle, fixture, case, route)
+        actual = run(compat, fixture, case, route)
+        if expected[0] in ("CONSTRUCT", "DESCRIBE"):
+            from rdflib.compare import isomorphic
+    
+            converted = oracle.Graph()
+            for triple in actual[1]:
+                converted.add(
+                    tuple(
+                        oracle.URIRef(str(term))
+                        if isinstance(term, compat.URIRef)
+                        else oracle.BNode(str(term))
+                        if isinstance(term, compat.BNode)
+                        else oracle.Literal(
+                            str(term), lang=term.language, datatype=term.datatype
+                        )
+                        for term in triple
+                    )
+                )
+            assert actual[0] == expected[0]
+            assert isomorphic(converted, expected[1])
+        else:
+>           assert actual == expected
+E           AssertionError: assert ('SELECT', ('...,), Counter()) == ('SELECT', ('... None),): 1}))
+E             
+E             At index 2 diff: Counter() != Counter({(('literal', '1', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1, (('literal', '2', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1, (('literal', '3', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1})
+E             Use -v to get more diff
+
+tests/test_contextual_mappings.py:128: AssertionError
+_ test_contextual_matrix[graph-outer-bind-aggregate-context-unbound-ConjunctiveGraph] _
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+fixture = {'cases': [{'dataset': 'named', 'initial': {}, 'name': 'graph-outer-filter-context-unbound', 'oracle': {'columns': ['d...': {'columns': ['this'], 'rows': [[[...]]], 'type': 'SELECT'}, ...}], 'quads': [['a', 'p', 'o1', 'g1']], 'triples': []}
+case = {'dataset': 'named', 'initial': {}, 'name': 'graph-outer-bind-aggregate-context-unbound', 'oracle': {'columns': ['this'], 'rows': [[['literal', '0', 'http://www.w3.org/2001/XMLSchema#integer', None]]], 'type': 'SELECT'}, ...}
+route = 'ConjunctiveGraph'
+
+    @pytest.mark.parametrize("route", ["Graph", "Dataset", "ConjunctiveGraph", "processor"])
+    @pytest.mark.parametrize("fixture,case", CASES, ids=[case["name"] for _, case in CASES])
+    def test_contextual_matrix(compat, oracle, fixture, case, route):
+        assert oracle.__version__ == "7.6.0"
+        assert compat is not oracle
+        if fixture.get("quads") and route in ("Graph", "processor"):
+            # Named datasets require a dataset consumer, while all other inputs run
+            # through every graph/processor route.
+            route = "Dataset"
+        expected = run(oracle, fixture, case, route)
+        actual = run(compat, fixture, case, route)
+        if expected[0] in ("CONSTRUCT", "DESCRIBE"):
+            from rdflib.compare import isomorphic
+    
+            converted = oracle.Graph()
+            for triple in actual[1]:
+                converted.add(
+                    tuple(
+                        oracle.URIRef(str(term))
+                        if isinstance(term, compat.URIRef)
+                        else oracle.BNode(str(term))
+                        if isinstance(term, compat.BNode)
+                        else oracle.Literal(
+                            str(term), lang=term.language, datatype=term.datatype
+                        )
+                        for term in triple
+                    )
+                )
+            assert actual[0] == expected[0]
+            assert isomorphic(converted, expected[1])
+        else:
+>           assert actual == expected
+E           AssertionError: assert ('SELECT', ('... None),): 1})) == ('SELECT', ('... None),): 1}))
+E             
+E             At index 2 diff: Counter({(('literal', '0', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1}) != Counter({(('literal', '3', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1})
+E             Use -v to get more diff
+
+tests/test_contextual_mappings.py:128: AssertionError
+_ test_contextual_matrix[graph-outer-bind-aggregate-context-bound-ConjunctiveGraph] _
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+fixture = {'cases': [{'dataset': 'named', 'initial': {}, 'name': 'graph-outer-filter-context-unbound', 'oracle': {'columns': ['d...': {'columns': ['this'], 'rows': [[[...]]], 'type': 'SELECT'}, ...}], 'quads': [['a', 'p', 'o1', 'g1']], 'triples': []}
+case = {'dataset': 'named', 'initial': {'this': 'http://example.org/a'}, 'name': 'graph-outer-bind-aggregate-context-bound', ...mns': ['this'], 'rows': [[['literal', '0', 'http://www.w3.org/2001/XMLSchema#integer', None]]], 'type': 'SELECT'}, ...}
+route = 'ConjunctiveGraph'
+
+    @pytest.mark.parametrize("route", ["Graph", "Dataset", "ConjunctiveGraph", "processor"])
+    @pytest.mark.parametrize("fixture,case", CASES, ids=[case["name"] for _, case in CASES])
+    def test_contextual_matrix(compat, oracle, fixture, case, route):
+        assert oracle.__version__ == "7.6.0"
+        assert compat is not oracle
+        if fixture.get("quads") and route in ("Graph", "processor"):
+            # Named datasets require a dataset consumer, while all other inputs run
+            # through every graph/processor route.
+            route = "Dataset"
+        expected = run(oracle, fixture, case, route)
+        actual = run(compat, fixture, case, route)
+        if expected[0] in ("CONSTRUCT", "DESCRIBE"):
+            from rdflib.compare import isomorphic
+    
+            converted = oracle.Graph()
+            for triple in actual[1]:
+                converted.add(
+                    tuple(
+                        oracle.URIRef(str(term))
+                        if isinstance(term, compat.URIRef)
+                        else oracle.BNode(str(term))
+                        if isinstance(term, compat.BNode)
+                        else oracle.Literal(
+                            str(term), lang=term.language, datatype=term.datatype
+                        )
+                        for term in triple
+                    )
+                )
+            assert actual[0] == expected[0]
+            assert isomorphic(converted, expected[1])
+        else:
+>           assert actual == expected
+E           AssertionError: assert ('SELECT', ('... None),): 1})) == ('SELECT', ('... None),): 1}))
+E             
+E             At index 2 diff: Counter({(('literal', '0', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1}) != Counter({(('literal', '3', 'http://www.w3.org/2001/XMLSchema#integer', None),): 1})
+E             Use -v to get more diff
+
+tests/test_contextual_mappings.py:128: AssertionError
+=============================== warnings summary ===============================
+tests/test_contextual_mappings.py: 480 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    c = self.default_context if default else None
+
+tests/test_contextual_mappings.py: 219 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:1721: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    query_graph = self.default_context.identifier
+
+tests/test_contextual_mappings.py: 427 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2344: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    context = self.default_context
+
+tests/test_contextual_mappings.py: 376 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:30: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    graph = getattr(module, "Graph" if route == "processor" else route)()
+
+tests/test_contextual_mappings.py: 15 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:233: DeprecationWarning: Dataset.contexts is deprecated, use Dataset.graphs instead.
+    for graph in ctx.dataset.contexts():
+
+tests/test_contextual_mappings.py: 45 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:235: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if graph == ctx.dataset.default_context:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_contextual_mappings.py::test_contextual_matrix[graph-outer-filter-context-unbound-ConjunctiveGraph]
+FAILED tests/test_contextual_mappings.py::test_contextual_matrix[graph-outer-filter-context-bound-ConjunctiveGraph]
+FAILED tests/test_contextual_mappings.py::test_contextual_matrix[graph-outer-bind-aggregate-context-unbound-ConjunctiveGraph]
+FAILED tests/test_contextual_mappings.py::test_contextual_matrix[graph-outer-bind-aggregate-context-bound-ConjunctiveGraph]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 4 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+4 failed, 747 passed, 1562 warnings in 5.74s

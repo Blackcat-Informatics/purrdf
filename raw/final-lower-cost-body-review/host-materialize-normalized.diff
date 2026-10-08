@@ -1,0 +1,56 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-lower-cost-body-review/baseline-host-materialize-normalized.s	2026-10-08 09:38:40.695461117 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-lower-cost-body-review/candidate-host-materialize-normalized.s	2026-10-08 09:38:40.863458279 -0600
+@@ -2,7 +2,7 @@
+ .LOCAL:
+ 	.cfi_startproc
+ 	.cfi_personality 155, DW.ref.rust_eh_personality
+-	.cfi_lsda 27, .Lexception2066
++	.cfi_lsda 27, .Lexception2160
+ 	pushq	%rbp
+ 	.cfi_def_cfa_offset 16
+ 	pushq	%r15
+@@ -198,7 +198,7 @@
+ 	leaq	624(%rsp), %r13
+ 	movq	%r14, 440(%rsp)
+ 	movq	%rax, 272(%rsp)
+-	leaq	.Lvtable.1R(%rip), %rax
++	leaq	.Lvtable.22(%rip), %rax
+ 	vmovq	%rax, %xmm0
+ 	vmovdqa	%xmm0, 576(%rsp)
+ 	.p2align	4
+@@ -292,7 +292,7 @@
+ 	movq	$1, 304(%rsp)
+ 	movq	$0, 312(%rsp)
+ 	movq	%rax, 552(%rsp)
+-	leaq	.Lvtable.1J(%rip), %rax
++	leaq	.Lvtable.1T(%rip), %rax
+ 	movq	%rax, 560(%rsp)
+ .LOCAL:
+ 	movq	<purrdf_core::ir::term::NonIriPredicate as core::fmt::Display>::fmt@GOTPCREL(%rip), %rax
+@@ -359,7 +359,7 @@
+ 	vpxor	%xmm0, %xmm0, %xmm0
+ 	vmovdqu	%xmm0, (%rax)
+ 	vpbroadcastd	.LOCAL(%rip), %xmm0
+-	leaq	.Lvtable.1R(%rip), %rax
++	leaq	.Lvtable.22(%rip), %rax
+ 	movq	$1, 112(%rsp)
+ 	movq	%r12, 120(%rsp)
+ 	movq	%rax, 128(%rsp)
+@@ -916,7 +916,7 @@
+ 	movq	core::result::unwrap_failed@GOTPCREL(%rip), %rax
+ 	movq	16(%rsp), %rbx
+ 	leaq	.Lalloc_cc656815297f75969399c3f4b1ad3de4(%rip), %rdi
+-	leaq	.Lvtable.2c(%rip), %rcx
++	leaq	.Lvtable.2q(%rip), %rcx
+ 	leaq	.Lalloc_d4c8062c4f28c49e31e589e7f415a063(%rip), %r8
+ 	leaq	15(%rsp), %rdx
+ 	movl	$55, %esi
+@@ -1015,7 +1015,7 @@
+ .LOCAL:
+ 	movl	80(%rsp), %ecx
+ 	leaq	96(%rsp), %rax
+-	leaq	.Lvtable.1R(%rip), %rdx
++	leaq	.Lvtable.22(%rip), %rdx
+ 	movq	$1, 88(%rsp)
+ 	vpxor	%xmm0, %xmm0, %xmm0
+ 	vmovdqu	%xmm0, (%rax)

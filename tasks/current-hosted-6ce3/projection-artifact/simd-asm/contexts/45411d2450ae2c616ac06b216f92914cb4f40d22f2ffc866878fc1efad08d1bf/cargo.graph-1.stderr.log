@@ -1,0 +1,83 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+       Fresh typenum v1.20.1
+       Fresh hybrid-array v0.4.15
+       Fresh crypto-common v0.2.2
+       Fresh block-buffer v0.12.1
+       Fresh purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+       Fresh cpufeatures v0.3.0
+       Fresh purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+       Fresh cfg-if v1.0.4
+       Fresh const-oid v0.10.2
+       Fresh digest v0.11.3
+       Fresh purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+       Fresh purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+       Fresh purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+       Fresh sha2 v0.11.0
+       Fresh regex-syntax v0.8.11
+       Fresh regex-automata v0.4.14
+       Fresh purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+       Fresh purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+       Fresh regex v1.12.4
+       Fresh hashbrown v0.17.1
+       Fresh purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+       Fresh crossbeam-utils v0.8.21
+       Fresh crossbeam-epoch v0.9.18
+       Fresh crossbeam-deque v0.8.6
+       Fresh rayon-core v1.13.0
+       Fresh either v1.16.0
+       Fresh rayon v1.12.0
+       Fresh libc v0.2.186
+       Fresh inout v0.2.2
+       Fresh cmov v0.5.4
+       Fresh ctutils v0.4.2
+       Fresh getrandom v0.3.4
+       Fresh purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+       Fresh purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+       Fresh purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+       Fresh cpubits v0.1.1
+       Fresh purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+       Fresh universal-hash v0.6.1
+       Fresh cipher v0.5.2
+       Fresh polyval v0.7.3
+       Fresh fastrand v2.4.1
+       Fresh twox-hash v2.1.2
+       Fresh structured-zstd v0.0.49
+       Fresh ghash v0.6.0
+       Fresh ctr v0.10.1
+       Fresh aes v0.9.3
+       Fresh aead v0.6.1
+       Fresh aes-gcm v0.11.1
+       Fresh purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+       Fresh visual-hashing v1.0.0
+       Fresh purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+       Fresh proc-macro2 v1.0.106
+       Fresh quote v1.0.46
+       Fresh purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+       Fresh purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+       Fresh purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+       Fresh syn v2.0.118
+       Fresh rustversion v1.0.22
+       Fresh bumpalo v3.20.3
+       Fresh wasm-bindgen-macro-support v0.2.125
+       Fresh purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+       Fresh purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+       Fresh purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+       Fresh unicode-ident v1.0.24
+       Fresh wasm-bindgen-shared v0.2.125
+       Fresh purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+       Fresh purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+       Fresh wasm-bindgen-macro v0.2.125
+       Fresh purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+       Fresh purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+       Fresh purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+       Fresh purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+       Fresh purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+       Fresh purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+       Fresh once_cell v1.21.4
+       Fresh wasm-bindgen v0.2.125
+       Fresh purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+       Fresh purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+      Timing report saved to /home/runner/work/purrdf/purrdf/target/simd-asm/contexts/45411d2450ae2c616ac06b216f92914cb4f40d22f2ffc866878fc1efad08d1bf/target/cargo-timings/cargo-timing-20261008T184641581Z-fe27715264302e3a.html
+    Finished `release` profile [optimized] target(s) in 0.08s

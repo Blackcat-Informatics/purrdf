@@ -1,0 +1,148 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-python-ir/purrdf_native.ll:534245
+; <core::slice::iter::Iter<purrdf_sparql_algebra::algebra::Expression> as core::iter::traits::iterator::Iterator>::for_each::<<purrdf_sparql_algebra::walk::NodeRef>::for_each_child<purrdf_sparql_algebra::walk::fold_post_order<purrdf_sparql_eval::rdflib::Facts, purrdf_sparql_eval::rdflib::compile<true>::{closure#4}>::{closure#0}>::{closure#7}>
+define internal fastcc void @_RINvXs2J_NtNtCs2k2z8Zem4rB_4core5slice4iterINtB7_4IterNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra10ExpressionENtNtNtNtBb_4iter6traits8iterator8Iterator8for_eachNCINvMNtBU_4walkNtB2K_7NodeRef14for_each_childNCINvB2K_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB3Q_7compileKb1_Es2_0E0Es5_0ECseY6IX0djbTh_13purrdf_native(ptr noundef nonnull %0, ptr nofree noundef nonnull readnone captures(address) %1, ptr nofree noundef nonnull readonly align 8 captures(none) %2) unnamed_addr #3 personality ptr @rust_eh_personality !guid !88341 {
+start:
+  %_131 = icmp eq ptr %0, %1
+  br i1 %_131, label %bb13, label %bb11
+
+bb11:                                             ; preds = %start, %_RNCINvMNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walkNtB5_7NodeRef14for_each_childNCINvB5_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB1H_7compileKb1_Es2_0E0Es5_0CseY6IX0djbTh_13purrdf_native.exit
+  %self.sroa.0.02 = phi ptr [ %_23, %_RNCINvMNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walkNtB5_7NodeRef14for_each_childNCINvB5_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB1H_7compileKb1_Es2_0E0Es5_0CseY6IX0djbTh_13purrdf_native.exit ], [ %0, %start ]
+  %_23 = getelementptr inbounds nuw i8, ptr %self.sroa.0.02, i64 64
+  %_5.val.i = load ptr, ptr %2, align 8, !noalias !88342, !nonnull !3914, !align !3915, !noundef !3914
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !88345)
+  %3 = getelementptr inbounds nuw i8, ptr %_5.val.i, i64 792
+  %_4.i.i.i = load i64, ptr %3, align 8, !alias.scope !88348, !noalias !88350, !noundef !3914
+  %_3.i.i.i = icmp ult i64 %_4.i.i.i, 32
+  br i1 %_3.i.i.i, label %bb3.i.i.i, label %bb5.i.i.i
+
+bb5.i.i.i:                                        ; preds = %bb11
+  %_8.i.i.i = getelementptr inbounds nuw i8, ptr %_5.val.i, i64 768
+  %4 = getelementptr inbounds nuw i8, ptr %_5.val.i, i64 784
+  %len.i.i.i.i = load i64, ptr %4, align 8, !alias.scope !88351, !noalias !88354, !noundef !3914
+  %self1.i.i.i.i = load i64, ptr %_8.i.i.i, align 8, !range !4129, !alias.scope !88351, !noalias !88354, !noundef !3914
+  %_4.i.i.i.i = icmp eq i64 %len.i.i.i.i, %self1.i.i.i.i
+  br i1 %_4.i.i.i.i, label %bb1.i.i.i.i, label %_RNvMsG_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNvNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walk15fold_post_order4StepE8push_mutCseY6IX0djbTh_13purrdf_native.exit.i.i.i
+
+bb1.i.i.i.i:                                      ; preds = %bb5.i.i.i
+; call <alloc::raw_vec::RawVec<purrdf_sparql_algebra::walk::fold_post_order::Step>>::grow_one
+  tail call void @_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecNtNvNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walk15fold_post_order4StepE8grow_oneCskntrVAOPBeX_18purrdf_sparql_eval(ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %_8.i.i.i) #81, !noalias !88354
+  br label %_RNvMsG_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNvNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walk15fold_post_order4StepE8push_mutCseY6IX0djbTh_13purrdf_native.exit.i.i.i
+
+_RNvMsG_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNvNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walk15fold_post_order4StepE8push_mutCseY6IX0djbTh_13purrdf_native.exit.i.i.i: ; preds = %bb1.i.i.i.i, %bb5.i.i.i
+  %5 = getelementptr inbounds nuw i8, ptr %_5.val.i, i64 776
+  %_14.i.i.i.i = load ptr, ptr %5, align 8, !alias.scope !88351, !noalias !88354, !nonnull !3914, !noundef !3914
+  %end.i.i.i.i = getelementptr inbounds nuw [24 x i8], ptr %_14.i.i.i.i, i64 %len.i.i.i.i
+  store i64 -1, ptr %end.i.i.i.i, align 8, !noalias !88342
+  %_3.sroa.5.0.end.i.i.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %end.i.i.i.i, i64 8
+  store i64 1, ptr %_3.sroa.5.0.end.i.i.sroa_idx.i.i, align 8, !noalias !88342
+  %_3.sroa.6.0.end.i.i.sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %end.i.i.i.i, i64 16
+  store ptr %self.sroa.0.02, ptr %_3.sroa.6.0.end.i.i.sroa_idx.i.i, align 8, !noalias !88342
+  %6 = add i64 %len.i.i.i.i, 1
+  store i64 %6, ptr %4, align 8, !alias.scope !88351, !noalias !88356
+  br label %_RNCINvMNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walkNtB5_7NodeRef14for_each_childNCINvB5_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB1H_7compileKb1_Es2_0E0Es5_0CseY6IX0djbTh_13purrdf_native.exit
+
+bb3.i.i.i:                                        ; preds = %bb11
+  %7 = getelementptr inbounds nuw [24 x i8], ptr %_5.val.i, i64 %_4.i.i.i
+  store i64 -1, ptr %7, align 8, !alias.scope !88357, !noalias !88342
+  %_3.sroa.5.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %7, i64 8
+  store i64 1, ptr %_3.sroa.5.0..sroa_idx.i.i, align 8, !alias.scope !88357, !noalias !88342
+  %_3.sroa.6.0..sroa_idx.i.i = getelementptr inbounds nuw i8, ptr %7, i64 16
+  store ptr %self.sroa.0.02, ptr %_3.sroa.6.0..sroa_idx.i.i, align 8, !alias.scope !88357, !noalias !88342
+  %8 = load i64, ptr %3, align 8, !alias.scope !88348, !noalias !88345, !noundef !3914
+  %9 = add i64 %8, 1
+  store i64 %9, ptr %3, align 8, !alias.scope !88348, !noalias !88345
+  br label %_RNCINvMNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walkNtB5_7NodeRef14for_each_childNCINvB5_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB1H_7compileKb1_Es2_0E0Es5_0CseY6IX0djbTh_13purrdf_native.exit
+
+_RNCINvMNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walkNtB5_7NodeRef14for_each_childNCINvB5_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB1H_7compileKb1_Es2_0E0Es5_0CseY6IX0djbTh_13purrdf_native.exit: ; preds = %_RNvMsG_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNvNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walk15fold_post_order4StepE8push_mutCseY6IX0djbTh_13purrdf_native.exit.i.i.i, %bb3.i.i.i
+  %_13 = icmp eq ptr %_23, %1
+  br i1 %_13, label %bb13, label %bb11
+
+bb13:                                             ; preds = %_RNCINvMNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walkNtB5_7NodeRef14for_each_childNCINvB5_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB1H_7compileKb1_Es2_0E0Es5_0CseY6IX0djbTh_13purrdf_native.exit, %start
+  ret void
+}
+
+ASSEMBLY
+_RINvXs2J_NtNtCs2k2z8Zem4rB_4core5slice4iterINtB7_4IterNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra10ExpressionENtNtNtNtBb_4iter6traits8iterator8Iterator8for_eachNCINvMNtBU_4walkNtB2K_7NodeRef14for_each_childNCINvB2K_15fold_post_orderNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib5FactsNCINvB3Q_7compileKb1_Es2_0E0Es5_0ECseY6IX0djbTh_13purrdf_native:
+	.cfi_startproc
+	cmpq	%rsi, %rdi
+	je	.LBB2287_9
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	pushq	%rax
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	_RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVecNtNvNtCsaBjTCBXVWc8_21purrdf_sparql_algebra4walk15fold_post_order4StepE8grow_oneCskntrVAOPBeX_18purrdf_sparql_eval@GOTPCREL(%rip), %r12
+	movq	%rdx, %rbx
+	movq	%rsi, %r14
+	movq	%rdi, %r15
+	jmp	.LBB2287_2
+	.p2align	4
+.LBB2287_6:
+	leaq	(%rax,%rax,2), %rax
+	movq	$-1, (%r13,%rax,8)
+	movq	$1, 8(%r13,%rax,8)
+	movq	%r15, 16(%r13,%rax,8)
+	incq	792(%r13)
+	addq	$64, %r15
+	cmpq	%r14, %r15
+	je	.LBB2287_8
+.LBB2287_2:
+	movq	(%rbx), %r13
+	movq	792(%r13), %rax
+	cmpq	$32, %rax
+	jb	.LBB2287_6
+	movq	784(%r13), %rbp
+	cmpq	768(%r13), %rbp
+	jne	.LBB2287_5
+	leaq	768(%r13), %rdi
+	callq	*%r12
+.LBB2287_5:
+	movq	776(%r13), %rcx
+	leaq	(%rbp,%rbp,2), %rax
+	incq	%rbp
+	movq	$-1, (%rcx,%rax,8)
+	movq	$1, 8(%rcx,%rax,8)
+	movq	%r15, 16(%rcx,%rax,8)
+	movq	%rbp, 784(%r13)
+	addq	$64, %r15
+	cmpq	%r14, %r15
+	jne	.LBB2287_2
+.LBB2287_8:
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	.cfi_restore %rbx
+	.cfi_restore %r12
+	.cfi_restore %r13
+	.cfi_restore %r14
+	.cfi_restore %r15
+	.cfi_restore %rbp
+.LBB2287_9:
+	retq
+.Lfunc_end2287:

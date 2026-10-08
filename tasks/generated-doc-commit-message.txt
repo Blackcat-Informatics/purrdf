@@ -1,0 +1,3 @@
+Refresh generated conformance and SIMD measurements
+
+Regenerate the conformance count from the qualified suite artifacts and the SIMD cell from the complete seven-configuration hosted projection.

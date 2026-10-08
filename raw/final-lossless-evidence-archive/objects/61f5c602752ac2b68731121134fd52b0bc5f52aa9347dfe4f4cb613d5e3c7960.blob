@@ -1,0 +1,8 @@
+ActiveState=active
+SubState=running
+InvocationID=d8524f09779440a9b450d666146f4bf1
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-normal-resolved-main-commit-20261008.scope
+MemoryCurrent=378118144
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

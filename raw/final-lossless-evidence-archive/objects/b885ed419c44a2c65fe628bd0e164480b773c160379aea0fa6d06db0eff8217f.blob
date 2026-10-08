@@ -1,0 +1,1 @@
+bindings/python/.venv/bin/python -I -m pytest -v bindings/python/tests/test_contextual_mappings.py bindings/python/tests/test_solution_row_protocol.py 

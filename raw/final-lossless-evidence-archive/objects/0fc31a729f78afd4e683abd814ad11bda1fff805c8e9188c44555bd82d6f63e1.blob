@@ -1,0 +1,31 @@
+check-spec-attribution self-test:
+  caught   bindings/python/src/py_store/query.rs module rustdoc: line 1, `CONSTRUCT template` near `SPARQL 1.2`
+  caught   bindings/python/src/py_store/query.rs QueryQuads pyclass __doc__: line 1, `CONSTRUCT template` near `SPARQL 1.2`
+  caught   bindings/python/tests/test_construct_named_graphs.py module docstring: line 1, `quad-template` near `SPARQL 1.2`
+  caught   crates/sparql-results/src/graph.rs module rustdoc: line 1, `CONSTRUCT { GRAPH` near `SPARQL 1.2`
+  passes   the corrected module rustdoc
+  passes   the corrected pyclass __doc__
+  passes   the corrected Python module docstring
+  passes   the corrected sparql-results rustdoc
+  passes   the book's negative statement
+  passes   the introduction's feature list
+  passes   a plain SPARQL 1.1 CONSTRUCT description carrying no version claim
+  passes   an unrelated SPARQL 1.2 mention with no extension phrasing nearby
+  passes   a Chinese page: the quad template disclaimed in the house voice
+  passes   a Chinese page: the same disclaimer with the Latin/CJK spaces dropped
+  passes   a Chinese page: the negative statement, SPARQL 1.2 as the subject
+  passes   a Chinese page: the introduction's feature-list wording
+  passes   a Chinese page: a plain SPARQL 1.1 CONSTRUCT description, no version claim
+  passes   a Chinese page: an unrelated SPARQL 1.2 mention with no extension phrasing
+  passes   a Chinese page: 'not part of SPARQL 1.2, PurRDF's own extension'
+  passes   a Chinese page: 'SPARQL 1.2 has no quad template'
+  passes   a Chinese page: 'not a SPARQL 1.2 standard feature'
+  caught   the quad template attributed to SPARQL 1.1
+  caught   a Chinese page attributing the quad template to SPARQL 1.2: line 1, `CONSTRUCT { GRAPH` near `SPARQL 1.2`
+  caught   a Chinese page calling the quad template a SPARQL 1.2 feature: line 1, `四元组模板` near `SPARQL 1.2`
+  caught   a Chinese page: SPARQL 1.2's CONSTRUCT template names a graph per statement: line 1, `CONSTRUCT 模板` near `SPARQL 1.2`
+  caught   a Chinese page: the quad template attributed to SPARQL 1.1 by the possessive: line 1, `四元组模板` near `SPARQL 1.1`
+  caught   a violation in a TRACKED file (throwaway repository)
+  spared   the untracked docs/book/book/searchindex-ef3e7a03.js (it matches, and is not enumerated)
+  self-test OK
+check-spec-attribution: no unqualified specification attributions.

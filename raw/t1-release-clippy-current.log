@@ -1,0 +1,27 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-algebra/src/traits.rs:376:29
+    |
+376 | / ...                   s.strukt("OptionalApplication", |s| {
+377 | | ...                       s.field("condition")
+378 | | ...                           .node(NodeRef::Expr(&optional.condition));
+379 | | ...                       s.field("retry_inputs")
+...   |
+382 | | ...                           .leaf(Leaf::Var(&optional.forget_marker));
+383 | | ...                   })
+    | |________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+    |
+376 |                             s.strukt("OptionalApplication", |s| {
+...
+382 |                                     .leaf(Leaf::Var(&optional.forget_marker));
+383 ~                             });
+    |
+
+error: could not compile `purrdf-sparql-algebra` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 1 previous error

@@ -1,0 +1,11 @@
+--- /dev/fd/63	2026-10-08 11:22:36.295963278 -0600
++++ /dev/fd/62	2026-10-08 11:22:36.295963278 -0600
+@@ -226,7 +226,7 @@
+ 
+ 142:                                              ; preds = %103
+ ; call core::num::imp::int_log10::panic_for_nonpositive_argument
+-  tail call void @core::num::imp::int_log10::panic_for_nonpositive_argument(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.1110) #ATTR, !noalias !ID
++  tail call void @core::num::imp::int_log10::panic_for_nonpositive_argument(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.1111) #ATTR, !noalias !ID
+   unreachable
+ 
+ 143:                                              ; preds = %116

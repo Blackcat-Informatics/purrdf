@@ -1,0 +1,17 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-base-python-ir/purrdf_native.ll:576305
+; <purrdf_native::shacl::PyShapes>::validate_against_dataset
+define void @_RNvMNtCseY6IX0djbTh_13purrdf_native5shaclNtB2_8PyShapes24validate_against_dataset(ptr dead_on_unwind noalias nofree noundef writable sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(592) %self, ptr noundef nonnull align 8 %data) unnamed_addr #1 !guid !92813 {
+start:
+; call purrdf_shapes::engine::validate_dataset
+  tail call void @_RNvNtCsjNNQCTe3zG0_13purrdf_shapes6engine16validate_dataset(ptr noalias nofree noundef nonnull sret([104 x i8]) align 8 captures(address) dereferenceable(104) %_0, ptr noundef nonnull align 8 %data, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) dereferenceable(592) %self)
+  ret void
+}
+
+ASSEMBLY
+_RNvMNtCseY6IX0djbTh_13purrdf_native5shaclNtB2_8PyShapes24validate_against_dataset:
+	.cfi_startproc
+	movq	%rsi, %rax
+	movq	%rdx, %rsi
+	movq	%rax, %rdx
+	jmpq	*_RNvNtCsjNNQCTe3zG0_13purrdf_shapes6engine16validate_dataset@GOTPCREL(%rip)
+.Lfunc_end2422:

@@ -1,0 +1,4 @@
+commit 56e636497c049debe2de5445389abf3e018d4783
+tree 33f75cadc2f87a89bec1230963ee68ec0262b99a
+parent e72660e8769af222387ecc4fd4f84ea9887e43a1
+subject fix(rdflib): route graph queries through contextual algebra

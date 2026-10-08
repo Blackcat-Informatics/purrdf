@@ -1,0 +1,13 @@
+      1 <pyo3::err::PyErr>::get_type
+      1 <pyo3::err::PyErr>::value
+      1 <pyo3::internal::state::AttachGuard>::attach
+      1 <pyo3::internal::state::SuspendAttach>::new
+      2 <pyo3::types::string::PyString>::new
+      1 PyErr_GivenExceptionMatches
+      2 Py_GetConstantBorrowed
+      1 __rustc::__rust_alloc
+      9 __rustc::__rust_dealloc
+      2 core::panicking::panic_in_cleanup
+     15 llvm.experimental.noalias.scope.decl
+      1 llvm.threadlocal.address.p0
+      1 purrdf_validate::xpath_regex::diagnostic_refusal_code

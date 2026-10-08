@@ -1,0 +1,8 @@
+ActiveState=active
+SubState=running
+InvocationID=a6d10829d9ad4f9ca546f6e3700d38ec
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-project-view-lift-rust-20261008.scope
+MemoryCurrent=1302745088
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

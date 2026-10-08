@@ -1,0 +1,344 @@
+[
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "check-brand-casing.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/check-brand-casing.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/check-brand-casing.exit"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "check-brand-casing.log",
+    "bytes": 134,
+    "mode": "0o644",
+    "sha256": "6067daaafc945ce6423119532908f3aa9b485ec6e806d22fb8f8aeb83d6ef744",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/check-brand-casing.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/check-brand-casing.log"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "check-issue-refs.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/check-issue-refs.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/check-issue-refs.exit"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "check-issue-refs.log",
+    "bytes": 283,
+    "mode": "0o644",
+    "sha256": "c5b200b9704ef7e82edbc8ce5dc7e26d96f8e40db36710cb1ccb25f3687f672d",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/check-issue-refs.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/check-issue-refs.log"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "check-spec-attribution.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/check-spec-attribution.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/check-spec-attribution.exit"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "check-spec-attribution.log",
+    "bytes": 2446,
+    "mode": "0o644",
+    "sha256": "4fac8cfab649fa45688c9017a3342708a326606ee52e81ff8762b11e05746943",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/check-spec-attribution.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/check-spec-attribution.log"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "doc-claims.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/doc-claims.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/doc-claims.exit"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "doc-claims.log",
+    "bytes": 310,
+    "mode": "0o644",
+    "sha256": "b0991f316112bd14fdbe9da6c88d8c3fc2535cdc2d2e161103c3cad9aa2759da",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/doc-claims.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/doc-claims.log"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "driver.log",
+    "bytes": 109,
+    "mode": "0o644",
+    "sha256": "e2ad8c48e3efe99f7f6d2d2f0e82bc217e3096e28b5bb7b7dc80a60a263359ff",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/driver.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/driver.log"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "live-scope.txt",
+    "bytes": 120,
+    "mode": "0o644",
+    "sha256": "0b844b69a9cb509b0f1399dff1da481446879208e9c71607a585a5df6be7acc1",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/live-scope.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/live-scope.txt"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "source-head.txt",
+    "bytes": 41,
+    "mode": "0o644",
+    "sha256": "77f5dad02412c8ec6142164c81828657298c0ae88759c05dd967ab6cc48166d3",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/source-head.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/source-head.txt"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "source-readback.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/source-readback.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/source-readback.exit"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "source-tree.txt",
+    "bytes": 41,
+    "mode": "0o644",
+    "sha256": "0f3bfa7cd8612e8793cdbef296daf96f085f6fab317dca54e4cf87686b50d609",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/source-tree.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/source-tree.txt"
+  },
+  {
+    "home": "final-scoreboard-prose-1",
+    "path": "source.patch",
+    "bytes": 4323,
+    "mode": "0o644",
+    "sha256": "838176305f8d80512f823831566404025057a66f5bfaebdecba263267bfc50cf",
+    "original": "/opt/purrdf-454-current-qualification-20261008/final-scoreboard-prose-1/source.patch",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/final-scoreboard-prose-1/source.patch"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "commit.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/commit.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/commit.exit"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "commit.log",
+    "bytes": 476,
+    "mode": "0o644",
+    "sha256": "35cf76b283161722576516392b6c42785bd2449ff60c5fd71aed80ac4f909ffd",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/commit.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/commit.log"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "committed-identity.txt",
+    "bytes": 225,
+    "mode": "0o644",
+    "sha256": "bc465aecd2c59a57dfc67b6ceec5b8206e96dce5691d2710bb88ead2120523fe",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/committed-identity.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/committed-identity.txt"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "identity-validation.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/identity-validation.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/identity-validation.exit"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "live-scope.txt",
+    "bytes": 120,
+    "mode": "0o644",
+    "sha256": "6d363005a8c499e5218f908fed044e02743038d5ced2f6839c76bf6704ba45f9",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/live-scope.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/live-scope.txt"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "push.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/push.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/push.exit"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "push.log",
+    "bytes": 190,
+    "mode": "0o644",
+    "sha256": "28bb7a93f547d0d76d25ec0cdff6faf5e2aa22835a1187572a3677d8e94c0e57",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/push.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/push.log"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "remote-head-readback.txt",
+    "bytes": 103,
+    "mode": "0o644",
+    "sha256": "d365ee89fd0f208eefe83a31acd64b189172486690b9197f2ade1ae5d9de2e99",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/remote-head-readback.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/remote-head-readback.txt"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "remote-head-validation.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/remote-head-validation.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/remote-head-validation.exit"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "signature-verification.log",
+    "bytes": 229,
+    "mode": "0o644",
+    "sha256": "58ba589be7b6b7395de4e120ffb02acf32ee4206b743cafdd4c8a1780a8a1ea6",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/signature-verification.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/signature-verification.log"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "source-status.txt",
+    "bytes": 11,
+    "mode": "0o644",
+    "sha256": "002c172cbf5fe65a209ac18bf9b0b2f8a74eb9176d011d6dc481adee2d672371",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/source-status.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/source-status.txt"
+  },
+  {
+    "home": "normal-scoreboard-prose-commit-1",
+    "path": "terminal-scope.txt",
+    "bytes": 35,
+    "mode": "0o644",
+    "sha256": "e4f68690eb3431cab9ec1af2b5d08c7b1c6cb968e4f5b8348e9862e9e516d838",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-scoreboard-prose-commit-1/terminal-scope.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-scoreboard-prose-commit-1/terminal-scope.txt"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "commit.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/commit.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/commit.exit"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "commit.log",
+    "bytes": 469,
+    "mode": "0o644",
+    "sha256": "26752b7e8c11a7d82efb1e59abc4d7e11aece9527466b0da019373fff700ce5c",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/commit.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/commit.log"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "committed-identity.txt",
+    "bytes": 218,
+    "mode": "0o644",
+    "sha256": "77f5fc696bbef86bd79b719036da8814d7465683e758fb295895d0c96bb4c157",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/committed-identity.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/committed-identity.txt"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "identity-validation.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/identity-validation.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/identity-validation.exit"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "live-scope-limits.txt",
+    "bytes": 164,
+    "mode": "0o644",
+    "sha256": "0dbe06d82524797039b2d3c36121a974486a5a6e13db6ff1a66df91b4ae163aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/live-scope-limits.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/live-scope-limits.txt"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "push.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/push.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/push.exit"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "push.log",
+    "bytes": 190,
+    "mode": "0o644",
+    "sha256": "33ce1dc5cc8bb5facccd4eb4f961c3c37e52258247a3eff5df5c885136ace1b8",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/push.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/push.log"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "remote-head-readback.txt",
+    "bytes": 103,
+    "mode": "0o644",
+    "sha256": "54a4bfddd0d9f1fa9f170ad72fc5ef27ba008303e5e6638d7a0667e2239573c6",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/remote-head-readback.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/remote-head-readback.txt"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "remote-head-validation.exit",
+    "bytes": 2,
+    "mode": "0o644",
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/remote-head-validation.exit",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/remote-head-validation.exit"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "signature-verification.log",
+    "bytes": 229,
+    "mode": "0o644",
+    "sha256": "44daa6cf7cb4758dd7eedb2c66859bc213495e19c1f3598cb9fbfb399de0316e",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/signature-verification.log",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/signature-verification.log"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "source-status.txt",
+    "bytes": 11,
+    "mode": "0o644",
+    "sha256": "002c172cbf5fe65a209ac18bf9b0b2f8a74eb9176d011d6dc481adee2d672371",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/source-status.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/source-status.txt"
+  },
+  {
+    "home": "normal-generated-doc-commit-1",
+    "path": "terminal-scope.txt",
+    "bytes": 35,
+    "mode": "0o644",
+    "sha256": "e4f68690eb3431cab9ec1af2b5d08c7b1c6cb968e4f5b8348e9862e9e516d838",
+    "original": "/opt/purrdf-454-current-qualification-20261008/normal-generated-doc-commit-1/terminal-scope.txt",
+    "selected": ".stage/rdflib-shim-algebra-level-reassignment/raw/current-publication-receipts/normal-generated-doc-commit-1/terminal-scope.txt"
+  }
+]

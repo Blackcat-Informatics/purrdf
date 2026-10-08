@@ -1,0 +1,1 @@
+PASS: every file scan exit1/no match. Initial xargs returned123 for underlying grep-style1; empty match inventory preserved, corrected per-file status handling used.

@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo clippy --locked --jobs 8 -p purrdf-core -p purrdf-sparql-eval --all-targets -- -D warnings 

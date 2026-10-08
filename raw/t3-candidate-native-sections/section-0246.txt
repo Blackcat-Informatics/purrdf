@@ -1,0 +1,381 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:877961
+; purrdf_sparql_eval::modifier::aggregate_numeric_tail_cost
+define internal fastcc { i64, i64 } @_RNvNtCs7veJbOBHQwe_18purrdf_sparql_eval8modifier27aggregate_numeric_tail_cost(i64 %0, ptr noalias nofree noundef nonnull readonly align 8 captures(none) dead_on_return dereferenceable(32) %1, i64 noundef %2, i64 %3) unnamed_addr #2 personality ptr @rust_eh_personality !guid !110226 {
+  %5 = alloca [32 x i8], align 8
+  %6 = alloca [80 x i8], align 16
+  %7 = alloca [40 x i8], align 8
+  %8 = getelementptr inbounds nuw i8, ptr %1, i64 8
+  %9 = load i64, ptr %8, align 8, !noundef !1703
+  %10 = getelementptr inbounds nuw i8, ptr %1, i64 16
+  %11 = load i64, ptr %10, align 8, !noundef !1703
+  %12 = icmp ult i64 %9, 39
+  %13 = icmp ult i64 %11, 19
+  %14 = and i1 %12, %13
+  %15 = and i64 %3, -4294902015
+  %16 = icmp eq i64 %15, 77309411328
+  %17 = select i1 %14, i1 %16, i1 false
+  br i1 %17, label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit, label %18
+
+18:                                               ; preds = %4
+  %19 = icmp eq i64 %0, 1
+  br i1 %19, label %28, label %24
+
+_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit: ; preds = %94, %90, %43, %38, %4
+  %20 = phi i64 [ -1, %38 ], [ 0, %4 ], [ %49, %43 ], [ %99, %94 ], [ -1, %90 ]
+  %21 = phi i64 [ -1, %38 ], [ 0, %4 ], [ %48, %43 ], [ %100, %94 ], [ -1, %90 ]
+  %22 = insertvalue { i64, i64 } poison, i64 %20, 0
+  %23 = insertvalue { i64, i64 } %22, i64 %21, 1
+  ret { i64, i64 } %23
+
+24:                                               ; preds = %18
+  call void @llvm.lifetime.start.p0(ptr nonnull %7)
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  %25 = zext i64 %2 to i128
+  %26 = getelementptr inbounds nuw i8, ptr %6, i64 16
+  store i128 %25, ptr %26, align 16
+  %27 = getelementptr inbounds nuw i8, ptr %6, i64 1
+  store i8 0, ptr %27, align 1
+  store i8 0, ptr %6, align 16
+; invoke purrdf_xsd::numeric::exact_path::shape_of
+  invoke fastcc void @_RNvNtNtCseV1CfwIPHUl_10purrdf_xsd7numeric10exact_path8shape_of.llvm.9305710216504555276(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(40) %7, ptr noalias nofree noundef nonnull readonly align 16 captures(address, read_provenance) dereferenceable(80) %6)
+          to label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8of_value.exit unwind label %50
+
+28:                                               ; preds = %18
+  %29 = getelementptr inbounds nuw i8, ptr %1, i64 24
+  %30 = load i32, ptr %29, align 8, !alias.scope !110227, !noundef !1703
+  %31 = icmp ult i64 %11, %9
+  br i1 %31, label %32, label %34
+
+32:                                               ; preds = %28
+  %33 = icmp eq i64 %11, 0
+  br i1 %33, label %38, label %36
+
+34:                                               ; preds = %28
+  %35 = tail call i64 @llvm.uadd.sat.i64(i64 %11, i64 2)
+  br label %38
+
+36:                                               ; preds = %32
+  %37 = tail call i64 @llvm.uadd.sat.i64(i64 %9, i64 1)
+  br label %38
+
+38:                                               ; preds = %36, %34, %32
+  %39 = phi i64 [ %35, %34 ], [ %37, %36 ], [ %9, %32 ]
+  %40 = load i64, ptr %1, align 8, !alias.scope !110227, !noundef !1703
+  %41 = tail call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %40, i64 9)
+  %42 = extractvalue { i64, i1 } %41, 1
+  br i1 %42, label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit, label %43, !prof !1727
+
+43:                                               ; preds = %38
+  %44 = icmp slt i32 %30, 0
+  %45 = tail call i64 @llvm.uadd.sat.i64(i64 %39, i64 1)
+  %46 = select i1 %44, i64 %45, i64 %39
+  %47 = extractvalue { i64, i1 } %41, 0
+  %48 = tail call i64 @llvm.uadd.sat.i64(i64 %47, i64 %46)
+  %49 = tail call i64 @llvm.uadd.sat.i64(i64 %48, i64 1)
+  br label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit
+
+50:                                               ; preds = %24, %101
+  %51 = landingpad { ptr, i32 }
+          cleanup
+; call core::ptr::drop_glue::<purrdf_xsd::value::XsdValue>
+  call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCseV1CfwIPHUl_10purrdf_xsd5value8XsdValueECs7veJbOBHQwe_18purrdf_sparql_eval(ptr noalias nofree noundef align 16 dereferenceable(80) %6) #88
+  resume { ptr, i32 } %51
+
+_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8of_value.exit: ; preds = %24
+  %52 = load i64, ptr %7, align 8, !range !1779, !noundef !1703
+  %53 = trunc nuw i64 %52 to i1
+  br i1 %53, label %54, label %101, !prof !1860
+
+54:                                               ; preds = %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8of_value.exit
+  %55 = getelementptr inbounds nuw i8, ptr %7, i64 8
+  %56 = load <4 x i64>, ptr %55, align 8
+  call void @llvm.lifetime.end.p0(ptr nonnull %7)
+; call core::ptr::drop_glue::<purrdf_xsd::value::XsdValue>
+  call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCseV1CfwIPHUl_10purrdf_xsd5value8XsdValueECs7veJbOBHQwe_18purrdf_sparql_eval(ptr noalias nofree noundef align 16 dereferenceable(80) %6)
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  call void @llvm.lifetime.start.p0(ptr nonnull %5)
+  store <4 x i64> %56, ptr %5, align 8
+; call purrdf_xsd::exact::cost::decimal_div
+  %57 = call { i64, i64 } @_RNvNtNtCseV1CfwIPHUl_10purrdf_xsd5exact4cost11decimal_div(ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(32) %1, ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(32) %5, i64 %3), !alias.scope !110232
+  call void @llvm.lifetime.end.p0(ptr nonnull %5)
+  %58 = extractvalue { i64, i64 } %57, 0
+  %59 = extractvalue { i64, i64 } %57, 1
+  %60 = trunc i64 %3 to i1
+  br i1 %60, label %61, label %65
+
+61:                                               ; preds = %54
+  %62 = extractelement <4 x i64> %56, i64 1
+  %63 = shl nuw i64 %62, 2
+  %64 = icmp ugt i64 %62, 4611686018427387903
+  br i1 %64, label %67, label %68, !prof !1727
+
+65:                                               ; preds = %54
+  %66 = lshr i64 %3, 32
+  br label %71
+
+67:                                               ; preds = %61
+  br label %68
+
+68:                                               ; preds = %67, %61
+  %69 = phi i64 [ -1, %67 ], [ %63, %61 ]
+  %70 = tail call i64 @llvm.uadd.sat.i64(i64 %11, i64 %69)
+  br label %71
+
+71:                                               ; preds = %68, %65
+  %72 = phi i64 [ %70, %68 ], [ %66, %65 ]
+  %73 = tail call i64 @llvm.usub.sat.i64(i64 %9, i64 %11)
+  %74 = extractelement <4 x i64> %56, i64 2
+  %75 = tail call i64 @llvm.uadd.sat.i64(i64 %73, i64 %74)
+  %76 = tail call i64 @llvm.uadd.sat.i64(i64 %75, i64 1)
+  %77 = tail call i64 @llvm.uadd.sat.i64(i64 %76, i64 %72)
+  %78 = udiv i64 %77, 9
+  %79 = urem i64 %77, 9
+  %80 = icmp ne i64 %79, 0
+  %81 = zext i1 %80 to i64
+  %82 = add nuw nsw i64 %78, %81
+  %83 = icmp ult i64 %72, %77
+  br i1 %83, label %84, label %86
+
+84:                                               ; preds = %71
+  %85 = icmp eq i64 %72, 0
+  br i1 %85, label %90, label %88
+
+86:                                               ; preds = %71
+  %87 = tail call i64 @llvm.uadd.sat.i64(i64 %72, i64 2)
+  br label %90
+
+88:                                               ; preds = %84
+  %89 = tail call i64 @llvm.uadd.sat.i64(i64 %77, i64 1)
+  br label %90
+
+90:                                               ; preds = %88, %86, %84
+  %91 = phi i64 [ %87, %86 ], [ %89, %88 ], [ %77, %84 ]
+  %92 = tail call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %82, i64 9)
+  %93 = extractvalue { i64, i1 } %92, 1
+  br i1 %93, label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit, label %94, !prof !1727
+
+94:                                               ; preds = %90
+  %95 = tail call i64 @llvm.uadd.sat.i64(i64 %91, i64 1)
+  %96 = extractvalue { i64, i1 } %92, 0
+  %97 = tail call i64 @llvm.uadd.sat.i64(i64 %96, i64 %95)
+  %98 = tail call i64 @llvm.uadd.sat.i64(i64 %97, i64 1)
+  %99 = tail call i64 @llvm.uadd.sat.i64(i64 %58, i64 %98)
+  %100 = tail call i64 @llvm.umax.i64(i64 %59, i64 %97)
+  br label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape11render_cost.exit
+
+101:                                              ; preds = %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8of_value.exit
+; invoke core::option::expect_failed
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.d93b065c2763fb0250ff43fdc196fa20.1910, i64 noundef 22, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.d93b065c2763fb0250ff43fdc196fa20.1911) #91
+          to label %102 unwind label %50
+
+102:                                              ; preds = %101
+  unreachable
+}
+
+ASSEMBLY
+_RNvNtCs7veJbOBHQwe_18purrdf_sparql_eval8modifier27aggregate_numeric_tail_cost:
+.Lfunc_begin1888:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception1252
+	pushq	%r15
+	.cfi_def_cfa_offset 16
+	pushq	%r14
+	.cfi_def_cfa_offset 24
+	pushq	%r12
+	.cfi_def_cfa_offset 32
+	pushq	%rbx
+	.cfi_def_cfa_offset 40
+	subq	$152, %rsp
+	.cfi_def_cfa_offset 192
+	.cfi_offset %rbx, -40
+	.cfi_offset %r12, -32
+	.cfi_offset %r14, -24
+	.cfi_offset %r15, -16
+	movq	8(%rsi), %r15
+	movq	16(%rsi), %r12
+	movq	%rcx, %rbx
+	movabsq	$77309411328, %r8
+	cmpq	$39, %r15
+	setb	%al
+	cmpq	$19, %r12
+	setb	%cl
+	andb	%al, %cl
+	movabsq	$-4294902015, %rax
+	andq	%rbx, %rax
+	cmpq	%r8, %rax
+	sete	%al
+	testb	%al, %cl
+	je	.LBB1888_3
+	xorl	%eax, %eax
+	xorl	%edx, %edx
+	jmp	.LBB1888_2
+.LBB1888_3:
+	cmpq	$1, %rdi
+	jne	.LBB1888_4
+	cmpq	%r15, %r12
+	jae	.LBB1888_28
+	testq	%r12, %r12
+	je	.LBB1888_12
+	incq	%r15
+	movq	$-1, %rax
+	cmoveq	%rax, %r15
+	jmp	.LBB1888_12
+.LBB1888_4:
+	movq	%rsi, %r14
+	movq	%rdx, 48(%rsp)
+	movq	$0, 56(%rsp)
+	movw	$0, 32(%rsp)
+.Ltmp39091:
+	leaq	112(%rsp), %rdi
+	leaq	32(%rsp), %rsi
+	callq	_RNvNtNtCseV1CfwIPHUl_10purrdf_xsd7numeric10exact_path8shape_of.llvm.9305710216504555276
+.Ltmp39092:
+	cmpl	$1, 112(%rsp)
+	jne	.LBB1888_26
+	vmovups	120(%rsp), %ymm0
+	leaq	32(%rsp), %rdi
+	vmovups	%ymm0, (%rsp)
+	vzeroupper
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCseV1CfwIPHUl_10purrdf_xsd5value8XsdValueECs7veJbOBHQwe_18purrdf_sparql_eval
+	vmovups	(%rsp), %ymm0
+	movq	_RNvNtNtCseV1CfwIPHUl_10purrdf_xsd5exact4cost11decimal_div@GOTPCREL(%rip), %rax
+	leaq	32(%rsp), %rsi
+	movq	%r14, %rdi
+	movq	%rbx, %rdx
+	vmovups	%ymm0, 32(%rsp)
+	vzeroupper
+	callq	*%rax
+	movq	%rdx, %rcx
+	testb	$1, %bl
+	je	.LBB1888_18
+	vmovdqu	(%rsp), %ymm0
+	vpextrq	$1, %xmm0, %rdx
+	movq	%rdx, %rsi
+	shrq	$62, %rsi
+	jne	.LBB1888_19
+	shlq	$2, %rdx
+.LBB1888_20:
+	addq	%r12, %rdx
+	movq	$-1, %rbx
+	cmovaeq	%rdx, %rbx
+	jmp	.LBB1888_21
+.LBB1888_28:
+	addq	$2, %r12
+	movq	$-1, %r15
+	cmovaeq	%r12, %r15
+.LBB1888_12:
+	movl	$9, %eax
+	mulq	(%rsi)
+	jo	.LBB1888_13
+	cmpl	$0, 24(%rsi)
+	movq	%rax, %rdx
+	jns	.LBB1888_16
+	incq	%r15
+	movq	$-1, %rax
+	cmoveq	%rax, %r15
+.LBB1888_16:
+	addq	%r15, %rdx
+	movq	$-1, %rcx
+	cmovbq	%rcx, %rdx
+	movq	%rdx, %rax
+	incq	%rax
+	cmoveq	%rcx, %rax
+	jmp	.LBB1888_2
+.LBB1888_18:
+	vmovdqu	(%rsp), %ymm0
+	shrq	$32, %rbx
+.LBB1888_21:
+	xorl	%edx, %edx
+	subq	%r12, %r15
+	vextracti128	$1, %ymm0, %xmm0
+	movq	$-1, %r8
+	movabsq	$-2049638230412172401, %rdi
+	movabsq	$-8198552921648689607, %r9
+	movabsq	$2049638230412172401, %r10
+	cmovaeq	%r15, %rdx
+	vmovq	%xmm0, %rsi
+	addq	%rdx, %rsi
+	cmovbq	%r8, %rsi
+	incq	%rsi
+	cmoveq	%r8, %rsi
+	addq	%rbx, %rsi
+	cmovbq	%r8, %rsi
+	movq	%rsi, %rdx
+	mulxq	%rdi, %rdi, %rdi
+	imulq	%rsi, %r9
+	xorl	%edx, %edx
+	shrq	$3, %rdi
+	cmpq	%r10, %r9
+	seta	%dl
+	addq	%rdi, %rdx
+	movq	%rax, %rdi
+	cmpq	%rsi, %rbx
+	jae	.LBB1888_29
+	testq	%rbx, %rbx
+	je	.LBB1888_24
+	incq	%rsi
+	movq	$-1, %rax
+	cmoveq	%rax, %rsi
+	jmp	.LBB1888_24
+.LBB1888_29:
+	addq	$2, %rbx
+	cmovbq	%r8, %rbx
+	movq	%rbx, %rsi
+.LBB1888_24:
+	movl	$9, %r8d
+	movq	%rdx, %rax
+	mulq	%r8
+	jo	.LBB1888_13
+	incq	%rsi
+	movq	$-1, %r8
+	movq	%rax, %rdx
+	movq	%rdi, %rax
+	cmoveq	%r8, %rsi
+	addq	%rsi, %rdx
+	cmovbq	%r8, %rdx
+	movq	%rdx, %rsi
+	incq	%rsi
+	cmoveq	%r8, %rsi
+	addq	%rsi, %rax
+	cmovbq	%r8, %rax
+	cmpq	%rdx, %rcx
+	cmovaq	%rcx, %rdx
+.LBB1888_2:
+	addq	$152, %rsp
+	.cfi_def_cfa_offset 40
+	popq	%rbx
+	.cfi_def_cfa_offset 32
+	popq	%r12
+	.cfi_def_cfa_offset 24
+	popq	%r14
+	.cfi_def_cfa_offset 16
+	popq	%r15
+	.cfi_def_cfa_offset 8
+	vzeroupper
+	retq
+.LBB1888_13:
+	.cfi_def_cfa_offset 192
+	movq	$-1, %rax
+	movq	$-1, %rdx
+	jmp	.LBB1888_2
+.LBB1888_26:
+.Ltmp39093:
+	movq	_RNvNtCs2k2z8Zem4rB_4core6option13expect_failed@GOTPCREL(%rip), %rax
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.1910(%rip), %rdi
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.1911(%rip), %rdx
+	movl	$22, %esi
+	callq	*%rax
+.Ltmp39094:
+	ud2
+.LBB1888_19:
+	movq	$-1, %rdx
+	jmp	.LBB1888_20
+.LBB1888_17:
+.Ltmp39095:
+	leaq	32(%rsp), %rdi
+	movq	%rax, %rbx
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCseV1CfwIPHUl_10purrdf_xsd5value8XsdValueECs7veJbOBHQwe_18purrdf_sparql_eval
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end1888:

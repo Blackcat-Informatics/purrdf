@@ -1,0 +1,9 @@
+# Source-only GRAPH cost and prose repair
+
+Status: SOURCE REPAIR PREPARED; runtime/emission verification NOT RUN. Existing actual cost FAILED finding and docs2880 terminal1 remain historical evidence, never relabeled PASS.
+
+Exactly three admitted shipping paths changed, unstaged pending root review: modifier.rs adds the one existing graph_holds_no_rows home’s reasoned #[inline(always)] boundary; no duplicated emptiness body or algorithm change. It retains the three exact short-circuiting quad/reifier/annotation first-row probes and existing contextual/native static dispatch. The reason is actual emitted ordinary per-graph helper call/live frame; annotation alone is not proof. Required refreshed affected modules must show actual inline emptiness paths and no extra helper frame, then complete whole-body proof. Full ABI/capture/drop/numeric/old-arm requirements remain untouched.
+
+README now says 'Last complete broad-suite snapshot. Scoreboard: **81 passed / 5 xfailed**'. CONFORMANCE retains unchanged4164/4 and appends explicit last-complete-broad-suite-snapshot qualification inside that row; surrounding historical note remains. These exact wording changes restore both mandatory current checker patterns without growing legacy Python gate, changing numbers, implying new broad-suite evidence or handediting generated blocks. Source diff-check0. No Cargo/probe/docs retry, staging, commit or push occurred.
+
+Prose-only requalification requires actual check-doc-claims plus all unreached English prose/normal English/zh builds. Existing glossary/i18n and generated-output comparisons passed at933daa; after projection-only wording change, bind exact allowed prose delta and regenerate POT/PO only if changed English book inputs require it (README/CONFORMANCE lie outside book POT, so this wording change does not itself alter it). Rust helper repair requires affected native tests/clippy and actual new matched emissions, not docs evidence.

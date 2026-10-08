@@ -1,0 +1,17 @@
+# Final owning documentation validation
+
+VERDICT: PASS for admitted current-source documentation acceptance. Refreshed lower Rust, production wheel and full emitted native-cost proof remain UNRUN / NOT MET; no whole-completion/commit/publication claim.
+
+Actual session85659 terminal0 observed via tools.write_stdin; driver.exit0 and all nine owning command exits0 retained under `/opt/purrdf-454-current-qualification-20261008/final-doc-validation-1`. Scope purrdf-454-final-doc-validation-20261008.scope invocationc3b941f3f0964317bd062bf44add34cd is inactive/dead; lane FREE. Live active/running scope receipt captures MemoryMax68719476736 and MemorySwapMax0, swap-current0 at observation. Raw same-active SDK/private target/build/tmp and jobs8/libtest8, inherited wrapper environment recorded. No timing claim.
+
+Bound tree2f3ee2d75b30145ac053be6587223d892b26368c, HEADfd963c263 and MERGE_HEADdf2cec88 remain unchanged. Complete tracked source hash readback succeeded immediately after owning English visualization generation and again at final driver completion. No tracked SVG, catalogue or other projection drift; unstaged shipping source clean. All original failed docs2880 and native-cost300e evidence remain preserved.
+
+|Actual owning caller|Settled evidence|
+|---|---|
+|Native glossary self-test|69 rows,43 rejections,24 K tokens,1716 production-path selftests;exit0.|
+|make check-i18n|Native production scan4314 translated units/3 tracked translated Markdown files/1716 controls. Seven real poison catalogues each exit1 as required: CJK brand/process, quad-template attribution, entailment overclaim, both SPARQL fence poisons, unreachable stale msgid. All six final render arms PASS;26 SPARQL fences/33 Markdown pages;3040 translated,0 fuzzy,0 untranslated,10 obsolete,zero source/catalogue drift. Actual mdBook0.5.3/i18n-helpers0.4.0 admitted at their pins.|
+|Owner check-generated.sh|All generated-output comparisons exit0, including visualization/claim projections and existing owning SSSOM accessibility control1PASS/0ignore. No blanket projection writes or hand-edited counters.|
+|Four English gates|Brand/issue references0, specification attribution+selftest0, doc claims154 agree with owning generated source0. Historical broad-Python4164/4 and81/5 scoreboard snapshots are retained honestly;28 boundary cases do not refresh them.|
+|Normal make book;make book-zh|Both actual terminal0. English owns SVG regeneration via viz_samples; tracked bytes unchanged. Each language has37 HTML paths:33 current chapter pages plus404.html/index.html/print.html/toc.html. Every chapter output required nonempty in both languages. Complete inventories independently exclude the nested zh tree from English. All164 rendered output files hashed and read back successfully.|
+
+This closes the actual owning docs acceptance on current lower-repair source, not merely scratch Markdown rendering. Catalogue generation was separately proven without source delta in portfolio-final-doc-generation-qualification.md; no rebind is needed. Reuse unchanged Shapes/parser/serializer qualification only within its documented300e source scope. Lower Project/Application/checkpoint behavior requires the prepared lower-rust execution; current compiled wheel28 and fresh full ABI/frame/capture/drop/old-arm/numeric/worker body proof remain mandatory. No lower-rust/wheel/cost phase, broad Python/vendor/oracle/timing, external repository action, commit or push occurred in this docs phase.

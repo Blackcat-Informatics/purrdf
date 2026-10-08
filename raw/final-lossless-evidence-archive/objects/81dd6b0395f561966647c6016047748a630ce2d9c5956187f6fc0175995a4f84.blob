@@ -1,0 +1,9 @@
+ActiveState=active
+SubState=running
+InvocationID=c3b941f3f0964317bd062bf44add34cd
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-final-doc-validation-20261008.scope
+MemoryCurrent=149913600
+MemoryPeak=265019392
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

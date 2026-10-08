@@ -1,0 +1,319 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "normalization": "Blank identities assigned by first encounter across the entire result; equality and distinctness preserved, opaque labels discarded.",
+  "cases": [
+    {
+      "name": "bnode-labelled-row-identity-unbound",
+      "query": "SELECT ?x ?a ?b WHERE { VALUES ?x {1 2 3} BIND(BNODE(\"label\") AS ?a) BIND(BNODE(\"label\") AS ?b) }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "a",
+          "b"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b0"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b0"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b0"
+            ]
+          ]
+        ],
+        "blank_identity_count": 1
+      }
+    },
+    {
+      "name": "bnode-labelled-row-identity-bound",
+      "query": "SELECT ?x ?a ?b WHERE { VALUES ?x {1 2 3} BIND(BNODE(\"label\") AS ?a) BIND(BNODE(\"label\") AS ?b) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "a",
+          "b"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b0"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b0"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b0"
+            ]
+          ]
+        ],
+        "blank_identity_count": 1
+      }
+    },
+    {
+      "name": "bnode-labelled-distinct-count-unbound",
+      "query": "SELECT (COUNT(DISTINCT ?a) AS ?n) WHERE { VALUES ?x {1 2 3} BIND(BNODE(\"label\") AS ?a) }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "blank_identity_count": 0
+      }
+    },
+    {
+      "name": "bnode-labelled-distinct-count-bound",
+      "query": "SELECT (COUNT(DISTINCT ?a) AS ?n) WHERE { VALUES ?x {1 2 3} BIND(BNODE(\"label\") AS ?a) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "blank_identity_count": 0
+      }
+    },
+    {
+      "name": "bnode-unlabelled-row-identity-unbound",
+      "query": "SELECT ?x ?a ?b WHERE { VALUES ?x {1 2 3} BIND(BNODE() AS ?a) BIND(BNODE() AS ?b) }",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "a",
+          "b"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b1"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b2"
+            ],
+            [
+              "blank",
+              "b3"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b4"
+            ],
+            [
+              "blank",
+              "b5"
+            ]
+          ]
+        ],
+        "blank_identity_count": 6
+      }
+    },
+    {
+      "name": "bnode-unlabelled-row-identity-bound",
+      "query": "SELECT ?x ?a ?b WHERE { VALUES ?x {1 2 3} BIND(BNODE() AS ?a) BIND(BNODE() AS ?b) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "a",
+          "b"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b0"
+            ],
+            [
+              "blank",
+              "b1"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b2"
+            ],
+            [
+              "blank",
+              "b3"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "blank",
+              "b4"
+            ],
+            [
+              "blank",
+              "b5"
+            ]
+          ]
+        ],
+        "blank_identity_count": 6
+      }
+    }
+  ]
+}

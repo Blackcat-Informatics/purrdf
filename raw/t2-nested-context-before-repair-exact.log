@@ -1,0 +1,38 @@
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+____________ test_nested_exists_preserves_enclosing_context[False] _____________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+matching = False
+
+    @pytest.mark.parametrize("matching", [False, True])
+    def test_nested_exists_preserves_enclosing_context(compat, oracle, matching):
+        fixture = {
+            "triples": [
+                ["a", "p", "b"],
+                ["a", "p", "c"],
+                ["a", "q", "z"],
+                ["z", "r", "b"],
+                ["z" if matching else "other", "r", "c"],
+            ]
+        }
+        case = {
+            "initial": {},
+            "query": "SELECT ?s WHERE { ?s <http://example.org/q> ?z . "
+            "?s <http://example.org/p> ?x FILTER NOT EXISTS { "
+            "?s <http://example.org/p> ?y FILTER(?x != ?y) "
+            "FILTER NOT EXISTS { ?z <http://example.org/r> ?y } } }",
+        }
+        expected = run(oracle, fixture, case, "Graph")
+        assert sum(expected[2].values()) == 1 + int(matching)
+>       assert run(compat, fixture, case, "Graph") == expected
+E       AssertionError: assert ('SELECT', ('...rg/a'),): 2})) == ('SELECT', ('...rg/a'),): 1}))
+E         
+E         At index 2 diff: Counter({(('iri', 'http://example.org/a'),): 2}) != Counter({(('iri', 'http://example.org/a'),): 1})
+E         Use -v to get more diff
+
+tests/test_contextual_mappings.py:153: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_contextual_mappings.py::test_nested_exists_preserves_enclosing_context[False]
+1 failed, 1 passed, 809 deselected in 0.14s

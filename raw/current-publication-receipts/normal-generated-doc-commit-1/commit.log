@@ -1,0 +1,4 @@
+Running as unit: purrdf-454-normal-generated-doc-commit-20261008.scope; invocation ID: 7d78284238534706a43e800a43b68121
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the staged index against df2cec88b0f8 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/454-rdflib-shim-algebra-level-reassignment 239c3c1aa] Refresh generated conformance and SIMD measurements
+ 2 files changed, 2 insertions(+), 2 deletions(-)

@@ -1,0 +1,46 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking digest v0.11.3
+    Checking cpufeatures v0.3.0
+   Compiling libc v0.2.186
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-events)
+    Checking sha2 v0.11.0
+    Checking regex-automata v0.4.14
+    Checking regex v1.12.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/testkit)
+    Checking crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/deflate)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd)
+   Compiling getrandom v0.3.4
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt)
+    Checking hashbrown v0.17.1
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+error: this parameter is a mutable reference but is not used mutably
+   --> crates/sparql-algebra/src/parser.rs:863:32
+    |
+863 |     fn note_scope_consultation(&mut self) {}
+    |                                ^----^^^^
+    |                                 |
+    |                                 help: consider removing this `mut`
+    |
+    = note: this is cfg-gated and may require further changes
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+    = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: could not compile `purrdf-sparql-algebra` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

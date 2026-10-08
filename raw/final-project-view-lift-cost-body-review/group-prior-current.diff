@@ -1,0 +1,20 @@
+--- .stage/rdflib-shim-algebra-level-reassignment/raw/final-project-view-lift-cost-body-review/prior-group-normalized.ll	2026-10-08 10:34:25.437059445 -0600
++++ .stage/rdflib-shim-algebra-level-reassignment/raw/final-project-view-lift-cost-body-review/current-group-normalized.ll	2026-10-08 10:34:25.441059380 -0600
+@@ -919,7 +919,7 @@
+ 
+ 552:                                              ; preds = %548
+ ; invoke core::panicking::panic_bounds_check
+-  invoke void @core::panicking::panic_bounds_check(i64 noundef %538, i64 noundef %549, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.786) #ATTR
++  invoke void @core::panicking::panic_bounds_check(i64 noundef %538, i64 noundef %549, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.787) #ATTR
+           to label %553 unwind label %613, !noalias !ID
+ 
+ 553:                                              ; preds = %552
+@@ -959,7 +959,7 @@
+ 
+ 576:                                              ; preds = %572
+ ; invoke core::panicking::panic_bounds_check
+-  invoke void @core::panicking::panic_bounds_check(i64 noundef %562, i64 noundef %573, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.786) #ATTR
++  invoke void @core::panicking::panic_bounds_check(i64 noundef %562, i64 noundef %573, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.787) #ATTR
+           to label %577 unwind label %620, !noalias !ID
+ 
+ 577:                                              ; preds = %576

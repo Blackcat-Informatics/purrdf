@@ -1,0 +1,155 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-candidate-python-ir/purrdf_native.ll:172269
+; core::ptr::drop_glue::<purrdf_shex::validate::ResultEntry>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex8validate11ResultEntryECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(136) %_1) unnamed_addr #1 personality ptr @rust_eh_personality !guid !33999 {
+start:
+  %0 = getelementptr inbounds nuw i8, ptr %_1, i64 48
+; invoke core::ptr::drop_glue::<purrdf_core::ir::term::TermValue>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir4term9TermValueECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef align 8 dereferenceable(80) %0)
+          to label %bb6 unwind label %cleanup
+
+cleanup:                                          ; preds = %start
+  %1 = landingpad { ptr, i32 }
+          cleanup
+  %_1.val = load i64, ptr %_1, align 8, !range !3940, !noundef !3923
+  %2 = icmp sgt i64 %_1.val, 0
+  br i1 %2, label %bb2.i.i.i4.i.i.i, label %bb3
+
+bb2.i.i.i4.i.i.i:                                 ; preds = %cleanup
+  %3 = getelementptr inbounds nuw i8, ptr %_1, i64 8
+  %_1.val3 = load ptr, ptr %3, align 8, !nonnull !3923, !noundef !3923
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val3, i64 noundef %_1.val, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !34000
+  br label %bb3
+
+bb6:                                              ; preds = %start
+  %_1.val4 = load i64, ptr %_1, align 8, !range !3940, !noundef !3923
+  %4 = icmp sgt i64 %_1.val4, 0
+  br i1 %4, label %bb2.i.i.i4.i.i.i8, label %bb5
+
+bb2.i.i.i4.i.i.i8:                                ; preds = %bb6
+  %5 = getelementptr inbounds nuw i8, ptr %_1, i64 8
+  %_1.val5 = load ptr, ptr %5, align 8, !nonnull !3923, !noundef !3923
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val5, i64 noundef %_1.val4, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !34003
+  br label %bb5
+
+bb3:                                              ; preds = %bb2.i.i.i4.i.i.i, %cleanup
+  %6 = getelementptr inbounds nuw i8, ptr %_1, i64 24
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34006)
+  %7 = load i64, ptr %6, align 8, !range !3940, !alias.scope !34006, !noundef !3923
+  %8 = icmp eq i64 %7, -1
+  br i1 %8, label %bb2, label %bb2.i
+
+bb2.i:                                            ; preds = %bb3
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34009)
+  %9 = icmp eq i64 %7, 0
+  br i1 %9, label %bb2, label %bb2.i.i.i4.i.i.i10
+
+bb2.i.i.i4.i.i.i10:                               ; preds = %bb2.i
+  %10 = getelementptr inbounds nuw i8, ptr %_1, i64 32
+  %_1.val1.i.i = load ptr, ptr %10, align 8, !alias.scope !34012, !nonnull !3923, !noundef !3923
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i, i64 noundef %7, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !34012
+  br label %bb2
+
+bb5:                                              ; preds = %bb2.i.i.i4.i.i.i8, %bb6
+  %11 = getelementptr inbounds nuw i8, ptr %_1, i64 24
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34013)
+  %12 = load i64, ptr %11, align 8, !range !3940, !alias.scope !34013, !noundef !3923
+  %13 = icmp eq i64 %12, -1
+  br i1 %13, label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionNtNtCsc70TAahYccp_5alloc6string6StringEECseY6IX0djbTh_13purrdf_native.exit14, label %bb2.i11
+
+bb2.i11:                                          ; preds = %bb5
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34016)
+  %14 = icmp eq i64 %12, 0
+  br i1 %14, label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionNtNtCsc70TAahYccp_5alloc6string6StringEECseY6IX0djbTh_13purrdf_native.exit14, label %bb2.i.i.i4.i.i.i12
+
+bb2.i.i.i4.i.i.i12:                               ; preds = %bb2.i11
+  %15 = getelementptr inbounds nuw i8, ptr %_1, i64 32
+  %_1.val1.i.i13 = load ptr, ptr %15, align 8, !alias.scope !34019, !nonnull !3923, !noundef !3923
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i13, i64 noundef %12, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !34019
+  br label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionNtNtCsc70TAahYccp_5alloc6string6StringEECseY6IX0djbTh_13purrdf_native.exit14
+
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtB4_6option6OptionNtNtCsc70TAahYccp_5alloc6string6StringEECseY6IX0djbTh_13purrdf_native.exit14: ; preds = %bb5, %bb2.i11, %bb2.i.i.i4.i.i.i12
+  ret void
+
+bb2:                                              ; preds = %bb2.i.i.i4.i.i.i10, %bb2.i, %bb3
+  resume { ptr, i32 } %1
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex8validate11ResultEntryECseY6IX0djbTh_13purrdf_native:
+.Lfunc_begin587:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception587
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	pushq	%rax
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	%rdi, %rbx
+	addq	$48, %rdi
+.Ltmp8060:
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtNtCs9JR5wkNnSpU_11purrdf_core2ir4term9TermValueECseY6IX0djbTh_13purrdf_native
+.Ltmp8061:
+	movq	(%rbx), %rsi
+	testq	%rsi, %rsi
+	jle	.LBB1131_3
+	movq	8(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB1131_3:
+	movq	24(%rbx), %rsi
+	cmpq	$-1, %rsi
+	je	.LBB1131_12
+	testq	%rsi, %rsi
+	je	.LBB1131_12
+	movq	32(%rbx), %rdi
+	movl	$1, %edx
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	jmpq	*_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+.LBB1131_12:
+	.cfi_def_cfa_offset 32
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1131_6:
+	.cfi_def_cfa_offset 32
+.Ltmp8062:
+	movq	(%rbx), %rsi
+	movq	%rax, %r14
+	testq	%rsi, %rsi
+	jle	.LBB1131_8
+	movq	8(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB1131_8:
+	movq	24(%rbx), %rsi
+	cmpq	$-1, %rsi
+	je	.LBB1131_11
+	testq	%rsi, %rsi
+	je	.LBB1131_11
+	movq	32(%rbx), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB1131_11:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end1131:

@@ -1,0 +1,9 @@
+ActiveState=active
+SubState=running
+InvocationID=3e81d808565f4bc7b334070a4459a9be
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-final-lower-rust-20261008.scope
+MemoryCurrent=619520000
+MemoryPeak=625258496
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

@@ -1,0 +1,4 @@
+cmp: EOF on ‘.stage/rdflib-shim-algebra-level-reassignment/raw/t1-issue-update.md’ after byte 2553, line 9
+comment 6029391269 exact body comparison exit 1
+gh --jq added one output newline; raw diff preserves this diagnostic.
+Exact gh template body comparison exit 0

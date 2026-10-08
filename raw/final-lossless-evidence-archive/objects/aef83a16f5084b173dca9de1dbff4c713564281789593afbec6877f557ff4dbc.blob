@@ -1,0 +1,409 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:619717
+; <purrdf_xsd::exact::cost::SumChain>::push
+define internal fastcc { i64, i64 } @_RNvMs0_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB5_8SumChain4push(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(80) %0, ptr noalias nofree noundef nonnull align 8 captures(none) dead_on_return dereferenceable(32) %1) unnamed_addr #2 !guid !76712 {
+  %3 = getelementptr inbounds nuw i8, ptr %0, i64 72
+  %4 = load i64, ptr %3, align 8, !noundef !1703
+  %5 = tail call i64 @llvm.uadd.sat.i64(i64 %4, i64 1)
+  store i64 %5, ptr %3, align 8
+  %6 = getelementptr inbounds nuw i8, ptr %1, i64 8
+  %7 = load i64, ptr %6, align 8, !noundef !1703
+  %8 = getelementptr inbounds nuw i8, ptr %1, i64 16
+  %9 = load i64, ptr %8, align 8, !noundef !1703
+  %10 = tail call i64 @llvm.usub.sat.i64(i64 %7, i64 %9)
+  %11 = getelementptr inbounds nuw i8, ptr %0, i64 56
+  %12 = load i64, ptr %11, align 8, !noundef !1703
+  %13 = icmp ugt i64 %10, %12
+  br i1 %13, label %14, label %15
+
+14:                                               ; preds = %2
+  store i64 %10, ptr %11, align 8
+  br label %15
+
+15:                                               ; preds = %14, %2
+  %16 = phi i64 [ %12, %2 ], [ %10, %14 ]
+  %17 = getelementptr inbounds nuw i8, ptr %0, i64 64
+  %18 = load i64, ptr %17, align 8, !noundef !1703
+  %19 = icmp ugt i64 %9, %18
+  br i1 %19, label %20, label %21
+
+20:                                               ; preds = %15
+  store i64 %9, ptr %17, align 8
+  br label %21
+
+21:                                               ; preds = %20, %15
+  %22 = phi i64 [ %18, %15 ], [ %9, %20 ]
+  %23 = load i64, ptr %0, align 8, !range !1779, !noundef !1703
+  %24 = trunc nuw i64 %23 to i1
+  br i1 %24, label %25, label %29
+
+25:                                               ; preds = %21
+  %26 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  %.sroa.0.0.copyload = load i64, ptr %26, align 8
+  %.sroa.4.0..sroa_idx = getelementptr inbounds nuw i8, ptr %0, i64 16
+  %.sroa.4.0.copyload = load i64, ptr %.sroa.4.0..sroa_idx, align 8
+  %.sroa.5.0..sroa_idx = getelementptr inbounds nuw i8, ptr %0, i64 24
+  %.sroa.5.0.copyload = load i64, ptr %.sroa.5.0..sroa_idx, align 8
+  %27 = add i64 %5, -1
+  %28 = icmp eq i64 %27, 0
+  br i1 %28, label %71, label %35, !prof !1727
+
+29:                                               ; preds = %116, %21
+  %30 = phi i64 [ %117, %116 ], [ 0, %21 ]
+  %31 = phi i64 [ %118, %116 ], [ 0, %21 ]
+  store i64 1, ptr %0, align 8
+  %32 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  tail call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(32) %32, ptr noundef nonnull align 8 dereferenceable(32) %1, i64 32, i1 false)
+  %33 = insertvalue { i64, i64 } poison, i64 %31, 0
+  %34 = insertvalue { i64, i64 } %33, i64 %30, 1
+  ret { i64, i64 } %34
+
+35:                                               ; preds = %25
+  %36 = icmp ne i64 %5, 1
+  tail call void @llvm.assume(i1 %36)
+  %37 = icmp ugt i64 %27, 9999999999
+  %38 = udiv i64 %27, 10000000000
+  %39 = select i1 %37, i32 10, i32 0
+  %40 = select i1 %37, i64 %38, i64 %27
+  %41 = icmp samesign ugt i64 %40, 99999
+  br i1 %41, label %42, label %45
+
+42:                                               ; preds = %35
+  %43 = udiv i64 %40, 100000
+  %44 = or disjoint i32 %39, 5
+  br label %45
+
+45:                                               ; preds = %42, %35
+  %46 = phi i32 [ %44, %42 ], [ %39, %35 ]
+  %47 = phi i64 [ %43, %42 ], [ %40, %35 ]
+  %48 = trunc nuw nsw i64 %47 to i32
+  %49 = add nuw nsw i32 %48, 393206
+  %50 = add nuw nsw i32 %48, 524188
+  %51 = and i32 %49, %50
+  %52 = add nuw nsw i32 %48, 916504
+  %53 = add nuw nsw i32 %48, 514288
+  %54 = and i32 %52, %53
+  %55 = xor i32 %51, %54
+  %56 = lshr i32 %55, 17
+  %57 = add nuw nsw i32 %56, %46
+  %58 = icmp samesign ult i32 %57, 20
+  tail call void @llvm.assume(i1 %58)
+  %59 = add nuw nsw i32 %57, 1
+  %60 = zext nneg i32 %59 to i64
+  %61 = tail call i64 @llvm.uadd.sat.i64(i64 %16, i64 %60)
+  %62 = tail call i64 @llvm.uadd.sat.i64(i64 %61, i64 %22)
+  %63 = udiv i64 %62, 9
+  %64 = urem i64 %62, 9
+  %65 = icmp ne i64 %64, 0
+  %66 = zext i1 %65 to i64
+  %67 = add nuw nsw i64 %63, %66
+  %68 = icmp ult i64 %.sroa.4.0.copyload, 39
+  %69 = icmp ult i64 %.sroa.5.0.copyload, 19
+  %70 = and i1 %68, %69
+  br i1 %70, label %72, label %76
+
+71:                                               ; preds = %25
+; call core::num::imp::int_log10::panic_for_nonpositive_argument
+  tail call void @_RNvNtNtNtCs2k2z8Zem4rB_4core3num3imp9int_log1030panic_for_nonpositive_argument(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.d93b065c2763fb0250ff43fdc196fa20.1089) #91
+  unreachable
+
+72:                                               ; preds = %45
+  %73 = icmp ult i64 %7, 39
+  %74 = icmp ult i64 %9, 19
+  %75 = and i1 %73, %74
+  br i1 %75, label %112, label %76
+
+76:                                               ; preds = %112, %72, %45
+  %77 = load i64, ptr %1, align 8, !alias.scope !76713, !noalias !76716
+  %78 = icmp ult i64 %.sroa.5.0.copyload, %9
+  br i1 %78, label %84, label %79
+
+79:                                               ; preds = %76
+  %80 = sub nuw i64 %.sroa.5.0.copyload, %9
+  %81 = udiv i64 %80, 9
+  %82 = add nuw nsw i64 %81, 1
+  %83 = tail call i64 @llvm.uadd.sat.i64(i64 %77, i64 %82)
+  br label %89
+
+84:                                               ; preds = %76
+  %85 = sub nuw i64 %9, %.sroa.5.0.copyload
+  %86 = udiv i64 %85, 9
+  %87 = add nuw nsw i64 %86, 1
+  %88 = tail call i64 @llvm.uadd.sat.i64(i64 %.sroa.0.0.copyload, i64 %87)
+  br label %89
+
+89:                                               ; preds = %84, %79
+  %90 = phi i64 [ %88, %84 ], [ %83, %79 ]
+  %91 = phi i64 [ %77, %84 ], [ %83, %79 ]
+  %92 = phi i64 [ %88, %84 ], [ %.sroa.0.0.copyload, %79 ]
+  %93 = shl nuw i64 %90, 2
+  %94 = icmp ugt i64 %90, 4611686018427387903
+  br i1 %94, label %95, label %96, !prof !1727
+
+95:                                               ; preds = %89
+  br label %96
+
+96:                                               ; preds = %95, %89
+  %97 = phi i64 [ -1, %95 ], [ %93, %89 ]
+  %98 = tail call i64 @llvm.umax.i64(i64 %92, i64 %91)
+  %99 = tail call i64 @llvm.uadd.sat.i64(i64 %98, i64 1)
+  %100 = shl nuw i64 %99, 2
+  %101 = icmp ugt i64 %99, 4611686018427387903
+  br i1 %101, label %102, label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8add_cost.exit, !prof !1727
+
+102:                                              ; preds = %96
+  br label %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8add_cost.exit
+
+_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8add_cost.exit: ; preds = %96, %102
+  %103 = phi i64 [ -1, %102 ], [ %100, %96 ]
+  %104 = tail call i64 @llvm.uadd.sat.i64(i64 %90, i64 %99)
+  %105 = tail call i64 @llvm.uadd.sat.i64(i64 %97, i64 %103)
+  %106 = getelementptr inbounds nuw i8, ptr %0, i64 40
+  %107 = load i64, ptr %106, align 8, !noundef !1703
+  %108 = getelementptr inbounds nuw i8, ptr %0, i64 48
+  %109 = load i64, ptr %108, align 8, !noundef !1703
+  %110 = tail call i64 @llvm.uadd.sat.i64(i64 %107, i64 %104)
+  %111 = tail call i64 @llvm.umax.i64(i64 %109, i64 %105)
+  store i64 %110, ptr %106, align 8
+  store i64 %111, ptr %108, align 8
+  br label %116
+
+112:                                              ; preds = %72
+  %113 = icmp ult i64 %62, 39
+  %114 = icmp ult i64 %22, 19
+  %115 = and i1 %114, %113
+  br i1 %115, label %116, label %76
+
+116:                                              ; preds = %112, %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8add_cost.exit
+  %117 = phi i64 [ 0, %112 ], [ %105, %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8add_cost.exit ]
+  %118 = phi i64 [ 0, %112 ], [ %104, %_RNvMs_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB4_5Shape8add_cost.exit ]
+  store i64 %67, ptr %1, align 8
+  store i64 %62, ptr %6, align 8
+  store i64 %22, ptr %8, align 8
+  %119 = getelementptr inbounds nuw i8, ptr %1, i64 24
+  store i32 -1, ptr %119, align 8
+  br label %29
+}
+
+ASSEMBLY
+_RNvMs0_NtNtCseV1CfwIPHUl_10purrdf_xsd5exact4costNtB5_8SumChain4push:
+.Lfunc_begin1429:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	pushq	%rax
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	72(%rdi), %rax
+	movq	8(%rsi), %rbx
+	movq	16(%rsi), %rcx
+	movq	56(%rdi), %r8
+	movq	$-1, %rdx
+	incq	%rax
+	movq	%rbx, %r9
+	cmovneq	%rax, %rdx
+	xorl	%eax, %eax
+	subq	%rcx, %r9
+	cmovaeq	%r9, %rax
+	movq	%rdx, 72(%rdi)
+	cmpq	%r8, %rax
+	ja	.LBB1429_1
+	movq	64(%rdi), %r9
+	cmpq	%r9, %rcx
+	ja	.LBB1429_3
+.LBB1429_4:
+	cmpl	$1, (%rdi)
+	jne	.LBB1429_5
+.LBB1429_7:
+	decq	%rdx
+	je	.LBB1429_26
+	movabsq	$-2601111570856684097, %rax
+	movq	8(%rdi), %r10
+	movq	16(%rdi), %r15
+	movq	24(%rdi), %r14
+	movq	%rdx, %r11
+	shrq	$10, %r11
+	xorl	%ebp, %ebp
+	mulxq	%rax, %rax, %rax
+	shrq	$33, %rax
+	cmpq	$9765625, %r11
+	movl	$10, %r11d
+	cmovbl	%ebp, %r11d
+	cmovbq	%rdx, %rax
+	cmpq	$100000, %rax
+	jb	.LBB1429_10
+	shrq	$5, %rax
+	movabsq	$755578637259143235, %r12
+	orl	$5, %r11d
+	movq	%rax, %rdx
+	mulxq	%r12, %rax, %rax
+	shrq	$7, %rax
+.LBB1429_10:
+	leal	393206(%rax), %edx
+	leal	524188(%rax), %ebp
+	movabsq	$-8198552921648689607, %r12
+	movabsq	$2049638230412172401, %r13
+	andl	%edx, %ebp
+	leal	916504(%rax), %edx
+	addl	$514288, %eax
+	andl	%edx, %eax
+	movq	$-1, %rdx
+	xorl	%ebp, %eax
+	shrl	$17, %eax
+	leal	1(%rax,%r11), %eax
+	addq	%rax, %r8
+	movabsq	$-2049638230412172401, %rax
+	cmovbq	%rdx, %r8
+	addq	%r9, %r8
+	cmovbq	%rdx, %r8
+	xorl	%r11d, %r11d
+	movq	%r8, %rdx
+	mulxq	%rax, %rdx, %rdx
+	imulq	%r8, %r12
+	shrq	$3, %rdx
+	cmpq	%r13, %r12
+	seta	%r11b
+	addq	%rdx, %r11
+	cmpq	$39, %r15
+	setb	%dl
+	cmpq	$19, %r14
+	setb	%bpl
+	testb	%bpl, %dl
+	je	.LBB1429_12
+	cmpq	$39, %rbx
+	setb	%dl
+	cmpq	$19, %rcx
+	setb	%bl
+	testb	%bl, %dl
+	je	.LBB1429_12
+	cmpq	$18, %r9
+	ja	.LBB1429_12
+	cmpq	$38, %r8
+	ja	.LBB1429_12
+	xorl	%edx, %edx
+	xorl	%eax, %eax
+	jmp	.LBB1429_25
+.LBB1429_1:
+	movq	%rax, %r8
+	movq	%rax, 56(%rdi)
+	movq	64(%rdi), %r9
+	cmpq	%r9, %rcx
+	jbe	.LBB1429_4
+.LBB1429_3:
+	movq	%rcx, %r9
+	movq	%rcx, 64(%rdi)
+	cmpl	$1, (%rdi)
+	je	.LBB1429_7
+.LBB1429_5:
+	xorl	%edx, %edx
+	xorl	%eax, %eax
+	jmp	.LBB1429_6
+.LBB1429_12:
+	movq	(%rsi), %rbx
+	movq	%r14, %rdx
+	subq	%rcx, %rdx
+	jae	.LBB1429_13
+	subq	%r14, %rcx
+	movq	%rcx, %rdx
+	mulxq	%rax, %rax, %rax
+	shrq	$3, %rax
+	incq	%rax
+	addq	%rax, %r10
+	movq	$-1, %rax
+	cmovaeq	%r10, %rax
+	movq	%rax, %r10
+	jmp	.LBB1429_15
+.LBB1429_13:
+	mulxq	%rax, %rax, %rax
+	shrq	$3, %rax
+	incq	%rax
+	addq	%rax, %rbx
+	movq	$-1, %rax
+	cmovaeq	%rbx, %rax
+	movq	%rax, %rbx
+.LBB1429_15:
+	movq	%rax, %rcx
+	movabsq	$4611686018427387903, %r14
+	shrq	$62, %rcx
+	jne	.LBB1429_17
+	leaq	(,%rax,4), %rdx
+.LBB1429_18:
+	cmpq	%rbx, %r10
+	movq	$-1, %rcx
+	cmovaq	%r10, %rbx
+	incq	%rbx
+	cmoveq	%rcx, %rbx
+	cmpq	%r14, %rbx
+	ja	.LBB1429_20
+	leaq	(,%rbx,4), %r10
+.LBB1429_21:
+	addq	%rbx, %rax
+	movq	40(%rdi), %r14
+	cmovbq	%rcx, %rax
+	addq	%r10, %rdx
+	movq	48(%rdi), %r10
+	cmovbq	%rcx, %rdx
+	addq	%rax, %r14
+	cmovbq	%rcx, %r14
+	cmpq	%rdx, %r10
+	cmovbeq	%rdx, %r10
+	movq	%r14, 40(%rdi)
+	movq	%r10, 48(%rdi)
+.LBB1429_25:
+	movq	%r11, (%rsi)
+	movq	%r8, 8(%rsi)
+	movq	%r9, 16(%rsi)
+	movl	$-1, 24(%rsi)
+.LBB1429_6:
+	movq	(%rsi), %rcx
+	movq	8(%rsi), %r10
+	movq	16(%rsi), %r9
+	movl	24(%rsi), %r8d
+	movl	28(%rsi), %esi
+	movq	$1, (%rdi)
+	movq	%rcx, 8(%rdi)
+	movq	%r10, 16(%rdi)
+	movq	%r9, 24(%rdi)
+	movl	%r8d, 32(%rdi)
+	movl	%esi, 36(%rdi)
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1429_26:
+	.cfi_def_cfa_offset 64
+	movq	_RNvNtNtNtCs2k2z8Zem4rB_4core3num3imp9int_log1030panic_for_nonpositive_argument@GOTPCREL(%rip), %rax
+	leaq	.Lanon.d93b065c2763fb0250ff43fdc196fa20.1089(%rip), %rdi
+	callq	*%rax
+.LBB1429_17:
+	movq	$-1, %rdx
+	jmp	.LBB1429_18
+.LBB1429_20:
+	movq	$-1, %r10
+	jmp	.LBB1429_21
+.Lfunc_end1429:

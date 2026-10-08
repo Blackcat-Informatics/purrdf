@@ -1,0 +1,35 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/retrieval)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/geo)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:108:21
+    |
+108 |                     assert_eq!(actual.solutions(), result.solutions())
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert_eq!(actual.solutions(), result.solutions());`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: more than 3 bools in a struct
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:133:5
+    |
+133 | /     struct Observer {
+134 | |         events: Arc<Mutex<Vec<String>>>,
+135 | |         volatile: bool,
+136 | |         fail: bool,
+...   |
+140 | |         initialized: Arc<Mutex<usize>>,
+141 | |     }
+    | |_____^
+    |
+    = help: consider using a state machine or refactoring bools into two-variant enums
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#struct_excessive_bools
+    = note: `-D clippy::struct-excessive-bools` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::struct_excessive_bools)]`
+
+error: could not compile `purrdf-sparql-eval` (test "rdflib_contextual") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

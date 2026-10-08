@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 57.66s
+     Running tests/rdflib_contextual.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-eval/0c7b169ea6698b57/out/rdflib_contextual-0c7b169ea6698b57)
+
+running 1 test
+test freeze_additional_oracle_inputs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+

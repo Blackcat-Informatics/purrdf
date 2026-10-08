@@ -1,0 +1,270 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [
+    [
+      "a",
+      "p",
+      "o1"
+    ],
+    [
+      "a",
+      "p",
+      "o2"
+    ],
+    [
+      "b",
+      "p",
+      "o3"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "group-having-reassigned-target-unbound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) } GROUP BY ?this HAVING(COUNT(*)>2) ORDER BY DESC(?n)",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-having-reassigned-target-bound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) } GROUP BY ?this HAVING(COUNT(*)>2) ORDER BY DESC(?n)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-reassigned-order-slice-unbound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(?s AS ?this) } GROUP BY ?this ORDER BY DESC(?n) ASC(STR(?this)) LIMIT 2",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-reassigned-order-slice-bound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(?s AS ?this) } GROUP BY ?this ORDER BY DESC(?n) ASC(STR(?this)) LIMIT 2",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-reassigned-having-single-unbound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(?s AS ?this) } GROUP BY ?this HAVING(COUNT(*)=1) ORDER BY STR(?this)",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-reassigned-having-single-bound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(?s AS ?this) } GROUP BY ?this HAVING(COUNT(*)=1) ORDER BY STR(?this)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-alias-order-offset-unbound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value } GROUP BY (?s AS ?this) ORDER BY DESC(?n) ASC(STR(?this)) OFFSET 1 LIMIT 1",
+      "initial": {},
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-alias-order-offset-bound",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value } GROUP BY (?s AS ?this) ORDER BY DESC(?n) ASC(STR(?this)) OFFSET 1 LIMIT 1",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

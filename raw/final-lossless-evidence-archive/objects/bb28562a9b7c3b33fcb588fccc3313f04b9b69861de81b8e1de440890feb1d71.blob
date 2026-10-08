@@ -1,0 +1,33 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:570779
+; purrdf_sparql_eval::modifier::eval_aggregate::<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#4}
+define internal void @_RNCINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCscvKzUMJsXPo_11purrdf_core2ir7dataset10RdfDatasetRSNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra3ast8VariableEs2_0B6_(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(8) %0, i8 noundef range(i8 0, 8) %1) unnamed_addr #23 personality ptr @rust_eh_personality !guid !69506 {
+  %3 = load ptr, ptr %0, align 8, !nonnull !1703, !align !13940, !noundef !1703
+  %4 = getelementptr inbounds nuw i8, ptr %3, i64 480
+  %5 = load ptr, ptr %4, align 16, !noundef !1703
+  %6 = icmp eq ptr %5, null
+  br i1 %6, label %12, label %7
+
+7:                                                ; preds = %2
+  %8 = zext nneg i8 %1 to i64
+  %9 = getelementptr inbounds nuw i8, ptr %5, i64 208
+  %10 = getelementptr inbounds nuw [8 x i8], ptr %9, i64 %8
+  %11 = atomicrmw add ptr %10, i64 1 monotonic, align 8
+  br label %12
+
+12:                                               ; preds = %7, %2
+  ret void
+}
+
+ASSEMBLY
+_RNCINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCscvKzUMJsXPo_11purrdf_core2ir7dataset10RdfDatasetRSNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra3ast8VariableEs2_0B6_:
+.Lfunc_begin1312:
+	.cfi_startproc
+	movq	(%rdi), %rax
+	movq	480(%rax), %rax
+	testq	%rax, %rax
+	je	.LBB1312_2
+	movzbl	%sil, %ecx
+	lock		incq	208(%rax,%rcx,8)
+.LBB1312_2:
+	retq
+.Lfunc_end1312:

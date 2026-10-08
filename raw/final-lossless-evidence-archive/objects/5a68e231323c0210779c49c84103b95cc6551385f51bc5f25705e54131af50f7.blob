@@ -1,0 +1,71 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-base-native-ir/qualification_454_native_cost.purrdf_sparql_algebra-4a3078603cefb9e1.purrdf_sparql_algebra.964a97ffd952b2f0-cgu.0.rcgu.o.rcgu.ll:37606
+; core::ptr::drop_glue::<purrdf_sparql_algebra::tree::Chain<purrdf_sparql_algebra::algebra::GraphPattern>>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscTZQnUyyJie_21purrdf_sparql_algebra4tree5ChainNtNtBG_7algebra12GraphPatternEEBG_(ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(24) %0) unnamed_addr #0 personality ptr @rust_eh_personality !guid !7401 {
+; invoke <purrdf_sparql_algebra::tree::Chain<purrdf_sparql_algebra::algebra::GraphPattern> as core::ops::drop::Drop>::drop
+  invoke fastcc void @_RNvXsv_NtCscTZQnUyyJie_21purrdf_sparql_algebra4treeINtB5_5ChainNtNtB7_7algebra12GraphPatternENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropB7_(ptr noalias nofree noundef align 8 dereferenceable(24) %0)
+          to label %4 unwind label %2
+
+2:                                                ; preds = %1
+  %3 = landingpad { ptr, i32 }
+          cleanup
+; invoke core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_algebra::algebra::GraphPattern>>
+  invoke fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCscTZQnUyyJie_21purrdf_sparql_algebra7algebra12GraphPatternEEB1c_(ptr noalias nofree noundef align 8 dereferenceable(24) %0) #43
+          to label %7 unwind label %5
+
+4:                                                ; preds = %1
+; call core::ptr::drop_glue::<alloc::vec::Vec<purrdf_sparql_algebra::algebra::GraphPattern>>
+  tail call fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCscTZQnUyyJie_21purrdf_sparql_algebra7algebra12GraphPatternEEB1c_(ptr noalias nofree noundef align 8 dereferenceable(24) %0)
+  ret void
+
+5:                                                ; preds = %2
+  %6 = landingpad { ptr, i32 }
+          filter [0 x ptr] zeroinitializer
+; call core::panicking::panic_in_cleanup
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup() #45
+  unreachable
+
+7:                                                ; preds = %2
+  resume { ptr, i32 } %3
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCscTZQnUyyJie_21purrdf_sparql_algebra4tree5ChainNtNtBG_7algebra12GraphPatternEEBG_:
+.Lfunc_begin86:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception58
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	pushq	%rax
+	.cfi_def_cfa_offset 32
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	movq	%rdi, %rbx
+.Ltmp1164:
+	callq	_RNvXsv_NtCscTZQnUyyJie_21purrdf_sparql_algebra4treeINtB5_5ChainNtNtB7_7algebra12GraphPatternENtNtNtCs2k2z8Zem4rB_4core3ops4drop4Drop4dropB7_
+.Ltmp1165:
+	movq	%rbx, %rdi
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 24
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	jmp	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCscTZQnUyyJie_21purrdf_sparql_algebra7algebra12GraphPatternEEB1c_
+.LBB86_3:
+	.cfi_def_cfa_offset 32
+.Ltmp1166:
+	movq	%rax, %r14
+.Ltmp1167:
+	movq	%rbx, %rdi
+	callq	_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueINtNtCsc70TAahYccp_5alloc3vec3VecNtNtCscTZQnUyyJie_21purrdf_sparql_algebra7algebra12GraphPatternEEB1c_
+.Ltmp1168:
+	movq	%r14, %rdi
+	callq	_Unwind_Resume@PLT
+.LBB86_2:
+.Ltmp1169:
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking16panic_in_cleanup@GOTPCREL(%rip), %rax
+	callq	*%rax
+.Lfunc_end86:

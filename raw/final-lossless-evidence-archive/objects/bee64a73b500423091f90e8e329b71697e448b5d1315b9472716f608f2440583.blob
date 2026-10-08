@@ -1,0 +1,9 @@
+Integrate dated SHACL admission with contextual queries
+
+Preserve current dated admission, governor and query provenance paths in
+the contextual evaluator. Keep lazy solution-row iteration and use one
+caller-local projection kernel with shared container and checkpoint homes.
+
+Qualify the affected native callers, isolated Python boundary and owning
+documentation routes. Retain matched native and host emitted-cost proof;
+final hosted qualification and PR finalization remain separate gates.

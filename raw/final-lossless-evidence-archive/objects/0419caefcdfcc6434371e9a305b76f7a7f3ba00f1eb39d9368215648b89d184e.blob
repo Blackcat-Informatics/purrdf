@@ -1,0 +1,1 @@
+uv build --no-create-gitignore --wheel --project bindings/python --out-dir /opt/purrdf-454-current-qualification-20261008/final-lower-python-1/wheel --config-setting maturin.build-args=--locked\ --jobs\ 8 

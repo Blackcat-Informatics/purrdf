@@ -1,0 +1,8 @@
+static-tail candidate emit53422 exit0
+static-tail candidate inventory84710 exit0
+selected release clippy96157 exit0
+final host emit46295 exit0
+final native install15094 exit0
+first Python boundary gate exit0:15passed
+bound final Python gate exit0:15passed
+postgate module/lock/test/source identity checks exit0

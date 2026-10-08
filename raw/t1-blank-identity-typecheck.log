@@ -1,0 +1,27 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error[E0599]: no variant named `BlankNode` found for enum `TermValue`
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:792:41
+    |
+792 |                     let Some(TermValue::BlankNode { .. }) = term else {
+    |                                         ^^^^^^^^^ variant not found in `TermValue`
+
+error[E0599]: no method named `query_view` found for struct `NativeSparqlEngine` in the current scope
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:811:10
+    |
+810 |       let result = engine
+    |  __________________-
+811 | |         .query_view(
+    | |_________-^^^^^^^^^^
+    |
+help: there is a method `query` with a similar name, but with different arguments
+   --> crates/rdf-core/src/backend.rs:228:5
+    |
+228 | /     fn query(
+229 | |         &self,
+230 | |         dataset: &Self::Dataset,
+231 | |         request: SparqlRequest<'_>,
+232 | |     ) -> Result<SparqlResult, RdfDiagnostic>;
+    | |_____________________________________________^
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (test "rdflib_contextual") due to 2 previous errors

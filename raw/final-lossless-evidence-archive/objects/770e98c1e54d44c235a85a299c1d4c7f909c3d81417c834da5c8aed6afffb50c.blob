@@ -1,0 +1,26 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 42.86s
+     Running unittests src/lib.rs (/opt/purrdf-454-current-qualification-20261008/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 18 tests
+test small::tests::every_ownership_path_drops_each_element_once ... ok
+test small::tests::capacity_overflow_panics ... ok
+test small::tests::macro_forms ... ok
+test small::tests::no_larger_than_needed ... ok
+test small::tests::panic_during_clone_drops_each_element_once ... ok
+test small::tests::panic_during_extend_drops_each_element_once ... ok
+test small::tests::overaligned_elements ... ok
+test small::tests::panic_during_extend_with_exact_hint_drops_each_element_once ... ok
+test small::tests::panic_in_retain_and_dedup_keeps_a_consistent_vector ... ok
+test small::tests::wrapping_enums_stay_the_same_size ... ok
+test small::tests::covariance_compiles ... ok
+test small::tests::zst_elements ... ok
+test small::tests::forget_into_iter_no_ub ... ok
+test small::tests::send_sync_bounds ... ok
+test small::tests::panicking_drop_no_double_free ... ok
+test small::tests::id_rows_behave_as_slices ... ok
+test small::tests::ownership_matches_vec ... ok
+test small::tests::model_matches_vec ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1199 filtered out; finished in 0.04s
+

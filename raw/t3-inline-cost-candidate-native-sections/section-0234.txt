@@ -1,0 +1,33 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-inline-cost-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_eval-0d067d9d4a72ce33.purrdf_sparql_eval.5766da4c1a18e898-cgu.0.rcgu.o.rcgu.ll:606499
+; <purrdf_sparql_eval::modifier::eval_aggregate<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#4} as core::ops::function::FnOnce<(purrdf_xsd::value::ErrorCode,)>>::call_once::{shim:vtable#0}
+define internal void @_RNSNvYNCINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCscvKzUMJsXPo_11purrdf_core2ir7dataset10RdfDatasetRSNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra3ast8VariableEs2_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTNtNtCseV1CfwIPHUl_10purrdf_xsd5value9ErrorCodeEE9call_once6vtableBb_(ptr nofree noundef readonly captures(none) %0, i8 noundef range(i8 0, 8) %1) unnamed_addr #23 personality ptr @rust_eh_personality !guid !74269 {
+  %3 = load ptr, ptr %0, align 8, !nonnull !1703, !align !13940, !noundef !1703
+  %4 = getelementptr inbounds nuw i8, ptr %3, i64 480
+  %5 = load ptr, ptr %4, align 16, !noalias !74270, !noundef !1703
+  %6 = icmp eq ptr %5, null
+  br i1 %6, label %12, label %7
+
+7:                                                ; preds = %2
+  %8 = zext nneg i8 %1 to i64
+  %9 = getelementptr inbounds nuw i8, ptr %5, i64 208
+  %10 = getelementptr inbounds nuw [8 x i8], ptr %9, i64 %8
+  %11 = atomicrmw add ptr %10, i64 1 monotonic, align 8, !noalias !74270
+  br label %12
+
+12:                                               ; preds = %7, %2
+  ret void
+}
+
+ASSEMBLY
+_RNSNvYNCINvNtCs7veJbOBHQwe_18purrdf_sparql_eval8modifier14eval_aggregateNtNtNtCscvKzUMJsXPo_11purrdf_core2ir7dataset10RdfDatasetRSNtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra3ast8VariableEs2_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTNtNtCseV1CfwIPHUl_10purrdf_xsd5value9ErrorCodeEE9call_once6vtableBb_:
+.Lfunc_begin1377:
+	.cfi_startproc
+	movq	(%rdi), %rax
+	movq	480(%rax), %rax
+	testq	%rax, %rax
+	je	.LBB1377_2
+	movzbl	%sil, %ecx
+	lock		incq	208(%rax,%rcx,8)
+.LBB1377_2:
+	retq
+.Lfunc_end1377:

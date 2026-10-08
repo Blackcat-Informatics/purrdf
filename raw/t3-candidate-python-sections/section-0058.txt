@@ -1,0 +1,516 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-candidate-python-ir/purrdf_native.ll:648581
+; <alloc::collections::btree::node::BalancingContext<*const purrdf_sparql_algebra::algebra::GraphPattern, purrdf_sparql_eval::rdflib::Compiled>>::bulk_steal_right
+define internal fastcc void @_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib8CompiledE16bulk_steal_rightCseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(56) %self, i64 noundef range(i64 1, 6) %count) unnamed_addr #1 personality ptr @rust_eh_personality !guid !105309 {
+start:
+  %_102 = alloca [168 x i8], align 8
+  %v = alloca [168 x i8], align 8
+  %0 = getelementptr inbounds nuw i8, ptr %self, i64 24
+  %_57 = load ptr, ptr %0, align 8, !nonnull !3923, !noundef !3923
+  %1 = getelementptr inbounds nuw i8, ptr %_57, i64 1946
+  %_55 = load i16, ptr %1, align 2, !noundef !3923
+  %old_left_len = zext i16 %_55 to i64
+  %2 = getelementptr inbounds nuw i8, ptr %self, i64 40
+  %_60 = load ptr, ptr %2, align 8, !nonnull !3923, !noundef !3923
+  %3 = getelementptr inbounds nuw i8, ptr %_60, i64 1946
+  %_58 = load i16, ptr %3, align 2, !noundef !3923
+  %old_right_len = zext i16 %_58 to i64
+  %new_left_len = add nuw nsw i64 %count, %old_left_len
+  %_9 = icmp samesign ult i64 %new_left_len, 12
+  br i1 %_9, label %bb3, label %bb4, !prof !4189
+
+bb4:                                              ; preds = %start
+; call core::panicking::panic
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_9d563bf934af269243f4fd2d81e69a4f, i64 noundef 50, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_3cdc9fa9cb5efbfcf6b32c16a3e402fe) #78
+  unreachable
+
+bb3:                                              ; preds = %start
+  %_12.not = icmp samesign ugt i64 %count, %old_right_len
+  br i1 %_12.not, label %bb6, label %bb5, !prof !3953
+
+bb6:                                              ; preds = %bb3
+; call core::panicking::panic
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_5e53e616a4e5193095e41a5e7312aea3, i64 noundef 40, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_a61e7ca6e93e83603a2f35960e46aefc) #78
+  unreachable
+
+bb5:                                              ; preds = %bb3
+  %new_right_len = sub nuw nsw i64 %old_right_len, %count
+  %4 = trunc nuw nsw i64 %new_left_len to i16
+  store i16 %4, ptr %1, align 2
+  %5 = trunc nuw i64 %new_right_len to i16
+  store i16 %5, ptr %3, align 2
+  %index = add nsw i64 %count, -1
+  %self5 = getelementptr [8 x i8], ptr %_60, i64 %count
+  %k = load ptr, ptr %self5, align 8, !noundef !3923
+  call void @llvm.lifetime.start.p0(ptr nonnull %v)
+  %self6 = getelementptr inbounds nuw i8, ptr %_60, i64 96
+  %self7 = getelementptr inbounds nuw [168 x i8], ptr %self6, i64 %index
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(168) %v, ptr noundef nonnull align 8 dereferenceable(168) %self7, i64 168, i1 false)
+  %self.val = load ptr, ptr %self, align 8, !nonnull !3923, !noundef !3923
+  %6 = getelementptr inbounds nuw i8, ptr %self, i64 16
+  %self.val33 = load i64, ptr %6, align 8, !noundef !3923
+  %_6.i.i = getelementptr inbounds nuw i8, ptr %self.val, i64 8
+  %self1.i.i = getelementptr inbounds nuw [8 x i8], ptr %_6.i.i, i64 %self.val33
+  %_10.i.i = getelementptr inbounds nuw i8, ptr %self.val, i64 96
+  %self3.i.i = getelementptr inbounds nuw [168 x i8], ptr %_10.i.i, i64 %self.val33
+  %_7.i = load ptr, ptr %self1.i.i, align 8, !noalias !105310, !noundef !3923
+  store ptr %k, ptr %self1.i.i, align 8, !noalias !105310
+  call void @llvm.lifetime.start.p0(ptr nonnull %_102)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(168) %_102, ptr noundef nonnull align 8 dereferenceable(168) %self3.i.i, i64 168, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(168) %self3.i.i, ptr noundef nonnull readonly align 8 dereferenceable(168) %v, i64 168, i1 false), !noalias !105314
+  %self9 = getelementptr inbounds nuw i8, ptr %_57, i64 8
+  %self10 = getelementptr inbounds nuw [8 x i8], ptr %self9, i64 %old_left_len
+  store ptr %_7.i, ptr %self10, align 8
+  %self11 = getelementptr inbounds nuw i8, ptr %_57, i64 96
+  %self12 = getelementptr inbounds nuw [168 x i8], ptr %self11, i64 %old_left_len
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(168) %self12, ptr noundef nonnull align 8 dereferenceable(168) %_102, i64 168, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %_102)
+  %self13 = getelementptr inbounds nuw i8, ptr %_60, i64 8
+  %index14 = add nuw nsw i64 %old_left_len, 1
+  %_122 = getelementptr inbounds nuw [8 x i8], ptr %self9, i64 %index14
+  %7 = shl nuw nsw i64 %index, 3
+  tail call void @llvm.memcpy.p0.p0.i64(ptr nonnull align 8 %_122, ptr nonnull readonly align 8 %self13, i64 %7, i1 false), !alias.scope !105315
+  %_139 = getelementptr inbounds nuw [168 x i8], ptr %self11, i64 %index14
+  %8 = mul nuw nsw i64 %index, 168
+  tail call void @llvm.memcpy.p0.p0.i64(ptr nonnull align 8 %_139, ptr nonnull readonly align 8 %self6, i64 %8, i1 false), !alias.scope !105319
+  %_6.i = getelementptr inbounds nuw [8 x i8], ptr %self13, i64 %count
+  %9 = shl nuw nsw i64 %new_right_len, 3
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %self13, ptr nonnull align 8 %_6.i, i64 %9, i1 false), !alias.scope !105323
+  %_6.i36 = getelementptr inbounds nuw [168 x i8], ptr %self6, i64 %count
+  %10 = mul nuw nsw i64 %new_right_len, 168
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %self6, ptr nonnull align 8 %_6.i36, i64 %10, i1 false), !alias.scope !105326
+  call void @llvm.lifetime.end.p0(ptr nonnull %v)
+  %11 = getelementptr inbounds nuw i8, ptr %self, i64 32
+  %self20 = load i64, ptr %11, align 8, !noundef !3923
+  %12 = icmp eq i64 %self20, 0
+  %13 = getelementptr inbounds nuw i8, ptr %self, i64 48
+  %14 = load i64, ptr %13, align 8, !noundef !3923
+  %15 = icmp eq i64 %14, 0
+  br i1 %12, label %bb42, label %bb43
+
+bb42:                                             ; preds = %bb5
+  br i1 %15, label %bb17, label %bb12, !prof !4189
+
+bb43:                                             ; preds = %bb5
+  br i1 %15, label %bb12, label %bb51, !prof !3953
+
+bb17.loopexit.unr-lcssa:                          ; preds = %bb4.i42
+  %lcmp.mod.not = icmp eq i64 %xtraiter, 0
+  br i1 %lcmp.mod.not, label %bb17, label %bb4.i42.epil.preheader
+
+bb4.i42.epil.preheader:                           ; preds = %bb17.loopexit.unr-lcssa, %bb4.i42.preheader
+  %iter.sroa.0.05.i43.epil.init = phi i64 [ 0, %bb4.i42.preheader ], [ %_0.i1.i.i.i44.7, %bb17.loopexit.unr-lcssa ]
+  %lcmp.mod51 = icmp ne i64 %xtraiter, 0
+  tail call void @llvm.assume(i1 %lcmp.mod51)
+  br label %bb4.i42.epil
+
+bb4.i42.epil:                                     ; preds = %bb4.i42.epil, %bb4.i42.epil.preheader
+  %iter.sroa.0.05.i43.epil = phi i64 [ %_0.i1.i.i.i44.epil, %bb4.i42.epil ], [ %iter.sroa.0.05.i43.epil.init, %bb4.i42.epil.preheader ]
+  %epil.iter = phi i64 [ %epil.iter.next, %bb4.i42.epil ], [ 0, %bb4.i42.epil.preheader ]
+  %_0.i1.i.i.i44.epil = add nuw nsw i64 %iter.sroa.0.05.i43.epil, 1
+  %_18.i.i45.epil = icmp samesign ult i64 %iter.sroa.0.05.i43.epil, 12
+  tail call void @llvm.assume(i1 %_18.i.i45.epil)
+  %self3.i.i46.epil = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %iter.sroa.0.05.i43.epil
+  %node.i.i47.epil = load ptr, ptr %self3.i.i46.epil, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.epil, align 8
+  %_22.i.i48.epil = trunc nuw nsw i64 %iter.sroa.0.05.i43.epil to i16
+  %16 = getelementptr inbounds nuw i8, ptr %node.i.i47.epil, i64 1944
+  store i16 %_22.i.i48.epil, ptr %16, align 8
+  %epil.iter.next = add i64 %epil.iter, 1
+  %epil.iter.cmp.not = icmp eq i64 %epil.iter.next, %xtraiter
+  br i1 %epil.iter.cmp.not, label %bb17, label %bb4.i42.epil, !llvm.loop !105329
+
+bb17:                                             ; preds = %bb17.loopexit.unr-lcssa, %bb4.i42.epil, %bb42
+  ret void
+
+bb12:                                             ; preds = %bb43, %bb42
+; call core::panicking::panic
+  tail call void @_RNvNtCs2k2z8Zem4rB_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @alloc_a500d906b91607583596fa15e63c2ada, i64 noundef 40, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_ac5a21b17ba6aaf95ab38054ed653ded) #78
+  unreachable
+
+bb51:                                             ; preds = %bb43
+  %self22 = getelementptr inbounds nuw i8, ptr %_60, i64 1952
+  %self24 = getelementptr inbounds nuw i8, ptr %_57, i64 1952
+  %_179 = getelementptr inbounds nuw [8 x i8], ptr %self24, i64 %index14
+  %17 = shl nuw nsw i64 %count, 3
+  tail call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(1) %_179, ptr noundef nonnull readonly align 8 dereferenceable(1) %self22, i64 %17, i1 false), !alias.scope !105330
+  %_6.i38 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %count
+  %18 = add nuw nsw i64 %9, 8
+  tail call void @llvm.memmove.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(1) %self22, ptr noundef nonnull align 8 dereferenceable(1) %_6.i38, i64 %18, i1 false), !alias.scope !105334
+  %_18.i.i = icmp ult i16 %_55, 11
+  tail call void @llvm.assume(i1 %_18.i.i)
+  %self3.i.i40 = getelementptr inbounds nuw [8 x i8], ptr %self24, i64 %index14
+  %node.i.i = load ptr, ptr %self3.i.i40, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_57, ptr %node.i.i, align 8
+  %_22.i.i = trunc nuw nsw i64 %index14 to i16
+  %19 = getelementptr inbounds nuw i8, ptr %node.i.i, i64 1944
+  store i16 %_22.i.i, ptr %19, align 8
+  %exitcond.not.i = icmp eq i64 %count, 1
+  br i1 %exitcond.not.i, label %bb4.i42.preheader, label %bb4.i.1
+
+bb4.i.1:                                          ; preds = %bb51
+  %_0.i1.i.i.i = add nuw nsw i64 %old_left_len, 2
+  %_18.i.i.1 = icmp samesign ult i16 %_55, 10
+  tail call void @llvm.assume(i1 %_18.i.i.1)
+  %self3.i.i40.1 = getelementptr inbounds nuw [8 x i8], ptr %self24, i64 %_0.i1.i.i.i
+  %node.i.i.1 = load ptr, ptr %self3.i.i40.1, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_57, ptr %node.i.i.1, align 8
+  %_22.i.i.1 = trunc nuw nsw i64 %_0.i1.i.i.i to i16
+  %20 = getelementptr inbounds nuw i8, ptr %node.i.i.1, i64 1944
+  store i16 %_22.i.i.1, ptr %20, align 8
+  %exitcond.not.i.1 = icmp eq i64 %count, 2
+  br i1 %exitcond.not.i.1, label %bb4.i42.preheader, label %bb4.i.2
+
+bb4.i.2:                                          ; preds = %bb4.i.1
+  %_0.i1.i.i.i.1 = add nuw nsw i64 %old_left_len, 3
+  %_18.i.i.2 = icmp samesign ult i16 %_55, 9
+  tail call void @llvm.assume(i1 %_18.i.i.2)
+  %self3.i.i40.2 = getelementptr inbounds nuw [8 x i8], ptr %self24, i64 %_0.i1.i.i.i.1
+  %node.i.i.2 = load ptr, ptr %self3.i.i40.2, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_57, ptr %node.i.i.2, align 8
+  %_22.i.i.2 = trunc nuw nsw i64 %_0.i1.i.i.i.1 to i16
+  %21 = getelementptr inbounds nuw i8, ptr %node.i.i.2, i64 1944
+  store i16 %_22.i.i.2, ptr %21, align 8
+  %exitcond.not.i.2 = icmp eq i64 %count, 3
+  br i1 %exitcond.not.i.2, label %bb4.i42.preheader, label %bb4.i.3
+
+bb4.i.3:                                          ; preds = %bb4.i.2
+  %_0.i1.i.i.i.2 = add nuw nsw i64 %old_left_len, 4
+  %_18.i.i.3 = icmp samesign ult i16 %_55, 8
+  tail call void @llvm.assume(i1 %_18.i.i.3)
+  %self3.i.i40.3 = getelementptr inbounds nuw [8 x i8], ptr %self24, i64 %_0.i1.i.i.i.2
+  %node.i.i.3 = load ptr, ptr %self3.i.i40.3, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_57, ptr %node.i.i.3, align 8
+  %_22.i.i.3 = trunc nuw nsw i64 %_0.i1.i.i.i.2 to i16
+  %22 = getelementptr inbounds nuw i8, ptr %node.i.i.3, i64 1944
+  store i16 %_22.i.i.3, ptr %22, align 8
+  %exitcond.not.i.3 = icmp eq i64 %count, 4
+  br i1 %exitcond.not.i.3, label %bb4.i42.preheader, label %bb4.i.4
+
+bb4.i.4:                                          ; preds = %bb4.i.3
+  %_0.i1.i.i.i.3 = add nuw nsw i64 %old_left_len, 5
+  %_18.i.i.4 = icmp ne i16 %_55, 7
+  tail call void @llvm.assume(i1 %_18.i.i.4)
+  %self3.i.i40.4 = getelementptr inbounds nuw [8 x i8], ptr %self24, i64 %_0.i1.i.i.i.3
+  %node.i.i.4 = load ptr, ptr %self3.i.i40.4, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_57, ptr %node.i.i.4, align 8
+  %_22.i.i.4 = trunc nuw nsw i64 %_0.i1.i.i.i.3 to i16
+  %23 = getelementptr inbounds nuw i8, ptr %node.i.i.4, i64 1944
+  store i16 %_22.i.i.4, ptr %23, align 8
+  br label %bb4.i42.preheader
+
+bb4.i42.preheader:                                ; preds = %bb4.i.4, %bb4.i.3, %bb4.i.2, %bb4.i.1, %bb51
+  %24 = add nuw nsw i64 %old_right_len, 1
+  %25 = sub nsw i64 %24, %count
+  %xtraiter = and i64 %25, 7
+  %26 = icmp samesign ult i64 %new_right_len, 7
+  br i1 %26, label %bb4.i42.epil.preheader, label %bb4.i42.preheader.new
+
+bb4.i42.preheader.new:                            ; preds = %bb4.i42.preheader
+  %unroll_iter = and i64 %25, -8
+  br label %bb4.i42
+
+bb4.i42:                                          ; preds = %bb4.i42, %bb4.i42.preheader.new
+  %iter.sroa.0.05.i43 = phi i64 [ 0, %bb4.i42.preheader.new ], [ %_0.i1.i.i.i44.7, %bb4.i42 ]
+  %niter = phi i64 [ 0, %bb4.i42.preheader.new ], [ %niter.next.7, %bb4.i42 ]
+  %_0.i1.i.i.i44 = or disjoint i64 %iter.sroa.0.05.i43, 1
+  %self3.i.i46 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %iter.sroa.0.05.i43
+  %node.i.i47 = load ptr, ptr %self3.i.i46, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47, align 8
+  %_22.i.i48 = trunc nuw nsw i64 %iter.sroa.0.05.i43 to i16
+  %27 = getelementptr inbounds nuw i8, ptr %node.i.i47, i64 1944
+  store i16 %_22.i.i48, ptr %27, align 8
+  %_0.i1.i.i.i44.1 = or disjoint i64 %iter.sroa.0.05.i43, 2
+  %self3.i.i46.1 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44
+  %node.i.i47.1 = load ptr, ptr %self3.i.i46.1, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.1, align 8
+  %_22.i.i48.1 = trunc nuw nsw i64 %_0.i1.i.i.i44 to i16
+  %28 = getelementptr inbounds nuw i8, ptr %node.i.i47.1, i64 1944
+  store i16 %_22.i.i48.1, ptr %28, align 8
+  %_0.i1.i.i.i44.2 = or disjoint i64 %iter.sroa.0.05.i43, 3
+  %self3.i.i46.2 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44.1
+  %node.i.i47.2 = load ptr, ptr %self3.i.i46.2, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.2, align 8
+  %_22.i.i48.2 = trunc nuw nsw i64 %_0.i1.i.i.i44.1 to i16
+  %29 = getelementptr inbounds nuw i8, ptr %node.i.i47.2, i64 1944
+  store i16 %_22.i.i48.2, ptr %29, align 8
+  %_0.i1.i.i.i44.3 = or disjoint i64 %iter.sroa.0.05.i43, 4
+  %self3.i.i46.3 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44.2
+  %node.i.i47.3 = load ptr, ptr %self3.i.i46.3, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.3, align 8
+  %_22.i.i48.3 = trunc nuw nsw i64 %_0.i1.i.i.i44.2 to i16
+  %30 = getelementptr inbounds nuw i8, ptr %node.i.i47.3, i64 1944
+  store i16 %_22.i.i48.3, ptr %30, align 8
+  %_0.i1.i.i.i44.4 = or disjoint i64 %iter.sroa.0.05.i43, 5
+  %self3.i.i46.4 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44.3
+  %node.i.i47.4 = load ptr, ptr %self3.i.i46.4, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.4, align 8
+  %_22.i.i48.4 = trunc nuw nsw i64 %_0.i1.i.i.i44.3 to i16
+  %31 = getelementptr inbounds nuw i8, ptr %node.i.i47.4, i64 1944
+  store i16 %_22.i.i48.4, ptr %31, align 8
+  %_0.i1.i.i.i44.5 = or disjoint i64 %iter.sroa.0.05.i43, 6
+  %self3.i.i46.5 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44.4
+  %node.i.i47.5 = load ptr, ptr %self3.i.i46.5, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.5, align 8
+  %_22.i.i48.5 = trunc nuw nsw i64 %_0.i1.i.i.i44.4 to i16
+  %32 = getelementptr inbounds nuw i8, ptr %node.i.i47.5, i64 1944
+  store i16 %_22.i.i48.5, ptr %32, align 8
+  %_0.i1.i.i.i44.6 = or disjoint i64 %iter.sroa.0.05.i43, 7
+  %self3.i.i46.6 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44.5
+  %node.i.i47.6 = load ptr, ptr %self3.i.i46.6, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.6, align 8
+  %_22.i.i48.6 = trunc nuw nsw i64 %_0.i1.i.i.i44.5 to i16
+  %33 = getelementptr inbounds nuw i8, ptr %node.i.i47.6, i64 1944
+  store i16 %_22.i.i48.6, ptr %33, align 8
+  %_0.i1.i.i.i44.7 = add nuw nsw i64 %iter.sroa.0.05.i43, 8
+  %_18.i.i45.7 = icmp samesign ult i64 %_0.i1.i.i.i44.6, 12
+  tail call void @llvm.assume(i1 %_18.i.i45.7)
+  %self3.i.i46.7 = getelementptr inbounds nuw [8 x i8], ptr %self22, i64 %_0.i1.i.i.i44.6
+  %node.i.i47.7 = load ptr, ptr %self3.i.i46.7, align 8, !nonnull !3923, !noundef !3923
+  store ptr %_60, ptr %node.i.i47.7, align 8
+  %_22.i.i48.7 = trunc nuw nsw i64 %_0.i1.i.i.i44.6 to i16
+  %34 = getelementptr inbounds nuw i8, ptr %node.i.i47.7, i64 1944
+  store i16 %_22.i.i48.7, ptr %34, align 8
+  %niter.next.7 = add nuw nsw i64 %niter, 8
+  %niter.ncmp.7 = icmp eq i64 %niter.next.7, %unroll_iter
+  br i1 %niter.ncmp.7, label %bb17.loopexit.unr-lcssa, label %bb4.i42
+}
+
+ASSEMBLY
+_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextPNtNtCsaBjTCBXVWc8_21purrdf_sparql_algebra7algebra12GraphPatternNtNtCskntrVAOPBeX_18purrdf_sparql_eval6rdflib8CompiledE16bulk_steal_rightCseY6IX0djbTh_13purrdf_native:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$376, %rsp
+	.cfi_def_cfa_offset 432
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	24(%rdi), %r15
+	movzwl	1946(%r15), %r8d
+	leaq	(%rsi,%r8), %rax
+	cmpq	$12, %rax
+	jae	.LBB2541_20
+	movq	40(%rdi), %rbp
+	movq	%rsi, %rbx
+	movq	%rdi, %r14
+	movzwl	1946(%rbp), %ecx
+	subq	%rsi, %rcx
+	jb	.LBB2541_2
+	imulq	$168, %rbx, %r13
+	movw	%ax, 1946(%r15)
+	movw	%cx, 1946(%rbp)
+	movq	%rcx, 8(%rsp)
+	imulq	$168, %r8, %r12
+	movq	%r8, 24(%rsp)
+	movq	16(%r14), %rdx
+	movq	(%rbp,%rbx,8), %rax
+	movq	(%r14), %rcx
+	vmovups	-72(%rbp,%r13), %zmm0
+	vmovups	-8(%rbp,%r13), %zmm1
+	vmovups	32(%rbp,%r13), %zmm2
+	imulq	$168, %rdx, %rsi
+	vmovups	%zmm2, 136(%rsp)
+	vmovups	%zmm1, 96(%rsp)
+	vmovups	%zmm0, 32(%rsp)
+	movq	8(%rcx,%rdx,8), %rdi
+	movq	%rax, 8(%rcx,%rdx,8)
+	movq	memcpy@GOTPCREL(%rip), %rax
+	leaq	-8(,%rbx,8), %rdx
+	vmovups	96(%rcx,%rsi), %zmm0
+	vmovups	200(%rcx,%rsi), %zmm2
+	vmovups	160(%rcx,%rsi), %zmm1
+	vmovups	96(%rsp), %zmm3
+	vmovups	%zmm2, 312(%rsp)
+	vmovups	%zmm0, 208(%rsp)
+	vmovups	32(%rsp), %zmm0
+	vmovups	136(%rsp), %zmm2
+	vmovups	%zmm1, 272(%rsp)
+	vmovups	%zmm3, 160(%rcx,%rsi)
+	vmovups	%zmm0, 96(%rcx,%rsi)
+	vmovups	%zmm2, 200(%rcx,%rsi)
+	movq	%rdi, 8(%r15,%r8,8)
+	leaq	16(%r15,%r8,8), %rdi
+	leaq	8(%rbp), %rsi
+	vmovups	208(%rsp), %zmm0
+	vmovups	272(%rsp), %zmm1
+	vmovups	312(%rsp), %zmm2
+	vmovups	%zmm2, 200(%r15,%r12)
+	vmovups	%zmm1, 160(%r15,%r12)
+	vmovups	%zmm0, 96(%r15,%r12)
+	vzeroupper
+	callq	*%rax
+	movq	memcpy@GOTPCREL(%rip), %rax
+	leaq	264(%r15,%r12), %rdi
+	leaq	96(%rbp), %rsi
+	leaq	-168(%r13), %rdx
+	callq	*%rax
+	movq	%rbx, 16(%rsp)
+	leaq	8(%rbp,%rbx,8), %rsi
+	movq	8(%rsp), %rbx
+	movq	memmove@GOTPCREL(%rip), %rax
+	leaq	8(%rbp), %rdi
+	leal	(,%rbx,8), %r12d
+	movq	%r12, %rdx
+	callq	*%rax
+	movq	memmove@GOTPCREL(%rip), %rax
+	imulq	$168, %rbx, %rdx
+	leaq	96(%rbp,%r13), %rsi
+	leaq	96(%rbp), %rdi
+	callq	*%rax
+	cmpq	$0, 32(%r14)
+	movq	48(%r14), %rax
+	je	.LBB2541_5
+	testq	%rax, %rax
+	je	.LBB2541_10
+	movq	24(%rsp), %r13
+	movq	16(%rsp), %rbx
+	movq	memcpy@GOTPCREL(%rip), %rax
+	leaq	1952(%rbp), %rsi
+	leaq	1(%r13), %r14
+	leaq	(,%rbx,8), %rdx
+	leaq	1952(%r15,%r14,8), %rdi
+	callq	*%rax
+	movq	memmove@GOTPCREL(%rip), %rax
+	leaq	1952(%rbp,%rbx,8), %rsi
+	addq	$8, %r12
+	leaq	1952(%rbp), %rdi
+	movq	%r12, %rdx
+	callq	*%rax
+	movq	1960(%r15,%r13,8), %rax
+	movq	%r15, (%rax)
+	movw	%r14w, 1944(%rax)
+	cmpq	$1, %rbx
+	je	.LBB2541_16
+	movq	1968(%r15,%r13,8), %rax
+	leal	2(%r13), %ecx
+	movq	%r15, (%rax)
+	movw	%cx, 1944(%rax)
+	cmpq	$2, %rbx
+	je	.LBB2541_16
+	movq	1976(%r15,%r13,8), %rax
+	leal	3(%r13), %ecx
+	movq	%r15, (%rax)
+	movw	%cx, 1944(%rax)
+	cmpq	$3, %rbx
+	je	.LBB2541_16
+	movq	1984(%r15,%r13,8), %rax
+	leal	4(%r13), %ecx
+	movq	%r15, (%rax)
+	movw	%cx, 1944(%rax)
+	cmpq	$4, %rbx
+	je	.LBB2541_16
+	movq	1992(%r15,%r13,8), %rax
+	leal	5(%r13), %ecx
+	movq	%r15, (%rax)
+	movw	%cx, 1944(%rax)
+.LBB2541_16:
+	movq	8(%rsp), %rcx
+	leaq	1(%rcx), %rdx
+	movl	%edx, %eax
+	andl	$7, %eax
+	cmpl	$7, %ecx
+	jae	.LBB2541_18
+	xorl	%ecx, %ecx
+	jmp	.LBB2541_7
+.LBB2541_5:
+	testq	%rax, %rax
+	je	.LBB2541_8
+.LBB2541_10:
+	leaq	.Lalloc_a500d906b91607583596fa15e63c2ada(%rip), %rdi
+	leaq	.Lalloc_ac5a21b17ba6aaf95ab38054ed653ded(%rip), %rdx
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip), %rax
+	movl	$40, %esi
+	callq	*%rax
+.LBB2541_18:
+	andq	$-8, %rdx
+	xorl	%ecx, %ecx
+	.p2align	4
+.LBB2541_19:
+	movq	1952(%rbp,%rcx,8), %rdi
+	movl	%ecx, %esi
+	leal	1(%rsi), %r8d
+	movq	%rbp, (%rdi)
+	movw	%cx, 1944(%rdi)
+	movq	1960(%rbp,%rcx,8), %rdi
+	movq	%rbp, (%rdi)
+	movw	%r8w, 1944(%rdi)
+	leal	2(%rsi), %r8d
+	movq	1968(%rbp,%rcx,8), %rdi
+	movq	%rbp, (%rdi)
+	movw	%r8w, 1944(%rdi)
+	leal	3(%rsi), %r8d
+	movq	1976(%rbp,%rcx,8), %rdi
+	movq	%rbp, (%rdi)
+	movw	%r8w, 1944(%rdi)
+	leal	4(%rsi), %r8d
+	movq	1984(%rbp,%rcx,8), %rdi
+	movq	%rbp, (%rdi)
+	movw	%r8w, 1944(%rdi)
+	leal	5(%rsi), %r8d
+	movq	1992(%rbp,%rcx,8), %rdi
+	movq	%rbp, (%rdi)
+	movw	%r8w, 1944(%rdi)
+	leal	6(%rsi), %r8d
+	addl	$7, %esi
+	movq	2000(%rbp,%rcx,8), %rdi
+	movq	%rbp, (%rdi)
+	movw	%r8w, 1944(%rdi)
+	movq	2008(%rbp,%rcx,8), %rdi
+	addq	$8, %rcx
+	movq	%rbp, (%rdi)
+	movw	%si, 1944(%rdi)
+	cmpq	%rdx, %rcx
+	jne	.LBB2541_19
+	testq	%rax, %rax
+	je	.LBB2541_8
+	.p2align	4
+.LBB2541_7:
+	movq	1952(%rbp,%rcx,8), %rdx
+	decq	%rax
+	movq	%rbp, (%rdx)
+	movw	%cx, 1944(%rdx)
+	leaq	1(%rcx), %rcx
+	jne	.LBB2541_7
+.LBB2541_8:
+	addq	$376, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB2541_20:
+	.cfi_def_cfa_offset 432
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip), %rax
+	leaq	.Lalloc_9d563bf934af269243f4fd2d81e69a4f(%rip), %rdi
+	leaq	.Lalloc_3cdc9fa9cb5efbfcf6b32c16a3e402fe(%rip), %rdx
+	movl	$50, %esi
+	callq	*%rax
+.LBB2541_2:
+	leaq	.Lalloc_5e53e616a4e5193095e41a5e7312aea3(%rip), %rdi
+	leaq	.Lalloc_a61e7ca6e93e83603a2f35960e46aefc(%rip), %rdx
+	movq	_RNvNtCs2k2z8Zem4rB_4core9panicking5panic@GOTPCREL(%rip), %rax
+	movl	$40, %esi
+	callq	*%rax
+.Lfunc_end2541:

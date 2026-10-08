@@ -1,0 +1,9 @@
+# Private projection kernel owning qualification
+
+VERDICT: PASS for admitted semantic/lint/one-home qualification; full native-cost acceptance NOT MET pending fresh emitted proof.
+
+Actual session97694 terminal0 observed through tools.write_stdin; evidence /opt/purrdf-454-current-qualification-20261008/final-project-private-kernel-rust-1 contains attributable session-terminal.json and all five commands/driver exits0. Scope purrdf-454-project-private-kernel-rust-20261008.scope invocation5c33dfeab0274dbf8ccd2cd65d1b8228 captured active64GiB/SwapMax0; terminal inactive/dead/lane FREE. Raw same SDK/private cached target/build/tmp/jobs8/libtest8/inherited wrapper; no timing claim.
+
+Actual Project1/prepared_parameters12/rdflib_contextual22 passed,35 total/0fail/0ignore. Strict evaluator all-target clippy/fmt PASS. Complete helpers hygiene and selftests PASS:81 enforced jobs/23 reasoned variants/92 distinct rows/1947 files, no out-of-crate path include,80 hash domains unique/prefix-free. Full tracked source readback0/tree72fa2c1ff03b00b4052bccf17895a091805785cf unchanged/no unstaged source; HEAD/MERGE_HEAD retained.
+
+Root and independent actual source review accepted one private macro projection kernel, input binding order and caller-local iterator composition; report portfolio-project-private-kernel-implementation.md. Unchanged36 governed/core53/worker45/docs/wheel remain scoped reusable evidence, not rerun. This qualification demonstrates projection behavior and one-home source applicability, not actual sole-call identity credit or erased SpecExtend setup/frame. Fresh candidate native+host complete twelve-row audit against strict immutable85204 baseline remains mandatory; prior579 full-cost FAILED and paired diagnostics retained. No cost emission/source change/copy/commit/forge action during qualification.

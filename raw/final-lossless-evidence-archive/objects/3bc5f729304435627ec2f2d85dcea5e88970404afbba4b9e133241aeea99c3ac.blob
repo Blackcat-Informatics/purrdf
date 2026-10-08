@@ -1,0 +1,8 @@
+ActiveState=active
+SubState=running
+InvocationID=5c33dfeab0274dbf8ccd2cd65d1b8228
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-project-private-kernel-rust-20261008.scope
+MemoryCurrent=1539268608
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

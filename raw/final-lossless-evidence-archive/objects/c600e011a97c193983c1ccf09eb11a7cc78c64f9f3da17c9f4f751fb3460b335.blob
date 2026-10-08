@@ -1,0 +1,719 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-47404805bc082bb3.purrdf_sparql_eval.4e34a4d67f036f69-cgu.0.rcgu.o.rcgu.ll:8943
+; <alloc::collections::btree::node::BalancingContext<u64, (u64, u64)>>::do_merge::<<alloc::collections::btree::node::BalancingContext<u64, (u64, u64)>>::merge_tracking_child<alloc::alloc::Global>::{closure#0}, alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, (u64, u64), alloc::collections::btree::node::marker::LeafOrInternal>, alloc::alloc::Global>
+define internal fastcc { ptr, i32 } @_RINvMs10_NtNtNtCsiymUexJS71D_5alloc11collections5btree4nodeINtB7_16BalancingContextyTyyEE8do_mergeNCINvB2_20merge_tracking_childNtNtBd_5alloc6GlobalE0INtB7_7NodeRefNtNtB7_6marker3MutyB1k_NtB2E_14LeafOrInternalEB22_ECs6IhMpzk205x_18purrdf_sparql_eval(ptr noalias nofree noundef nonnull readonly align 4 captures(none) dead_on_return dereferenceable(28) %0) unnamed_addr #0 !guid !2833 {
+  %2 = load ptr, ptr %0, align 4, !nonnull !1577, !noundef !1577
+  %3 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  %4 = load i32, ptr %3, align 4, !noundef !1577
+  %5 = getelementptr inbounds nuw i8, ptr %0, i32 12
+  %6 = load ptr, ptr %5, align 4, !nonnull !1577, !noundef !1577
+  %7 = getelementptr inbounds nuw i8, ptr %0, i32 16
+  %8 = load i32, ptr %7, align 4, !noundef !1577
+  %9 = getelementptr inbounds nuw i8, ptr %6, i32 270
+  %10 = load i16, ptr %9, align 2, !noundef !1577
+  %11 = zext i16 %10 to i32
+  %12 = getelementptr inbounds nuw i8, ptr %0, i32 20
+  %13 = load ptr, ptr %12, align 4, !nonnull !1577, !noundef !1577
+  %14 = getelementptr inbounds nuw i8, ptr %13, i32 270
+  %15 = load i16, ptr %14, align 2, !noundef !1577
+  %16 = zext i16 %15 to i32
+  %17 = add nuw nsw i32 %11, 1
+  %18 = add nuw nsw i32 %17, %16
+  %19 = icmp samesign ult i32 %18, 12
+  br i1 %19, label %21, label %20, !prof !1595
+
+20:                                               ; preds = %1
+; call core::panicking::panic
+  tail call void @_RNvNtCsb6ASFGx6cXz_4core9panicking5panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.aac9511986e388c37851c10029bf7af7.101, i32 noundef 42, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.aac9511986e388c37851c10029bf7af7.102) #75
+  unreachable
+
+21:                                               ; preds = %1
+  %22 = getelementptr inbounds nuw i8, ptr %2, i32 270
+  %23 = load i16, ptr %22, align 2, !noundef !1577
+  %24 = zext i16 %23 to i32
+  %25 = getelementptr inbounds nuw i8, ptr %0, i32 8
+  %26 = load i32, ptr %25, align 4, !noundef !1577
+  %27 = trunc nuw nsw i32 %18 to i16
+  store i16 %27, ptr %9, align 2
+  %28 = getelementptr inbounds nuw i8, ptr %2, i32 176
+  %29 = getelementptr inbounds nuw [8 x i8], ptr %28, i32 %26
+  %30 = load i64, ptr %29, align 8, !alias.scope !2834, !noundef !1577
+  %31 = getelementptr i8, ptr %29, i32 8
+  %32 = xor i32 %26, -1
+  %33 = add i32 %24, %32
+  %34 = shl nuw nsw i32 %33, 3
+  tail call void @llvm.memmove.p0.p0.i32(ptr nonnull align 8 %29, ptr align 8 %31, i32 %34, i1 false), !alias.scope !2834
+  %35 = getelementptr inbounds nuw i8, ptr %6, i32 176
+  %36 = getelementptr inbounds nuw [8 x i8], ptr %35, i32 %11
+  store i64 %30, ptr %36, align 8
+  %37 = getelementptr inbounds nuw i8, ptr %13, i32 176
+  %38 = getelementptr inbounds nuw [8 x i8], ptr %35, i32 %17
+  %39 = shl nuw nsw i32 %16, 3
+  tail call void @llvm.memcpy.p0.p0.i32(ptr nonnull align 8 %38, ptr nonnull readonly align 8 %37, i32 %39, i1 false), !alias.scope !2837
+  %40 = getelementptr inbounds nuw [16 x i8], ptr %2, i32 %26
+  %41 = load i64, ptr %40, align 8, !alias.scope !2841, !noalias !2844, !noundef !1577
+  %42 = getelementptr inbounds nuw i8, ptr %40, i32 8
+  %43 = load i64, ptr %42, align 8, !alias.scope !2841, !noalias !2844, !noundef !1577
+  %44 = getelementptr i8, ptr %40, i32 16
+  %45 = shl nuw nsw i32 %33, 4
+  tail call void @llvm.memmove.p0.p0.i32(ptr nonnull align 8 %40, ptr align 8 %44, i32 %45, i1 false), !alias.scope !2841, !noalias !2844
+  %46 = getelementptr inbounds nuw [16 x i8], ptr %6, i32 %11
+  store i64 %41, ptr %46, align 8
+  %47 = getelementptr inbounds nuw i8, ptr %46, i32 8
+  store i64 %43, ptr %47, align 8
+  %48 = getelementptr inbounds nuw [16 x i8], ptr %6, i32 %17
+  %49 = shl nuw nsw i32 %16, 4
+  tail call void @llvm.memcpy.p0.p0.i32(ptr nonnull align 8 %48, ptr nonnull readonly align 8 %13, i32 %49, i1 false), !alias.scope !2846
+  %50 = getelementptr inbounds nuw i8, ptr %2, i32 272
+  %51 = add i32 %26, 1
+  %52 = getelementptr inbounds nuw [4 x i8], ptr %50, i32 %51
+  %53 = getelementptr i8, ptr %52, i32 4
+  %54 = shl nuw nsw i32 %33, 2
+  tail call void @llvm.memmove.p0.p0.i32(ptr nonnull align 4 %52, ptr align 4 %53, i32 %54, i1 false), !alias.scope !2850
+  %55 = icmp ult i32 %51, %24
+  br i1 %55, label %.preheader.preheader, label %.loopexit2
+
+.preheader.preheader:                             ; preds = %21
+  %56 = xor i32 %26, -1
+  %57 = add i32 %56, %24
+  %58 = add nsw i32 %24, -2
+  %59 = sub i32 %58, %26
+  %xtraiter = and i32 %57, 3
+  %lcmp.mod.not = icmp eq i32 %xtraiter, 0
+  br i1 %lcmp.mod.not, label %.preheader.prol.loopexit, label %.preheader.prol
+
+.preheader.prol:                                  ; preds = %.preheader.preheader, %.preheader.prol
+  %60 = phi i32 [ %61, %.preheader.prol ], [ %51, %.preheader.preheader ]
+  %prol.iter = phi i32 [ %prol.iter.next, %.preheader.prol ], [ 0, %.preheader.preheader ]
+  %61 = add nuw nsw i32 %60, 1
+  %62 = icmp ult i32 %60, 12
+  tail call void @llvm.assume(i1 %62)
+  %63 = getelementptr inbounds nuw [4 x i8], ptr %50, i32 %60
+  %64 = load ptr, ptr %63, align 4, !nonnull !1577, !noundef !1577
+  %65 = getelementptr inbounds nuw i8, ptr %64, i32 264
+  store ptr %2, ptr %65, align 8
+  %66 = trunc nuw nsw i32 %60 to i16
+  %67 = getelementptr inbounds nuw i8, ptr %64, i32 268
+  store i16 %66, ptr %67, align 4
+  %prol.iter.next = add i32 %prol.iter, 1
+  %prol.iter.cmp.not = icmp eq i32 %prol.iter.next, %xtraiter
+  br i1 %prol.iter.cmp.not, label %.preheader.prol.loopexit, label %.preheader.prol, !llvm.loop !2853
+
+.preheader.prol.loopexit:                         ; preds = %.preheader.prol, %.preheader.preheader
+  %.unr = phi i32 [ %51, %.preheader.preheader ], [ %61, %.preheader.prol ]
+  %68 = icmp ult i32 %59, 3
+  br i1 %68, label %.loopexit2, label %.preheader
+
+.preheader:                                       ; preds = %.preheader.prol.loopexit, %.preheader
+  %69 = phi i32 [ %88, %.preheader ], [ %.unr, %.preheader.prol.loopexit ]
+  %70 = add nuw nsw i32 %69, 1
+  %71 = getelementptr inbounds nuw [4 x i8], ptr %50, i32 %69
+  %72 = load ptr, ptr %71, align 4, !nonnull !1577, !noundef !1577
+  %73 = getelementptr inbounds nuw i8, ptr %72, i32 264
+  store ptr %2, ptr %73, align 8
+  %74 = trunc nuw nsw i32 %69 to i16
+  %75 = getelementptr inbounds nuw i8, ptr %72, i32 268
+  store i16 %74, ptr %75, align 4
+  %76 = add nuw nsw i32 %69, 2
+  %77 = getelementptr inbounds nuw [4 x i8], ptr %50, i32 %70
+  %78 = load ptr, ptr %77, align 4, !nonnull !1577, !noundef !1577
+  %79 = getelementptr inbounds nuw i8, ptr %78, i32 264
+  store ptr %2, ptr %79, align 8
+  %80 = trunc nuw nsw i32 %70 to i16
+  %81 = getelementptr inbounds nuw i8, ptr %78, i32 268
+  store i16 %80, ptr %81, align 4
+  %82 = add nuw nsw i32 %69, 3
+  %83 = getelementptr inbounds nuw [4 x i8], ptr %50, i32 %76
+  %84 = load ptr, ptr %83, align 4, !nonnull !1577, !noundef !1577
+  %85 = getelementptr inbounds nuw i8, ptr %84, i32 264
+  store ptr %2, ptr %85, align 8
+  %86 = trunc nuw nsw i32 %76 to i16
+  %87 = getelementptr inbounds nuw i8, ptr %84, i32 268
+  store i16 %86, ptr %87, align 4
+  %88 = add nuw nsw i32 %69, 4
+  %89 = icmp ult i32 %69, 9
+  tail call void @llvm.assume(i1 %89)
+  %90 = getelementptr inbounds nuw [4 x i8], ptr %50, i32 %82
+  %91 = load ptr, ptr %90, align 4, !nonnull !1577, !noundef !1577
+  %92 = getelementptr inbounds nuw i8, ptr %91, i32 264
+  store ptr %2, ptr %92, align 8
+  %93 = trunc nuw nsw i32 %82 to i16
+  %94 = getelementptr inbounds nuw i8, ptr %91, i32 268
+  store i16 %93, ptr %94, align 4
+  %95 = icmp eq i32 %88, %24
+  br i1 %95, label %.loopexit2, label %.preheader
+
+.loopexit2:                                       ; preds = %.preheader.prol.loopexit, %.preheader, %21
+  %96 = load i16, ptr %22, align 2, !noundef !1577
+  %97 = add i16 %96, -1
+  store i16 %97, ptr %22, align 2
+  %98 = icmp ugt i32 %4, 1
+  br i1 %98, label %99, label %.loopexit
+
+99:                                               ; preds = %.loopexit2
+  %100 = getelementptr inbounds nuw i8, ptr %6, i32 272
+  %101 = getelementptr inbounds nuw [4 x i8], ptr %100, i32 %17
+  %102 = getelementptr inbounds nuw i8, ptr %13, i32 272
+  %103 = shl nuw nsw i32 %16, 2
+  %104 = add nuw nsw i32 %103, 4
+  tail call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(1) %101, ptr noundef nonnull readonly align 4 dereferenceable(1) %102, i32 %104, i1 false), !alias.scope !2854
+  %105 = add nuw nsw i32 %16, 1
+  %xtraiter5 = and i32 %105, 3
+  %lcmp.mod6.not = icmp eq i32 %xtraiter5, 0
+  br i1 %lcmp.mod6.not, label %.prol.loopexit, label %.prol.preheader
+
+.prol.preheader:                                  ; preds = %99, %.prol.preheader
+  %106 = phi i32 [ %107, %.prol.preheader ], [ %17, %99 ]
+  %prol.iter7 = phi i32 [ %prol.iter7.next, %.prol.preheader ], [ 0, %99 ]
+  %107 = add nuw nsw i32 %106, 1
+  %108 = icmp samesign ult i32 %106, 12
+  tail call void @llvm.assume(i1 %108)
+  %109 = getelementptr inbounds nuw [4 x i8], ptr %100, i32 %106
+  %110 = load ptr, ptr %109, align 4, !nonnull !1577, !noundef !1577
+  %111 = getelementptr inbounds nuw i8, ptr %110, i32 264
+  store ptr %6, ptr %111, align 8
+  %112 = trunc nuw nsw i32 %106 to i16
+  %113 = getelementptr inbounds nuw i8, ptr %110, i32 268
+  store i16 %112, ptr %113, align 4
+  %prol.iter7.next = add i32 %prol.iter7, 1
+  %prol.iter7.cmp.not = icmp eq i32 %prol.iter7.next, %xtraiter5
+  br i1 %prol.iter7.cmp.not, label %.prol.loopexit, label %.prol.preheader, !llvm.loop !2858
+
+.prol.loopexit:                                   ; preds = %.prol.preheader, %99
+  %.unr8 = phi i32 [ %17, %99 ], [ %107, %.prol.preheader ]
+  %114 = icmp ult i16 %15, 3
+  br i1 %114, label %.loopexit, label %.new
+
+.new:                                             ; preds = %.prol.loopexit, %.new
+  %115 = phi i32 [ %134, %.new ], [ %.unr8, %.prol.loopexit ]
+  %116 = add nuw nsw i32 %115, 1
+  %117 = getelementptr inbounds nuw [4 x i8], ptr %100, i32 %115
+  %118 = load ptr, ptr %117, align 4, !nonnull !1577, !noundef !1577
+  %119 = getelementptr inbounds nuw i8, ptr %118, i32 264
+  store ptr %6, ptr %119, align 8
+  %120 = trunc nuw nsw i32 %115 to i16
+  %121 = getelementptr inbounds nuw i8, ptr %118, i32 268
+  store i16 %120, ptr %121, align 4
+  %122 = add nuw nsw i32 %115, 2
+  %123 = getelementptr inbounds nuw [4 x i8], ptr %100, i32 %116
+  %124 = load ptr, ptr %123, align 4, !nonnull !1577, !noundef !1577
+  %125 = getelementptr inbounds nuw i8, ptr %124, i32 264
+  store ptr %6, ptr %125, align 8
+  %126 = trunc nuw nsw i32 %116 to i16
+  %127 = getelementptr inbounds nuw i8, ptr %124, i32 268
+  store i16 %126, ptr %127, align 4
+  %128 = add nuw nsw i32 %115, 3
+  %129 = getelementptr inbounds nuw [4 x i8], ptr %100, i32 %122
+  %130 = load ptr, ptr %129, align 4, !nonnull !1577, !noundef !1577
+  %131 = getelementptr inbounds nuw i8, ptr %130, i32 264
+  store ptr %6, ptr %131, align 8
+  %132 = trunc nuw nsw i32 %122 to i16
+  %133 = getelementptr inbounds nuw i8, ptr %130, i32 268
+  store i16 %132, ptr %133, align 4
+  %134 = add nuw nsw i32 %115, 4
+  %135 = icmp ult i32 %115, 9
+  tail call void @llvm.assume(i1 %135)
+  %136 = getelementptr inbounds nuw [4 x i8], ptr %100, i32 %128
+  %137 = load ptr, ptr %136, align 4, !nonnull !1577, !noundef !1577
+  %138 = getelementptr inbounds nuw i8, ptr %137, i32 264
+  store ptr %6, ptr %138, align 8
+  %139 = trunc nuw nsw i32 %128 to i16
+  %140 = getelementptr inbounds nuw i8, ptr %137, i32 268
+  store i16 %139, ptr %140, align 4
+  %141 = icmp eq i32 %128, %18
+  br i1 %141, label %.loopexit, label %.new
+
+.loopexit:                                        ; preds = %.prol.loopexit, %.new, %.loopexit2
+  %142 = phi i32 [ 272, %.loopexit2 ], [ 320, %.new ], [ 320, %.prol.loopexit ]
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %13, i32 noundef %142, i32 noundef 8) #71
+  %143 = insertvalue { ptr, i32 } poison, ptr %6, 0
+  %144 = insertvalue { ptr, i32 } %143, i32 %8, 1
+  ret { ptr, i32 } %144
+}
+
+ASSEMBLY
+_RINvMs10_NtNtNtCsiymUexJS71D_5alloc11collections5btree4nodeINtB7_16BalancingContextyTyyEE8do_mergeNCINvB2_20merge_tracking_childNtNtBd_5alloc6GlobalE0INtB7_7NodeRefNtNtB7_6marker3MutyB1k_NtB2E_14LeafOrInternalEB22_ECs6IhMpzk205x_18purrdf_sparql_eval:
+.Lfunc_begin21:
+	.functype	_RINvMs10_NtNtNtCsiymUexJS71D_5alloc11collections5btree4nodeINtB7_16BalancingContextyTyyEE8do_mergeNCINvB2_20merge_tracking_childNtNtBd_5alloc6GlobalE0INtB7_7NodeRefNtNtB7_6marker3MutyB1k_NtB2E_14LeafOrInternalEB22_ECs6IhMpzk205x_18purrdf_sparql_eval (i32, i32) -> ()
+	.local  	i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i64, i32, i32, i64, i32
+	block   	
+	local.get	1
+	i32.load	12
+	local.tee	2
+	i32.load16_u	270
+	local.tee	3
+	i32.const	1
+	i32.add 
+	local.tee	4
+	local.get	1
+	i32.load	20
+	local.tee	5
+	i32.load16_u	270
+	local.tee	6
+	i32.add 
+	local.tee	7
+	i32.const	12
+	i32.ge_u
+	br_if   	0
+	local.get	1
+	i32.load	16
+	local.set	8
+	local.get	1
+	i32.load	4
+	local.set	9
+	local.get	1
+	i32.load	0
+	local.tee	10
+	i32.load16_u	270
+	local.set	11
+	local.get	2
+	local.get	7
+	i32.store16	270
+	local.get	10
+	local.get	1
+	i32.load	8
+	local.tee	7
+	i32.const	3
+	i32.shl 
+	i32.add 
+	local.tee	1
+	i64.load	176
+	local.set	12
+	block   	
+	local.get	11
+	local.get	7
+	i32.const	-1
+	i32.xor 
+	i32.add 
+	local.tee	13
+	i32.const	3
+	i32.shl 
+	local.tee	14
+	i32.eqz
+	br_if   	0
+	local.get	1
+	i32.const	176
+	i32.add 
+	local.get	1
+	i32.const	184
+	i32.add 
+	local.get	14
+	memory.copy	0, 0
+.LBB21_3:
+	end_block
+	local.get	2
+	i32.const	176
+	i32.add 
+	local.tee	1
+	local.get	3
+	i32.const	3
+	i32.shl 
+	i32.add 
+	local.get	12
+	i64.store	0
+	block   	
+	local.get	6
+	i32.const	3
+	i32.shl 
+	local.tee	14
+	i32.eqz
+	br_if   	0
+	local.get	1
+	local.get	4
+	i32.const	3
+	i32.shl 
+	i32.add 
+	local.get	5
+	i32.const	176
+	i32.add 
+	local.get	14
+	memory.copy	0, 0
+.LBB21_5:
+	end_block
+	local.get	10
+	local.get	7
+	i32.const	4
+	i32.shl 
+	i32.add 
+	local.tee	1
+	i64.load	0
+	local.set	12
+	local.get	1
+	i64.load	8
+	local.set	15
+	block   	
+	local.get	13
+	i32.const	4
+	i32.shl 
+	local.tee	14
+	i32.eqz
+	br_if   	0
+	local.get	1
+	local.get	1
+	i32.const	16
+	i32.add 
+	local.get	14
+	memory.copy	0, 0
+.LBB21_7:
+	end_block
+	local.get	2
+	local.get	3
+	i32.const	4
+	i32.shl 
+	i32.add 
+	local.tee	1
+	local.get	15
+	i64.store	8
+	local.get	1
+	local.get	12
+	i64.store	0
+	block   	
+	local.get	6
+	i32.const	4
+	i32.shl 
+	local.tee	1
+	i32.eqz
+	br_if   	0
+	local.get	2
+	local.get	4
+	i32.const	4
+	i32.shl 
+	i32.add 
+	local.get	5
+	local.get	1
+	memory.copy	0, 0
+.LBB21_9:
+	end_block
+	local.get	7
+	i32.const	1
+	i32.add 
+	local.set	1
+	block   	
+	local.get	13
+	i32.const	2
+	i32.shl 
+	local.tee	13
+	i32.eqz
+	br_if   	0
+	local.get	10
+	local.get	1
+	i32.const	2
+	i32.shl 
+	i32.add 
+	local.tee	14
+	i32.const	272
+	i32.add 
+	local.get	14
+	i32.const	276
+	i32.add 
+	local.get	13
+	memory.copy	0, 0
+.LBB21_11:
+	end_block
+	block   	
+	local.get	1
+	local.get	11
+	i32.ge_u
+	br_if   	0
+	local.get	11
+	local.get	7
+	i32.sub 
+	i32.const	-2
+	i32.add 
+	local.set	16
+	block   	
+	local.get	7
+	i32.const	-1
+	i32.xor 
+	local.get	11
+	i32.add 
+	i32.const	3
+	i32.and 
+	local.tee	13
+	i32.eqz
+	br_if   	0
+	local.get	7
+	i32.const	2
+	i32.shl 
+	local.get	10
+	i32.add 
+	i32.const	276
+	i32.add 
+	local.set	7
+.LBB21_14:
+	loop    	
+	local.get	7
+	i32.load	0
+	local.tee	14
+	local.get	1
+	i32.store16	268
+	local.get	14
+	local.get	10
+	i32.store	264
+	local.get	7
+	i32.const	4
+	i32.add 
+	local.set	7
+	local.get	1
+	i32.const	1
+	i32.add 
+	local.set	1
+	local.get	13
+	i32.const	-1
+	i32.add 
+	local.tee	13
+	br_if   	0
+.LBB21_15:
+	end_loop
+	end_block
+	local.get	16
+	i32.const	3
+	i32.lt_u
+	br_if   	0
+	local.get	1
+	i32.const	2
+	i32.shl 
+	local.get	10
+	i32.add 
+	i32.const	284
+	i32.add 
+	local.set	7
+.LBB21_17:
+	loop    	
+	local.get	7
+	i32.const	-12
+	i32.add 
+	i32.load	0
+	local.tee	13
+	local.get	1
+	i32.store16	268
+	local.get	13
+	local.get	10
+	i32.store	264
+	local.get	7
+	i32.const	-8
+	i32.add 
+	i32.load	0
+	local.tee	13
+	local.get	1
+	i32.const	1
+	i32.add 
+	i32.store16	268
+	local.get	13
+	local.get	10
+	i32.store	264
+	local.get	7
+	i32.const	-4
+	i32.add 
+	i32.load	0
+	local.tee	13
+	local.get	1
+	i32.const	2
+	i32.add 
+	i32.store16	268
+	local.get	13
+	local.get	10
+	i32.store	264
+	local.get	7
+	i32.load	0
+	local.tee	13
+	local.get	1
+	i32.const	3
+	i32.add 
+	i32.store16	268
+	local.get	13
+	local.get	10
+	i32.store	264
+	local.get	7
+	i32.const	16
+	i32.add 
+	local.set	7
+	local.get	11
+	local.get	1
+	i32.const	4
+	i32.add 
+	local.tee	1
+	i32.ne  
+	br_if   	0
+.LBB21_18:
+	end_loop
+	end_block
+	local.get	10
+	local.get	10
+	i32.load16_u	270
+	i32.const	-1
+	i32.add 
+	i32.store16	270
+	i32.const	272
+	local.set	13
+	block   	
+	local.get	9
+	i32.const	2
+	i32.lt_u
+	br_if   	0
+	block   	
+	local.get	6
+	i32.const	2
+	i32.shl 
+	i32.const	4
+	i32.add 
+	local.tee	1
+	i32.eqz
+	br_if   	0
+	local.get	2
+	local.get	4
+	i32.const	2
+	i32.shl 
+	i32.add 
+	i32.const	272
+	i32.add 
+	local.get	5
+	i32.const	272
+	i32.add 
+	local.get	1
+	memory.copy	0, 0
+.LBB21_21:
+	end_block
+	block   	
+	local.get	6
+	i32.const	1
+	i32.add 
+	i32.const	3
+	i32.and 
+	local.tee	7
+	i32.eqz
+	br_if   	0
+	local.get	3
+	i32.const	2
+	i32.shl 
+	local.get	2
+	i32.add 
+	i32.const	276
+	i32.add 
+	local.set	1
+.LBB21_23:
+	loop    	
+	local.get	1
+	i32.load	0
+	local.tee	10
+	local.get	4
+	i32.store16	268
+	local.get	10
+	local.get	2
+	i32.store	264
+	local.get	1
+	i32.const	4
+	i32.add 
+	local.set	1
+	local.get	4
+	i32.const	1
+	i32.add 
+	local.set	4
+	local.get	7
+	i32.const	-1
+	i32.add 
+	local.tee	7
+	br_if   	0
+.LBB21_24:
+	end_loop
+	end_block
+	i32.const	320
+	local.set	13
+	local.get	6
+	i32.const	3
+	i32.lt_u
+	br_if   	0
+	local.get	3
+	local.get	6
+	i32.add 
+	i32.const	2
+	i32.add 
+	local.set	10
+	local.get	4
+	i32.const	2
+	i32.shl 
+	local.get	2
+	i32.add 
+	i32.const	284
+	i32.add 
+	local.set	1
+.LBB21_26:
+	loop    	
+	local.get	1
+	i32.const	-12
+	i32.add 
+	i32.load	0
+	local.tee	7
+	local.get	4
+	i32.store16	268
+	local.get	7
+	local.get	2
+	i32.store	264
+	local.get	1
+	i32.const	-8
+	i32.add 
+	i32.load	0
+	local.tee	7
+	local.get	4
+	i32.const	1
+	i32.add 
+	i32.store16	268
+	local.get	7
+	local.get	2
+	i32.store	264
+	local.get	1
+	i32.const	-4
+	i32.add 
+	i32.load	0
+	local.tee	7
+	local.get	4
+	i32.const	2
+	i32.add 
+	i32.store16	268
+	local.get	7
+	local.get	2
+	i32.store	264
+	local.get	1
+	i32.load	0
+	local.tee	7
+	local.get	4
+	i32.const	3
+	i32.add 
+	i32.store16	268
+	local.get	7
+	local.get	2
+	i32.store	264
+	local.get	1
+	i32.const	16
+	i32.add 
+	local.set	1
+	local.get	10
+	local.get	4
+	i32.const	4
+	i32.add 
+	local.tee	4
+	i32.ne  
+	br_if   	0
+.LBB21_27:
+	end_loop
+	end_block
+	local.get	5
+	local.get	13
+	i32.const	8
+	call	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	local.get	0
+	local.get	8
+	i32.store	4
+	local.get	0
+	local.get	2
+	i32.store	0
+	return
+.LBB21_28:
+	end_block
+	i32.const	.Lanon.aac9511986e388c37851c10029bf7af7.101
+	i32.const	42
+	i32.const	.Lanon.aac9511986e388c37851c10029bf7af7.102
+	call	_RNvNtCsb6ASFGx6cXz_4core9panicking5panic
+	unreachable
+	end_function
+.Lfunc_end21:

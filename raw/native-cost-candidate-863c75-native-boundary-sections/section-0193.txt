@@ -1,0 +1,1371 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-native-boundary-ir/qualification_454_native_cost.std-453218b5e9634890.std.552422bcccb5c833-cgu.0.rcgu.o.rcgu.ll:10715
+; <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::remove_leaf_kv::<<alloc::collections::btree::map::entry::OccupiedEntry<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::remove_kv::{closure#0}, alloc::alloc::Global>
+define internal fastcc void @_RINvMs_NtNtNtCsc70TAahYccp_5alloc11collections5btree6removeINtNtB7_4node6HandleINtBY_7NodeRefNtNtBY_6marker3MutjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoNtB1v_4LeafENtB1v_2KVE14remove_leaf_kvNCNvMs5_NtNtB7_3map5entryINtB3S_13OccupiedEntryjB1M_E9remove_kv0NtNtBb_5alloc6GlobalEB1Y_(ptr dead_on_unwind noalias nofree noundef nonnull writable writeonly align 8 captures(none) dereferenceable(72) %0, ptr noalias nofree noundef nonnull readonly align 8 captures(none) dead_on_return dereferenceable(24) %1, ptr nofree noundef nonnull writeonly captures(none) %2) unnamed_addr #5 personality ptr @rust_eh_personality !dbg !12155 !guid !12157 {
+  %4 = alloca [40 x i8], align 8
+  %5 = alloca [56 x i8], align 8
+  %6 = alloca [56 x i8], align 8
+  %7 = alloca [56 x i8], align 8
+  %8 = alloca [56 x i8], align 8
+  %9 = alloca [24 x i8], align 8
+  %10 = alloca [24 x i8], align 8
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !12158), !dbg !12161
+  %11 = load ptr, ptr %1, align 8, !dbg !12162, !alias.scope !12158, !noalias !12169, !nonnull !459, !noundef !459
+  %12 = getelementptr inbounds nuw i8, ptr %11, i64 538, !dbg !12171
+  %13 = load i16, ptr %12, align 2, !dbg !12171, !noalias !12172, !noundef !459
+  %14 = zext i16 %13 to i64, !dbg !12173
+  %15 = getelementptr inbounds nuw i8, ptr %11, i64 8, !dbg !12176
+  %16 = getelementptr inbounds nuw i8, ptr %1, i64 16, !dbg !12180
+  %17 = load i64, ptr %16, align 8, !dbg !12180, !alias.scope !12158, !noalias !12169, !noundef !459
+  %18 = getelementptr inbounds nuw [8 x i8], ptr %15, i64 %17, !dbg !12181
+  %19 = load i64, ptr %18, align 8, !dbg !12184, !alias.scope !12188, !noalias !12172, !noundef !459
+  %20 = getelementptr i8, ptr %18, i64 8, !dbg !12191
+  %21 = xor i64 %17, -1, !dbg !12193
+  %22 = add i64 %14, %21, !dbg !12193
+  %23 = shl nuw nsw i64 %22, 3, !dbg !12194
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %18, ptr align 8 %20, i64 %23, i1 false), !dbg !12194, !alias.scope !12188, !noalias !12172
+  %24 = getelementptr inbounds nuw i8, ptr %11, i64 96, !dbg !12196
+  %25 = getelementptr inbounds nuw [40 x i8], ptr %24, i64 %17, !dbg !12200
+  %26 = load ptr, ptr %25, align 8, !dbg !12203, !noalias !12158
+  %27 = getelementptr inbounds nuw i8, ptr %25, i64 8, !dbg !12203
+  %28 = load i64, ptr %27, align 8, !dbg !12203, !noalias !12158
+  %29 = getelementptr inbounds nuw i8, ptr %25, i64 16, !dbg !12203
+  call void @llvm.lifetime.start.p0(ptr nonnull %10), !dbg !12207
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %10, ptr noundef nonnull align 8 dereferenceable(24) %29, i64 24, i1 false), !dbg !12203
+  %30 = getelementptr i8, ptr %25, i64 40, !dbg !12208
+  %31 = mul nuw nsw i64 %22, 40, !dbg !12210
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %25, ptr align 8 %30, i64 %31, i1 false), !dbg !12210, !alias.scope !12212, !noalias !12215
+  %32 = add i16 %13, -1, !dbg !12217
+  store i16 %32, ptr %12, align 2, !dbg !12219, !noalias !12172
+  %33 = getelementptr inbounds nuw i8, ptr %1, i64 8, !dbg !12220
+  %34 = load i64, ptr %33, align 8, !dbg !12220, !alias.scope !12158, !noalias !12169, !noundef !459
+  %35 = icmp ult i16 %32, 5, !dbg !12221
+  %36 = getelementptr inbounds nuw i8, ptr %6, i64 8, !dbg !12221
+  %37 = getelementptr inbounds nuw i8, ptr %5, i64 8, !dbg !12221
+  %38 = getelementptr inbounds nuw i8, ptr %6, i64 24, !dbg !12221
+  %39 = getelementptr inbounds nuw i8, ptr %5, i64 24, !dbg !12221
+  %40 = getelementptr inbounds nuw i8, ptr %6, i64 40, !dbg !12221
+  %41 = getelementptr inbounds nuw i8, ptr %5, i64 40, !dbg !12221
+  %42 = getelementptr inbounds nuw i8, ptr %6, i64 16, !dbg !12221
+  %43 = getelementptr inbounds nuw i8, ptr %5, i64 16, !dbg !12221
+  br i1 %35, label %44, label %294, !dbg !12221
+
+44:                                               ; preds = %3
+  call void @llvm.lifetime.start.p0(ptr nonnull %9), !dbg !12224
+  %45 = load ptr, ptr %11, align 8, !dbg !12226, !noalias !12232, !noundef !459
+  %46 = icmp eq ptr %45, null, !dbg !12237
+  br i1 %46, label %62, label %47, !dbg !12240
+
+47:                                               ; preds = %44
+  %48 = add i64 %34, 1, !dbg !12241
+  %49 = getelementptr inbounds nuw i8, ptr %11, i64 536, !dbg !12249
+  %50 = load i16, ptr %49, align 8, !dbg !12249, !noalias !12232
+  %51 = icmp eq i16 %50, 0, !dbg !12250
+  br i1 %51, label %52, label %79, !dbg !12250
+
+52:                                               ; preds = %47
+  %53 = getelementptr inbounds nuw i8, ptr %45, i64 538, !dbg !12254
+  %54 = load i16, ptr %53, align 2, !dbg !12254, !noalias !12260, !noundef !459
+  %55 = icmp eq i16 %54, 0, !dbg !12261
+  br i1 %55, label %.loopexit17, label %65, !dbg !12261, !prof !2415
+
+56:                                               ; preds = %170, %168, %.loopexit17, %117, %112, %103, %97
+  %57 = landingpad { ptr, i32 }
+          cleanup
+  %58 = icmp eq ptr %26, null, !dbg !12262
+  %59 = icmp eq i64 %28, 0
+  %60 = select i1 %58, i1 true, i1 %59, !dbg !12262
+  br i1 %60, label %304, label %61, !dbg !12262
+
+61:                                               ; preds = %56
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %26) ]
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %26, i64 noundef %28, i64 noundef 1) #51, !dbg !12269
+  br label %304, !dbg !12280
+
+62:                                               ; preds = %44
+  store ptr %11, ptr %9, align 8, !dbg !12281
+  %63 = getelementptr inbounds nuw i8, ptr %9, i64 8, !dbg !12281
+  store i64 %34, ptr %63, align 8, !dbg !12281
+  %64 = getelementptr inbounds nuw i8, ptr %9, i64 16, !dbg !12281
+  store i64 %17, ptr %64, align 8, !dbg !12281
+  br label %104, !dbg !12285
+
+65:                                               ; preds = %52
+  %66 = getelementptr inbounds nuw i8, ptr %45, i64 552, !dbg !12286
+  %67 = load ptr, ptr %66, align 8, !dbg !12297, !noalias !12260, !nonnull !459, !noundef !459
+  call void @llvm.lifetime.start.p0(ptr nonnull %7), !dbg !12306
+  store ptr %45, ptr %7, align 8, !dbg !12306
+  %68 = getelementptr inbounds nuw i8, ptr %7, i64 8, !dbg !12306
+  store i64 %48, ptr %68, align 8, !dbg !12306
+  %69 = getelementptr inbounds nuw i8, ptr %7, i64 16, !dbg !12306
+  store i64 0, ptr %69, align 8, !dbg !12306
+  %70 = getelementptr inbounds nuw i8, ptr %7, i64 24, !dbg !12306
+  store ptr %11, ptr %70, align 8, !dbg !12306
+  %71 = getelementptr inbounds nuw i8, ptr %7, i64 32, !dbg !12306
+  store i64 %34, ptr %71, align 8, !dbg !12306
+  %72 = getelementptr inbounds nuw i8, ptr %7, i64 40, !dbg !12306
+  store ptr %67, ptr %72, align 8, !dbg !12306
+  %73 = getelementptr inbounds nuw i8, ptr %7, i64 48, !dbg !12306
+  store i64 %34, ptr %73, align 8, !dbg !12306
+  %74 = getelementptr inbounds nuw i8, ptr %67, i64 538, !dbg !12307
+  %75 = load i16, ptr %74, align 2, !dbg !12307, !noundef !459
+  %76 = zext i16 %75 to i64, !dbg !12314
+  %77 = add nuw nsw i64 %76, %14, !dbg !12318
+  %78 = icmp samesign ult i64 %77, 12, !dbg !12318
+  br i1 %78, label %117, label %112, !dbg !12319
+
+79:                                               ; preds = %47
+  %80 = zext nneg i16 %50 to i64, !dbg !12320
+  %81 = add nsw i64 %80, -1, !dbg !12323
+  %82 = getelementptr inbounds nuw i8, ptr %45, i64 544, !dbg !12324
+  %83 = icmp ult i16 %50, 13, !dbg !12328
+  tail call void @llvm.assume(i1 %83), !dbg !12331
+  %84 = getelementptr inbounds nuw [8 x i8], ptr %82, i64 %81, !dbg !12332
+  %85 = load ptr, ptr %84, align 8, !dbg !12333, !noalias !12260, !nonnull !459, !noundef !459
+  call void @llvm.lifetime.start.p0(ptr nonnull %8), !dbg !12337
+  store ptr %45, ptr %8, align 8, !dbg !12337
+  %86 = getelementptr inbounds nuw i8, ptr %8, i64 8, !dbg !12337
+  store i64 %48, ptr %86, align 8, !dbg !12337
+  %87 = getelementptr inbounds nuw i8, ptr %8, i64 16, !dbg !12337
+  store i64 %81, ptr %87, align 8, !dbg !12337
+  %88 = getelementptr inbounds nuw i8, ptr %8, i64 24, !dbg !12337
+  store ptr %85, ptr %88, align 8, !dbg !12337
+  %89 = getelementptr inbounds nuw i8, ptr %8, i64 32, !dbg !12337
+  store i64 %34, ptr %89, align 8, !dbg !12337
+  %90 = getelementptr inbounds nuw i8, ptr %8, i64 40, !dbg !12337
+  store ptr %11, ptr %90, align 8, !dbg !12337
+  %91 = getelementptr inbounds nuw i8, ptr %8, i64 48, !dbg !12337
+  store i64 %34, ptr %91, align 8, !dbg !12337
+  %92 = getelementptr inbounds nuw i8, ptr %85, i64 538, !dbg !12338
+  %93 = load i16, ptr %92, align 2, !dbg !12338, !noundef !459
+  %94 = zext i16 %93 to i64, !dbg !12342
+  %95 = add nuw nsw i64 %14, %94, !dbg !12345
+  %96 = icmp samesign ult i64 %95, 12, !dbg !12345
+  br i1 %96, label %103, label %97, !dbg !12346
+
+97:                                               ; preds = %79
+; invoke <alloc::collections::btree::node::BalancingContext<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::bulk_steal_left
+  invoke fastcc void @_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE15bulk_steal_leftB1v_(ptr noalias nofree noundef align 8 dereferenceable(56) %8, i64 noundef 1)
+          to label %98 unwind label %56, !dbg !12347
+
+98:                                               ; preds = %97
+  %99 = add i64 %17, 1, !dbg !12350
+  store ptr %11, ptr %9, align 8, !dbg !12351
+  %100 = getelementptr inbounds nuw i8, ptr %9, i64 8, !dbg !12351
+  store i64 %34, ptr %100, align 8, !dbg !12351
+  %101 = getelementptr inbounds nuw i8, ptr %9, i64 16, !dbg !12351
+  store i64 %99, ptr %101, align 8, !dbg !12351
+  br label %102, !dbg !12353
+
+102:                                              ; preds = %103, %98
+  call void @llvm.lifetime.end.p0(ptr nonnull %8), !dbg !12354
+  br label %104, !dbg !12354
+
+103:                                              ; preds = %79
+; invoke <alloc::collections::btree::node::BalancingContext<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::merge_tracking_child_edge::<alloc::alloc::Global>
+  invoke fastcc void @_RINvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB7_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE25merge_tracking_child_edgeNtNtBd_5alloc6GlobalEB1w_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(24) %9, ptr noalias nofree noundef align 8 captures(address) dereferenceable(56) %8, i64 noundef 1, i64 noundef %17)
+          to label %102 unwind label %56, !dbg !12355
+
+104:                                              ; preds = %116, %102, %62
+  %105 = getelementptr inbounds nuw i8, ptr %9, i64 8, !dbg !12356
+  %106 = load i64, ptr %105, align 8, !dbg !12356, !noundef !459
+  %107 = load ptr, ptr %9, align 8, !dbg !12356, !nonnull !459, !noundef !459
+  %108 = getelementptr inbounds nuw i8, ptr %9, i64 16, !dbg !12356
+  %109 = load i64, ptr %108, align 8, !dbg !12356, !noundef !459
+  %110 = load ptr, ptr %107, align 8, !dbg !12358, !noalias !12363, !noundef !459
+  %111 = icmp eq ptr %110, null, !dbg !12366
+  br i1 %111, label %293, label %118, !dbg !12369
+
+112:                                              ; preds = %65
+; invoke <alloc::collections::btree::node::BalancingContext<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::bulk_steal_right
+  invoke fastcc void @_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE16bulk_steal_rightB1v_(ptr noalias nofree noundef align 8 dereferenceable(56) %7, i64 noundef 1)
+          to label %113 unwind label %56, !dbg !12370
+
+113:                                              ; preds = %112
+  store ptr %11, ptr %9, align 8, !dbg !12373
+  %114 = getelementptr inbounds nuw i8, ptr %9, i64 8, !dbg !12373
+  store i64 %34, ptr %114, align 8, !dbg !12373
+  %115 = getelementptr inbounds nuw i8, ptr %9, i64 16, !dbg !12373
+  store i64 %17, ptr %115, align 8, !dbg !12373
+  br label %116, !dbg !12375
+
+116:                                              ; preds = %117, %113
+  call void @llvm.lifetime.end.p0(ptr nonnull %7), !dbg !12376
+  br label %104, !dbg !12376
+
+117:                                              ; preds = %65
+; invoke <alloc::collections::btree::node::BalancingContext<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::merge_tracking_child_edge::<alloc::alloc::Global>
+  invoke fastcc void @_RINvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB7_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE25merge_tracking_child_edgeNtNtBd_5alloc6GlobalEB1w_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(24) %9, ptr noalias nofree noundef align 8 captures(address) dereferenceable(56) %7, i64 noundef 0, i64 noundef %17)
+          to label %116 unwind label %56, !dbg !12377
+
+118:                                              ; preds = %104
+  %119 = getelementptr inbounds nuw i8, ptr %6, i64 32
+  %120 = getelementptr inbounds nuw i8, ptr %6, i64 48
+  %121 = getelementptr inbounds nuw i8, ptr %5, i64 32
+  %122 = getelementptr inbounds nuw i8, ptr %5, i64 48
+  call void @llvm.lifetime.start.p0(ptr nonnull %5), !dbg !12378
+  call void @llvm.lifetime.start.p0(ptr nonnull %6), !dbg !12378
+  %123 = getelementptr inbounds nuw i8, ptr %110, i64 538, !dbg !12378
+  %124 = load i16, ptr %123, align 2, !dbg !12378, !noalias !12386, !noundef !459
+  %125 = icmp ugt i16 %124, 4, !dbg !12389
+  br i1 %125, label %.loopexit18, label %.split, !dbg !12389
+
+.split:                                           ; preds = %118
+  %126 = add i64 %106, 1, !dbg !12391
+  br label %127, !dbg !12397
+
+127:                                              ; preds = %.loopexit, %.split
+  %128 = phi i16 [ %290, %.loopexit ], [ %124, %.split ]
+  %129 = phi ptr [ %132, %.loopexit ], [ %110, %.split ]
+  %130 = phi i64 [ %135, %.loopexit ], [ %126, %.split ]
+  %131 = zext nneg i16 %128 to i64, !dbg !12401
+  %132 = load ptr, ptr %129, align 8, !dbg !12404, !noalias !12405, !noundef !459
+  %133 = icmp eq ptr %132, null, !dbg !12410
+  br i1 %133, label %144, label %134, !dbg !12397
+
+134:                                              ; preds = %127
+  %135 = add i64 %130, 1, !dbg !12411
+  %136 = getelementptr inbounds nuw i8, ptr %129, i64 536, !dbg !12414
+  %137 = load i16, ptr %136, align 8, !dbg !12414, !noalias !12405
+  %138 = icmp eq i16 %137, 0, !dbg !12415
+  br i1 %138, label %139, label %155, !dbg !12415
+
+139:                                              ; preds = %134
+  %140 = getelementptr inbounds nuw i8, ptr %132, i64 538, !dbg !12417
+  %141 = load i16, ptr %140, align 2, !dbg !12417, !noalias !12420, !noundef !459
+  %142 = icmp eq i16 %141, 0, !dbg !12421
+  br i1 %142, label %.loopexit17, label %146, !dbg !12421, !prof !2415
+
+.loopexit17:                                      ; preds = %139, %52
+; invoke core::panicking::panic_fmt
+  invoke void @_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt(ptr noundef nonnull @anon.f13bb3f258876cb12f4a84b0a5cdace5.314, ptr noundef nonnull inttoptr (i64 123 to ptr), ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.f13bb3f258876cb12f4a84b0a5cdace5.315) #75
+          to label %143 unwind label %56, !dbg !12422
+
+143:                                              ; preds = %.loopexit17
+  unreachable
+
+144:                                              ; preds = %127
+  %145 = icmp eq i16 %128, 0, !dbg !12423
+  br i1 %145, label %292, label %.loopexit18, !dbg !12423
+
+146:                                              ; preds = %139
+  %147 = getelementptr inbounds nuw i8, ptr %132, i64 552, !dbg !12425
+  %148 = load ptr, ptr %147, align 8, !dbg !12429, !noalias !12420, !nonnull !459, !noundef !459
+  store ptr %132, ptr %5, align 8, !dbg !12433, !noalias !12386
+  store i64 %135, ptr %37, align 8, !dbg !12433, !noalias !12386
+  store i64 0, ptr %43, align 8, !dbg !12433, !noalias !12386
+  store ptr %129, ptr %39, align 8, !dbg !12433, !noalias !12386
+  store i64 %130, ptr %121, align 8, !dbg !12433, !noalias !12386
+  store ptr %148, ptr %41, align 8, !dbg !12433, !noalias !12386
+  store i64 %130, ptr %122, align 8, !dbg !12433, !noalias !12386
+  %149 = add nuw nsw i64 %131, 1, !dbg !12434
+  %150 = getelementptr inbounds nuw i8, ptr %148, i64 538, !dbg !12438
+  %151 = load i16, ptr %150, align 2, !dbg !12438, !noalias !12386, !noundef !459
+  %152 = zext i16 %151 to i64, !dbg !12440
+  %153 = add nuw nsw i64 %149, %152, !dbg !12434
+  %154 = icmp samesign ult i64 %153, 12, !dbg !12434
+  br i1 %154, label %175, label %170, !dbg !12443
+
+155:                                              ; preds = %134
+  %156 = zext nneg i16 %137 to i64, !dbg !12444
+  %157 = add nsw i64 %156, -1, !dbg !12446
+  %158 = getelementptr inbounds nuw i8, ptr %132, i64 544, !dbg !12447
+  %159 = icmp ult i16 %137, 13, !dbg !12449
+  tail call void @llvm.assume(i1 %159), !dbg !12452
+  %160 = getelementptr inbounds nuw [8 x i8], ptr %158, i64 %157, !dbg !12453
+  %161 = load ptr, ptr %160, align 8, !dbg !12454, !noalias !12420, !nonnull !459, !noundef !459
+  store ptr %132, ptr %6, align 8, !dbg !12458, !noalias !12386
+  store i64 %135, ptr %36, align 8, !dbg !12458, !noalias !12386
+  store i64 %157, ptr %42, align 8, !dbg !12458, !noalias !12386
+  store ptr %161, ptr %38, align 8, !dbg !12458, !noalias !12386
+  store i64 %130, ptr %119, align 8, !dbg !12458, !noalias !12386
+  store ptr %129, ptr %40, align 8, !dbg !12458, !noalias !12386
+  store i64 %130, ptr %120, align 8, !dbg !12458, !noalias !12386
+  %162 = getelementptr inbounds nuw i8, ptr %161, i64 538, !dbg !12459
+  %163 = load i16, ptr %162, align 2, !dbg !12459, !noalias !12386, !noundef !459
+  %164 = zext i16 %163 to i64, !dbg !12464
+  %165 = add nuw nsw i64 %131, 1, !dbg !12467
+  %166 = add nuw nsw i64 %165, %164, !dbg !12467
+  %167 = icmp samesign ult i64 %166, 12, !dbg !12467
+  br i1 %167, label %172, label %168, !dbg !12468
+
+168:                                              ; preds = %155
+  %169 = sub nuw nsw i64 5, %131, !dbg !12469
+; invoke <alloc::collections::btree::node::BalancingContext<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::bulk_steal_left
+  invoke fastcc void @_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE15bulk_steal_leftB1v_(ptr noalias nofree noundef align 8 dereferenceable(56) %6, i64 noundef %169)
+          to label %.loopexit18 unwind label %56, !dbg !12470
+
+170:                                              ; preds = %146
+  %171 = sub nuw nsw i64 5, %131, !dbg !12471
+; invoke <alloc::collections::btree::node::BalancingContext<usize, std::sys::pal::unix::stack_overflow::thread_info::ThreadInfo>>::bulk_steal_right
+  invoke fastcc void @_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE16bulk_steal_rightB1v_(ptr noalias nofree noundef align 8 dereferenceable(56) %5, i64 noundef %171)
+          to label %.loopexit18 unwind label %56, !dbg !12472
+
+.loopexit18:                                      ; preds = %.loopexit, %170, %168, %144, %118
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !12473
+  call void @llvm.lifetime.end.p0(ptr nonnull %6), !dbg !12473
+  br label %293, !dbg !12474
+
+172:                                              ; preds = %155
+  %173 = add nuw nsw i64 %164, 1, !dbg !12475
+  %174 = add nuw nsw i64 %173, %131, !dbg !12475
+  %.phi.trans.insert = getelementptr inbounds nuw i8, ptr %132, i64 538
+  %.pre = load i16, ptr %.phi.trans.insert, align 2, !dbg !12486, !noalias !12489
+  br label %175, !dbg !12492
+
+175:                                              ; preds = %172, %146
+  %176 = phi i16 [ %.pre, %172 ], [ %141, %146 ], !dbg !12486
+  %177 = phi ptr [ %161, %172 ], [ %129, %146 ]
+  %178 = phi ptr [ %129, %172 ], [ %148, %146 ]
+  %179 = phi i64 [ %157, %172 ], [ 0, %146 ]
+  %180 = phi i64 [ %164, %172 ], [ %131, %146 ]
+  %181 = phi i64 [ %131, %172 ], [ %152, %146 ]
+  %182 = phi i64 [ %173, %172 ], [ %149, %146 ]
+  %183 = phi i64 [ %174, %172 ], [ %153, %146 ]
+  %184 = getelementptr inbounds nuw i8, ptr %177, i64 538, !dbg !12494
+  %185 = getelementptr inbounds nuw i8, ptr %132, i64 538, !dbg !12486
+  %186 = zext i16 %176 to i64, !dbg !12497
+  %187 = trunc nuw nsw i64 %183 to i16, !dbg !12500
+  store i16 %187, ptr %184, align 2, !dbg !12500, !noalias !12489
+  %188 = getelementptr inbounds nuw i8, ptr %132, i64 8, !dbg !12501
+  %189 = getelementptr inbounds nuw [8 x i8], ptr %188, i64 %179, !dbg !12504
+  %190 = load i64, ptr %189, align 8, !dbg !12507, !alias.scope !12511, !noalias !12489, !noundef !459
+  %191 = getelementptr i8, ptr %189, i64 8, !dbg !12514
+  %192 = xor i64 %179, -1, !dbg !12516
+  %193 = add nsw i64 %186, %192, !dbg !12516
+  %194 = shl nuw nsw i64 %193, 3, !dbg !12517
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %189, ptr align 8 %191, i64 %194, i1 false), !dbg !12517, !alias.scope !12511, !noalias !12489
+  %195 = getelementptr inbounds nuw i8, ptr %177, i64 8, !dbg !12519
+  %196 = getelementptr inbounds nuw [8 x i8], ptr %195, i64 %180, !dbg !12523
+  store i64 %190, ptr %196, align 8, !dbg !12530, !noalias !12489
+  %197 = getelementptr inbounds nuw i8, ptr %178, i64 8, !dbg !12533
+  %198 = getelementptr inbounds nuw [8 x i8], ptr %195, i64 %182, !dbg !12536
+  %199 = shl nuw nsw i64 %181, 3, !dbg !12550
+  tail call void @llvm.memcpy.p0.p0.i64(ptr nonnull align 8 %198, ptr nonnull readonly align 8 %197, i64 %199, i1 false), !dbg !12550, !alias.scope !12553, !noalias !12489
+  %200 = getelementptr inbounds nuw i8, ptr %132, i64 96, !dbg !12557
+  %201 = getelementptr inbounds nuw [40 x i8], ptr %200, i64 %179, !dbg !12560
+  call void @llvm.lifetime.start.p0(ptr nonnull %4), !dbg !12563
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(40) %4, ptr noundef nonnull align 8 dereferenceable(40) %201, i64 40, i1 false), !dbg !12567, !noalias !12489
+  %202 = getelementptr i8, ptr %201, i64 40, !dbg !12571
+  %203 = mul nuw nsw i64 %193, 40, !dbg !12573
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %201, ptr align 8 %202, i64 %203, i1 false), !dbg !12573, !alias.scope !12575, !noalias !12578
+  %204 = getelementptr inbounds nuw i8, ptr %177, i64 96, !dbg !12580
+  %205 = getelementptr inbounds nuw [40 x i8], ptr %204, i64 %180, !dbg !12583
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(40) %205, ptr noundef nonnull align 8 dereferenceable(40) %4, i64 40, i1 false), !dbg !12590, !noalias !12489
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !dbg !12591
+  %206 = getelementptr inbounds nuw i8, ptr %178, i64 96, !dbg !12592
+  %207 = getelementptr inbounds nuw [40 x i8], ptr %204, i64 %182, !dbg !12595
+  %208 = mul nuw nsw i64 %181, 40, !dbg !12609
+  tail call void @llvm.memcpy.p0.p0.i64(ptr nonnull align 8 %207, ptr nonnull readonly align 8 %206, i64 %208, i1 false), !dbg !12609, !alias.scope !12612, !noalias !12489
+  %209 = getelementptr inbounds nuw i8, ptr %132, i64 544, !dbg !12616
+  %210 = add nuw nsw i64 %179, 1, !dbg !12619
+  %211 = getelementptr inbounds nuw [8 x i8], ptr %209, i64 %210, !dbg !12620
+  %212 = getelementptr i8, ptr %211, i64 8, !dbg !12623
+  tail call void @llvm.memmove.p0.p0.i64(ptr nonnull align 8 %211, ptr align 8 %212, i64 %194, i1 false), !dbg !12625, !alias.scope !12627, !noalias !12489
+  %213 = icmp samesign ult i64 %210, %186, !dbg !12630
+  br i1 %213, label %.preheader.preheader, label %.loopexit16, !dbg !12635
+
+.preheader.preheader:                             ; preds = %175
+  %214 = sub nuw nsw i64 %186, %210, !dbg !12635
+  %reass.sub = sub nsw i64 %186, %179, !dbg !12635
+  %215 = add nsw i64 %reass.sub, -2, !dbg !12635
+  %xtraiter = and i64 %214, 3, !dbg !12635
+  %lcmp.mod.not = icmp eq i64 %xtraiter, 0, !dbg !12635
+  br i1 %lcmp.mod.not, label %.preheader.prol.loopexit, label %.preheader.prol, !dbg !12635
+
+.preheader.prol:                                  ; preds = %.preheader.preheader, %.preheader.prol
+  %216 = phi i64 [ %217, %.preheader.prol ], [ %210, %.preheader.preheader ]
+  %prol.iter = phi i64 [ %prol.iter.next, %.preheader.prol ], [ 0, %.preheader.preheader ]
+  %217 = add nuw nsw i64 %216, 1, !dbg !12636
+  %218 = icmp samesign ult i64 %216, 12, !dbg !12639
+  tail call void @llvm.assume(i1 %218), !dbg !12644
+  %219 = getelementptr inbounds nuw [8 x i8], ptr %209, i64 %216, !dbg !12645
+  %220 = load ptr, ptr %219, align 8, !dbg !12646, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %132, ptr %220, align 8, !dbg !12650, !noalias !12489
+  %221 = trunc nuw nsw i64 %216 to i16, !dbg !12652
+  %222 = getelementptr inbounds nuw i8, ptr %220, i64 536, !dbg !12653
+  store i16 %221, ptr %222, align 8, !dbg !12653, !noalias !12489
+  %prol.iter.next = add i64 %prol.iter, 1, !dbg !12635
+  %prol.iter.cmp.not = icmp eq i64 %prol.iter.next, %xtraiter, !dbg !12635
+  br i1 %prol.iter.cmp.not, label %.preheader.prol.loopexit, label %.preheader.prol, !dbg !12635, !llvm.loop !12655
+
+.preheader.prol.loopexit:                         ; preds = %.preheader.prol, %.preheader.preheader
+  %.unr = phi i64 [ %210, %.preheader.preheader ], [ %217, %.preheader.prol ]
+  %223 = icmp ult i64 %215, 3, !dbg !12635
+  br i1 %223, label %.loopexit16, label %.preheader, !dbg !12635
+
+.preheader:                                       ; preds = %.preheader.prol.loopexit, %.preheader
+  %224 = phi i64 [ %240, %.preheader ], [ %.unr, %.preheader.prol.loopexit ]
+  %225 = add nuw nsw i64 %224, 1, !dbg !12636
+  %226 = getelementptr inbounds nuw [8 x i8], ptr %209, i64 %224, !dbg !12645
+  %227 = load ptr, ptr %226, align 8, !dbg !12646, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %132, ptr %227, align 8, !dbg !12650, !noalias !12489
+  %228 = trunc nuw nsw i64 %224 to i16, !dbg !12652
+  %229 = getelementptr inbounds nuw i8, ptr %227, i64 536, !dbg !12653
+  store i16 %228, ptr %229, align 8, !dbg !12653, !noalias !12489
+  %230 = add nuw nsw i64 %224, 2, !dbg !12636
+  %231 = getelementptr inbounds nuw [8 x i8], ptr %209, i64 %225, !dbg !12645
+  %232 = load ptr, ptr %231, align 8, !dbg !12646, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %132, ptr %232, align 8, !dbg !12650, !noalias !12489
+  %233 = trunc nuw nsw i64 %225 to i16, !dbg !12652
+  %234 = getelementptr inbounds nuw i8, ptr %232, i64 536, !dbg !12653
+  store i16 %233, ptr %234, align 8, !dbg !12653, !noalias !12489
+  %235 = add nuw nsw i64 %224, 3, !dbg !12636
+  %236 = getelementptr inbounds nuw [8 x i8], ptr %209, i64 %230, !dbg !12645
+  %237 = load ptr, ptr %236, align 8, !dbg !12646, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %132, ptr %237, align 8, !dbg !12650, !noalias !12489
+  %238 = trunc nuw nsw i64 %230 to i16, !dbg !12652
+  %239 = getelementptr inbounds nuw i8, ptr %237, i64 536, !dbg !12653
+  store i16 %238, ptr %239, align 8, !dbg !12653, !noalias !12489
+  %240 = add nuw nsw i64 %224, 4, !dbg !12636
+  %241 = icmp ult i64 %224, 9, !dbg !12639
+  tail call void @llvm.assume(i1 %241), !dbg !12644
+  %242 = getelementptr inbounds nuw [8 x i8], ptr %209, i64 %235, !dbg !12645
+  %243 = load ptr, ptr %242, align 8, !dbg !12646, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %132, ptr %243, align 8, !dbg !12650, !noalias !12489
+  %244 = trunc nuw nsw i64 %235 to i16, !dbg !12652
+  %245 = getelementptr inbounds nuw i8, ptr %243, i64 536, !dbg !12653
+  store i16 %244, ptr %245, align 8, !dbg !12653, !noalias !12489
+  %246 = icmp eq i64 %240, %186, !dbg !12630
+  br i1 %246, label %.loopexit16, label %.preheader, !dbg !12635
+
+.loopexit16:                                      ; preds = %.preheader.prol.loopexit, %.preheader, %175
+  %247 = load i16, ptr %185, align 2, !dbg !12656, !noalias !12489, !noundef !459
+  %248 = add i16 %247, -1, !dbg !12656
+  store i16 %248, ptr %185, align 2, !dbg !12656, !noalias !12489
+  %249 = icmp ugt i64 %135, 1, !dbg !12657
+  br i1 %249, label %250, label %.loopexit, !dbg !12657
+
+250:                                              ; preds = %.loopexit16
+  %251 = getelementptr inbounds nuw i8, ptr %177, i64 544, !dbg !12658
+  %252 = getelementptr inbounds nuw [8 x i8], ptr %251, i64 %182, !dbg !12663
+  %253 = getelementptr inbounds nuw i8, ptr %178, i64 544, !dbg !12675
+  %254 = add nuw nsw i64 %199, 8, !dbg !12677
+  tail call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(1) %252, ptr noundef nonnull readonly align 8 dereferenceable(1) %253, i64 %254, i1 false), !dbg !12677, !alias.scope !12680, !noalias !12489
+  %255 = add nsw i64 %183, 1, !dbg !12684
+  %256 = sub nsw i64 %255, %182, !dbg !12684
+  %257 = sub nsw i64 %183, %182, !dbg !12684
+  %xtraiter79 = and i64 %256, 3, !dbg !12684
+  %lcmp.mod80.not = icmp eq i64 %xtraiter79, 0, !dbg !12684
+  br i1 %lcmp.mod80.not, label %.prol.loopexit, label %.prol.preheader, !dbg !12684
+
+.prol.preheader:                                  ; preds = %250, %.prol.preheader
+  %258 = phi i64 [ %259, %.prol.preheader ], [ %182, %250 ]
+  %prol.iter81 = phi i64 [ %prol.iter81.next, %.prol.preheader ], [ 0, %250 ]
+  %259 = add nuw nsw i64 %258, 1, !dbg !12688
+  %260 = icmp samesign ult i64 %258, 12, !dbg !12691
+  tail call void @llvm.assume(i1 %260), !dbg !12696
+  %261 = getelementptr inbounds nuw [8 x i8], ptr %251, i64 %258, !dbg !12697
+  %262 = load ptr, ptr %261, align 8, !dbg !12698, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %177, ptr %262, align 8, !dbg !12702, !noalias !12489
+  %263 = trunc nuw nsw i64 %258 to i16, !dbg !12704
+  %264 = getelementptr inbounds nuw i8, ptr %262, i64 536, !dbg !12705
+  store i16 %263, ptr %264, align 8, !dbg !12705, !noalias !12489
+  %prol.iter81.next = add i64 %prol.iter81, 1, !dbg !12684
+  %prol.iter81.cmp.not = icmp eq i64 %prol.iter81.next, %xtraiter79, !dbg !12684
+  br i1 %prol.iter81.cmp.not, label %.prol.loopexit, label %.prol.preheader, !dbg !12684, !llvm.loop !12707
+
+.prol.loopexit:                                   ; preds = %.prol.preheader, %250
+  %.unr82 = phi i64 [ %182, %250 ], [ %259, %.prol.preheader ]
+  %265 = icmp ult i64 %257, 3, !dbg !12684
+  br i1 %265, label %.loopexit, label %.new, !dbg !12684
+
+.new:                                             ; preds = %.prol.loopexit, %.new
+  %266 = phi i64 [ %282, %.new ], [ %.unr82, %.prol.loopexit ]
+  %267 = add nuw nsw i64 %266, 1, !dbg !12688
+  %268 = getelementptr inbounds nuw [8 x i8], ptr %251, i64 %266, !dbg !12697
+  %269 = load ptr, ptr %268, align 8, !dbg !12698, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %177, ptr %269, align 8, !dbg !12702, !noalias !12489
+  %270 = trunc nuw nsw i64 %266 to i16, !dbg !12704
+  %271 = getelementptr inbounds nuw i8, ptr %269, i64 536, !dbg !12705
+  store i16 %270, ptr %271, align 8, !dbg !12705, !noalias !12489
+  %272 = add nuw nsw i64 %266, 2, !dbg !12688
+  %273 = getelementptr inbounds nuw [8 x i8], ptr %251, i64 %267, !dbg !12697
+  %274 = load ptr, ptr %273, align 8, !dbg !12698, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %177, ptr %274, align 8, !dbg !12702, !noalias !12489
+  %275 = trunc nuw nsw i64 %267 to i16, !dbg !12704
+  %276 = getelementptr inbounds nuw i8, ptr %274, i64 536, !dbg !12705
+  store i16 %275, ptr %276, align 8, !dbg !12705, !noalias !12489
+  %277 = add nuw nsw i64 %266, 3, !dbg !12688
+  %278 = getelementptr inbounds nuw [8 x i8], ptr %251, i64 %272, !dbg !12697
+  %279 = load ptr, ptr %278, align 8, !dbg !12698, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %177, ptr %279, align 8, !dbg !12702, !noalias !12489
+  %280 = trunc nuw nsw i64 %272 to i16, !dbg !12704
+  %281 = getelementptr inbounds nuw i8, ptr %279, i64 536, !dbg !12705
+  store i16 %280, ptr %281, align 8, !dbg !12705, !noalias !12489
+  %282 = add nuw nsw i64 %266, 4, !dbg !12688
+  %283 = icmp ult i64 %266, 9, !dbg !12691
+  tail call void @llvm.assume(i1 %283), !dbg !12696
+  %284 = getelementptr inbounds nuw [8 x i8], ptr %251, i64 %277, !dbg !12697
+  %285 = load ptr, ptr %284, align 8, !dbg !12698, !noalias !12489, !nonnull !459, !noundef !459
+  store ptr %177, ptr %285, align 8, !dbg !12702, !noalias !12489
+  %286 = trunc nuw nsw i64 %277 to i16, !dbg !12704
+  %287 = getelementptr inbounds nuw i8, ptr %285, i64 536, !dbg !12705
+  store i16 %286, ptr %287, align 8, !dbg !12705, !noalias !12489
+  %288 = icmp eq i64 %277, %183, !dbg !12708
+  br i1 %288, label %.loopexit, label %.new, !dbg !12684
+
+.loopexit:                                        ; preds = %.prol.loopexit, %.new, %.loopexit16
+  %289 = phi i64 [ 544, %.loopexit16 ], [ 640, %.new ], [ 640, %.prol.loopexit ]
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %178, i64 noundef %289, i64 noundef 8) #51, !dbg !12710, !noalias !12489
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !12473
+  call void @llvm.lifetime.end.p0(ptr nonnull %6), !dbg !12473
+  call void @llvm.lifetime.start.p0(ptr nonnull %5), !dbg !12378
+  call void @llvm.lifetime.start.p0(ptr nonnull %6), !dbg !12378
+  %290 = load i16, ptr %185, align 2, !dbg !12378, !noalias !12386, !noundef !459
+  %291 = icmp ugt i16 %290, 4, !dbg !12389
+  br i1 %291, label %.loopexit18, label %127, !dbg !12389
+
+292:                                              ; preds = %144
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !12473
+  call void @llvm.lifetime.end.p0(ptr nonnull %6), !dbg !12473
+  store i8 1, ptr %2, align 1, !dbg !12715
+  br label %293, !dbg !12722
+
+293:                                              ; preds = %292, %.loopexit18, %104
+  call void @llvm.lifetime.end.p0(ptr nonnull %9), !dbg !12723
+  br label %294, !dbg !12724
+
+294:                                              ; preds = %293, %3
+  %295 = phi ptr [ %11, %3 ], [ %107, %293 ]
+  %296 = phi i64 [ %34, %3 ], [ %106, %293 ]
+  %297 = phi i64 [ %17, %3 ], [ %109, %293 ]
+  store i64 %19, ptr %0, align 8, !dbg !12725
+  %298 = getelementptr inbounds nuw i8, ptr %0, i64 8, !dbg !12725
+  store ptr %26, ptr %298, align 8, !dbg !12725
+  %299 = getelementptr inbounds nuw i8, ptr %0, i64 16, !dbg !12725
+  store i64 %28, ptr %299, align 8, !dbg !12725
+  %300 = getelementptr inbounds nuw i8, ptr %0, i64 24, !dbg !12725
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(24) %300, ptr noundef nonnull align 8 dereferenceable(24) %10, i64 24, i1 false), !dbg !12725
+  %301 = getelementptr inbounds nuw i8, ptr %0, i64 48, !dbg !12725
+  store ptr %295, ptr %301, align 8, !dbg !12725
+  %302 = getelementptr inbounds nuw i8, ptr %0, i64 56, !dbg !12725
+  store i64 %296, ptr %302, align 8, !dbg !12725
+  %303 = getelementptr inbounds nuw i8, ptr %0, i64 64, !dbg !12725
+  store i64 %297, ptr %303, align 8, !dbg !12725
+  call void @llvm.lifetime.end.p0(ptr nonnull %10), !dbg !12726
+  ret void, !dbg !12727
+
+304:                                              ; preds = %61, %56
+  resume { ptr, i32 } %57, !dbg !12728
+}
+
+ASSEMBLY
+_RINvMs_NtNtNtCsc70TAahYccp_5alloc11collections5btree6removeINtNtB7_4node6HandleINtBY_7NodeRefNtNtBY_6marker3MutjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoNtB1v_4LeafENtB1v_2KVE14remove_leaf_kvNCNvMs5_NtNtB7_3map5entryINtB3S_13OccupiedEntryjB1M_E9remove_kv0NtNtBb_5alloc6GlobalEB1Y_:
+.Lfunc_begin13:
+	.file	111 "/rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad" "library/alloc/src/collections/btree/remove.rs"
+	.loc	111 26 0
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception6
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	pushq	%r15
+	pushq	%r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%rbx
+	subq	$328, %rsp
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	movq	%rdx, -200(%rbp)
+	movq	%rsi, %r14
+	movq	%rdi, -224(%rbp)
+.Ltmp2648:
+	.loc	29 315 9 prologue_end
+	movq	(%rsi), %r13
+.Ltmp2649:
+	.loc	29 1321 69
+	movq	16(%rsi), %r12
+.Ltmp2650:
+	.loc	29 291 30
+	movzwl	538(%r13), %ebx
+.Ltmp2651:
+	.loc	2 971 18
+	leaq	8(%r13,%r12,8), %rdi
+.Ltmp2652:
+	.loc	30 1758 9
+	movq	8(%r13,%r12,8), %rax
+	movq	%rax, -216(%rbp)
+.Ltmp2653:
+	.loc	2 971 18
+	leaq	16(,%r12,8), %rsi
+	addq	%r13, %rsi
+.Ltmp2654:
+	.loc	29 1913 63
+	movq	%r12, %r15
+	notq	%r15
+	addq	%rbx, %r15
+.Ltmp2655:
+	.loc	30 665 9
+	shlq	$3, %r15
+	movq	%r15, %rdx
+	callq	*memmove@GOTPCREL(%rip)
+	movq	%r12, -48(%rbp)
+.Ltmp2656:
+	.loc	2 971 18
+	leaq	(%r12,%r12,4), %rax
+	leaq	96(,%rax,8), %rdi
+	addq	%r13, %rdi
+.Ltmp2657:
+	.loc	30 1758 9
+	movq	96(%r13,%rax,8), %rcx
+	movq	%rcx, -184(%rbp)
+	movq	104(%r13,%rax,8), %rcx
+	movq	%rcx, -104(%rbp)
+	movq	128(%r13,%rax,8), %rcx
+	movq	%rcx, -256(%rbp)
+	vmovups	112(%r13,%rax,8), %xmm0
+	vmovaps	%xmm0, -272(%rbp)
+.Ltmp2658:
+	.loc	2 971 18
+	leaq	136(,%rax,8), %rsi
+	addq	%r13, %rsi
+.Ltmp2659:
+	.loc	30 665 9
+	leaq	(%r15,%r15,4), %rdx
+	callq	*memmove@GOTPCREL(%rip)
+.Ltmp2660:
+	.loc	29 1323 36
+	leal	-1(%rbx), %eax
+	.loc	29 1323 13 is_stmt 0
+	movw	%ax, 538(%r13)
+	.loc	29 1324 22 is_stmt 1
+	movq	8(%r14), %rdi
+.Ltmp2661:
+	.loc	111 33 12
+	cmpw	$4, %ax
+	ja	.LBB13_48
+.Ltmp2662:
+	.loc	29 340 18
+	movq	(%r13), %rax
+.Ltmp2663:
+	.loc	15 744 15
+	testq	%rax, %rax
+	.loc	15 744 9 is_stmt 0
+	je	.LBB13_15
+.Ltmp2664:
+	.loc	15 0 9
+	movq	%rbx, %r8
+.Ltmp2665:
+	.loc	29 343 55 is_stmt 1
+	leaq	1(%rdi), %rcx
+	.loc	29 345 43
+	movzwl	536(%r13), %edx
+	testq	%rdx, %rdx
+.Ltmp2666:
+	.loc	29 910 12
+	je	.LBB13_3
+.Ltmp2667:
+	.loc	30 1758 9
+	movq	536(%rax,%rdx,8), %rsi
+.Ltmp2668:
+	.loc	29 912 51
+	decq	%rdx
+.Ltmp2669:
+	.loc	111 38 25
+	movq	%rax, -168(%rbp)
+	movq	%rcx, -160(%rbp)
+	movq	%rdx, -152(%rbp)
+	movq	%rsi, -144(%rbp)
+	movq	%rdi, -136(%rbp)
+	movq	%r13, -128(%rbp)
+	movq	%rdi, -120(%rbp)
+.Ltmp2670:
+	.loc	29 291 30
+	movzwl	538(%rsi), %eax
+.Ltmp2671:
+	.loc	29 1443 9
+	addl	%eax, %r8d
+	cmpl	$12, %r8d
+.Ltmp2672:
+	.loc	111 40 24
+	jae	.LBB13_12
+.Ltmp2635:
+	.loc	111 0 24 is_stmt 0
+	leaq	-96(%rbp), %rdi
+	leaq	-168(%rbp), %rsi
+	.loc	111 41 40 is_stmt 1
+	movl	$1, %edx
+	movq	-48(%rbp), %rcx
+	callq	_RINvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB7_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE25merge_tracking_child_edgeNtNtBd_5alloc6GlobalEB1w_
+.Ltmp2636:
+	jmp	.LBB13_18
+.Ltmp2673:
+.LBB13_15:
+	.loc	29 904 9
+	movq	%r13, -96(%rbp)
+	movq	%rdi, -88(%rbp)
+	jmp	.LBB13_16
+.Ltmp2674:
+.LBB13_3:
+	.loc	29 921 12
+	cmpw	$0, 538(%rax)
+	je	.LBB13_24
+.Ltmp2675:
+	.loc	29 0 12 is_stmt 0
+	movq	%rdi, %rbx
+.Ltmp2676:
+	.loc	30 1758 9 is_stmt 1
+	movq	552(%rax), %rdx
+.Ltmp2677:
+	.loc	111 47 26
+	movq	%rax, -168(%rbp)
+	movq	%rcx, -160(%rbp)
+	movq	$0, -152(%rbp)
+	movq	%r13, -144(%rbp)
+	movq	%rbx, -136(%rbp)
+	movq	%rdx, -128(%rbp)
+	movq	%rbx, -120(%rbp)
+.Ltmp2678:
+	.loc	29 291 30
+	movzwl	538(%rdx), %eax
+.Ltmp2679:
+	.loc	29 1443 9
+	addl	%eax, %r8d
+	cmpl	$12, %r8d
+.Ltmp2680:
+	.loc	111 49 24
+	jae	.LBB13_5
+.Ltmp2639:
+	.loc	111 0 24 is_stmt 0
+	leaq	-96(%rbp), %rdi
+	leaq	-168(%rbp), %rsi
+	.loc	111 50 41 is_stmt 1
+	xorl	%edx, %edx
+	movq	-48(%rbp), %rcx
+	callq	_RINvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB7_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE25merge_tracking_child_edgeNtNtBd_5alloc6GlobalEB1w_
+.Ltmp2640:
+	jmp	.LBB13_18
+.Ltmp2681:
+.LBB13_12:
+.Ltmp2633:
+	.loc	111 0 41 is_stmt 0
+	movq	%rdi, %rbx
+	leaq	-168(%rbp), %rdi
+.Ltmp2682:
+	.loc	29 1568 14 is_stmt 1
+	movl	$1, %esi
+	callq	_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE15bulk_steal_leftB1v_
+.Ltmp2634:
+	.loc	29 0 14 is_stmt 0
+	movq	-48(%rbp), %rax
+	.loc	29 1570 53 is_stmt 1
+	incq	%rax
+.Ltmp2683:
+	.loc	29 904 9
+	movq	%r13, -96(%rbp)
+	movq	%rbx, -88(%rbp)
+	jmp	.LBB13_17
+.Ltmp2684:
+.LBB13_5:
+.Ltmp2637:
+	.loc	29 0 9 is_stmt 0
+	leaq	-168(%rbp), %rdi
+.Ltmp2685:
+	.loc	29 1581 14 is_stmt 1
+	movl	$1, %esi
+	callq	_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE16bulk_steal_rightB1v_
+.Ltmp2638:
+.Ltmp2686:
+	.loc	29 904 9
+	movq	%r13, -96(%rbp)
+	movq	%rbx, -88(%rbp)
+.Ltmp2687:
+.LBB13_16:
+	.loc	29 0 9 is_stmt 0
+	movq	-48(%rbp), %rax
+.LBB13_17:
+	movq	%rax, -80(%rbp)
+.LBB13_18:
+.Ltmp2688:
+	.loc	111 60 28 is_stmt 1
+	movq	-96(%rbp), %r13
+	movq	-88(%rbp), %rax
+	movq	%rax, -176(%rbp)
+	movq	-80(%rbp), %rax
+	movq	%rax, -48(%rbp)
+.Ltmp2689:
+	.loc	29 340 18
+	movq	(%r13), %rbx
+.Ltmp2690:
+	.loc	15 744 15
+	testq	%rbx, %rbx
+	.loc	15 744 9 is_stmt 0
+	je	.LBB13_47
+.Ltmp2691:
+	.loc	29 291 30 is_stmt 1
+	movzwl	538(%rbx), %eax
+.Ltmp2692:
+	.file	112 "/rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad" "library/alloc/src/collections/btree/fix.rs"
+	.loc	112 18 12
+	cmpw	$4, %ax
+	jbe	.LBB13_20
+.Ltmp2693:
+.LBB13_47:
+	.loc	112 0 12 is_stmt 0
+	movq	-176(%rbp), %rdi
+.LBB13_48:
+	movq	-224(%rbp), %rcx
+	movq	-216(%rbp), %rax
+	.loc	111 75 9 is_stmt 1
+	movq	%rax, (%rcx)
+	movq	-184(%rbp), %rax
+	movq	%rax, 8(%rcx)
+	movq	-104(%rbp), %rax
+	movq	%rax, 16(%rcx)
+	vmovaps	-272(%rbp), %xmm0
+	vmovups	%xmm0, 24(%rcx)
+	movq	-256(%rbp), %rax
+	movq	%rax, 40(%rcx)
+	movq	%r13, 48(%rcx)
+	movq	%rdi, 56(%rcx)
+	movq	-48(%rbp), %rax
+	movq	%rax, 64(%rcx)
+.Ltmp2694:
+	.loc	111 76 6 epilogue_begin
+	addq	$328, %rsp
+	popq	%rbx
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_def_cfa %rsp, 8
+	retq
+.LBB13_20:
+	.cfi_def_cfa %rbp, 16
+	.loc	111 0 6 is_stmt 0
+	movq	-176(%rbp), %rcx
+.Ltmp2695:
+	.loc	29 343 55 is_stmt 1
+	leaq	1(%rcx), %r15
+	movq	%r13, -208(%rbp)
+	jmp	.LBB13_21
+.Ltmp2696:
+	.loc	29 0 55 is_stmt 0
+.Ltmp2697:
+	.p2align	4
+.LBB13_44:
+	.loc	34 178 14 is_stmt 1
+	movl	$8, %edx
+	movq	%r14, %rdi
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.Ltmp2698:
+	.loc	29 291 30
+	movzwl	538(%rbx), %eax
+.Ltmp2699:
+	.loc	112 18 12
+	cmpw	$4, %ax
+	ja	.LBB13_47
+.Ltmp2700:
+.LBB13_21:
+	.loc	112 0 12 is_stmt 0
+	movq	%rbx, %rcx
+.Ltmp2701:
+	.loc	97 154 17 is_stmt 1
+	movzwl	%ax, %eax
+.Ltmp2702:
+	.loc	29 340 18
+	movq	(%rbx), %rbx
+.Ltmp2703:
+	.loc	15 744 15
+	testq	%rbx, %rbx
+	.loc	15 744 9 is_stmt 0
+	je	.LBB13_45
+.Ltmp2704:
+	.loc	15 0 9
+	movq	%r15, %rsi
+.Ltmp2705:
+	.loc	29 343 55 is_stmt 1
+	leaq	1(%r15), %rdi
+	.loc	29 345 43
+	movzwl	536(%rcx), %r15d
+	testq	%r15, %r15
+	movq	%rdi, -192(%rbp)
+.Ltmp2706:
+	.loc	29 910 12
+	je	.LBB13_23
+.Ltmp2707:
+	.loc	30 1758 9
+	movq	536(%rbx,%r15,8), %r12
+.Ltmp2708:
+	.loc	29 912 51
+	decq	%r15
+.Ltmp2709:
+	.loc	112 22 25
+	movq	%rbx, -328(%rbp)
+	movq	%rdi, -320(%rbp)
+	movq	%r15, -312(%rbp)
+	movq	%r12, -304(%rbp)
+	movq	%rsi, -296(%rbp)
+	movq	%rcx, -288(%rbp)
+	movq	%rsi, -280(%rbp)
+.Ltmp2710:
+	.loc	29 291 30
+	movzwl	538(%r12), %esi
+.Ltmp2711:
+	.loc	29 1443 9
+	leal	(%rax,%rsi), %edx
+	incl	%edx
+	cmpl	$12, %edx
+.Ltmp2712:
+	.loc	112 23 24
+	jae	.LBB13_29
+.Ltmp2713:
+	.loc	29 1467 28
+	leaq	1(%rsi), %rdx
+	movq	%rdx, -64(%rbp)
+	movq	%rsi, -112(%rbp)
+	addq	%rax, %rsi
+	incq	%rsi
+.Ltmp2714:
+	.loc	29 291 30
+	movzwl	538(%rbx), %edx
+	movq	%rcx, -72(%rbp)
+	movq	%rax, -56(%rbp)
+	jmp	.LBB13_32
+.Ltmp2715:
+	.loc	29 0 30 is_stmt 0
+.Ltmp2716:
+	.p2align	4
+.LBB13_23:
+	.loc	29 291 30 is_stmt 1
+	movzwl	538(%rbx), %edx
+.Ltmp2717:
+	.loc	29 921 12
+	testw	%dx, %dx
+	je	.LBB13_24
+.Ltmp2718:
+	.loc	30 1758 9
+	movq	552(%rbx), %r8
+.Ltmp2719:
+	.loc	112 31 26
+	movq	%rbx, -168(%rbp)
+	movq	%rdi, -160(%rbp)
+	movq	$0, -152(%rbp)
+	movq	%rcx, -144(%rbp)
+	movq	%rsi, -136(%rbp)
+	movq	%r8, -128(%rbp)
+	movq	%rsi, -120(%rbp)
+.Ltmp2720:
+	.loc	29 291 30
+	movzwl	538(%r8), %r9d
+.Ltmp2721:
+	.loc	29 1443 9
+	leaq	(%rax,%r9), %rsi
+	incq	%rsi
+	cmpq	$12, %rsi
+.Ltmp2722:
+	.loc	112 32 24
+	jae	.LBB13_30
+.Ltmp2723:
+	.loc	112 0 24 is_stmt 0
+	leaq	1(%rax), %rdi
+	movq	%rdi, -64(%rbp)
+	movq	%rcx, %r12
+	movq	%r8, -72(%rbp)
+	xorl	%r15d, %r15d
+	movq	%rax, -112(%rbp)
+	movq	%r9, -56(%rbp)
+.LBB13_32:
+.Ltmp2724:
+	.loc	97 154 17 is_stmt 1
+	movzwl	%dx, %eax
+	movq	%rax, -248(%rbp)
+	movq	%rsi, -232(%rbp)
+.Ltmp2725:
+	.loc	29 1473 13
+	movw	%si, 538(%r12)
+.Ltmp2726:
+	.loc	2 971 18
+	leaq	(%rbx,%r15,8), %rdi
+	addq	$8, %rdi
+.Ltmp2727:
+	.loc	30 1758 9
+	movq	8(%rbx,%r15,8), %r14
+.Ltmp2728:
+	.loc	2 971 18
+	leaq	(%rbx,%r15,8), %rsi
+	addq	$16, %rsi
+	movq	%r15, -240(%rbp)
+.Ltmp2729:
+	.loc	29 1913 63
+	notq	%r15
+	addq	%rax, %r15
+.Ltmp2730:
+	.loc	30 665 9
+	shlq	$3, %r15
+	movq	%r15, %rdx
+	movq	memmove@GOTPCREL(%rip), %rax
+	callq	*%rax
+	movq	-112(%rbp), %rax
+.Ltmp2731:
+	.loc	42 575 9
+	movq	%r14, 8(%r12,%rax,8)
+	movq	-72(%rbp), %rax
+.Ltmp2732:
+	.loc	29 503 18
+	leaq	8(%rax), %rsi
+	movq	-64(%rbp), %rax
+.Ltmp2733:
+	.loc	23 102 24
+	leaq	(%r12,%rax,8), %rdi
+	addq	$8, %rdi
+	movq	-56(%rbp), %r14
+.Ltmp2734:
+	.loc	30 574 14
+	shll	$3, %r14d
+	movq	%r14, %rdx
+	movq	memcpy@GOTPCREL(%rip), %r13
+	callq	*%r13
+	movq	-240(%rbp), %r13
+.Ltmp2735:
+	.loc	2 971 18
+	leaq	(,%r13,4), %rax
+	addq	%r13, %rax
+	leaq	96(%rbx,%rax,8), %rdi
+.Ltmp2736:
+	.loc	30 1758 9
+	movq	128(%rbx,%rax,8), %rcx
+	movq	%rcx, -336(%rbp)
+	vmovups	96(%rbx,%rax,8), %ymm0
+	vmovups	%ymm0, -368(%rbp)
+.Ltmp2737:
+	.loc	2 971 18
+	leaq	(%rbx,%rax,8), %rsi
+	addq	$136, %rsi
+.Ltmp2738:
+	.loc	30 665 9
+	leaq	(%r15,%r15,4), %rdx
+	vzeroupper
+	callq	*memmove@GOTPCREL(%rip)
+	movq	-112(%rbp), %rax
+.Ltmp2739:
+	.loc	23 232 18
+	leaq	(%rax,%rax,4), %rax
+.Ltmp2740:
+	.loc	42 575 9
+	vmovups	-368(%rbp), %ymm0
+	vmovups	%ymm0, 96(%r12,%rax,8)
+	movq	-336(%rbp), %rcx
+	movq	%rcx, 128(%r12,%rax,8)
+	movq	-72(%rbp), %rax
+.Ltmp2741:
+	.loc	29 517 18
+	leaq	96(%rax), %rsi
+	movq	-64(%rbp), %rax
+.Ltmp2742:
+	.loc	23 102 24
+	leaq	(%rax,%rax,4), %rax
+	leaq	96(%r12,%rax,8), %rdi
+	movq	%r14, -56(%rbp)
+.Ltmp2743:
+	.loc	30 574 14
+	leaq	(%r14,%r14,4), %rdx
+	vzeroupper
+	callq	*memcpy@GOTPCREL(%rip)
+	movq	%r13, %rax
+.Ltmp2744:
+	.loc	29 1489 75
+	incq	%r13
+.Ltmp2745:
+	.loc	2 971 18
+	leaq	552(%rbx,%rax,8), %rdi
+	movq	%rax, %r14
+.Ltmp2746:
+	.loc	2 971 18 is_stmt 0
+	leaq	(%rbx,%rax,8), %rsi
+	addq	$560, %rsi
+.Ltmp2747:
+	.loc	30 665 9 is_stmt 1
+	movq	%r15, %rdx
+	callq	*memmove@GOTPCREL(%rip)
+	movq	-248(%rbp), %rsi
+.Ltmp2748:
+	.loc	22 2224 50
+	cmpq	%r13, %rsi
+	movq	-192(%rbp), %r15
+.Ltmp2749:
+	.loc	58 1100 12
+	jbe	.LBB13_38
+	movl	%esi, %ecx
+	subl	%r13d, %ecx
+	andl	$3, %ecx
+	je	.LBB13_34
+	.loc	58 0 12 is_stmt 0
+.Ltmp2750:
+	.p2align	4
+.LBB13_35:
+.Ltmp2751:
+	.loc	25 1043 17 is_stmt 1
+	leaq	1(%r13), %rax
+.Ltmp2752:
+	.loc	30 1758 9
+	movq	544(%rbx,%r13,8), %rdx
+.Ltmp2753:
+	.loc	29 591 18
+	movq	%rbx, (%rdx)
+.Ltmp2754:
+	.loc	42 575 9
+	movw	%r13w, 536(%rdx)
+	movq	%rax, %r13
+.Ltmp2755:
+	.loc	58 1100 12
+	decq	%rcx
+	jne	.LBB13_35
+	negq	%r14
+	leaq	(%rsi,%r14), %rcx
+	addq	$-2, %rcx
+	cmpl	$3, %ecx
+	jb	.LBB13_38
+.Ltmp2756:
+	.loc	58 0 12 is_stmt 0
+.Ltmp2757:
+	.p2align	4
+.LBB13_37:
+	.loc	30 1758 9 is_stmt 1
+	movq	544(%rbx,%rax,8), %rcx
+.Ltmp2758:
+	.loc	29 591 18
+	movq	%rbx, (%rcx)
+.Ltmp2759:
+	.loc	42 575 9
+	movw	%ax, 536(%rcx)
+.Ltmp2760:
+	.loc	30 1758 9
+	movq	552(%rbx,%rax,8), %rcx
+.Ltmp2761:
+	.loc	29 591 18
+	movq	%rbx, (%rcx)
+.Ltmp2762:
+	.loc	42 575 9
+	leal	1(%rax), %edx
+	movw	%dx, 536(%rcx)
+.Ltmp2763:
+	.loc	30 1758 9
+	movq	560(%rbx,%rax,8), %rcx
+.Ltmp2764:
+	.loc	29 591 18
+	movq	%rbx, (%rcx)
+.Ltmp2765:
+	.loc	42 575 9
+	leal	2(%rax), %edx
+	movw	%dx, 536(%rcx)
+.Ltmp2766:
+	.loc	30 1758 9
+	movq	568(%rbx,%rax,8), %rcx
+.Ltmp2767:
+	.loc	29 591 18
+	movq	%rbx, (%rcx)
+.Ltmp2768:
+	.loc	42 575 9
+	leal	3(%rax), %edx
+	movw	%dx, 536(%rcx)
+.Ltmp2769:
+	.loc	22 2224 50
+	addq	$4, %rax
+	cmpq	%rsi, %rax
+.Ltmp2770:
+	.loc	58 1100 12
+	jne	.LBB13_37
+.Ltmp2771:
+.LBB13_38:
+	.loc	29 1491 13
+	decw	538(%rbx)
+	movl	$544, %esi
+	.loc	29 1493 16
+	cmpq	$2, %r15
+	movq	-208(%rbp), %r13
+	movq	-72(%rbp), %r14
+	jb	.LBB13_44
+	.loc	29 0 16 is_stmt 0
+	movq	-64(%rbp), %r15
+.Ltmp2772:
+	.loc	23 102 24 is_stmt 1
+	leaq	(%r12,%r15,8), %rdi
+	addq	$544, %rdi
+.Ltmp2773:
+	.loc	29 533 18
+	leaq	544(%r14), %rsi
+	movq	-56(%rbp), %rdx
+.Ltmp2774:
+	.loc	30 574 14
+	addq	$8, %rdx
+	callq	*memcpy@GOTPCREL(%rip)
+	movq	-232(%rbp), %rdi
+.Ltmp2775:
+	.loc	58 1100 12
+	movl	%edi, %ecx
+	subl	%r15d, %ecx
+	incl	%ecx
+	movq	%r15, %rax
+	andl	$3, %ecx
+	je	.LBB13_42
+	.loc	58 0 12 is_stmt 0
+	movq	%r15, %rdx
+	.p2align	4
+.LBB13_41:
+.Ltmp2776:
+	.loc	25 1043 17 is_stmt 1
+	leaq	1(%rdx), %rax
+.Ltmp2777:
+	.loc	30 1758 9
+	movq	544(%r12,%rdx,8), %rsi
+.Ltmp2778:
+	.loc	29 591 18
+	movq	%r12, (%rsi)
+.Ltmp2779:
+	.loc	42 575 9
+	movw	%dx, 536(%rsi)
+	movq	%rax, %rdx
+.Ltmp2780:
+	.loc	58 1100 12
+	decq	%rcx
+	jne	.LBB13_41
+.LBB13_42:
+	movq	%rdi, %rcx
+	subq	%r15, %rcx
+	movl	$640, %esi
+	cmpl	$3, %ecx
+	movq	-192(%rbp), %r15
+	jb	.LBB13_44
+.Ltmp2781:
+	.loc	58 0 12 is_stmt 0
+.Ltmp2782:
+	.p2align	4
+.LBB13_43:
+	.loc	30 1758 9 is_stmt 1
+	movq	544(%r12,%rax,8), %rcx
+.Ltmp2783:
+	.loc	29 591 18
+	movq	%r12, (%rcx)
+.Ltmp2784:
+	.loc	42 575 9
+	movw	%ax, 536(%rcx)
+.Ltmp2785:
+	.loc	30 1758 9
+	movq	552(%r12,%rax,8), %rcx
+.Ltmp2786:
+	.loc	29 591 18
+	movq	%r12, (%rcx)
+.Ltmp2787:
+	.loc	42 575 9
+	leal	1(%rax), %edx
+	movw	%dx, 536(%rcx)
+.Ltmp2788:
+	.loc	30 1758 9
+	movq	560(%r12,%rax,8), %rcx
+.Ltmp2789:
+	.loc	29 591 18
+	movq	%r12, (%rcx)
+.Ltmp2790:
+	.loc	42 575 9
+	leal	2(%rax), %edx
+	movw	%dx, 536(%rcx)
+.Ltmp2791:
+	.loc	30 1758 9
+	movq	568(%r12,%rax,8), %rcx
+.Ltmp2792:
+	.loc	29 591 18
+	movq	%r12, (%rcx)
+.Ltmp2793:
+	.loc	42 575 9
+	leaq	3(%rax), %rdx
+	movw	%dx, 536(%rcx)
+.Ltmp2794:
+	.loc	58 1100 12
+	addq	$4, %rax
+.Ltmp2795:
+	.loc	22 2224 50
+	cmpq	%rdi, %rdx
+.Ltmp2796:
+	.loc	58 1100 12
+	jne	.LBB13_43
+	jmp	.LBB13_44
+.Ltmp2797:
+.LBB13_34:
+	.loc	58 0 12 is_stmt 0
+	movq	%r13, %rax
+.Ltmp2798:
+	.loc	58 1100 12
+	negq	%r14
+	leaq	(%rsi,%r14), %rcx
+	addq	$-2, %rcx
+	cmpl	$3, %ecx
+	jae	.LBB13_37
+	jmp	.LBB13_38
+.Ltmp2799:
+.LBB13_45:
+	.loc	112 41 24 is_stmt 1
+	testq	%rax, %rax
+	jne	.LBB13_47
+.Ltmp2800:
+	.loc	112 0 24 is_stmt 0
+	movq	-200(%rbp), %rax
+.Ltmp2801:
+	.file	113 "/rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad" "library/alloc/src/collections/btree/map/entry.rs"
+	.loc	113 658 47 is_stmt 1
+	movb	$1, (%rax)
+	jmp	.LBB13_47
+.Ltmp2802:
+.LBB13_29:
+	.loc	112 27 56
+	movl	$5, %esi
+	subq	%rax, %rsi
+.Ltmp2641:
+	leaq	-328(%rbp), %rdi
+	.loc	112 27 40 is_stmt 0
+	callq	_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE15bulk_steal_leftB1v_
+.Ltmp2642:
+	jmp	.LBB13_47
+.Ltmp2803:
+.LBB13_30:
+	.loc	112 36 58 is_stmt 1
+	movl	$5, %esi
+	subq	%rax, %rsi
+.Ltmp2643:
+	leaq	-168(%rbp), %rdi
+	.loc	112 36 41 is_stmt 0
+	callq	_RNvMs10_NtNtNtCsc70TAahYccp_5alloc11collections5btree4nodeINtB6_16BalancingContextjNtNtNtNtNtNtCs7jcFBdfocI9_3std3sys3pal4unix14stack_overflow11thread_info10ThreadInfoE16bulk_steal_rightB1v_
+.Ltmp2644:
+	jmp	.LBB13_47
+.Ltmp2804:
+.LBB13_24:
+.Ltmp2645:
+	.loc	111 0 0
+	leaq	.Lanon.f13bb3f258876cb12f4a84b0a5cdace5.314(%rip), %rdi
+	leaq	.Lanon.f13bb3f258876cb12f4a84b0a5cdace5.315(%rip), %rdx
+	movl	$123, %esi
+	callq	*_RNvNtCs2k2z8Zem4rB_4core9panicking9panic_fmt@GOTPCREL(%rip)
+.Ltmp2805:
+.Ltmp2646:
+	ud2
+.LBB13_7:
+.Ltmp2647:
+	movq	%rax, %rbx
+	movq	-184(%rbp), %rdi
+.Ltmp2806:
+	.loc	30 848 1 is_stmt 1
+	testq	%rdi, %rdi
+	je	.LBB13_10
+	cmpq	$0, -104(%rbp)
+	je	.LBB13_10
+.Ltmp2807:
+	.loc	34 178 14
+	movl	$1, %edx
+	movq	-104(%rbp), %rsi
+	callq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+.Ltmp2808:
+.LBB13_10:
+	.loc	34 0 14 is_stmt 0
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end13:

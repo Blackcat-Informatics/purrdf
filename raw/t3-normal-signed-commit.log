@@ -1,0 +1,5 @@
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against dfc0c21adabe (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'bindings/python/src/py_store/quad_store.rs'.
+Recorded resolution for 'docs/CONFORMANCE.md'.
+Recorded resolution for 'docs/book/po/zh-Hans.po'.
+[paudley/454-rdflib-shim-algebra-level-reassignment cee1c41b2] Integrate division governance with contextual queries

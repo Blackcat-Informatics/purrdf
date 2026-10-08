@@ -1,0 +1,3151 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [
+    [
+      "a",
+      "p",
+      "o1"
+    ],
+    [
+      "a",
+      "p",
+      "o2"
+    ],
+    [
+      "b",
+      "p",
+      "o3"
+    ]
+  ],
+  "cases": [
+    {
+      "name": "optional-remembered-retry-assignment-unbound",
+      "query": "SELECT ?x ?s WHERE { ?x <http://example.org/p> <http://example.org/o1> { ?s <http://example.org/p> <http://example.org/o3> OPTIONAL { ?x <http://example.org/p> <http://example.org/o3> BIND(<http://example.org/z> AS ?x) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "x"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "optional-remembered-retry-assignment-initial",
+      "query": "SELECT ?x ?s WHERE { ?x <http://example.org/p> <http://example.org/o1> { ?s <http://example.org/p> <http://example.org/o3> OPTIONAL { ?x <http://example.org/p> <http://example.org/o3> BIND(<http://example.org/z> AS ?x) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "x"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "optional-remembered-retry-filter-unbound",
+      "query": "SELECT ?x ?s WHERE { ?x <http://example.org/p> <http://example.org/o1> { ?s <http://example.org/p> <http://example.org/o3> OPTIONAL { ?x <http://example.org/p> ?o FILTER(?x=<http://example.org/b>) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "x"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "optional-remembered-retry-filter-initial",
+      "query": "SELECT ?x ?s WHERE { ?x <http://example.org/p> <http://example.org/o1> { ?s <http://example.org/p> <http://example.org/o3> OPTIONAL { ?x <http://example.org/p> ?o FILTER(?x=<http://example.org/b>) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "x"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "optional-empty-remember-keeps-context-unbound",
+      "query": "SELECT ?x WHERE { ?x <http://example.org/p> <http://example.org/o1> { OPTIONAL { ?x <http://example.org/p> <http://example.org/o3> BIND(<http://example.org/z> AS ?x) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "optional-empty-remember-keeps-context-initial",
+      "query": "SELECT ?x WHERE { ?x <http://example.org/p> <http://example.org/o1> { OPTIONAL { ?x <http://example.org/p> <http://example.org/o3> BIND(<http://example.org/z> AS ?x) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "optional-unbound-driver-cell-unbound",
+      "query": "SELECT * WHERE { VALUES (?x ?tag) { (UNDEF 1) (<http://example.org/a> 2) } OPTIONAL { ?x <http://example.org/p> ?o BIND(<http://example.org/z> AS ?x) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "tag",
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "optional-unbound-driver-cell-initial",
+      "query": "SELECT * WHERE { VALUES (?x ?tag) { (UNDEF 1) (<http://example.org/a> 2) } OPTIONAL { ?x <http://example.org/p> ?o BIND(<http://example.org/z> AS ?x) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "tag",
+          "x"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "minus-logical-domains-projected-unbound",
+      "query": "SELECT * WHERE { { SELECT ?left WHERE { BIND(1 AS ?left) } } MINUS { SELECT ?right WHERE { BIND(2 AS ?right) BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "left",
+          "right"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "minus-logical-domains-projected-initial",
+      "query": "SELECT * WHERE { { SELECT ?left WHERE { BIND(1 AS ?left) } } MINUS { SELECT ?right WHERE { BIND(2 AS ?right) BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "left",
+          "right"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "exists-projected-context-unbound",
+      "query": "SELECT ?this ?value WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) FILTER EXISTS { { SELECT ?value WHERE { ?this <http://example.org/p> ?value } } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "exists-projected-context-initial",
+      "query": "SELECT ?this ?value WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/z> AS ?this) FILTER EXISTS { { SELECT ?value WHERE { ?this <http://example.org/p> ?value } } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-empty-postalias-unbound",
+      "query": "SELECT (<http://example.org/z> AS ?this) (COUNT(*) AS ?n) WHERE { ?s <http://example.org/absent> ?o } GROUP BY ?this",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-empty-postalias-initial",
+      "query": "SELECT (<http://example.org/z> AS ?this) (COUNT(*) AS ?n) WHERE { ?s <http://example.org/absent> ?o } GROUP BY ?this",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "forget-expression-only-outer-unbound",
+      "query": "SELECT ?x ?y WHERE { ?x <http://example.org/p> <http://example.org/o1> { BIND(?x AS ?y) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "y"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "forget-expression-only-outer-initial",
+      "query": "SELECT ?x ?y WHERE { ?x <http://example.org/p> <http://example.org/o1> { BIND(?x AS ?y) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "x",
+          "y"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "name": "nested-duplicate-nonlazy-unbound",
+      "query": "SELECT * WHERE { { SELECT ?v WHERE { VALUES ?v { 1 1 } } LIMIT 2 } { SELECT ?v ?this WHERE { VALUES ?v { 1 1 } BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "v"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "nested-duplicate-nonlazy-initial",
+      "query": "SELECT * WHERE { { SELECT ?v WHERE { VALUES ?v { 1 1 } } LIMIT 2 } { SELECT ?v ?this WHERE { VALUES ?v { 1 1 } BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "v"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-minus-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-minus-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-optional-not-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-not-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-nested-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-nested-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-subselect-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-optional-subselect-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-minus-optional-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-minus-optional-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-minus-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-minus-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-minus-not-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-minus-not-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-minus-nested-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-minus-nested-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-minus-subselect-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-minus-subselect-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-optional-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-exists-optional-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-minus-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-minus-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-not-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-not-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-nested-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-exists-nested-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-exists-subselect-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-exists-subselect-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-not-exists-optional-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-optional-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-minus-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-minus-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-not-exists-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-not-exists-nested-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-nested-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-subselect-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-not-exists-subselect-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-optional-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-optional-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-minus-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-minus-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-nested-not-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-not-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-nested-subselect-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-nested-subselect-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { BIND(<http://example.org/w> AS ?this) } { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-subselect-optional-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o3"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-optional-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } OPTIONAL { ?this <http://example.org/p> ?o BIND(<http://example.org/z> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "o",
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/o2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-minus-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-minus-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-subselect-not-exists-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-not-exists-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } FILTER NOT EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "composition-subselect-nested-unbound",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "composition-subselect-nested-initial",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) { SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) } } { BIND(<http://example.org/w> AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    }
+  ]
+}

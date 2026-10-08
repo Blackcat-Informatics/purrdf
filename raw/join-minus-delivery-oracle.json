@@ -1,0 +1,234 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "nonlazy-join-limit-stop-unbound",
+      "query": "SELECT ?tick WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } VALUES ?y {0} } LIMIT 1",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tick"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "nonlazy-join-limit-stop-bound",
+      "query": "SELECT ?tick WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } VALUES ?y {0} } LIMIT 1",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tick"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "minus-left-limit-stop-unbound",
+      "query": "SELECT ?tick WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } MINUS { VALUES ?y {0} } } LIMIT 1",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tick"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "minus-left-limit-stop-bound",
+      "query": "SELECT ?tick WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } MINUS { VALUES ?y {0} } } LIMIT 1",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tick"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 1
+      }
+    },
+    {
+      "name": "nonlazy-join-group-delivery-unbound",
+      "query": "SELECT (SUM(?tick) AS ?input) (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } VALUES ?y {0} }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "input",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "9",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "nonlazy-join-group-delivery-bound",
+      "query": "SELECT (SUM(?tick) AS ?input) (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } VALUES ?y {0} }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "input",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "9",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "minus-left-group-delivery-unbound",
+      "query": "SELECT (SUM(?tick) AS ?input) (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } MINUS { VALUES ?y {0} } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "input",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "9",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "minus-left-group-delivery-bound",
+      "query": "SELECT (SUM(?tick) AS ?input) (SUM(<http://example.org/counter>(1)) AS ?this) WHERE { { SELECT DISTINCT ?tick WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) } } MINUS { VALUES ?y {0} } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "input",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "9",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    }
+  ]
+}

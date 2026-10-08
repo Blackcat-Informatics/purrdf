@@ -1,0 +1,18 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_algebra-96bf57510f55d7ab.purrdf_sparql_algebra.2d4d4c38e30aca1e-cgu.0.rcgu.o.rcgu.ll:212279
+; <purrdf_sparql_algebra::algebra::GraphPattern as core::fmt::Debug>::fmt
+define dso_local noundef zeroext i1 @_RNvXs8_NtCs3T8KIHP36KE_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCsb6ASFGx6cXz_4core3fmt5Debug3fmt(ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(72) %0, ptr noalias nofree noundef align 4 dereferenceable(16) %1) unnamed_addr #0 !guid !38605 {
+; call purrdf_sparql_algebra::traits::node_debug
+  %3 = tail call fastcc noundef zeroext i1 @_RNvNtCs3T8KIHP36KE_21purrdf_sparql_algebra6traits10node_debug.llvm.646358101967817734(i32 noundef 0, ptr noundef %0, ptr noalias nofree noundef align 4 dereferenceable(16) %1) #35
+  ret i1 %3
+}
+
+ASSEMBLY
+_RNvXs8_NtCs3T8KIHP36KE_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCsb6ASFGx6cXz_4core3fmt5Debug3fmt:
+.Lfunc_begin344:
+	.functype	_RNvXs8_NtCs3T8KIHP36KE_21purrdf_sparql_algebra6traitsNtNtB7_7algebra12GraphPatternNtNtCsb6ASFGx6cXz_4core3fmt5Debug3fmt (i32, i32) -> (i32)
+	i32.const	0
+	local.get	0
+	local.get	1
+	call	_RNvNtCs3T8KIHP36KE_21purrdf_sparql_algebra6traits10node_debug.llvm.646358101967817734
+	end_function
+.Lfunc_end344:

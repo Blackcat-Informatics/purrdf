@@ -1,0 +1,5 @@
+{"case": "false-first", "type": "SELECT", "answer": [], "arguments": [1]}
+{"case": "error-first", "type": "SELECT", "answer": [], "arguments": [2]}
+{"case": "three-in-order", "type": "SELECT", "answer": [["1"]], "arguments": [1, 2, 3]}
+{"case": "three-reversed", "type": "SELECT", "answer": [], "arguments": [3, 2, 1]}
+{"case": "ask-first-witness", "type": "ASK", "answer": true, "arguments": [4, 5]}

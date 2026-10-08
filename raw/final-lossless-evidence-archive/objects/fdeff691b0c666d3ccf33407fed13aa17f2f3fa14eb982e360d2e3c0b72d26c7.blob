@@ -1,0 +1,145 @@
+{
+  "interpreter": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/bin/python",
+  "isolated": 1,
+  "native": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/purrdf/purrdf_native.abi3.so",
+  "package_files": [
+    {
+      "bytes": 5336,
+      "path": "purrdf/__init__.py",
+      "sha256": "5c6db38682513f4d6d10815c8c65f22a68b03e208e92fae3e54fa02ffc8c945f"
+    },
+    {
+      "bytes": 182406,
+      "path": "purrdf/__init__.pyi",
+      "sha256": "d6350d161c3c4dde539d471ebb4d9dfc974bd9643545407b7653f83d2f325041"
+    },
+    {
+      "bytes": 4798,
+      "path": "purrdf/_gts_export.py",
+      "sha256": "6d7740558f5d7327d94f0705d17e96677febc2786e60ba440ec03aa39a358f52"
+    },
+    {
+      "bytes": 480,
+      "path": "purrdf/compat/__init__.py",
+      "sha256": "fd867ed193f4b1a72cc7bafcdeeefcfcf86ffad63f1bc9819a4f95539ebeb500"
+    },
+    {
+      "bytes": 2749,
+      "path": "purrdf/compat/rdflib/__init__.py",
+      "sha256": "64631c4a1f85161785379bf09bfbe29c248ff9465f6c8ac7d3a56650ae4407e3"
+    },
+    {
+      "bytes": 7267,
+      "path": "purrdf/compat/rdflib/collection.py",
+      "sha256": "9a4aa241a384a16aacec6796a6826ae1eb9de3a3e3a6885342bf4a3be5049ca7"
+    },
+    {
+      "bytes": 2480,
+      "path": "purrdf/compat/rdflib/compare.py",
+      "sha256": "1765680e938cd43a7d1c9833a5a4aa06c9d063467554272ca9a66d639ec09106"
+    },
+    {
+      "bytes": 72714,
+      "path": "purrdf/compat/rdflib/graph.py",
+      "sha256": "a9ce5e039221fcd510a387cda9078e2ca70eebc2050de021a862ade35fb01e51"
+    },
+    {
+      "bytes": 29999,
+      "path": "purrdf/compat/rdflib/namespace.py",
+      "sha256": "7701a93bbbe59db1d0cbec9dff20f444a25604770eb82514c7f8813eeb750c4d"
+    },
+    {
+      "bytes": 3736,
+      "path": "purrdf/compat/rdflib/parser.py",
+      "sha256": "f6d8b2aef04fb9b3bf21a4d06f7e7b73f4a6e3c4d3c6f8980c1c22c93e5f4dc0"
+    },
+    {
+      "bytes": 7851,
+      "path": "purrdf/compat/rdflib/paths.py",
+      "sha256": "3c09840adb9a8959b17a59c474cb662a8a204b3cc2d11a48b98c900fd15f4660"
+    },
+    {
+      "bytes": 9721,
+      "path": "purrdf/compat/rdflib/plugin.py",
+      "sha256": "77c3bbf04489aa8b91ca16b6e53dd11a4db275253c1bb19cbcad2879160d36fa"
+    },
+    {
+      "bytes": 210,
+      "path": "purrdf/compat/rdflib/plugins/__init__.py",
+      "sha256": "aceedd816ebb69e1f99ebc920508034282e34954fed5a2b687eeb863910e8da0"
+    },
+    {
+      "bytes": 5998,
+      "path": "purrdf/compat/rdflib/plugins/parsers.py",
+      "sha256": "483b72e58fc935f0479fcc3d99b19fb1e4603a503991dbddcbdbe322fb471a92"
+    },
+    {
+      "bytes": 5617,
+      "path": "purrdf/compat/rdflib/plugins/serializers/__init__.py",
+      "sha256": "d9801e583df527e43c106e8d88dcd965637fc79b6e7aec5ec53aa5865ca9a0b6"
+    },
+    {
+      "bytes": 319,
+      "path": "purrdf/compat/rdflib/plugins/serializers/turtle.py",
+      "sha256": "7dc9f17fb9c704edad47e459ad6099430d3b446fee06713b5b6c94c749fcf8cb"
+    },
+    {
+      "bytes": 3118,
+      "path": "purrdf/compat/rdflib/plugins/sparql.py",
+      "sha256": "14968775eec8cf703ea0c3f975f4d71d2a0197ed894dd7fbf158b57dd3b7d4af"
+    },
+    {
+      "bytes": 2422,
+      "path": "purrdf/compat/rdflib/plugins/sparqlprocessor.py",
+      "sha256": "fba3f8c04ca8f7d2cef22ffd37081ff7f76a7753bda4db28225a92aa21e23817"
+    },
+    {
+      "bytes": 8107,
+      "path": "purrdf/compat/rdflib/plugins/sparqlresults.py",
+      "sha256": "85ac0ff9c0948e21c57013c2ca994e2ecee7dcb7ceabfae3437436d284ea48ff"
+    },
+    {
+      "bytes": 14039,
+      "path": "purrdf/compat/rdflib/query.py",
+      "sha256": "ce37e9fc170d66342b90e6a889a388db893614978cbad8f73a2ac9e915009f6e"
+    },
+    {
+      "bytes": 10066,
+      "path": "purrdf/compat/rdflib/resource.py",
+      "sha256": "79d600bec7e869dd6a9820212a5ea2751c815f47b6862d4c26c7a421c62c1faf"
+    },
+    {
+      "bytes": 1355,
+      "path": "purrdf/compat/rdflib/serializer.py",
+      "sha256": "8eceacfbf76c24133b88cdb7782f9836753a7df6eae718669224901925568b8e"
+    },
+    {
+      "bytes": 1286,
+      "path": "purrdf/compat/rdflib/store.py",
+      "sha256": "712dec395c7f844b2293166bd9578aa376530a7eca1d6403b6abb7cd9889bd9d"
+    },
+    {
+      "bytes": 30708,
+      "path": "purrdf/compat/rdflib/term.py",
+      "sha256": "d066c87ffedf24faece143b808fbf49371d088580c1d31d64c063ad42063f39e"
+    },
+    {
+      "bytes": 5578,
+      "path": "purrdf/compat/rdflib/util.py",
+      "sha256": "37f6a6e9348bdac5e7dc3c15b15eaf8d30b757d9d2897ba86945cc94c7d132de"
+    },
+    {
+      "bytes": 35872960,
+      "path": "purrdf/purrdf_native.abi3.so",
+      "sha256": "f37e9346b7eabd85f43b51b02b955029c9255ed838939319d43955005c105075"
+    },
+    {
+      "bytes": 0,
+      "path": "purrdf/py.typed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "venv": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv",
+  "wheel": "/opt/purrdf-454-current-qualification-20261008/final-lower-python-1/wheel/purrdf-3.0.1-cp313-abi3-linux_x86_64.whl",
+  "wheel_sha256": "5ade0a6d37b298357e9434dc1f454eecd50b28f6d9768d9a6907defc3a064f7e"
+}

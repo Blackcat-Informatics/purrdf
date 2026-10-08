@@ -1,0 +1,10 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 44.54s
+     Running tests/contextual_probe.rs (/opt/.cargo/slots/10d1255bdd2ffab0/0/build/debug/build/purrdf-sparql-eval/be5da7b39bb72dc3/out/contextual_probe-be5da7b39bb72dc3)
+
+running 1 test
+136 oracle cases passed; 0 failures
+test contextual_matrix ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

@@ -1,0 +1,19 @@
+Uninstalled 1 package in 4ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 15ms
+RUF015 Prefer `next(...)` over single element slice
+   --> tests/test_contextual_mappings.py:307:16
+    |
+305 |         f"SELECT (AGG(<{namespace}MEDIAN>, ?v) AS ?m) WHERE {{ VALUES ?v {{1 2 3}} }}"
+306 |     )
+307 |     assert str(list(graph.query(query, aggregate_namespace=namespace))[0].m) == "2"
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+308 |     extension = EX + "extension/"
+309 |     held = f"ASK {{ FILTER(<{extension}heldIn>(<{EX}r>, <{EX}s>)) }}"
+    |
+help: Replace with `next(...)`
+
+Found 1 error.
+No fixes available (1 hidden fix can be enabled with the `--unsafe-fixes` option).

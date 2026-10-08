@@ -1,0 +1,199 @@
+........................................................................ [  8%]
+........................................................................ [ 17%]
+........................................................................ [ 26%]
+........................................................................ [ 35%]
+........................................................................ [ 44%]
+........................................................................ [ 53%]
+........................................................................ [ 62%]
+........................................................................ [ 71%]
+........................................................................ [ 80%]
+........................................................................ [ 89%]
+........................................................................ [ 98%]
+......F.....FFF
+=================================== FAILURES ===================================
+________________________ test_shadow_contextual_matrix _________________________
+
+    def test_shadow_contextual_matrix():
+        from _shadow_test_utils import _run_in_shadow
+    
+        assert (
+>           _run_in_shadow(
+                f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parent)!r}); from test_contextual_mappings import shadow_matrix; shadow_matrix()"
+            ).strip()
+            == "shadow contextual inputs: 198"
+        )
+
+tests/test_contextual_mappings.py:207: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+code = "import sys; sys.path.insert(0, '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests'); from test_contextual_mappings import shadow_matrix; shadow_matrix()"
+
+    def _run_in_shadow(code: str) -> str:
+        """Run ``code`` in a child interpreter whose ``import rdflib`` is the shadow."""
+        proc = _run_with_shadow([sys.executable, "-c", code])
+>       assert proc.returncode == 0, (
+               ^^^^^^^^^^^^^^^^^^^^
+            f"shadow subprocess failed (rc={proc.returncode})\n"
+            f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+        )
+E       AssertionError: shadow subprocess failed (rc=1)
+E       --- stdout ---
+E       
+E       --- stderr ---
+E       Traceback (most recent call last):
+E         File "<string>", line 1, in <module>
+E           import sys; sys.path.insert(0, '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests'); from test_contextual_mappings import shadow_matrix; shadow_matrix()
+E                                                                                                                                                                                                          ~~~~~~~~~~~~~^^
+E         File "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py", line 197, in shadow_matrix
+E           assert actual == frozen_result(case), case["name"]
+E                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: queries-08
+
+tests/_shadow_test_utils.py:48: AssertionError
+___________________ test_dataset_query_scope[False-Dataset] ____________________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+kind = 'Dataset', union = False
+
+    @pytest.mark.parametrize("kind", ["Dataset", "ConjunctiveGraph"])
+    @pytest.mark.parametrize("union", [False, True])
+    def test_dataset_query_scope(compat, oracle, kind, union):
+        answers = []
+        for module in (compat, oracle):
+            dataset = getattr(module, kind)()
+            dataset.default_union = union
+            predicate = module.URIRef(EX + "p")
+            subject = module.URIRef(EX + "s")
+            dataset.add((subject, predicate, module.URIRef(EX + "default")))
+            for name in ("g", "h"):
+                dataset.get_context(module.URIRef(EX + name)).add(
+                    (subject, predicate, module.URIRef(EX + "named"))
+                )
+            query = f"SELECT ?o WHERE {{ ?s <{EX}p> ?o }}"
+            answers.append(sorted(str(row.o) for row in dataset.query(query)))
+            graph = dataset.get_context(module.URIRef(EX + "g"))
+            assert [str(row.o) for row in graph.query(query)] == [EX + "named"]
+            if module is compat:
+                from purrdf.compat.rdflib.plugins.sparqlprocessor import SPARQLProcessor
+    
+                assert [str(row.o) for row in SPARQLProcessor(graph).query(query)] == [
+                    EX + "named"
+                ]
+>           with pytest.raises(Exception, match="dataset|Dataset"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE <class 'Exception'>
+
+tests/test_contextual_mappings.py:363: Failed
+_______________ test_dataset_query_scope[False-ConjunctiveGraph] _______________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+kind = 'ConjunctiveGraph', union = False
+
+    @pytest.mark.parametrize("kind", ["Dataset", "ConjunctiveGraph"])
+    @pytest.mark.parametrize("union", [False, True])
+    def test_dataset_query_scope(compat, oracle, kind, union):
+        answers = []
+        for module in (compat, oracle):
+            dataset = getattr(module, kind)()
+            dataset.default_union = union
+            predicate = module.URIRef(EX + "p")
+            subject = module.URIRef(EX + "s")
+            dataset.add((subject, predicate, module.URIRef(EX + "default")))
+            for name in ("g", "h"):
+                dataset.get_context(module.URIRef(EX + name)).add(
+                    (subject, predicate, module.URIRef(EX + "named"))
+                )
+            query = f"SELECT ?o WHERE {{ ?s <{EX}p> ?o }}"
+            answers.append(sorted(str(row.o) for row in dataset.query(query)))
+            graph = dataset.get_context(module.URIRef(EX + "g"))
+            assert [str(row.o) for row in graph.query(query)] == [EX + "named"]
+            if module is compat:
+                from purrdf.compat.rdflib.plugins.sparqlprocessor import SPARQLProcessor
+    
+                assert [str(row.o) for row in SPARQLProcessor(graph).query(query)] == [
+                    EX + "named"
+                ]
+>           with pytest.raises(Exception, match="dataset|Dataset"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE <class 'Exception'>
+
+tests/test_contextual_mappings.py:363: Failed
+____________________ test_dataset_query_scope[True-Dataset] ____________________
+
+compat = <module 'purrdf.compat.rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py'>
+oracle = <module 'rdflib' from '/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py'>
+kind = 'Dataset', union = True
+
+    @pytest.mark.parametrize("kind", ["Dataset", "ConjunctiveGraph"])
+    @pytest.mark.parametrize("union", [False, True])
+    def test_dataset_query_scope(compat, oracle, kind, union):
+        answers = []
+        for module in (compat, oracle):
+            dataset = getattr(module, kind)()
+            dataset.default_union = union
+            predicate = module.URIRef(EX + "p")
+            subject = module.URIRef(EX + "s")
+            dataset.add((subject, predicate, module.URIRef(EX + "default")))
+            for name in ("g", "h"):
+                dataset.get_context(module.URIRef(EX + name)).add(
+                    (subject, predicate, module.URIRef(EX + "named"))
+                )
+            query = f"SELECT ?o WHERE {{ ?s <{EX}p> ?o }}"
+            answers.append(sorted(str(row.o) for row in dataset.query(query)))
+            graph = dataset.get_context(module.URIRef(EX + "g"))
+            assert [str(row.o) for row in graph.query(query)] == [EX + "named"]
+            if module is compat:
+                from purrdf.compat.rdflib.plugins.sparqlprocessor import SPARQLProcessor
+    
+                assert [str(row.o) for row in SPARQLProcessor(graph).query(query)] == [
+                    EX + "named"
+                ]
+>           with pytest.raises(Exception, match="dataset|Dataset"):
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE <class 'Exception'>
+
+tests/test_contextual_mappings.py:363: Failed
+=============================== warnings summary ===============================
+tests/test_contextual_mappings.py: 482 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    c = self.default_context if default else None
+
+tests/test_contextual_mappings.py: 231 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:1721: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    query_graph = self.default_context.identifier
+
+tests/test_contextual_mappings.py: 433 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2344: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    context = self.default_context
+
+tests/test_contextual_mappings.py: 396 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:30: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    graph = getattr(module, "Graph" if route == "processor" else route)()
+
+tests/test_contextual_mappings.py: 15 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:233: DeprecationWarning: Dataset.contexts is deprecated, use Dataset.graphs instead.
+    for graph in ctx.dataset.contexts():
+
+tests/test_contextual_mappings.py: 45 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:235: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if graph == ctx.dataset.default_context:
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:344: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    dataset = getattr(module, kind)()
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-Dataset]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2340: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if context == self.default_context:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_contextual_mappings.py::test_shadow_contextual_matrix - Ass...
+FAILED tests/test_contextual_mappings.py::test_dataset_query_scope[False-Dataset]
+FAILED tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+FAILED tests/test_contextual_mappings.py::test_dataset_query_scope[True-Dataset]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 4 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+4 failed, 803 passed, 1 deselected, 1605 warnings in 4.83s

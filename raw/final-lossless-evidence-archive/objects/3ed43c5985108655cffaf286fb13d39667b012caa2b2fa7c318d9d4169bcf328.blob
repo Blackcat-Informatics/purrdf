@@ -1,0 +1,4 @@
+0ab0355be77595ba3acb1a77bcac8274ef332ed2b0070a6dcfe68a31ba0c5bdd  .stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-probe/src/main.rs
+0ab0355be77595ba3acb1a77bcac8274ef332ed2b0070a6dcfe68a31ba0c5bdd  .stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-ir-probe/src/main.rs
+455e49d4485396e39d5ca2c3c7499a080ec59a477780a9f45a33b4fadeda973c  crates/sparql-eval/src/eval.rs
+15b4243148a98858e10b58b2f54ce7caf6a175ac9cdff8acc2975a474501994a  crates/sparql-eval/src/binop.rs

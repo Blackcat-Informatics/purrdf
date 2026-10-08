@@ -1,0 +1,8 @@
+ActiveState=active
+SubState=running
+InvocationID=873b2f100c9a47dcbcda3eaf26398a65
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-smallvec-bulk-rust-20261008.scope
+MemoryCurrent=1129598976
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

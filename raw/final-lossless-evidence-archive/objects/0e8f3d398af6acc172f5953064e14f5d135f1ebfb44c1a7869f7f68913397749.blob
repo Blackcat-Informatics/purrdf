@@ -1,0 +1,6 @@
+{"oracle_version": "7.6.0", "oracle_module": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py", "source_sha256": "2249ed9d8163e79ce102d054a576194f892092c0387ac9b4ce88b564a43a0a07", "lock_sha256": "06275d43821c8351f89f88071af043ce4c4645fe3adcf2126b2f28f031cafc01"}
+{"case": "false-first", "type": "SELECT", "answer": [], "arguments": [1]}
+{"case": "error-first", "type": "SELECT", "answer": [], "arguments": [2]}
+{"case": "three-in-order", "type": "SELECT", "answer": [["1"]], "arguments": [1, 2, 3]}
+{"case": "three-reversed", "type": "SELECT", "answer": [], "arguments": [3, 2, 1]}
+{"case": "ask-first-witness", "type": "ASK", "answer": true, "arguments": [4, 5]}

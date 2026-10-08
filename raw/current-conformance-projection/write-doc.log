@@ -1,0 +1,78 @@
+python3 scripts/conformance-matrix.py --from-results /opt/purrdf-454-conformance-ed14-20261008.FOVwkJBK/results --write-doc
+
+PurRDF conformance matrix
+=================================================================================================================================================================
+  SUITE                                                         SOURCE                                                       PASS  XF/SKIP  BUDGET   FAIL  STATUS
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+  IRI (RFC 3987 / RFC 3986 resolution)                          W3C IRI + RFC vectors                                          19        0       0      0  GREEN
+  RDFC-1.0 canonicalization                                     W3C rdf-canon                                                   6        0       0      0  GREEN
+  RDF 1.2 canonicalization profile                              purrdf-rdfc12 v2 (first-party)                                 12        0       0      0  GREEN
+  Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)                     W3C rdf-tests                                                 264        0       0      0  GREEN
+  SPARQL 1.0/1.1/1.2 evaluation (full corpus)                   W3C sparql10 + sparql11 + sparql12 + first-party             1393        0       0      0  GREEN
+  SPARQL 1.0 unlisted vendored files                            W3C data-r2 files no upstream manifest lists                    1        0       0      0  GREEN
+  SPARQL 1.0 cases superseded by RDF 1.2                        W3C data-r2 extended evaluation root                            1        0       0      0  GREEN
+  SPARQL CONSTRUCT (first-party corpus)                         purrdf-construct (first-party)                                 29        0       0      0  GREEN
+  SPARQL DESCRIBE (first-party corpus)                          purrdf-describe (first-party)                                  16        0       0      0  GREEN
+  SPARQL CDT (SEP-0009, vendored corpus)                        awslabs/SPARQL-CDTs                                           658        0       0      0  GREEN
+  SPARQL execution governors                                    purrdf-sparql-governors (first-party)                          50        0       0      0  GREEN
+  SPARQL embedding kNN (first-party)                            purrdf-embedding-knn (first-party)                             15        0       0      0  GREEN
+  HNSW approximate kNN (first-party)                            purrdf-hnsw (first-party)                                      87        0       0      0  GREEN
+  GeoSPARQL 1.1 determinism corpus                              purrdf-geo (first-party; OGC 22-047r1)                         20        0       0      0  GREEN
+  Entailment (OWL 2 DL consistency)                             W3C OWL 2 test suite                                          258        4       4      0  GREEN
+  Entailment (OWL 2 RL, W3C entailment tests)                   W3C OWL 2 entailment tests                                     50        0       0      0  GREEN
+  SHACL Core + SHACL-SPARQL                                     W3C data-shapes                                               129        0       0      0  GREEN
+  SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)  W3C shacl12-test-suite                                        538        6       6      0  GREEN
+  SHACL 1.2 unlisted vendored files                             W3C shacl12-test-suite files no manifest includes               3        0       0      0  GREEN
+  SHACL (first-party corpus)                                    first-party frozen reports                                     73        0       0      0  GREEN
+  Community SHACL dated profiles (REC 2017 / WD 2026)           community-proposed corpus, agent-reviewed                     115        0       0      0  GREEN
+  SHACL prepared-product equivalence                            W3C data-shapes + shacl12-test-suite + first-party corpus     364        0       0      0  GREEN
+  XSD/XPath regExp (first-party corpus)                         first-party, XSD G + F&O 5.6                                  292        0       0      0  GREEN
+  SHACL Rules                                                   DASH + first-party                                             20        0       0      0  GREEN
+  ShEx 2.1 validation                                           shexTest v2.1.0                                              1105        0       0      0  GREEN
+  ShEx syntax + ShExC/ShExJ round-trip                          shexTest v2.1.0                                                10        0       0      0  GREEN
+  JSON Schema draft 2020-12 (official suite)                    JSON-Schema-Test-Suite 5b0ee16                               2342        0       0      0  GREEN
+  JSON Schema draft 2019-09 (official suite)                    JSON-Schema-Test-Suite 5b0ee16                               2298        0       0      0  GREEN
+  JSON Schema draft-07 (official suite)                         JSON-Schema-Test-Suite 5b0ee16                               1841        0       0      0  GREEN
+  GTS transport (frozen vectors)                                gmeow-gts frozen corpus, vectors/                              38        1       1      0  GREEN
+  rdflib LSP drop-in gate                                       rdflib 7.6 own tests                                           81        5       5      0  GREEN
+  Python binding suite                                          first-party (incl. compat differential vs rdflib)            4192        4       4      0  GREEN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+  TOTAL                                                                                                                     16320       20      20      0
+
+Notes:
+  - IRI (RFC 3987 / RFC 3986 resolution): parse/validate/normalize/resolve vectors
+  - RDFC-1.0 canonicalization: 65 vectors (64 eval + 1 negative), sharded
+  - RDF 1.2 canonicalization profile: 19 goldens + 7 refusals, frozen and content-addressed
+  - Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML): 264/264 vectors round-trip; 0 allowlisted gaps
+  - SPARQL 1.0/1.1/1.2 evaluation (full corpus): 1393 pass · 0 xfail (ledgered)
+  - SPARQL 1.0 unlisted vendored files: 20 vendored files no upstream manifest lists: 1 described entry the group leaves out, graded against the SPARQL 1.1 reading that replaced it · 8 files of the orphan sameTerm manifest, whose anonymous untyped entries cannot load · 11 payloads no manifest names
+  - SPARQL 1.0 cases superseded by RDF 1.2: 1/1 graded against the SPARQL 1.2 order (§15.1, RDF 1.2 simple literal = xsd:string): the frozen terms exactly, the frozen order not
+  - SPARQL CONSTRUCT (first-party corpus): 29/29 cases: triple-producing §16.2 + CONSTRUCT GRAPH quads, paired case for case, incl. the RDF 1.2 statement layer and its per-graph keying and BOTH terms a subject position refuses (a literal and a triple term) at BOTH depths it applies (an asserted subject and the subject of a triple term nested in an object, the depth at which an unenforced term model emits a document the engine's own readers refuse); the quad-template grammar bounded from both sides by 1 positive and 7 negative syntax verdicts
+  - SPARQL DESCRIBE (first-party corpus): 16/16 cases pinning the symmetric CBD, incl. the RDF 1.2 statement layer on both sides of its subject-or-object disjunction and its per-graph scope over TriG
+  - SPARQL CDT (SEP-0009, vendored corpus): 658/658 vendored upstream cases (awslabs/SPARQL-CDTs, commit e0a7465) across six groups: the list and map function libraries, the FOLD aggregate and the UNFOLD graph pattern, ORDER BY over composite values, and blank-node identity inside composite lexical forms. PurRDF reads TWO forms outside the published lexical space — an RDF 1.2 triple term and a directional language-tagged literal as list elements or map values — which a conformant SEP-0009 reader calls ill-formed; `crates/sparql-conformance/tests/cdt_lexical_divergence.rs` grades every composite literal in every corpus this workspace ships and proves not one of them needs either
+  - SPARQL execution governors: 50/50 pinned cases; 42 zero/boundary/over-bound bands, frozen and content-addressed
+  - SPARQL embedding kNN (first-party): the PURREMB kNN property-function seam end to end — rank order, join-back, the LIMIT prefix law, cross-artifact byte identity, and the `property-function-work` governor charge point the governor corpus deliberately does not band (its relations report zero work). The `knn_wasm_determinism` case pins five neighbours and their exact `xsd:double` distance lexicals as a literal, so a reassociated sum or a fused multiply-add that swaps two near-tied neighbours fails here; these numeric expectations run natively; `make wasm-test` separately selects actual WASM dispatch and SIMD kernels
+  - HNSW approximate kNN (first-party): the approximate half of the retrieval pair, graded against the exact path as its oracle: every offered row compared to the exact scan's own `(distance, row)` order, the graph invariants that make an offer possible at all (every row reachable from the entry point, degree bounds, sorted adjacency, the fixed level formula), the approximation contract (an offer is never a proof of absence), the PURREMB guard round-trip through the real INDEX_GUARDS and INDEX_PAYLOAD sections, the SPARQL property-function seam from query text, and the decoder-hostility cases. It also grades the CORPUS the recall figures are taken over, because on this crate the distribution decides the recall, so a generator that drifted toward uniform would quietly turn every recall number into a statement about the fixture: effective dimension against a uniform control, and the achieved within-cluster cosine -- measured against the centroid each row was drawn around, pinned across a ladder of intended values, pinned again for the default shape every figure in this crate uses, and held flat across a sixty-fourfold range of widths, which is the property that separates an intended cosine from a fixed noise amplitude whose tightness collapses as the width grows. This complete corpus runs natively; focused WASM tests exercise actual dispatch, SIMD kernels and path admission
+  - GeoSPARQL 1.1 determinism corpus: 20 geometries folded byte-wise into one u64 digest, compared with the pinned `GOLDEN_DIGEST` in crates/geo/tests/determinism.rs (`9667c2ee2cd3ad4b`): agrees. Counts CORPUS GEOMETRIES, not test functions. NO OGC conformance suite is vendored and none is claimed — the crate's SHACL shapes are first-party `example.org` mirrors of the shipped OGC 22-047r1 validator, because PurRDF mints no vocabulary IRIs, so the evaluator-seam and shape cases grade the implementation against its own reading of the specification and are gated by `make check` rather than counted here. This complete corpus runs natively; `make wasm` separately builds the release crate.
+  - Entailment (OWL 2 DL consistency): 258/262 DL consistency verdicts · 4 ledgered · corpus is a subset: 220 more consistency-shaped cases upstream are NOT vendored (172 the tableau decided when probed, 0 non-terminating, 25 withheld, 23 with no RDF/XML premise)
+  - Entailment (OWL 2 RL, W3C entailment tests): 50/50 agreeing · 0 ledgered · 0 actionable · corpus: 27 positive + 23 negative
+  - SHACL Core + SHACL-SPARQL: 129 pass as approved · 0 ledgered
+  - SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL): 538 pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered
+  - SHACL 1.2 unlisted vendored files: 3 entries of vendored files no upstream manifest includes, graded apart from the approved suite: 2 exactly as written · 1 with a proven delta
+  - SHACL (first-party corpus): 73/73 byte-frozen expected reports
+  - Community SHACL dated profiles (REC 2017 / WD 2026): 115/115 applicable dated executions
+  - SHACL prepared-product equivalence: 364/376 shapes graphs agree across parse/admit/rebuild; 0 refused by the product writer; 12 whose shapes graph the conformance harnesses require the loader to refuse (a declared sht:Failure)
+  - XSD/XPath regExp (first-party corpus): 292/292 hand-derived XSD/XPath regExp cases
+  - SHACL Rules: 20/20 inferred-graph fixtures
+  - ShEx 2.1 validation: 1105/1105 attempted · 0 trait-skips
+  - ShEx syntax + ShExC/ShExJ round-trip: schemas parse + negative syntax/structure
+  - JSON Schema draft 2020-12 (official suite): every draft 2020-12 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,463 validation cases, all 874 format cases and all 4 output-format cases pass, plus the suite-inventory case. optional/cross-draft.json evaluates a $ref into a draft 2019-09 document under 2019-09 rules
+  - JSON Schema draft 2019-09 (official suite): every draft 2019-09 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,419 validation cases, all 874 format cases and all 4 output-format cases pass, plus the suite-inventory case. $recursiveRef, array-form items, and optional/cross-draft.json's $refs into 2020-12 and draft-07 documents, each evaluated under its own draft
+  - JSON Schema draft-07 (official suite): every draft-07 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,047 validation cases and all 793 format cases pass, plus the suite-inventory case; draft-07 has no output-format tests
+  - GTS transport (frozen vectors): 38/39 frozen vectors fold byte-exactly into their committed `.expected.json`; 1 ledgered divergence from an upstream expectation this reader contradicts. The corpus is governed upstream and is never regenerated here
+  - rdflib LSP drop-in gate: 81 pass · 5 strict-xfail (ledgered)
+  - Python binding suite: 4192 pass · 4 strict-xfail (ledgered)
+
+VERDICT: GREEN — all conformance suites pass or are ledgered
+
+wrote matrix block to docs/CONFORMANCE.md

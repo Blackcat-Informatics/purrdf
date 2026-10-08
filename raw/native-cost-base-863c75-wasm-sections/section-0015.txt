@@ -1,0 +1,117 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_algebra-06fbdff6ca78b517.purrdf_sparql_algebra.aab3ba0e27ad4130-cgu.0.rcgu.o.rcgu.ll:45933
+; purrdf_sparql_algebra::walk::walk_pre_post::<purrdf_sparql_algebra::serialize::validate_carrier_pattern::{closure#0}>::{closure#0}
+define internal fastcc void @_RNCINvNtCseEDRShONSVg_21purrdf_sparql_algebra4walk13walk_pre_postNCNvNtB6_9serialize24validate_carrier_pattern0E0B6_(ptr nofree nonnull captures(none) %0, ptr noundef nonnull %1) unnamed_addr #3 !guid !10113 {
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !10114)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !10117)
+  %3 = getelementptr inbounds nuw i8, ptr %0, i32 396
+  %4 = load i32, ptr %3, align 4, !alias.scope !10114, !noalias !10117, !noundef !1022
+  %5 = icmp ult i32 %4, 32
+  br i1 %5, label %20, label %6
+
+6:                                                ; preds = %2
+  %7 = getelementptr inbounds nuw i8, ptr %0, i32 384
+  %8 = getelementptr inbounds nuw i8, ptr %0, i32 392
+  %9 = load i32, ptr %8, align 4, !alias.scope !10114, !noalias !10117, !noundef !1022
+  %10 = load i32, ptr %7, align 4, !range !1127, !alias.scope !10114, !noalias !10117, !noundef !1022
+  %11 = icmp eq i32 %9, %10
+  br i1 %11, label %12, label %13
+
+12:                                               ; preds = %6
+; call <alloc::raw_vec::RawVec<alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>>>::grow_one
+  tail call void @_RNvMs4_NtCsiymUexJS71D_5alloc7raw_vecINtB5_6RawVecINtNtB7_3vec3VecINtNtCsb6ASFGx6cXz_4core6option6OptionNtNtCseEDRShONSVg_21purrdf_sparql_algebra3ast10GroundTermEEE8grow_oneB1I_(ptr noalias nofree noundef nonnull align 4 dereferenceable(8) %7) #37, !noalias !10117
+  br label %13
+
+13:                                               ; preds = %12, %6
+  %14 = getelementptr inbounds nuw i8, ptr %0, i32 388
+  %15 = load ptr, ptr %14, align 4, !alias.scope !10114, !noalias !10117, !nonnull !1022, !noundef !1022
+  %16 = getelementptr inbounds nuw [12 x i8], ptr %15, i32 %9
+  store i32 0, ptr %16, align 4, !noalias !10114
+  %17 = getelementptr inbounds nuw i8, ptr %16, i32 4
+  store i32 1, ptr %17, align 4, !noalias !10114
+  %18 = getelementptr inbounds nuw i8, ptr %16, i32 8
+  store ptr %1, ptr %18, align 4, !noalias !10114
+  %19 = add i32 %9, 1
+  store i32 %19, ptr %8, align 4, !alias.scope !10114, !noalias !10117
+  br label %26
+
+20:                                               ; preds = %2
+  %21 = getelementptr inbounds nuw [12 x i8], ptr %0, i32 %4
+  store i32 0, ptr %21, align 4, !alias.scope !10119
+  %22 = getelementptr inbounds nuw i8, ptr %21, i32 4
+  store i32 1, ptr %22, align 4, !alias.scope !10119
+  %23 = getelementptr inbounds nuw i8, ptr %21, i32 8
+  store ptr %1, ptr %23, align 4, !alias.scope !10119
+  %24 = load i32, ptr %3, align 4, !alias.scope !10114, !noalias !10117, !noundef !1022
+  %25 = add i32 %24, 1
+  store i32 %25, ptr %3, align 4, !alias.scope !10114, !noalias !10117
+  br label %26
+
+26:                                               ; preds = %20, %13
+  ret void
+}
+
+ASSEMBLY
+_RNCINvNtCseEDRShONSVg_21purrdf_sparql_algebra4walk13walk_pre_postNCNvNtB6_9serialize24validate_carrier_pattern0E0B6_:
+.Lfunc_begin97:
+	.functype	_RNCINvNtCseEDRShONSVg_21purrdf_sparql_algebra4walk13walk_pre_postNCNvNtB6_9serialize24validate_carrier_pattern0E0B6_ (i32, i32) -> ()
+	.local  	i32
+	block   	
+	local.get	0
+	i32.load	396
+	local.tee	2
+	i32.const	32
+	i32.lt_u
+	br_if   	0
+	block   	
+	local.get	0
+	i32.load	392
+	local.tee	2
+	local.get	0
+	i32.load	384
+	i32.ne  
+	br_if   	0
+	local.get	0
+	i32.const	384
+	i32.add 
+	call	_RNvMs4_NtCsiymUexJS71D_5alloc7raw_vecINtB5_6RawVecINtNtB7_3vec3VecINtNtCsb6ASFGx6cXz_4core6option6OptionNtNtCseEDRShONSVg_21purrdf_sparql_algebra3ast10GroundTermEEE8grow_oneB1I_
+.LBB97_3:
+	end_block
+	local.get	0
+	local.get	2
+	i32.const	1
+	i32.add 
+	i32.store	392
+	local.get	0
+	i32.load	388
+	local.get	2
+	i32.const	12
+	i32.mul 
+	i32.add 
+	local.tee	0
+	local.get	1
+	i32.store	8
+	local.get	0
+	i64.const	4294967296
+	i64.store	0:p2align=2
+	return
+.LBB97_4:
+	end_block
+	local.get	0
+	local.get	2
+	i32.const	12
+	i32.mul 
+	i32.add 
+	local.tee	2
+	i64.const	4294967296
+	i64.store	0:p2align=2
+	local.get	2
+	local.get	1
+	i32.store	8
+	local.get	0
+	local.get	0
+	i32.load	396
+	i32.const	1
+	i32.add 
+	i32.store	396
+	end_function
+.Lfunc_end97:

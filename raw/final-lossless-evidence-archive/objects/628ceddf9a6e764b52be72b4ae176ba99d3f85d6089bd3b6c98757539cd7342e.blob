@@ -1,0 +1,30 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/retrieval)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/geo)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/slice)
+error[E0004]: non-exhaustive patterns: `&GraphPattern::Apply { .. }` not covered
+    --> crates/slice/src/ownership.rs:1041:11
+     |
+1041 |     match g {
+     |           ^ pattern `&GraphPattern::Apply { .. }` not covered
+     |
+note: `GraphPattern` defined here
+    --> crates/sparql-algebra/src/algebra.rs:796:1
+     |
+ 796 | pub enum GraphPattern {
+     | ^^^^^^^^^^^^^^^^^^^^^
+...
+1043 |     Apply {
+     |     ----- not covered
+     = note: the matched value is of type `&GraphPattern`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+     |
+1119 ~         ),
+1120 ~         &GraphPattern::Apply { .. } => todo!(),
+     |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `purrdf-slice` (lib) due to 1 previous error

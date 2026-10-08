@@ -1,0 +1,39 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-8d88597f61c9805d.purrdf_sparql_eval.3390c597aa620bea-cgu.0.rcgu.o.rcgu.ll:156851
+; purrdf_sparql_eval::binop::eval_union::<purrdf_core::ir::dataset::RdfDataset>
+define dso_local void @_RINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop10eval_unionNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([64 x i8]) align 8 captures(none) dereferenceable(64) %0, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(72) %1, ptr noalias nofree noundef nonnull readonly align 4 captures(address, read_provenance) %2, i32 noundef range(i32 0, 29826162) %3, ptr noalias nofree noundef align 16 dereferenceable(576) %4) unnamed_addr #10 !guid !26292 {
+  %6 = alloca [16 x i8], align 4
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  store i32 -2, ptr %6, align 4
+; call purrdf_sparql_eval::binop::eval_union_with::<purrdf_core::ir::dataset::RdfDataset>
+  call fastcc void @_RINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop15eval_union_withNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(64) %0, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(72) %1, ptr noalias nofree noundef nonnull readonly align 4 captures(address, read_provenance) %2, i32 noundef %3, ptr noalias nofree noundef align 4 captures(address) dereferenceable(16) %6, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable_or_null(92) null, ptr noalias nofree noundef align 16 dereferenceable(576) %4) #74
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop10eval_unionNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetEB4_:
+.Lfunc_begin284:
+	.functype	_RINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop10eval_unionNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetEB4_ (i32, i32, i32, i32, i32) -> ()
+	.local  	i32
+	global.get	__stack_pointer
+	i32.const	16
+	i32.sub 
+	local.tee	5
+	global.set	__stack_pointer
+	local.get	5
+	i32.const	-2
+	i32.store	0
+	local.get	0
+	local.get	1
+	local.get	2
+	local.get	3
+	local.get	5
+	i32.const	0
+	local.get	4
+	call	_RINvNtCs4qtSUp8yRUQ_18purrdf_sparql_eval5binop15eval_union_withNtNtNtCsl8HMMB5r1Dk_11purrdf_core2ir7dataset10RdfDatasetEB4_
+	local.get	5
+	i32.const	16
+	i32.add 
+	global.set	__stack_pointer
+	end_function
+.Lfunc_end284:

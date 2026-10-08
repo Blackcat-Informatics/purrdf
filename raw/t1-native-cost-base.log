@@ -1,0 +1,28 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-epoch v0.9.18
+   Compiling cpufeatures v0.3.0
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/rdf-core)
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling getrandom v0.3.4
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/stack)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/qual-454-native-performance-baseline/crates/sparql-eval)
+   Compiling qualification-454-native-cost v0.0.0 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-probe)
+    Finished `release` profile [optimized] target(s) in 1m 28s
+     Running `/opt/.cargo/slots/9cc3b70f2cc3d6cc/0/target/release/qualification-454-native-cost`
+layout graph=144 expr=64 query=264 prepared=368 node_ref=16
+case0 retained=1120 plan=1224 rows=16 parse=Measurement { allocations: 38, requested_bytes: 9174, retained_bytes: 888, peak_working_bytes: 7702 } clone=Measurement { allocations: 3, requested_bytes: 312, retained_bytes: 312, peak_working_bytes: 312 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -312, peak_working_bytes: 312 } prepare=Measurement { allocations: 44, requested_bytes: 10302, retained_bytes: 2000, peak_working_bytes: 7970 } reuse=Measurement { allocations: 66, requested_bytes: 6290, retained_bytes: 4126, peak_working_bytes: 4814 }
+case1 retained=1560 plan=1664 rows=16 parse=Measurement { allocations: 59, requested_bytes: 12654, retained_bytes: 1360, peak_working_bytes: 9550 } clone=Measurement { allocations: 7, requested_bytes: 784, retained_bytes: 784, peak_working_bytes: 784 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -784, peak_working_bytes: 784 } prepare=Measurement { allocations: 65, requested_bytes: 13878, retained_bytes: 2568, peak_working_bytes: 9914 } reuse=Measurement { allocations: 85, requested_bytes: 21535, retained_bytes: 4126, peak_working_bytes: 11637 }
+case2 retained=2039 plan=2143 rows=16 parse=Measurement { allocations: 60, requested_bytes: 10885, retained_bytes: 1832, peak_working_bytes: 8646 } clone=Measurement { allocations: 6, requested_bytes: 752, retained_bytes: 752, peak_working_bytes: 752 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -752, peak_working_bytes: 752 } prepare=Measurement { allocations: 66, requested_bytes: 12106, retained_bytes: 3037, peak_working_bytes: 9007 } reuse=Measurement { allocations: 150, requested_bytes: 14533, retained_bytes: 5773, peak_working_bytes: 6461 }
+case3 retained=2149 plan=2253 rows=16 parse=Measurement { allocations: 59, requested_bytes: 13027, retained_bytes: 1928, peak_working_bytes: 9638 } clone=Measurement { allocations: 6, requested_bytes: 864, retained_bytes: 864, peak_working_bytes: 864 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -864, peak_working_bytes: 864 } prepare=Measurement { allocations: 76, requested_bytes: 18684, retained_bytes: 3137, peak_working_bytes: 10003 } reuse=Measurement { allocations: 48, requested_bytes: 10431, retained_bytes: 927, peak_working_bytes: 4432 }
+case4 retained=2079 plan=2183 rows=16 parse=Measurement { allocations: 60, requested_bytes: 13155, retained_bytes: 1816, peak_working_bytes: 9726 } clone=Measurement { allocations: 8, requested_bytes: 800, retained_bytes: 800, peak_working_bytes: 800 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -800, peak_working_bytes: 800 } prepare=Measurement { allocations: 67, requested_bytes: 14438, retained_bytes: 2979, peak_working_bytes: 10045 } reuse=Measurement { allocations: 258, requested_bytes: 23339, retained_bytes: 4440, peak_working_bytes: 7411 }
+case5 retained=2907 plan=3011 rows=16 parse=Measurement { allocations: 79, requested_bytes: 14639, retained_bytes: 2704, peak_working_bytes: 10510 } clone=Measurement { allocations: 9, requested_bytes: 1144, retained_bytes: 1144, peak_working_bytes: 1144 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -1144, peak_working_bytes: 1144 } prepare=Measurement { allocations: 85, requested_bytes: 15930, retained_bytes: 3979, peak_working_bytes: 10941 } reuse=Measurement { allocations: 167, requested_bytes: 16663, retained_bytes: 2479, peak_working_bytes: 5648 }
+case6 retained=2039 plan=2143 rows=16 parse=Measurement { allocations: 60, requested_bytes: 10885, retained_bytes: 1832, peak_working_bytes: 8646 } clone=Measurement { allocations: 6, requested_bytes: 752, retained_bytes: 752, peak_working_bytes: 752 } drop=Measurement { allocations: 0, requested_bytes: 0, retained_bytes: -752, peak_working_bytes: 752 } prepare=Measurement { allocations: 66, requested_bytes: 12097, retained_bytes: 3028, peak_working_bytes: 8998 } reuse=Measurement { allocations: 765, requested_bytes: 81755, retained_bytes: 5773, peak_working_bytes: 9328 }

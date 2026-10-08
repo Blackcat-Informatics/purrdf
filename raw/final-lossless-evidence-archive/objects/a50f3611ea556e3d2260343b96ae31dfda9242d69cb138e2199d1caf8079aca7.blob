@@ -1,0 +1,50 @@
+........................................................................ [  8%]
+........................................................................ [ 17%]
+........................................................................ [ 26%]
+........................................................................ [ 35%]
+........................................................................ [ 44%]
+........................................................................ [ 53%]
+........................................................................ [ 62%]
+........................................................................ [ 71%]
+........................................................................ [ 80%]
+........................................................................ [ 89%]
+........................................................................ [ 98%]
+................                                                         [100%]
+=============================== warnings summary ===============================
+tests/test_contextual_mappings.py: 482 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    c = self.default_context if default else None
+
+tests/test_contextual_mappings.py: 233 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:1721: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    query_graph = self.default_context.identifier
+
+tests/test_contextual_mappings.py: 433 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2344: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    context = self.default_context
+
+tests/test_contextual_mappings.py: 396 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:30: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    graph = getattr(module, "Graph" if route == "processor" else route)()
+
+tests/test_contextual_mappings.py: 15 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:233: DeprecationWarning: Dataset.contexts is deprecated, use Dataset.graphs instead.
+    for graph in ctx.dataset.contexts():
+
+tests/test_contextual_mappings.py: 45 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:235: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if graph == ctx.dataset.default_context:
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-ConjunctiveGraph]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:349: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    dataset = getattr(module, kind)()
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-Dataset]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2340: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if context == self.default_context:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+808 passed, 1 deselected, 1609 warnings in 5.82s

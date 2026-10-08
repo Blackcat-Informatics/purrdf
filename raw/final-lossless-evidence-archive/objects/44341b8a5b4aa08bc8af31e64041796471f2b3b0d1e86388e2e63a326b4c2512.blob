@@ -1,0 +1,37 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error: expected expression, found `.`
+  --> crates/sparql-eval/tests/rdflib_contextual.rs:65:21
+   |
+65 |                     .collect();
+   |                     ^ expected expression
+
+error[E0308]: mismatched types
+  --> crates/sparql-eval/tests/rdflib_contextual.rs:59:37
+   |
+59 |                   let terms: Vec<_> = quad
+   |  ____________________________------___^
+   | |                            |
+   | |                            expected due to this
+60 | |                     .iter()
+61 | |                     .map(|term| {
+62 | |                         builder
+63 | |                             .intern_iri(&format!("http://example.org/{}", term.as_str().unwrap()))
+64 | |                     });
+   | |______________________^ expected `Vec<_>`, found `Map<Iter<'_, Value>, {closure@...}>`
+   |
+   = note: expected struct `std::vec::Vec<_>`
+              found struct `std::iter::Map<std::slice::Iter<'_, purrdf_lex::json::Value>, {closure@crates/sparql-eval/tests/rdflib_contextual.rs:61:26: 61:32}>`
+help: consider using `.collect()` to convert the `Iterator` into a `std::vec::Vec<_>`
+   |
+64 |                     }).collect();
+   |                       ++++++++++
+
+error[E0282]: type annotations needed
+   --> crates/sparql-eval/tests/rdflib_contextual.rs:848:13
+    |
+848 |             assert_eq!(fixture["triples"].as_array().unwrap().as_slice(), []);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+Some errors have detailed explanations: E0282, E0308.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `purrdf-sparql-eval` (test "rdflib_contextual") due to 3 previous errors

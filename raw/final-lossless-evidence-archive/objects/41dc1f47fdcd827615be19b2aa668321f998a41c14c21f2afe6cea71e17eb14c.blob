@@ -1,0 +1,33 @@
+88:  call void @llvm.lifetime.start.p0(ptr nonnull %_3.i.i), !noalias !108216
+130:  call void @llvm.lifetime.end.p0(ptr nonnull %_3.i.i), !noalias !108216
+139:  call void @llvm.lifetime.end.p0(ptr nonnull %_3.i.i), !noalias !108216
+140:  call void @llvm.lifetime.start.p0(ptr nonnull %subs.i.i), !noalias !108216
+142:  call void @llvm.lifetime.start.p0(ptr nonnull %_9.i.i), !noalias !108216
+155:  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i.i), !noalias !108216
+160:  call void @llvm.lifetime.end.p0(ptr nonnull %subs.i.i), !noalias !108216
+165:  call void @llvm.lifetime.end.p0(ptr nonnull %_9.i.i), !noalias !108216
+168:  call void @llvm.lifetime.start.p0(ptr nonnull %specs.i.i), !noalias !108216
+170:  call void @llvm.lifetime.start.p0(ptr nonnull %_15.i.i), !noalias !108216
+188:  call void @llvm.lifetime.end.p0(ptr nonnull %_15.i.i), !noalias !108216
+197:  call void @llvm.lifetime.end.p0(ptr nonnull %_15.i.i), !noalias !108216
+270:  call void @llvm.lifetime.start.p0(ptr nonnull %_33.i.i), !noalias !108216
+301:; invoke <pyo3::internal::state::SuspendAttach>::new
+302:  %43 = invoke { i64, ptr } @<pyo3::internal::state::SuspendAttach>::new()
+1625:; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+1626:  call fastcc void @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>(ptr noalias nofree noundef readonly align 8 dereferenceable(168) %38), !noalias !108259
+1630:; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+1631:  call fastcc void @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>(ptr noalias nofree noundef readonly align 8 dereferenceable(168) %38) #79, !noalias !108259
+1672:; call core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>
+1673:  call fastcc void @core::ptr::drop_glue::<purrdf_native::py_store::query::EngineConfig>(ptr noalias nofree noundef readonly align 8 dereferenceable(168) %38) #79, !noalias !108259
+1683:; invoke <pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+1684:  invoke void @<pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %_guard.i.i.i)
+1689:; invoke <pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop
+1690:  invoke void @<pyo3::internal::state::SuspendAttach as core::ops::drop::Drop>::drop(ptr noalias nofree noundef nonnull align 8 dereferenceable(16) %_guard.i.i.i)
+1714:  call void @llvm.lifetime.end.p0(ptr nonnull %_33.i.i), !noalias !108216
+1736:  call void @llvm.lifetime.end.p0(ptr nonnull %specs.i.i), !noalias !108216
+1754:; invoke purrdf_native::py_store::query::materialize_results
+1755:  invoke fastcc void @purrdf_native::py_store::query::materialize_results(ptr noalias nofree noundef nonnull align 8 captures(address) dereferenceable(56) %_0, ptr noalias nofree noundef align 8 captures(address) dereferenceable(56) %result.i.i)
+1760:  call void @llvm.lifetime.end.p0(ptr nonnull %specs.i.i), !noalias !108216
+1761:  call void @llvm.lifetime.end.p0(ptr nonnull %subs.i.i), !noalias !108216
+1773:  call void @llvm.lifetime.end.p0(ptr nonnull %subs.i.i), !noalias !108216
+1933:  call void @llvm.lifetime.end.p0(ptr nonnull %specs.i.i), !noalias !108216

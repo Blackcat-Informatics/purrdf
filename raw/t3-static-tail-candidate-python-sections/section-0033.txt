@@ -1,0 +1,301 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-static-tail-candidate-python-ir/purrdf_native.ll:172427
+; core::ptr::drop_glue::<purrdf_shex::validate::ValidationOptions>
+define internal fastcc void @_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex8validate17ValidationOptionsECseY6IX0djbTh_13purrdf_native(ptr noalias nofree noundef nonnull readonly align 8 captures(none) dereferenceable(64) %_1) unnamed_addr #1 personality ptr @rust_eh_personality !guid !34027 {
+start:
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34028)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34031)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34034)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34037)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34040)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34043)
+  %0 = getelementptr inbounds nuw i8, ptr %_1, i64 8
+  %_6.i.i.i.i.i.i = load i64, ptr %0, align 8, !alias.scope !34046, !noundef !3923
+  %_4.i.i.i.i.i.i = icmp eq i64 %_6.i.i.i.i.i.i, 0
+  br i1 %_4.i.i.i.i.i.i, label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex6semact14SemActRegistryECseY6IX0djbTh_13purrdf_native.exit, label %bb1.i.i.i.i.i.i
+
+bb1.i.i.i.i.i.i:                                  ; preds = %start
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34047)
+  %1 = getelementptr inbounds nuw i8, ptr %_1, i64 24
+  %_2.i.i.i.i.i.i.i = load i64, ptr %1, align 8, !alias.scope !34050, !noundef !3923
+  %2 = icmp eq i64 %_2.i.i.i.i.i.i.i, 0
+  br i1 %2, label %_RINvMsa_NtCsaPaXZ31LQcT_9hashbrown3rawNtB6_13RawTableInner13drop_elementsTNtNtCsc70TAahYccp_5alloc6string6StringINtNtB1e_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2Y_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i, label %bb2.i.i.i.i.i.i.i
+
+bb2.i.i.i.i.i.i.i:                                ; preds = %bb1.i.i.i.i.i.i
+  %_17.i.i.i.i.i.i.i = load ptr, ptr %_1, align 8, !alias.scope !34050, !nonnull !3923, !noundef !3923
+  %ctrl.val2.i.i.i.i.i.i.i.i = load <16 x i8>, ptr %_17.i.i.i.i.i.i.i, align 16, !noalias !34051
+  %3 = icmp sgt <16 x i8> %ctrl.val2.i.i.i.i.i.i.i.i, splat (i8 -1)
+  %next_ctrl.i.i.i.i.i.i.i.i = getelementptr inbounds nuw i8, ptr %_17.i.i.i.i.i.i.i, i64 16
+  %4 = bitcast <16 x i1> %3 to i16
+  br label %bb14.i.i.i.i.i.i.i
+
+bb14.i.i.i.i.i.i.i:                               ; preds = %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i
+  %iter.sroa.0.010.i.i.i.i.i.i.i = phi ptr [ %_17.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i ], [ %iter.sroa.0.1.i.i.i.i.i.i.i, %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i ]
+  %iter.sroa.6.09.i.i.i.i.i.i.i = phi ptr [ %next_ctrl.i.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i ], [ %iter.sroa.6.1.i.i.i.i.i.i.i, %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i ]
+  %iter.sroa.105.08.i.i.i.i.i.i.i = phi i64 [ %_2.i.i.i.i.i.i.i, %bb2.i.i.i.i.i.i.i ], [ %11, %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i ]
+  %iter.sroa.84.07.i.i.i.i.i.i.i = phi i16 [ %4, %bb2.i.i.i.i.i.i.i ], [ %_34.i.i.i.i.i.i.i.i, %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i ]
+  %.not14.i.i.i.i.i.i.i.i = icmp eq i16 %iter.sroa.84.07.i.i.i.i.i.i.i, 0
+  br i1 %.not14.i.i.i.i.i.i.i.i, label %bb9.i.i.i.i.i.i.i.i, label %_RINvMsi_NtCsaPaXZ31LQcT_9hashbrown3rawINtB6_12RawIterRangeTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBZ_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2I_6semact13SemActContextEEp6OutputbEL_EEE9next_implKb0_ECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i
+
+bb9.i.i.i.i.i.i.i.i:                              ; preds = %bb14.i.i.i.i.i.i.i, %bb9.i.i.i.i.i.i.i.i
+  %_1716.i.i.i.i.i.i.i.i = phi ptr [ %_17.i.i.i.i.i.i.i.i, %bb9.i.i.i.i.i.i.i.i ], [ %iter.sroa.6.09.i.i.i.i.i.i.i, %bb14.i.i.i.i.i.i.i ]
+  %5 = phi ptr [ %7, %bb9.i.i.i.i.i.i.i.i ], [ %iter.sroa.0.010.i.i.i.i.i.i.i, %bb14.i.i.i.i.i.i.i ]
+  %self6.val12.i.i.i.i.i.i.i.i = load <16 x i8>, ptr %_1716.i.i.i.i.i.i.i.i, align 16, !noalias !34054
+  %6 = icmp sgt <16 x i8> %self6.val12.i.i.i.i.i.i.i.i, splat (i8 -1)
+  %7 = getelementptr inbounds i8, ptr %5, i64 -640
+  %_17.i.i.i.i.i.i.i.i = getelementptr inbounds nuw i8, ptr %_1716.i.i.i.i.i.i.i.i, i64 16
+  %self3.cast.i.i.i.i.i.i.i.i = bitcast <16 x i1> %6 to i16
+  %.not.i.i.i.i.i.i.i.i = icmp eq i16 %self3.cast.i.i.i.i.i.i.i.i, 0
+  br i1 %.not.i.i.i.i.i.i.i.i, label %bb9.i.i.i.i.i.i.i.i, label %_RINvMsi_NtCsaPaXZ31LQcT_9hashbrown3rawINtB6_12RawIterRangeTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBZ_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2I_6semact13SemActContextEEp6OutputbEL_EEE9next_implKb0_ECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i
+
+_RINvMsi_NtCsaPaXZ31LQcT_9hashbrown3rawINtB6_12RawIterRangeTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBZ_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2I_6semact13SemActContextEEp6OutputbEL_EEE9next_implKb0_ECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i: ; preds = %bb9.i.i.i.i.i.i.i.i, %bb14.i.i.i.i.i.i.i
+  %iter.sroa.6.1.i.i.i.i.i.i.i = phi ptr [ %iter.sroa.6.09.i.i.i.i.i.i.i, %bb14.i.i.i.i.i.i.i ], [ %_17.i.i.i.i.i.i.i.i, %bb9.i.i.i.i.i.i.i.i ]
+  %iter.sroa.0.1.i.i.i.i.i.i.i = phi ptr [ %iter.sroa.0.010.i.i.i.i.i.i.i, %bb14.i.i.i.i.i.i.i ], [ %7, %bb9.i.i.i.i.i.i.i.i ]
+  %self3.lcssa.i.i.i.i.i.i.i.i = phi i16 [ %iter.sroa.84.07.i.i.i.i.i.i.i, %bb14.i.i.i.i.i.i.i ], [ %self3.cast.i.i.i.i.i.i.i.i, %bb9.i.i.i.i.i.i.i.i ]
+  %8 = add i16 %self3.lcssa.i.i.i.i.i.i.i.i, -1
+  %9 = tail call range(i16 0, 17) i16 @llvm.cttz.i16(i16 %self3.lcssa.i.i.i.i.i.i.i.i, i1 true)
+  %_25.i.i.i.i.i.i.i.i = zext nneg i16 %9 to i64
+  %_34.i.i.i.i.i.i.i.i = and i16 %8, %self3.lcssa.i.i.i.i.i.i.i.i
+  %_48.i.i.i.i.i.i.i.i = sub nsw i64 0, %_25.i.i.i.i.i.i.i.i
+  %10 = getelementptr inbounds [40 x i8], ptr %iter.sroa.0.1.i.i.i.i.i.i.i, i64 %_48.i.i.i.i.i.i.i.i
+  %11 = add i64 %iter.sroa.105.08.i.i.i.i.i.i.i, -1
+  %12 = getelementptr inbounds i8, ptr %10, i64 -40
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34057)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !34060)
+  %_1.val.i.i.i.i.i.i.i.i.i = load i64, ptr %12, align 8, !alias.scope !34063, !noalias !34050
+  %13 = icmp eq i64 %_1.val.i.i.i.i.i.i.i.i.i, 0
+  br i1 %13, label %bb4.i.i.i.i.i.i.i.i, label %bb2.i.i.i4.i.i.i.i.i.i.i.i.i.i
+
+bb2.i.i.i4.i.i.i.i.i.i.i.i.i.i:                   ; preds = %_RINvMsi_NtCsaPaXZ31LQcT_9hashbrown3rawINtB6_12RawIterRangeTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBZ_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2I_6semact13SemActContextEEp6OutputbEL_EEE9next_implKb0_ECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i
+  %14 = getelementptr inbounds i8, ptr %10, i64 -32
+  %_1.val1.i.i.i.i.i.i.i.i.i = load ptr, ptr %14, align 8, !alias.scope !34063, !noalias !34050, !nonnull !3923, !noundef !3923
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %_1.val1.i.i.i.i.i.i.i.i.i, i64 noundef %_1.val.i.i.i.i.i.i.i.i.i, i64 noundef range(i64 1, -9223372036854775807) 1) #77, !noalias !34064
+  br label %bb4.i.i.i.i.i.i.i.i
+
+bb4.i.i.i.i.i.i.i.i:                              ; preds = %bb2.i.i.i4.i.i.i.i.i.i.i.i.i.i, %_RINvMsi_NtCsaPaXZ31LQcT_9hashbrown3rawINtB6_12RawIterRangeTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBZ_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2I_6semact13SemActContextEEp6OutputbEL_EEE9next_implKb0_ECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i
+  %15 = getelementptr inbounds i8, ptr %10, i64 -16
+  %.val2.i.i.i.i.i.i.i.i = load ptr, ptr %15, align 8, !alias.scope !34057, !noalias !34050
+  %16 = getelementptr inbounds i8, ptr %10, i64 -8
+  %.val3.i.i.i.i.i.i.i.i = load ptr, ptr %16, align 8, !alias.scope !34057, !noalias !34050, !nonnull !3923, !align !3924, !noundef !3923
+  %17 = load ptr, ptr %.val3.i.i.i.i.i.i.i.i, align 8, !invariant.load !3923, !noalias !34065
+  %.not.i.i.i.i.i.i.i.i.i = icmp eq ptr %17, null
+  br i1 %.not.i.i.i.i.i.i.i.i.i, label %bb3.i.i.i.i.i.i.i.i.i, label %is_not_null.i.i.i.i.i.i.i.i.i
+
+is_not_null.i.i.i.i.i.i.i.i.i:                    ; preds = %bb4.i.i.i.i.i.i.i.i
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %.val2.i.i.i.i.i.i.i.i) ]
+  invoke void %17(ptr noundef nonnull %.val2.i.i.i.i.i.i.i.i)
+          to label %bb3.i.i.i.i.i.i.i.i.i unwind label %cleanup.i.i.i.i.i.i.i.i.i, !noalias !34065
+
+bb3.i.i.i.i.i.i.i.i.i:                            ; preds = %is_not_null.i.i.i.i.i.i.i.i.i, %bb4.i.i.i.i.i.i.i.i
+  %18 = getelementptr inbounds nuw i8, ptr %.val3.i.i.i.i.i.i.i.i, i64 8
+  %size.i.i.i.i.i.i.i.i.i.i = load i64, ptr %18, align 8, !range !4138, !invariant.load !3923, !noalias !34065
+  %19 = icmp eq i64 %size.i.i.i.i.i.i.i.i.i.i, 0
+  br i1 %19, label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i, label %_RNvXs1_NtCsc70TAahYccp_5alloc5allocNtB5_6GlobalNtNtCs2k2z8Zem4rB_4core5alloc9Allocator10deallocate.exit.i.i.i.i.i.i.i.i.i.i
+
+_RNvXs1_NtCsc70TAahYccp_5alloc5allocNtB5_6GlobalNtNtCs2k2z8Zem4rB_4core5alloc9Allocator10deallocate.exit.i.i.i.i.i.i.i.i.i.i: ; preds = %bb3.i.i.i.i.i.i.i.i.i
+  %20 = getelementptr inbounds nuw i8, ptr %.val3.i.i.i.i.i.i.i.i, i64 16
+  %align.i.i.i.i.i.i.i.i.i.i = load i64, ptr %20, align 8, !range !3925, !invariant.load !3923, !noalias !34065
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %.val2.i.i.i.i.i.i.i.i) ]
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %.val2.i.i.i.i.i.i.i.i, i64 noundef %size.i.i.i.i.i.i.i.i.i.i, i64 noundef range(i64 1, -9223372036854775807) %align.i.i.i.i.i.i.i.i.i.i) #77, !noalias !34065
+  br label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i
+
+cleanup.i.i.i.i.i.i.i.i.i:                        ; preds = %is_not_null.i.i.i.i.i.i.i.i.i
+  %21 = landingpad { ptr, i32 }
+          cleanup
+  %22 = getelementptr inbounds nuw i8, ptr %.val3.i.i.i.i.i.i.i.i, i64 8
+  %size.i4.i.i.i.i.i.i.i.i.i = load i64, ptr %22, align 8, !range !4138, !invariant.load !3923, !noalias !34065
+  %23 = icmp eq i64 %size.i4.i.i.i.i.i.i.i.i.i, 0
+  br i1 %23, label %bb2.i.i.i.i.i.i.i.i.i, label %_RNvXs1_NtCsc70TAahYccp_5alloc5allocNtB5_6GlobalNtNtCs2k2z8Zem4rB_4core5alloc9Allocator10deallocate.exit.i5.i.i.i.i.i.i.i.i.i
+
+_RNvXs1_NtCsc70TAahYccp_5alloc5allocNtB5_6GlobalNtNtCs2k2z8Zem4rB_4core5alloc9Allocator10deallocate.exit.i5.i.i.i.i.i.i.i.i.i: ; preds = %cleanup.i.i.i.i.i.i.i.i.i
+  %24 = getelementptr inbounds nuw i8, ptr %.val3.i.i.i.i.i.i.i.i, i64 16
+  %align.i6.i.i.i.i.i.i.i.i.i = load i64, ptr %24, align 8, !range !3925, !invariant.load !3923, !noalias !34065
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %.val2.i.i.i.i.i.i.i.i, i64 noundef %size.i4.i.i.i.i.i.i.i.i.i, i64 noundef range(i64 1, -9223372036854775807) %align.i6.i.i.i.i.i.i.i.i.i) #77, !noalias !34065
+  br label %bb2.i.i.i.i.i.i.i.i.i
+
+bb2.i.i.i.i.i.i.i.i.i:                            ; preds = %_RNvXs1_NtCsc70TAahYccp_5alloc5allocNtB5_6GlobalNtNtCs2k2z8Zem4rB_4core5alloc9Allocator10deallocate.exit.i5.i.i.i.i.i.i.i.i.i, %cleanup.i.i.i.i.i.i.i.i.i
+  resume { ptr, i32 } %21
+
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i: ; preds = %_RNvXs1_NtCsc70TAahYccp_5alloc5allocNtB5_6GlobalNtNtCs2k2z8Zem4rB_4core5alloc9Allocator10deallocate.exit.i.i.i.i.i.i.i.i.i.i, %bb3.i.i.i.i.i.i.i.i.i
+  %25 = icmp eq i64 %11, 0
+  br i1 %25, label %_RINvMsa_NtCsaPaXZ31LQcT_9hashbrown3rawNtB6_13RawTableInner13drop_elementsTNtNtCsc70TAahYccp_5alloc6string6StringINtNtB1e_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2Y_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i, label %bb14.i.i.i.i.i.i.i
+
+_RINvMsa_NtCsaPaXZ31LQcT_9hashbrown3rawNtB6_13RawTableInner13drop_elementsTNtNtCsc70TAahYccp_5alloc6string6StringINtNtB1e_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2Y_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i: ; preds = %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueTNtNtCsc70TAahYccp_5alloc6string6StringINtNtBG_5boxed3BoxDG0_INtNtNtB4_3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB29_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i.i, %bb1.i.i.i.i.i.i
+  %26 = mul i64 %_6.i.i.i.i.i.i, 40
+  %_35.1.i.i.i.i.i.i.i = icmp slt i64 %_6.i.i.i.i.i.i, 461168601842738790
+  tail call void @llvm.assume(i1 %_35.1.i.i.i.i.i.i.i)
+  %27 = and i64 %26, -16
+  %ctrl_offset.i.i.i.i.i.i.i = add i64 %27, 48
+  %rhs5.i.i.i.i.i.i.i = add nsw i64 %_6.i.i.i.i.i.i, 17
+  %_42.0.i.i.i.i.i.i.i = add i64 %rhs5.i.i.i.i.i.i.i, %ctrl_offset.i.i.i.i.i.i.i
+  %_42.1.i.i.i.i.i.i.i = icmp uge i64 %_42.0.i.i.i.i.i.i.i, %ctrl_offset.i.i.i.i.i.i.i
+  %_22.i.i.i.i.i.i.i = icmp ult i64 %_42.0.i.i.i.i.i.i.i, 9223372036854775793
+  tail call void @llvm.assume(i1 %_42.1.i.i.i.i.i.i.i)
+  tail call void @llvm.assume(i1 %_22.i.i.i.i.i.i.i)
+  %28 = icmp eq i64 %_42.0.i.i.i.i.i.i.i, 0
+  br i1 %28, label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex6semact14SemActRegistryECseY6IX0djbTh_13purrdf_native.exit, label %bb1.i3.i.i.i.i.i.i
+
+bb1.i3.i.i.i.i.i.i:                               ; preds = %_RINvMsa_NtCsaPaXZ31LQcT_9hashbrown3rawNtB6_13RawTableInner13drop_elementsTNtNtCsc70TAahYccp_5alloc6string6StringINtNtB1e_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2Y_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i
+  %self1.i.i.i.i.i.i = load ptr, ptr %_1, align 8, !alias.scope !34046, !nonnull !3923, !noundef !3923
+  %_18.i.i.i.i.i.i = sub i64 -48, %27
+  %ptr.i.i.i.i.i.i = getelementptr inbounds i8, ptr %self1.i.i.i.i.i.i, i64 %_18.i.i.i.i.i.i
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %ptr.i.i.i.i.i.i, i64 noundef %_42.0.i.i.i.i.i.i.i, i64 noundef range(i64 1, -9223372036854775807) 16) #77, !noalias !34046
+  br label %_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex6semact14SemActRegistryECseY6IX0djbTh_13purrdf_native.exit
+
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex6semact14SemActRegistryECseY6IX0djbTh_13purrdf_native.exit: ; preds = %start, %_RINvMsa_NtCsaPaXZ31LQcT_9hashbrown3rawNtB6_13RawTableInner13drop_elementsTNtNtCsc70TAahYccp_5alloc6string6StringINtNtB1e_5boxed3BoxDG0_INtNtNtCs2k2z8Zem4rB_4core3ops8function2FnTRL1_NtNtCsfhsa5ZihkoN_11purrdf_shex3ast6SemActRL0_NtNtB2Y_6semact13SemActContextEEp6OutputbEL_EEECseY6IX0djbTh_13purrdf_native.exit.i.i.i.i.i.i, %bb1.i3.i.i.i.i.i.i
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCs2k2z8Zem4rB_4core3ptr9drop_glueNtNtCsfhsa5ZihkoN_11purrdf_shex8validate17ValidationOptionsECseY6IX0djbTh_13purrdf_native:
+.Lfunc_begin589:
+	.cfi_startproc
+	.cfi_personality 155, DW.ref.rust_eh_personality
+	.cfi_lsda 27, .Lexception589
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$24, %rsp
+	.cfi_def_cfa_offset 80
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	8(%rdi), %rax
+	testq	%rax, %rax
+	je	.LBB1133_19
+	movq	24(%rdi), %r13
+	movq	%rax, 16(%rsp)
+	movq	%rdi, 8(%rsp)
+	testq	%r13, %r13
+	je	.LBB1133_14
+	movq	8(%rsp), %rax
+	vpcmpeqd	%xmm0, %xmm0, %xmm0
+	movq	(%rax), %rbp
+	vpcmpltb	(%rbp), %xmm0, %k0
+	leaq	16(%rbp), %r14
+	kmovd	%k0, %ebx
+	jmp	.LBB1133_3
+	.p2align	4
+.LBB1133_13:
+	blsrl	%ebx, %ebx
+	decq	%r13
+	je	.LBB1133_14
+.LBB1133_3:
+	testw	%bx, %bx
+	jne	.LBB1133_7
+	vpcmpeqd	%xmm0, %xmm0, %xmm0
+	.p2align	4
+.LBB1133_5:
+	vpcmpltb	(%r14), %xmm0, %k0
+	addq	$-640, %rbp
+	addq	$16, %r14
+	kortestw	%k0, %k0
+	je	.LBB1133_5
+	kmovd	%k0, %ebx
+.LBB1133_7:
+	xorl	%eax, %eax
+	tzcntl	%ebx, %eax
+	negq	%rax
+	leaq	(%rax,%rax,4), %rax
+	movq	-40(%rbp,%rax,8), %rsi
+	leaq	(%rbp,%rax,8), %r12
+	testq	%rsi, %rsi
+	je	.LBB1133_9
+	movq	-32(%r12), %rdi
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movl	$1, %edx
+	callq	*%rax
+.LBB1133_9:
+	movq	-16(%r12), %r15
+	movq	-8(%r12), %r12
+	movq	(%r12), %rax
+	testq	%rax, %rax
+	je	.LBB1133_11
+.Ltmp8069:
+	movq	%r15, %rdi
+	callq	*%rax
+.Ltmp8070:
+.LBB1133_11:
+	movq	8(%r12), %rsi
+	testq	%rsi, %rsi
+	je	.LBB1133_13
+	movq	16(%r12), %rdx
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movq	%r15, %rdi
+	callq	*%rax
+	jmp	.LBB1133_13
+.LBB1133_14:
+	movq	16(%rsp), %rsi
+	movq	8(%rsp), %rcx
+	leaq	(,%rsi,8), %rax
+	leaq	(%rax,%rax,4), %rax
+	andq	$-16, %rax
+	addq	%rax, %rsi
+	addq	$65, %rsi
+	je	.LBB1133_19
+	movq	(%rcx), %rdi
+	movl	$16, %edx
+	subq	%rax, %rdi
+	addq	$-48, %rdi
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	jmpq	*_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip)
+.LBB1133_19:
+	.cfi_def_cfa_offset 80
+	addq	$24, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB1133_16:
+	.cfi_def_cfa_offset 80
+.Ltmp8071:
+	movq	8(%r12), %rsi
+	movq	%rax, %rbx
+	testq	%rsi, %rsi
+	je	.LBB1133_18
+	movq	16(%r12), %rdx
+	movq	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc@GOTPCREL(%rip), %rax
+	movq	%r15, %rdi
+	callq	*%rax
+.LBB1133_18:
+	movq	%rbx, %rdi
+	callq	_Unwind_Resume@PLT
+.Lfunc_end1133:

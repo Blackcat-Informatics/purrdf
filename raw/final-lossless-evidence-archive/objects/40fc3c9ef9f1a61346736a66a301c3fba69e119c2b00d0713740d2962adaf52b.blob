@@ -1,0 +1,129 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-extended-ir/qualification_454_native_cost.purrdf_sparql_eval-0ecc65cc8c2d1ea3.purrdf_sparql_eval.85e4f8f062a88157-cgu.0.rcgu.o.rcgu.ll:388386
+; core::slice::sort::shared::pivot::median3_rec::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+define internal fastcc noundef nonnull ptr @_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_(ptr nofree noundef nonnull readonly %0, ptr nofree noundef nonnull readonly %1, ptr nofree noundef nonnull readonly %2, i64 noundef range(i64 1, 16012798675095097) %3) unnamed_addr #11 personality ptr @rust_eh_personality !guid !47004 {
+  %5 = icmp samesign ugt i64 %3, 7
+  br i1 %5, label %6, label %19
+
+6:                                                ; preds = %4
+  %7 = lshr i64 %3, 3
+  %8 = shl nuw nsw i64 %7, 2
+  %9 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %8
+  %10 = mul nuw nsw i64 %7, 7
+  %11 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %10
+; call core::slice::sort::shared::pivot::median3_rec::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+  %12 = tail call fastcc noundef ptr @_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_(ptr noundef %0, ptr noundef %9, ptr noundef %11, i64 noundef %7)
+  %13 = getelementptr inbounds nuw [72 x i8], ptr %1, i64 %8
+  %14 = getelementptr inbounds nuw [72 x i8], ptr %1, i64 %10
+; call core::slice::sort::shared::pivot::median3_rec::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+  %15 = tail call fastcc noundef ptr @_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_(ptr noundef %1, ptr noundef %13, ptr noundef %14, i64 noundef %7)
+  %16 = getelementptr inbounds nuw [72 x i8], ptr %2, i64 %8
+  %17 = getelementptr inbounds nuw [72 x i8], ptr %2, i64 %10
+; call core::slice::sort::shared::pivot::median3_rec::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+  %18 = tail call fastcc noundef ptr @_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_(ptr noundef %2, ptr noundef %16, ptr noundef %17, i64 noundef %7)
+  br label %19
+
+19:                                               ; preds = %6, %4
+  %20 = phi ptr [ %18, %6 ], [ %2, %4 ]
+  %21 = phi ptr [ %15, %6 ], [ %1, %4 ]
+  %22 = phi ptr [ %12, %6 ], [ %0, %4 ]
+  %23 = getelementptr i8, ptr %22, i64 40
+  %24 = load i64, ptr %23, align 8, !noundef !1641
+  %25 = getelementptr i8, ptr %21, i64 40
+  %26 = load i64, ptr %25, align 8, !noundef !1641
+  %27 = icmp ult i64 %24, %26
+  %28 = getelementptr i8, ptr %20, i64 40
+  %29 = load i64, ptr %28, align 8, !noundef !1641
+  %30 = icmp ult i64 %24, %29
+  %31 = xor i1 %27, %30
+  %32 = icmp ult i64 %26, %29
+  %33 = xor i1 %27, %32
+  %34 = select i1 %33, ptr %20, ptr %21
+  %35 = select i1 %31, ptr %22, ptr %34
+  ret ptr %35
+}
+
+ASSEMBLY
+_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_:
+.Lfunc_begin975:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	pushq	%rax
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	%rdx, %r14
+	movq	%rsi, %rbx
+	cmpq	$8, %rcx
+	jb	.LBB975_2
+	shrq	$3, %rcx
+	movq	%rcx, %rax
+	shlq	$5, %rax
+	imulq	$504, %rcx, %r12
+	movq	%rcx, %r13
+	leaq	(%rax,%rax,8), %r15
+	leaq	(%rdi,%r15), %rsi
+	leaq	(%rdi,%r12), %rdx
+	callq	_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_
+	leaq	(%rbx,%r15), %rsi
+	leaq	(%rbx,%r12), %rdx
+	movq	%rax, %rbp
+	movq	%rbx, %rdi
+	movq	%r13, %rcx
+	callq	_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_
+	addq	%r14, %r15
+	addq	%r14, %r12
+	movq	%rax, %rbx
+	movq	%r14, %rdi
+	movq	%r13, %rcx
+	movq	%r15, %rsi
+	movq	%r12, %rdx
+	callq	_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort6shared5pivot11median3_recTjINtNtCstkel86B4QG_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCsbuIrFgshI6V_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB14_20sort_unstable_by_keyjNCINvNtB2h_8modifier10eval_groupNtNtNtB1b_2ir7dataset10RdfDatasetEs1_0E0EB2h_
+	movq	%rbp, %rdi
+	movq	%rax, %r14
+.LBB975_2:
+	movq	40(%rdi), %rax
+	movq	40(%rbx), %rcx
+	movq	40(%r14), %rsi
+	cmpq	%rcx, %rax
+	setb	%dl
+	cmpq	%rsi, %rax
+	setb	%al
+	xorb	%dl, %al
+	cmpq	%rsi, %rcx
+	setb	%cl
+	xorb	%dl, %cl
+	cmovneq	%r14, %rbx
+	testb	%al, %al
+	cmovneq	%rdi, %rbx
+	movq	%rbx, %rax
+	addq	$8, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end975:

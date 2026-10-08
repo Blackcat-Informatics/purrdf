@@ -1,0 +1,20 @@
+--- /dev/fd/63	2026-10-08 11:22:36.025967666 -0600
++++ /dev/fd/62	2026-10-08 11:22:36.025967666 -0600
+@@ -2522,7 +2522,7 @@
+ 
+ 1396:                                             ; preds = %1390
+ ; invoke core::panicking::panic
+-  invoke void @core::panicking::panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.HASH.1066, i64 noundef 47, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.1068) #ATTR
++  invoke void @core::panicking::panic(ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.HASH.1067, i64 noundef 47, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.1069) #ATTR
+           to label %1397 unwind label %1436, !noalias !ID, !inline_history !ID
+ 
+ 1397:                                             ; preds = %1396
+@@ -4863,7 +4863,7 @@
+   %2409 = getelementptr inbounds nuw i8, ptr %45, i64 24
+   store ptr @<usize as core::fmt::Debug>::fmt, ptr %2409, align 8, !noalias !ID
+ ; invoke core::panicking::panic_fmt
+-  invoke void @core::panicking::panic_fmt(ptr noundef nonnull @anon.HASH.2158, ptr noundef nonnull %45, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.289) #ATTR
++  invoke void @core::panicking::panic_fmt(ptr noundef nonnull @anon.HASH.2159, ptr noundef nonnull %45, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @anon.HASH.289) #ATTR
+           to label %2410 unwind label %2339, !noalias !ID
+ 
+ 2410:                                             ; preds = %2406

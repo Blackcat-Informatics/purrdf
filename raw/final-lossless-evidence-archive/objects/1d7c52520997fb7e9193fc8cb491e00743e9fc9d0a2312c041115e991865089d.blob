@@ -1,0 +1,9 @@
+ActiveState=active
+SubState=running
+InvocationID=45e6d066dd3247bf8a9a5c2d0687bb97
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-454-final-lower-python-20261008.scope
+MemoryCurrent=1198055424
+MemoryPeak=1198579712
+MemorySwapCurrent=0
+MemoryMax=68719476736
+MemorySwapMax=0

@@ -1,0 +1,1082 @@
+{
+  "oracle_version": "7.6.0",
+  "oracle_module": {
+    "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py",
+    "sha256": "5b11d35dac2c6f608b8676056a13d786e526ec660aa494c081e01797165792fc"
+  },
+  "prefix": "http://example.org/",
+  "fixtures": {
+    "plain": [
+      [
+        "a",
+        "p",
+        "o1"
+      ],
+      [
+        "a",
+        "p",
+        "o2"
+      ],
+      [
+        "b",
+        "p",
+        "o3"
+      ]
+    ],
+    "named": {
+      "g1": [
+        [
+          "a",
+          "p",
+          "o1"
+        ],
+        [
+          "b",
+          "p",
+          "o2"
+        ]
+      ],
+      "g2": [
+        [
+          "a",
+          "p",
+          "o3"
+        ]
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "graph-variable-assignment-unbound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value BIND(<http://example.org/z> AS ?s) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-variable-assignment-bound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value BIND(<http://example.org/z> AS ?s) } }",
+      "initial": {
+        "g": "http://example.org/g1"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/z"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-variable-inner-graph-assignment-unbound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value BIND(<http://example.org/g2> AS ?g) } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-variable-inner-graph-assignment-bound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value BIND(<http://example.org/g2> AS ?g) } }",
+      "initial": {
+        "g": "http://example.org/g1"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-assignment-before-leaf-unbound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { BIND(<http://example.org/g2> AS ?g) GRAPH ?g { ?s <http://example.org/p> ?value } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-assignment-before-leaf-bound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { BIND(<http://example.org/g2> AS ?g) GRAPH ?g { ?s <http://example.org/p> ?value } }",
+      "initial": {
+        "g": "http://example.org/g1"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-inner-exists-assignment-unbound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value FILTER EXISTS { BIND(<http://example.org/z> AS ?s) ?s <http://example.org/p> ?value } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "graph-inner-exists-assignment-bound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value FILTER EXISTS { BIND(<http://example.org/z> AS ?s) ?s <http://example.org/p> ?value } } }",
+      "initial": {
+        "g": "http://example.org/g1"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "graph-optional-assignment-unbound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/z> AS ?s) } } }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g2"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "graph-optional-assignment-bound",
+      "dataset": "named",
+      "query": "SELECT * WHERE { GRAPH ?g { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/z> AS ?s) } } }",
+      "initial": {
+        "g": "http://example.org/g1"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "g",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/g1"
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "values-undef-conflict-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { VALUES ?this { UNDEF <http://example.org/a> <http://example.org/b> } BIND(<http://example.org/z> AS ?this) }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "values-undef-conflict-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { VALUES ?this { UNDEF <http://example.org/a> <http://example.org/b> } BIND(<http://example.org/z> AS ?this) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/z"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "values-undef-repeat-error-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { VALUES (?this ?tag) { (UNDEF 1) (<http://example.org/a> 2) (<http://example.org/b> 3) } BIND((1/0) AS ?this) }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tag",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            null
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "values-undef-repeat-error-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { VALUES (?this ?tag) { (UNDEF 1) (<http://example.org/a> 2) (<http://example.org/b> 3) } BIND((1/0) AS ?this) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "tag",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "1",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ],
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-star-alias-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?this <http://example.org/p> ?value } GROUP BY (<http://example.org/z> AS ?this)",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "group-star-alias-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?this <http://example.org/p> ?value } GROUP BY (<http://example.org/z> AS ?this)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "group-star-empty-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?this <http://example.org/absent> ?value } GROUP BY (<http://example.org/z> AS ?this)",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "group-star-empty-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?this <http://example.org/absent> ?value } GROUP BY (<http://example.org/z> AS ?this)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "group-star-count-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?this <http://example.org/p> ?value } GROUP BY ?this HAVING(COUNT(*)>0)",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "group-star-count-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?this <http://example.org/p> ?value } GROUP BY ?this HAVING(COUNT(*)>0)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "value"
+        ],
+        "rows": []
+      }
+    },
+    {
+      "name": "select-duplicate-alias-unbound",
+      "dataset": "plain",
+      "query": "SELECT (<http://example.org/z> AS ?this) (<http://example.org/w> AS ?this) WHERE { ?this <http://example.org/p> ?value }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "select-duplicate-alias-bound",
+      "dataset": "plain",
+      "query": "SELECT (<http://example.org/z> AS ?this) (<http://example.org/w> AS ?this) WHERE { ?this <http://example.org/p> ?value }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/w"
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-duplicate-alias-unbound",
+      "dataset": "plain",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?this <http://example.org/p> ?value } GROUP BY (<http://example.org/z> AS ?this) (<http://example.org/w> AS ?this)",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-duplicate-alias-bound",
+      "dataset": "plain",
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?this <http://example.org/p> ?value } GROUP BY (<http://example.org/z> AS ?this) (<http://example.org/w> AS ?this)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "n",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "iri",
+              "http://example.org/w"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "select-aggregate-reassign-unbound",
+      "dataset": "plain",
+      "query": "SELECT (COUNT(*) AS ?this) WHERE { ?this <http://example.org/p> ?value }",
+      "initial": {},
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "3",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "select-aggregate-reassign-bound",
+      "dataset": "plain",
+      "query": "SELECT (COUNT(*) AS ?this) WHERE { ?this <http://example.org/p> ?value }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "2",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "optional-success-count-call-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>() AS ?call) } }",
+      "initial": {},
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "call",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "optional-success-count-call-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>() AS ?call) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "call",
+          "s",
+          "value"
+        ],
+        "rows": [
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            null,
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "optional-success-count-this-unbound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>() AS ?this) } }",
+      "initial": {},
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            null,
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            null,
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            null,
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "optional-success-count-this-bound",
+      "dataset": "plain",
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/counter>() AS ?this) } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "s",
+          "this",
+          "value"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o1"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o2"
+            ]
+          ],
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ],
+            [
+              "iri",
+              "http://example.org/a"
+            ],
+            [
+              "iri",
+              "http://example.org/o3"
+            ]
+          ]
+        ],
+        "callback_invocations": 0
+      }
+    }
+  ]
+}

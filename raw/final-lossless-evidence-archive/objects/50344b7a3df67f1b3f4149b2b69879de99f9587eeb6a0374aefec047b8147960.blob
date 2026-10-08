@@ -1,0 +1,13 @@
+# Normal signed fixture commit, push and new generator cohort
+
+VERDICT: PASS for normal publication and unique dispatch identity. Full hosted qualification NOT MET / new run pending.
+
+Normal configured signed commit session1287 actual terminal0 produced 6ce3cc6567d0874414cf138bcdfd11f4799e6901, exact qualified tree1905c6847912d5ee3d6f7de618a575d7cb5bd2f2 and sole parented14f23ead7a303a18b9ef610f1e6caeb4483a35. Only three cfg(test) ApplicationPolicy literals acquire dataset_required:false; production bodies are unchanged. Normal hooks ran without escape; verify-commit0, good signature G/full fingerprintAF5E0032F7494CEBCAA7BBBE9B87CFBBCFDBAF11, exact tree/parent/clean-index/source/MERGE_HEAD-absence admission0. Captured live scope64GiB/SwapMax0, terminalinactive; local hook lane released to root308.
+
+Ordinary no-force push session62261 actual0; exact ls-remote branch readback equals6ce3cc6567d0874414cf138bcdfd11f4799e6901, remote validation0. Raw commit/push/identity/signature/limits receipts: /opt/purrdf-454-current-qualification-20261008/normal-hosted-fixture-commit-1. [Owning fixture qualification25250](portfolio-current-hosted-fixture-qualification.md) proves three named tests and whole workspace library/test compilation plus strict owning all-target clippy/fmt; not a whole workspace test execution. Analytical72fa cost and unchanged production caller evidence reuse is scoped by the exact cfg(test)-only delta.
+
+After verified push, exactly one ci.yaml workflow_dispatch with simd_projection=true was admitted and dispatched in session98650, actual0. Unique SHA/branch/event/start-time selection bound run37819711271 attempt1, created2026-10-08T17:50:53Z: https://github.com/Blackcat-Informatics/purrdf/actions/runs/37819711271 . Raw dispatch and unique admission: current-hosted-6ce3/. New full seven-configuration projection is an owning generation cohort, not a preexisting parity/whole hosted PASS. Current run pending; any projection/document repairs require subsequent owning admission and exact source binding.
+
+Old run37817482468 remains FAILED evidence (fixture omissions and stale SIMD/conformance projections). No manual cancellation or rerun occurred; workflow concurrency supersession can change outstanding job state, which must remain separately recorded. No PR, source documentation edit, evidence copy, cleanup or final merge was performed.
+
+Old-run terminal clarification: watch22033 actual exit1; API run37817482468 now completed/cancelled after new cohort supersession. Its completed failed jobs and raw failure logs remain FAILED evidence, never replaced by cancellation or current-run pending. Final complete old job inventory is tasks/current-hosted-ed14/final-job-pages.json. No manual cancellation was invoked.

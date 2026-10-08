@@ -1,0 +1,14 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Compiled proof replay dependencies
+
+The full LLVM, assembly, section inventories, exact source manifests, effective compiler commands and untimed probe output are retained in this selected Stage archive. No build-cache target is evidence. Lossless oversized-module reconstruction is specified in `t2-evidence-packaging.md`; reconstruct original `.ll` paths before checking their original SHA-256 manifests or section references.
+
+The probe Cargo manifests intentionally retain the actual absolute source paths used for the executed comparison. Their dependencies are the corresponding recorded source checkout, not whichever source currently occupies main. Task1 baseline is commit `863c75e2c1e13001bcbe025820d257bd0ee49c4f`; Task2 baseline is signed commit `e72660e8769af222387ecc4fd4f84ea9887e43a1`. Candidate source is identified by the final source manifests, signed commits and acceptance index. Replaying builds after owned worktree cleanup requires recreating the recorded detached source checkouts at those paths, or explicitly relocating manifest dependency paths while preserving source identity. The original fixture remains in the source tree at `bindings/python/tests/rdflib_suite/vendor/test_nested_filters.py`, with its hash recorded beside the Rust-only witness.
+
+Use the captured effective commands and exact compiler/profile attribution in the native review. Probe manifests alone do not specify the effective flags: the managed command supplies explicit ThinLTO for the native pair, while the Python pair has no observed LTO flag. Do not substitute another compiler or infer a later linker transformation. The normal installed development-profile binding module is correctness evidence and is distinct from the release cost artifacts. No clock/timing benchmark is needed to inspect or reproduce this structural comparison.
+
+Target symlinks into `/opt/.cargo/target` or slot directories represent disposable managed build caches, and their target bytes are not required for archive verification. Complete emitted evidence is independently retained. Owned cache links may be removed before archive capture after their processes terminate; the shared global cache and sibling source worktrees are preserved.
+
+After the writer and reviewers confirmed owned build/test/inventory processes terminal, six cache links were removed from this archive's raw probe directories: `native-cost-probe`, `native-cost-base-ir-probe`, `fixture-freezer`, `native-cost-t2-base-probe`, `native-cost-t2-candidate-probe`, and `native-vendor-witness`. Only their `target` symlink entries were removed. No target directory or cache bytes under `/opt/.cargo` were deleted. Probe source/manifests, frozen data, full emitted artifacts and executed receipts remain independently archived.

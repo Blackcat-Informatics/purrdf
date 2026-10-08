@@ -1,0 +1,549 @@
+cargo run -q --locked -p helper-census -- --python-binding-tests
+OK: no Rust test module under bindings/python/src (27 sources scanned)
+cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+Resolved 107 packages in 2ms
+Uninstalled 1 package in 4ms
+warning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.
+         If the cache and target directories are on different filesystems, hardlinking may not be supported.
+         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.
+Installed 1 package in 16ms
+ ~ purrdf==3.0.1 (from file:///home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python)
+============================= test session starts ==============================
+platform linux -- Python 3.13.12, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python
+configfile: pyproject.toml
+collected 4731 items
+
+tests/test_acceptance_matrix.py ....s.                                   [  0%]
+tests/test_aggregate_namespace.py ...........                            [  0%]
+tests/test_argument_refusals.py ...........................              [  0%]
+tests/test_codec_fidelity.py .........................                   [  1%]
+tests/test_collection.py .........                                       [  1%]
+tests/test_compat_parity.py ...........                                  [  1%]
+tests/test_construct_named_graphs.py ................................... [  2%]
+.........                                                                [  2%]
+tests/test_contextual_mappings.py ...................................... [  3%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 17%]
+........................................................................ [ 18%]
+...................................................                      [ 19%]
+tests/test_dataset.py ...........                                        [ 20%]
+tests/test_dataset_canonicalization.py ......                            [ 20%]
+tests/test_document_base.py ...................................          [ 21%]
+tests/test_engine_configuration.py ...                                   [ 21%]
+tests/test_entail.py ....                                                [ 21%]
+tests/test_entail_reasoning.py ......................................... [ 22%]
+.............................                                            [ 22%]
+tests/test_entail_regimes.py ........................................... [ 23%]
+............................................                             [ 24%]
+tests/test_frozen_escape_vectors.py .................................... [ 25%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+........................................................................ [ 29%]
+........................................................................ [ 31%]
+........................................................................ [ 32%]
+........................................................................ [ 34%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 41%]
+........................................................................ [ 43%]
+........................................................................ [ 45%]
+........................................................................ [ 46%]
+........................................................................ [ 48%]
+........................................................................ [ 49%]
+........................................................................ [ 51%]
+................................                                         [ 51%]
+tests/test_frozen_lex_vectors.py ....................................... [ 52%]
+........................................................................ [ 54%]
+........................................................................ [ 55%]
+........................................................................ [ 57%]
+........................................................................ [ 58%]
+........................................................................ [ 60%]
+........................................................................ [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 80%]
+.............................................                            [ 80%]
+tests/test_graph.py ..                                                   [ 80%]
+tests/test_graph_facade.py ..............x....                           [ 81%]
+tests/test_gts_fold_view.py ..........                                   [ 81%]
+tests/test_gts_fold_view_self_reaching.py ........                       [ 81%]
+tests/test_gts_ingest_report.py ........                                 [ 81%]
+tests/test_gts_relational_export.py .................                    [ 82%]
+tests/test_jsonld_baseline.py ...                                        [ 82%]
+tests/test_jsonld_configured.py ......                                   [ 82%]
+tests/test_namespaces.py ............................................... [ 83%]
+................                                                         [ 83%]
+tests/test_native_store_contract.py .........                            [ 84%]
+tests/test_paths.py ....................                                 [ 84%]
+tests/test_plugin_discovery.py ......................................... [ 85%]
+.........................................                                [ 86%]
+tests/test_prepared_prebound_grouping.py .......                         [ 86%]
+tests/test_prepared_query.py .......................                     [ 86%]
+tests/test_projection.py ..........                                      [ 87%]
+tests/test_property_functions.py ....................................... [ 87%]
+..........................................                               [ 88%]
+tests/test_query.py .......xx                                            [ 88%]
+tests/test_query_governors.py .......................................... [ 89%]
+.....                                                                    [ 89%]
+tests/test_query_presentation.py ....................                    [ 90%]
+tests/test_rdf_dataset_layers.py ...                                     [ 90%]
+tests/test_rdflib_shadow.py ............                                 [ 90%]
+tests/test_rdflib_suite.py F.                                            [ 90%]
+tests/test_rdflib_version.py .                                           [ 90%]
+tests/test_redeclared_withdrawn_graph.py .                               [ 90%]
+tests/test_resource.py ........                                          [ 90%]
+tests/test_retrieval.py ................................................ [ 91%]
+........................................................................ [ 93%]
+.........                                                                [ 93%]
+tests/test_retrieval_cost_counters.py ....                               [ 93%]
+tests/test_retrieval_vector_producers.py ...........................     [ 94%]
+tests/test_sarif.py ....                                                 [ 94%]
+tests/test_scan_order_determinism.py .                                   [ 94%]
+tests/test_serialize_declared_empty_graphs.py ...                        [ 94%]
+tests/test_serialize_loss.py ........                                    [ 94%]
+tests/test_serialize_output_short_write.py ....                          [ 94%]
+tests/test_sha3.py ......                                                [ 94%]
+tests/test_shacl_change_path.py ..........                               [ 95%]
+tests/test_shacl_change_path_typing.py .....                             [ 95%]
+tests/test_shacl_conformance_disallows.py .....                          [ 95%]
+tests/test_shacl_extension_usage.py ....                                 [ 95%]
+tests/test_shacl_owl_imports.py ...............                          [ 95%]
+tests/test_shacl_product.py ........                                     [ 95%]
+tests/test_shacl_result_annotations.py .                                 [ 95%]
+tests/test_shacl_rules_shapes_graph.py ...                               [ 95%]
+tests/test_shacl_shapes_graph_iri.py ...                                 [ 95%]
+tests/test_shacl_shapes_graph_well_formed.py ...                         [ 96%]
+tests/test_shacl_subclass_of_in_shapes_graph.py ..                       [ 96%]
+tests/test_shacl_tools.py .........                                      [ 96%]
+tests/test_shapes_product_identity.py ..........                         [ 96%]
+tests/test_shex.py .......                                               [ 96%]
+tests/test_sparql_prefixes.py ....                                       [ 96%]
+tests/test_sparql_results.py ........................................... [ 97%]
+.                                                                        [ 97%]
+tests/test_sparqlprocessor.py .....                                      [ 97%]
+tests/test_term_model.py ............................................... [ 98%]
+......................................x........                          [ 99%]
+tests/test_top_level_exports.py ............                             [100%]
+
+=================================== FAILURES ===================================
+_________________________ test_rdflib_conformance_gate _________________________
+
+    def test_rdflib_conformance_gate() -> None:
+        """rdflib's own vendored tests pass against the shim modulo the ledger.
+    
+        GREEN == returncode 0: every vendored test passed or is a known strict xfail;
+        any real failure, any XPASS (a ledgered test that started passing), any
+        collection error, or any stale ledger key turns this RED and shrinks/edits
+        the ledger.
+        """
+        returncode, output, board = _run_suite()
+        assert board, f"could not find scoreboard in runner output:\n{output}"
+    
+        # Report the conformance scoreboard on the parent run for visibility.
+        print(
+            "\nrdflib LSP conformance scoreboard: "
+            f"{board['passed']} passed / {board['xfailed']} xfailed "
+            f"(xpassed={board['xpassed']}, failed={board['failed']}, "
+            f"errors={board['errors']}, ledger {board['ledger_applied']}/"
+            f"{board['ledger_total']} applied, stale={board['ledger_stale']})"
+        )
+    
+        assert board["xpassed"] == 0, (
+            "XPASS discipline: a ledgered test now passes — remove it from "
+            f"xfail_ledger.toml so the ledger shrinks.\n{output}"
+        )
+>       assert board["failed"] == 0, f"unexpected vendored-test failures:\n{output}"
+E       AssertionError: unexpected vendored-test failures:
+E         ..................xx.xx....................x.....F...................... [ 83%]
+E         ..............                                                           [100%]
+E         =================================== FAILURES ===================================
+E         _______________ test_nested_filter_outermost_binding_propagation _______________
+E         
+E             def test_nested_filter_outermost_binding_propagation() -> None:
+E                 """
+E                 This test implements a query that requires functionality of nested FILTER NOT EXISTS query components.
+E             
+E                 It encodes a single ground truth positive query result, a tuple where:
+E                 * The first member is a HistoricAction,
+E                 * The second member is a wholly redundant HistoricRecord in consideration of latter HistoricRecords that cover all non-HistoricRecord inputs to the Action, and
+E                 * The third member is the superseding record.
+E                 """
+E                 expected: Set[Tuple[URIRef, URIRef, URIRef]] = {
+E                     (
+E                         URIRef("http://example.org/kb/action-1-2"),
+E                         URIRef("http://example.org/kb/record-123-1"),
+E                         URIRef("http://example.org/kb/record-1-2"),
+E                     )
+E                 }
+E                 computed: Set[Tuple[URIRef, URIRef, URIRef]] = set()
+E             
+E                 historic_ontology_graph_data = """\
+E             @prefix case-investigation: <https://ontology.caseontology.org/case/investigation/> .
+E             @prefix ex: <http://example.org/ontology/> .
+E             @prefix kb: <http://example.org/kb/> .
+E             @prefix owl: <http://www.w3.org/2002/07/owl#> .
+E             @prefix prov: <http://www.w3.org/ns/prov#> .
+E             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+E             @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+E             @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+E             
+E             <http://example.org/ontology>
+E               a owl:Ontology ;
+E               rdfs:comment "This example ontology represents a history-analyzing application, where notes of things' handling are created and accompany the things as they are used in actions.  For the sake of demonstration, classes and properties implemented here are simplifications of other ontologies' classes and properties.  Otherwise, this ontology is narrowly similar to an application of the CASE and PROV-O ontologies."@en ;
+E               rdfs:seeAlso <https://github.com/casework/CASE-Implementation-PROV-O> ;
+E               .
+E             
+E             # Begin ontology (TBox).
+E             
+E             ex:HistoricThing
+E               a owl:Class ;
+E               rdfs:subClassOf owl:Thing ;
+E               rdfs:comment "A thing generated by some HistoricAction with an accompanying HistoricRecord, and is the input to other HistoricActions.  When a HistoricThing is the input to a HistoricAction, a new HistoricRecord should be emitted by the HistoricAction."@en ;
+E               rdfs:seeAlso prov:Entity ;
+E               .
+E             
+E             ex:HistoricRecord
+E               a owl:Class ;
+E               rdfs:subClassOf ex:HistoricThing ;
+E               rdfs:comment
+E                 "An example class analagous to PROV-O's Collection and CASE's ProvenanceRecord."@en ,
+E                 "Only the latest HistoricRecord for an object should be an input to a HistoricAction."@en
+E                 ;
+E               rdfs:seeAlso
+E                 case-investigation:ProvenanceRecord ,
+E                 prov:Collection
+E                 ;
+E               .
+E             
+E             ex:HistoricAction
+E               a owl:Class ;
+E               rdfs:subClassOf owl:Thing ;
+E               rdfs:comment "An example class analagous to PROV-O's Activity and CASE's InvestigativeAction."@en ;
+E               rdfs:seeAlso
+E                 case-investigation:InvestigativeAction ,
+E                 prov:Activity
+E                 ;
+E               owl:disjointWith ex:HistoricThing ;
+E               .
+E             
+E             ex:hadMember
+E               a owl:ObjectProperty ;
+E               rdfs:domain ex:HistoricRecord ;
+E               rdfs:range ex:HistoricThing ;
+E               rdfs:seeAlso prov:hadMember ;
+E               .
+E             
+E             ex:generated
+E               a owl:ObjectProperty ;
+E               rdfs:domain ex:HistoricAction ;
+E               rdfs:range ex:HistoricThing ;
+E               rdfs:seeAlso prov:wasGeneratedBy ;
+E               .
+E             
+E             ex:used
+E               a owl:ObjectProperty ;
+E               rdfs:domain ex:HistoricAction ;
+E               rdfs:range ex:HistoricThing ;
+E               rdfs:seeAlso prov:used ;
+E               .
+E             
+E             ex:wasDerivedFrom
+E               a owl:ObjectProperty ;
+E               rdfs:domain owl:Thing ;
+E               rdfs:range owl:Thing ;
+E               rdfs:seeAlso prov:wasDerivedFrom ;
+E               .
+E             
+E             # Begin knowledge base (ABox).
+E             
+E             kb:record-123-1
+E               a ex:HistoricRecord ;
+E               rdfs:comment "This is a first record of having handled thing-1, thing-2, and thing-3."@en ;
+E               ex:hadMember
+E                 kb:thing-1 ,
+E                 kb:thing-2
+E                 ;
+E               .
+E             
+E             kb:record-1-2
+E               a ex:HistoricRecord ;
+E               rdfs:comment "This is a second record of having handled thing-1."@en ;
+E               ex:hadMember kb:thing-1 ;
+E               ex:wasDerivedFrom kb:record-123-1 ;
+E               .
+E             
+E             kb:record-2-2
+E               a ex:HistoricRecord ;
+E               rdfs:comment "This is a second record of having handled thing-2."@en ;
+E               ex:hadMember kb:thing-2 ;
+E               ex:wasDerivedFrom kb:record-123-1 ;
+E               .
+E             
+E             kb:record-4-1
+E               a ex:HistoricRecord ;
+E               rdfs:comment "This is a first record of having handled thing-4.  thing-4 is independent in history of thing-1 and thing-2."@en ;
+E               ex:hadMember kb:thing-4 ;
+E               .
+E             
+E             kb:thing-1
+E               a ex:HistoricThing ;
+E               .
+E             
+E             kb:thing-2
+E               a ex:HistoricThing ;
+E               .
+E             
+E             kb:thing-3
+E               a ex:HistoricThing ;
+E               .
+E             
+E             kb:thing-4
+E               a ex:HistoricThing ;
+E               .
+E             
+E             kb:action-123-0
+E               a ex:HistoricAction ;
+E               rdfs:comment "Generate things 1, 2, and 3."@en ;
+E               ex:generated
+E                 kb:record-123-1 ,
+E                 kb:thing-1 ,
+E                 kb:thing-2 ,
+E                 kb:thing-3
+E                 .
+E             
+E             kb:action-4-0
+E               a ex:HistoricAction ;
+E               rdfs:comment "Generate thing 4."@en ;
+E               ex:generated
+E                 kb:record-4-1 ,
+E                 kb:thing-4
+E                 .
+E             
+E             kb:action-1-1
+E               a ex:HistoricAction ;
+E               rdfs:comment "Handle thing-1."@en ;
+E               ex:used
+E                 kb:record-123-1 ,
+E                 kb:thing-1
+E                 ;
+E               ex:generated kb:record-1-2 ;
+E               .
+E             
+E             kb:action-2-1
+E               a ex:HistoricAction ;
+E               rdfs:comment "Handle thing-2."@en ;
+E               ex:used
+E                 kb:record-123-1 ,
+E                 kb:thing-2
+E                 ;
+E               ex:generated kb:record-2-2 ;
+E               .
+E             
+E             kb:action-1-2
+E               a ex:HistoricAction ;
+E               rdfs:comment "This node SHOULD be found by the query.  record-123-1 is wholly redundant with record-1-2 with respect to the collective whole of action inputs."@en ;
+E               ex:used
+E                 kb:record-123-1 ,
+E                 kb:record-1-2 ,
+E                 kb:thing-1
+E                 ;
+E               .
+E             
+E             kb:action-12-2
+E               a ex:HistoricAction ;
+E               rdfs:comment "This node SHOULD NOT be found by the query.  record-123-1 is partially, but not wholly, redundant with record-1-2, due to to thing-2 having record-123-1 as its only accompanying historic record."@en ;
+E               ex:used
+E                 kb:record-123-1 ,
+E                 kb:record-1-2 ,
+E                 kb:thing-1 ,
+E                 kb:thing-2
+E                 ;
+E               .
+E             
+E             kb:action-123-2
+E               a ex:HistoricAction ;
+E               rdfs:comment "This node SHOULD NOT be found by the query.  record-123-1 is partially, but not wholly, redundant with record-1-2 and record-2-2, due to thing-3 having record-123-1 as its only accompanying historic record."@en ;
+E               ex:used
+E                 kb:record-123-1 ,
+E                 kb:record-1-2 ,
+E                 kb:record-2-2 ,
+E                 kb:thing-1 ,
+E                 kb:thing-2 ,
+E                 kb:thing-3
+E                 ;
+E               .
+E             
+E             kb:action-1234-2
+E               a ex:HistoricAction ;
+E               rdfs:comment "This node SHOULD NOT be found by the query.  record-123-1 is partially, but not wholly, redundant with record-1-2 and record-2-2, due to thing-3 having record-123-1 as its only accompanying historic record.  thing-4 also has no shared history with thing-1, -2, or -3."@en ;
+E               ex:used
+E                 kb:record-123-1 ,
+E                 kb:record-1-2 ,
+E                 kb:record-2-2 ,
+E                 kb:record-4-1 ,
+E                 kb:thing-1 ,
+E                 kb:thing-2 ,
+E                 kb:thing-3 ,
+E                 kb:thing-4
+E                 ;
+E               .
+E             """
+E             
+E                 # See 'TEST OBJECTIVE' annotation.
+E                 query = """\
+E             PREFIX ex: <http://example.org/ontology/>
+E             SELECT ?nAction ?nRedundantRecord ?nSupersedingRecord
+E             WHERE {
+E               ?nAction
+E                 ex:used
+E                   ?nThing1 ,
+E                   ?nRedundantRecord ,
+E                   ?nSupersedingRecord
+E                   ;
+E                 .
+E               ?nRedundantRecord
+E                 a ex:HistoricRecord ;
+E                 ex:hadMember ?nThing1 ;
+E                 .
+E               ?nSupersedingRecord
+E                 a ex:HistoricRecord ;
+E                 ex:wasDerivedFrom+ ?nRedundantRecord ;
+E                 ex:hadMember ?nThing1 ;
+E                 .
+E               FILTER NOT EXISTS {
+E                 ?nAction ex:used ?nThing2 .
+E                 ?nRedundantRecord ex:hadMember ?nThing2 .
+E                 FILTER ( ?nThing1 != ?nThing2 )
+E                 FILTER NOT EXISTS {
+E                   ####
+E                   #
+E                   # TEST OBJECTIVE:
+E                   # nThing2 must be passed from the outermost context.
+E                   #
+E                   ####
+E                   ?nSupersedingRecord ex:hadMember ?nThing2 .
+E                 }
+E               }
+E             }
+E             """
+E             
+E                 graph = Graph()
+E                 graph.parse(data=historic_ontology_graph_data)
+E                 logging.debug(len(graph))
+E             
+E                 for result in graph.query(query):
+E                     assert isinstance(result, ResultRow)
+E                     assert isinstance(result[0], URIRef)
+E                     assert isinstance(result[1], URIRef)
+E                     assert isinstance(result[2], URIRef)
+E             
+E                     computed.add((result[0], result[1], result[2]))
+E             
+E         >       assert expected == computed
+E         E       AssertionError: assert {('http://exa.../record-1-2')} == {('http://exa.../record-2-2')}
+E         E         
+E         E         Extra items in the right set:
+E         E         ('http://example.org/kb/action-123-2', 'http://example.org/kb/record-123-1', 'http://example.org/kb/record-2-2')
+E         E         ('http://example.org/kb/action-12-2', 'http://example.org/kb/record-123-1', 'http://example.org/kb/record-1-2')
+E         E         ('http://example.org/kb/action-1234-2', 'http://example.org/kb/record-123-1', 'http://example.org/kb/record-1-2')
+E         E         ('http://example.org/kb/action-123-2', 'http://example.org/kb/record-123-1', 'http://example.org/kb/record-1-2')
+E         E         ('http://example.org/kb/action-1234-2', 'http://example.org/kb/record-123-1', 'http://example.org/kb/record-2-2')
+E         E         Use -v to get more diff
+E         
+E         test_nested_filters.py:348: AssertionError
+E         =============================== warnings summary ===============================
+E         test_conjunctive_graph.py::test_bnode_publicid
+E           /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/rdflib_suite/vendor/test_conjunctive_graph.py:20: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+E             g = ConjunctiveGraph()
+E         
+E         test_conjunctive_graph.py::test_quad_contexts
+E           /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/rdflib_suite/vendor/test_conjunctive_graph.py:38: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+E             g = ConjunctiveGraph()
+E         
+E         test_conjunctive_graph.py::test_context_namespaces
+E           /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/rdflib_suite/vendor/test_conjunctive_graph.py:50: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+E             cg = ConjunctiveGraph()
+E         
+E         test_conjunctive_graph.py::test_graph_ids[check-kws0]
+E         test_conjunctive_graph.py::test_graph_ids[check-kws1]
+E           /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/rdflib_suite/vendor/test_conjunctive_graph.py:69: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+E             cg = ConjunctiveGraph()
+E         
+E         -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+E         PURRDF_SCOREBOARD passed=80 xfailed=5 xpassed=0 failed=1 errors=0 ledger_total=5 ledger_applied=5 ledger_stale=0
+E         =========================== short test summary info ============================
+E         FAILED test_nested_filters.py::test_nested_filter_outermost_binding_propagation
+E         1 failed, 80 passed, 5 xfailed, 5 warnings in 0.17s
+E         
+E         
+E       assert 1 == 0
+
+tests/test_rdflib_suite.py:81: AssertionError
+----------------------------- Captured stdout call -----------------------------
+
+rdflib LSP conformance scoreboard: 80 passed / 5 xfailed (xpassed=0, failed=1, errors=0, ledger 5/5 applied, stale=0)
+=============================== warnings summary ===============================
+tests/test_contextual_mappings.py: 482 warnings
+tests/test_dataset.py: 6 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    c = self.default_context if default else None
+
+tests/test_contextual_mappings.py: 233 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:1721: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    query_graph = self.default_context.identifier
+
+tests/test_contextual_mappings.py: 433 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2344: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    context = self.default_context
+
+tests/test_contextual_mappings.py: 396 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:30: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    graph = getattr(module, "Graph" if route == "processor" else route)()
+
+tests/test_contextual_mappings.py: 15 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:233: DeprecationWarning: Dataset.contexts is deprecated, use Dataset.graphs instead.
+    for graph in ctx.dataset.contexts():
+
+tests/test_contextual_mappings.py: 45 warnings
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py:235: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if graph == ctx.dataset.default_context:
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[False-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-ConjunctiveGraph]
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-ConjunctiveGraph]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/tests/test_contextual_mappings.py:359: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+    dataset = getattr(module, kind)()
+
+tests/test_contextual_mappings.py::test_dataset_query_scope[True-Dataset]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/graph.py:2340: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+    if context == self.default_context:
+
+tests/test_term_model.py::test_ill_typed_matches_oracle[boolean-maybe]
+  /home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/term.py:1862: UserWarning: Parsing weird boolean, 'maybe' does not map to True or False
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_rdflib_suite.py::test_rdflib_conformance_gate - AssertionEr...
+===== 1 failed, 4725 passed, 1 skipped, 4 xfailed, 1616 warnings in 38.91s =====
+make: *** [Makefile:454: pytest] Error 1

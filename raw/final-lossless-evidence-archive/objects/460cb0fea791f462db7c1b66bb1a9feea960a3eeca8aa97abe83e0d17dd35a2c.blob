@@ -1,0 +1,214 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-base-native-ir/qualification_454_native_cost.purrdf_sparql_eval-f1be5881d2e83378.purrdf_sparql_eval.5af75fb13b780118-cgu.0.rcgu.o.rcgu.ll:425101
+; core::slice::sort::unstable::heapsort::heapsort::<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), <[(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)]>::sort_unstable_by_key<usize, purrdf_sparql_eval::modifier::eval_group<purrdf_core::ir::dataset::RdfDataset>::{closure#3}>::{closure#0}>
+define void @_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort8unstable8heapsort8heapsortTjINtNtCscaz69AfmUZO_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCs7Od70DJOKqO_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB15_20sort_unstable_by_keyjNCINvNtB2j_8modifier10eval_groupNtNtNtB1c_2ir7dataset10RdfDatasetEs1_0E0EB2j_(ptr noalias nofree noundef nonnull align 8 captures(none) %0, i64 noundef range(i64 0, 128102389400760776) %1, ptr noalias nofree readnone align 8 captures(none) %2) unnamed_addr #20 personality ptr @rust_eh_personality !guid !51728 {
+  %4 = alloca [72 x i8], align 8
+  %5 = lshr i64 %1, 1
+  %6 = add nuw nsw i64 %5, %1
+  %7 = icmp eq i64 %6, 0
+  br i1 %7, label %.loopexit9, label %.preheader8
+
+.loopexit9:                                       ; preds = %.loopexit, %3
+  ret void
+
+.preheader8:                                      ; preds = %3, %.loopexit
+  %8 = phi i64 [ %9, %.loopexit ], [ %6, %3 ]
+  %9 = add nsw i64 %8, -1
+  %10 = icmp ult i64 %9, %1
+  br i1 %10, label %13, label %11
+
+11:                                               ; preds = %.preheader8
+  %12 = sub nuw nsw i64 %9, %1
+  br label %15
+
+13:                                               ; preds = %.preheader8
+  %14 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %9
+  call void @llvm.lifetime.start.p0(ptr nonnull %4)
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(72) %4, ptr noundef nonnull align 8 dereferenceable(72) %0, i64 72, i1 false)
+  tail call void @llvm.memmove.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(72) %0, ptr noundef nonnull align 8 dereferenceable(72) %14, i64 72, i1 false), !alias.scope !51729
+  call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 8 dereferenceable(72) %14, ptr noundef nonnull align 8 dereferenceable(72) %4, i64 72, i1 false)
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  br label %15
+
+15:                                               ; preds = %13, %11
+  %16 = phi i64 [ %12, %11 ], [ 0, %13 ]
+  %17 = tail call i64 @llvm.umin.i64(i64 %9, i64 %1)
+  %18 = icmp ule i64 %16, %17
+  tail call void @llvm.assume(i1 %18)
+  %19 = shl nuw nsw i64 %16, 1
+  %20 = or disjoint i64 %19, 1
+  %21 = icmp samesign ult i64 %20, %17
+  br i1 %21, label %.preheader, label %.loopexit
+
+.preheader:                                       ; preds = %15, %46
+  %22 = phi i64 [ %62, %46 ], [ %20, %15 ]
+  %23 = phi i64 [ %61, %46 ], [ %19, %15 ]
+  %24 = phi i64 [ %38, %46 ], [ %16, %15 ]
+  %25 = add nuw nsw i64 %23, 2
+  %26 = icmp samesign ult i64 %25, %17
+  br i1 %26, label %27, label %37
+
+27:                                               ; preds = %.preheader
+  %28 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %22
+  %29 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %25
+  %30 = getelementptr i8, ptr %28, i64 40
+  %31 = load i64, ptr %30, align 8, !noundef !1671
+  %32 = getelementptr i8, ptr %29, i64 40
+  %33 = load i64, ptr %32, align 8, !noundef !1671
+  %34 = icmp ult i64 %31, %33
+  %35 = zext i1 %34 to i64
+  %36 = add nuw nsw i64 %22, %35
+  br label %37
+
+37:                                               ; preds = %27, %.preheader
+  %38 = phi i64 [ %36, %27 ], [ %22, %.preheader ]
+  %39 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %24
+  %40 = getelementptr inbounds nuw [72 x i8], ptr %0, i64 %38
+  %41 = getelementptr i8, ptr %39, i64 40
+  %42 = load i64, ptr %41, align 8, !noundef !1671
+  %43 = getelementptr i8, ptr %40, i64 40
+  %44 = load i64, ptr %43, align 8, !noundef !1671
+  %45 = icmp ult i64 %42, %44
+  br i1 %45, label %46, label %.loopexit
+
+46:                                               ; preds = %37
+  %47 = load <4 x i64>, ptr %39, align 8, !alias.scope !51732, !noalias !1671
+  %48 = load <4 x i64>, ptr %40, align 8, !alias.scope !51738, !noalias !1671
+  store <4 x i64> %48, ptr %39, align 8, !alias.scope !51732, !noalias !1671
+  store <4 x i64> %47, ptr %40, align 8, !alias.scope !51738, !noalias !1671
+  %49 = getelementptr inbounds nuw i8, ptr %39, i64 32
+  %50 = getelementptr inbounds nuw i8, ptr %40, i64 32
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !51743)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !51745)
+  %51 = load i64, ptr %49, align 8, !alias.scope !51743, !noalias !51745
+  %52 = load i64, ptr %50, align 8, !alias.scope !51745, !noalias !51743
+  store i64 %52, ptr %49, align 8, !alias.scope !51743, !noalias !51745
+  store i64 %51, ptr %50, align 8, !alias.scope !51745, !noalias !51743
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !51747)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !51749)
+  store i64 %44, ptr %41, align 8, !alias.scope !51747, !noalias !51749
+  store i64 %42, ptr %43, align 8, !alias.scope !51749, !noalias !51747
+  %53 = getelementptr inbounds nuw i8, ptr %39, i64 48
+  %54 = getelementptr inbounds nuw i8, ptr %40, i64 48
+  %55 = load <2 x i64>, ptr %53, align 8, !alias.scope !51751, !noalias !1671
+  %56 = load <2 x i64>, ptr %54, align 8, !alias.scope !51754, !noalias !1671
+  store <2 x i64> %56, ptr %53, align 8, !alias.scope !51751, !noalias !1671
+  store <2 x i64> %55, ptr %54, align 8, !alias.scope !51754, !noalias !1671
+  %57 = getelementptr inbounds nuw i8, ptr %39, i64 64
+  %58 = getelementptr inbounds nuw i8, ptr %40, i64 64
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !51757)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !51759)
+  %59 = load i64, ptr %57, align 8, !alias.scope !51757, !noalias !51759
+  %60 = load i64, ptr %58, align 8, !alias.scope !51759, !noalias !51757
+  store i64 %60, ptr %57, align 8, !alias.scope !51757, !noalias !51759
+  store i64 %59, ptr %58, align 8, !alias.scope !51759, !noalias !51757
+  %61 = shl nuw nsw i64 %38, 1
+  %62 = or disjoint i64 %61, 1
+  %63 = icmp samesign ult i64 %62, %17
+  br i1 %63, label %.preheader, label %.loopexit
+
+.loopexit:                                        ; preds = %46, %37, %15
+  %64 = icmp eq i64 %9, 0
+  br i1 %64, label %.loopexit9, label %.preheader8
+}
+
+ASSEMBLY
+_RINvNtNtNtNtCs2k2z8Zem4rB_4core5slice4sort8unstable8heapsort8heapsortTjINtNtCscaz69AfmUZO_11purrdf_core5small8SmallVecAINtNtBa_6option6OptionNtNtCs7Od70DJOKqO_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsc70TAahYccp_5alloc3vec3VecjEENCINvMB8_SB15_20sort_unstable_by_keyjNCINvNtB2j_8modifier10eval_groupNtNtNtB1c_2ir7dataset10RdfDatasetEs1_0E0EB2j_:
+.Lfunc_begin1064:
+	.cfi_startproc
+	movq	%rsi, %rax
+	shrq	%rax
+	addq	%rsi, %rax
+	je	.LBB1064_12
+	pushq	%r14
+	.cfi_def_cfa_offset 16
+	pushq	%rbx
+	.cfi_def_cfa_offset 24
+	.cfi_offset %rbx, -24
+	.cfi_offset %r14, -16
+	jmp	.LBB1064_2
+	.p2align	4
+.LBB1064_10:
+	testq	%rax, %rax
+	je	.LBB1064_11
+.LBB1064_2:
+	decq	%rax
+	movq	%rax, %rdx
+	subq	%rsi, %rdx
+	jae	.LBB1064_4
+	vmovups	(%rdi), %zmm0
+	movq	64(%rdi), %rdx
+	leaq	(%rax,%rax,8), %rcx
+	vmovups	(%rdi,%rcx,8), %zmm2
+	movq	%rdx, -8(%rsp)
+	movq	64(%rdi,%rcx,8), %rdx
+	vmovups	%zmm0, -72(%rsp)
+	vmovups	-72(%rsp), %zmm1
+	movq	%rdx, 64(%rdi)
+	movq	-8(%rsp), %rdx
+	vmovups	%zmm2, (%rdi)
+	movq	%rdx, 64(%rdi,%rcx,8)
+	xorl	%edx, %edx
+	vmovups	%zmm1, (%rdi,%rcx,8)
+.LBB1064_4:
+	cmpq	%rsi, %rax
+	leaq	1(%rdx,%rdx), %r9
+	movq	%rsi, %rcx
+	cmovbq	%rax, %rcx
+	cmpq	%rcx, %r9
+	jae	.LBB1064_10
+	leaq	(%rdx,%rdx), %r10
+	.p2align	4
+.LBB1064_6:
+	addq	$2, %r10
+	cmpq	%rcx, %r10
+	jae	.LBB1064_8
+	leaq	(%r9,%r9,8), %r8
+	leaq	(%r10,%r10,8), %r10
+	movq	40(%rdi,%r8,8), %r8
+	cmpq	40(%rdi,%r10,8), %r8
+	adcq	$0, %r9
+.LBB1064_8:
+	leaq	(%rdx,%rdx,8), %r10
+	leaq	(%r9,%r9,8), %r11
+	movq	%r9, %r8
+	movq	40(%rdi,%r10,8), %rdx
+	movq	40(%rdi,%r11,8), %r9
+	cmpq	%r9, %rdx
+	jae	.LBB1064_10
+	leaq	(%rdi,%r10,8), %r10
+	leaq	(%rdi,%r11,8), %r11
+	vmovups	(%r10), %ymm0
+	vmovups	(%r11), %ymm1
+	vmovups	%ymm1, (%r10)
+	vmovups	%ymm0, (%r11)
+	movq	32(%r10), %rbx
+	movq	32(%r11), %r14
+	movq	%r14, 32(%r10)
+	movq	%rbx, 32(%r11)
+	movq	%r9, 40(%r10)
+	movq	%rdx, 40(%r11)
+	vmovups	48(%r10), %xmm0
+	vmovups	48(%r11), %xmm1
+	vmovups	%xmm1, 48(%r10)
+	vmovups	%xmm0, 48(%r11)
+	movq	64(%r11), %r9
+	movq	64(%r10), %rdx
+	movq	%r9, 64(%r10)
+	leaq	1(%r8,%r8), %r9
+	leaq	(%r8,%r8), %r10
+	movq	%rdx, 64(%r11)
+	movq	%r8, %rdx
+	cmpq	%rcx, %r9
+	jb	.LBB1064_6
+	jmp	.LBB1064_10
+.LBB1064_11:
+	popq	%rbx
+	.cfi_def_cfa_offset 16
+	popq	%r14
+	.cfi_def_cfa_offset 8
+	.cfi_restore %rbx
+	.cfi_restore %r14
+.LBB1064_12:
+	vzeroupper
+	retq
+.Lfunc_end1064:

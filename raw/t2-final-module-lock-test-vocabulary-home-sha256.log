@@ -1,0 +1,3 @@
+282264e4a45c28cad41f66dd7ec517d2f728f595360edd83b8affacf976979a4  bindings/python/python/src/purrdf/purrdf_native.abi3.so
+06275d43821c8351f89f88071af043ce4c4645fe3adcf2126b2f28f031cafc01  bindings/python/uv.lock
+9b547977e29cc2c0dde850cc4249e4e9784e8a00287c14b391a3808448d3ee49  bindings/python/tests/test_contextual_mappings.py

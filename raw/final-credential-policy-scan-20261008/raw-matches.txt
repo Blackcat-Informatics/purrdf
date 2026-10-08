@@ -1,0 +1,4 @@
+/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/tasks/portfolio-final-evidence-packaging-proposal.md
+/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts/src/openpgp.rs
+/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/vectors/openpgp/test_key.sec.asc
+/opt/purrdf-454-native-cost-main-df2cec88/source.tar

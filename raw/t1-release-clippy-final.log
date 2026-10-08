@@ -1,0 +1,33 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/sparql-eval/tests/prepared_execution.rs:150:25
+    |
+150 |     purrdf_sparql_eval::set_memo_verification_enabled(false);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:197:20
+    |
+196 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+197 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/sparql-eval/tests/prepared_execution.rs:152:25
+    |
+152 |     purrdf_sparql_eval::set_memo_verification_enabled(true);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:197:20
+    |
+196 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+197 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (test "prepared_execution") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

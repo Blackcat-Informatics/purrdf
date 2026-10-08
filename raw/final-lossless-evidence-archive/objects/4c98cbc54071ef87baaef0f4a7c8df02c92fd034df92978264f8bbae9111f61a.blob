@@ -1,0 +1,32 @@
+0	IRI (RFC 3987 / RFC 3986 resolution)	19	0	0	true
+1	RDFC-1.0 canonicalization	6	0	0	true
+2	RDF 1.2 canonicalization profile	12	0	0	true
+3	Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)	264	0	0	true
+4	SPARQL 1.0/1.1/1.2 evaluation (full corpus)	1393	0	0	true
+5	SPARQL 1.0 unlisted vendored files	1	0	0	true
+6	SPARQL 1.0 cases superseded by RDF 1.2	1	0	0	true
+7	SPARQL CONSTRUCT (first-party corpus)	29	0	0	true
+8	SPARQL DESCRIBE (first-party corpus)	16	0	0	true
+9	SPARQL CDT (SEP-0009, vendored corpus)	658	0	0	true
+10	SPARQL execution governors	50	0	0	true
+11	SPARQL embedding kNN (first-party)	15	0	0	true
+12	HNSW approximate kNN (first-party)	87	0	0	true
+13	GeoSPARQL 1.1 determinism corpus	20	0	0	true
+14	Entailment (OWL 2 DL consistency)	258	4	0	true
+15	Entailment (OWL 2 RL, W3C entailment tests)	50	0	0	true
+16	SHACL Core + SHACL-SPARQL	129	0	0	true
+17	SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)	538	6	0	true
+18	SHACL 1.2 unlisted vendored files	3	0	0	true
+19	SHACL (first-party corpus)	73	0	0	true
+20	Community SHACL dated profiles (REC 2017 / WD 2026)	115	0	0	true
+21	SHACL prepared-product equivalence	364	0	0	true
+22	XSD/XPath regExp (first-party corpus)	292	0	0	true
+23	SHACL Rules	20	0	0	true
+24	ShEx 2.1 validation	1105	0	0	true
+25	ShEx syntax + ShExC/ShExJ round-trip	10	0	0	true
+26	JSON Schema draft 2020-12 (official suite)	2342	0	0	true
+27	JSON Schema draft 2019-09 (official suite)	2298	0	0	true
+28	JSON Schema draft-07 (official suite)	1841	0	0	true
+29	GTS transport (frozen vectors)	38	1	0	true
+30	rdflib LSP drop-in gate	81	5	0	true
+31	Python binding suite	4192	4	0	true

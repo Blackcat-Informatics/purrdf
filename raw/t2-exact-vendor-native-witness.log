@@ -1,0 +1,64 @@
+     Locking 70 packages to highest Rust 1.100.0-nightly compatible versions
+      Adding wasm-bindgen v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro-support v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-shared v0.2.125 (available: v0.2.129)
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling cpufeatures v0.3.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/lex)
+   Compiling crossbeam-utils v0.8.23
+   Compiling crossbeam-epoch v0.9.21
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.5
+   Compiling digest v0.11.3
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd)
+   Compiling inout v0.2.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-events)
+   Compiling cmov v0.5.4
+   Compiling crossbeam-deque v0.8.8
+   Compiling ctutils v0.4.3
+   Compiling sha2 v0.11.0
+   Compiling libc v0.2.190
+   Compiling regex-syntax v0.8.11
+   Compiling cpubits v0.1.1
+   Compiling rayon-core v1.13.0
+   Compiling regex-automata v0.4.18
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt)
+   Compiling cipher v0.5.2
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+   Compiling polyval v0.7.3
+   Compiling regex v1.13.1
+   Compiling getrandom v0.3.4
+   Compiling hashbrown v0.17.1
+   Compiling either v1.19.0
+   Compiling rayon v1.12.0
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.5
+   Compiling fastrand v2.5.0
+   Compiling structured-zstd v0.0.49
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/stack)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf)
+   Compiling qualification-454-frozen-vendor-witness v0.0.0 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/.stage/rdflib-shim-algebra-level-reassignment/raw/native-vendor-witness)
+    Finished `release` profile [optimized] target(s) in 2m 26s
+     Running `/opt/.cargo/slots/dbcc6e1601a6a560/0/target/release/qualification-454-frozen-vendor-witness bindings/python/tests/rdflib_suite/vendor/test_nested_filters.py`
+fixture=bindings/python/tests/rdflib_suite/vendor/test_nested_filters.py
+columns=["nAction", "nRedundantRecord", "nSupersedingRecord"]
+rows=[[Some(Iri("http://example.org/kb/action-1-2")), Some(Iri("http://example.org/kb/record-123-1")), Some(Iri("http://example.org/kb/record-1-2"))]]
+exact frozen vendor witness native PASS

@@ -1,0 +1,11 @@
+becb41cb4c8dec6e8bdf62d50f16747f0970b0e68295a708b2da30dc57e25e4b  .stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-bin
+faa6bb7f65cf82437d460225d5f7137644538911a352535277c3db42dd754e9f  .stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base.asm
+9aca8f3739301e905997b9736da84dc1ede5705d73c32182e7464152ed93613d  .stage/rdflib-shim-algebra-level-reassignment/raw/ir-inventory
+Dropped stash@{0} (f753f029e29fd59f16119306a09fd54251e121a5)
+stash@{0} 6364aa842ce5c3c1eed3d80f601c082c53b62ccc On issue-408-geodesy-spatial-index: 408 preserve complete implementation before latest main integration
+stash@{1} 5e1669b3348aef3643dbe825c51d294dd02a953b On issue-408-geodesy-spatial-index: Preserve geodesy implementation before authorized main synchronization
+stash@{2} f85c86a685fbc74e399d255c9d2ce0b0a634c210 On paudley/384-portable-adversarial-conformance: 384 work in progress before main integration
+stash@{3} 60ff7d3f00a1afd52bb0a9074c46752aab32f39f On paudley/358-async-wasm-service: 358-inflight-parked-1790574920
+7465c1c96c13420c8745c74cf85f39f35fd3892db88b9ede5892e17a8d01d522  .stage/rdflib-shim-algebra-level-reassignment/raw/t1-final-shipping-tracked.diff
+b3fdad6f0be09d06884cd6aa6699a6d369a9018eb139b30d6ca3d2f553e35db3  .stage/rdflib-shim-algebra-level-reassignment/tasks/T1-review.md
+becb93004ac582a2210d1e9dbd29d0cea7a6e3fe02c636ac8d9f92fcb8851e99  .stage/rdflib-shim-algebra-level-reassignment/tasks/T1-native-cost-review.md

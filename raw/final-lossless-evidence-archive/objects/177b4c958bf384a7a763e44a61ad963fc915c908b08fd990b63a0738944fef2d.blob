@@ -1,0 +1,6 @@
+MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false \
+	MDBOOK_OUTPUT__HTML__SITE_URL='/purrdf/zh-Hans/' \
+	mdbook build -d "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/docs/book/book/zh-Hans" docs/book
+ INFO Book building has started
+ INFO Running the html backend
+ INFO HTML book written to `/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/docs/book/book/zh-Hans`

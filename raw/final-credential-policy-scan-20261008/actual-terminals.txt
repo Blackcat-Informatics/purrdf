@@ -1,0 +1,6 @@
+73557 before inventory/modes/SHA terminal0
+21266 raw policy scan0; initial archive-loop terminal2 intentional traversal fixture; initial diagnostics retained
+89059 corrected archive loop terminal0;26 producer0;matcher0/1;zero error lines
+36312 baseline nested9/readbacks0 and after snapshot complete; final diff terminal1 for two concurrent monitor-report changes, not artifact mismatch
+proposal private-history preservation/cmp/SHA terminal0
+current complete selected-Stage raw rescan terminal0;zero matches/errors

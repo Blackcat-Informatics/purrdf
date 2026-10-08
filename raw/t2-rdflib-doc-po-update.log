@@ -1,0 +1,5 @@
+MDBOOK_OUTPUT='{"xgettext": {"pot-file": "messages.pot"}}' mdbook build -d docs/book/po docs/book
+ INFO Book building has started
+ INFO Running the xgettext backend
+ INFO Invoking the "xgettext" renderer
+msgmerge --quiet --update --backup=none docs/book/po/zh-Hans.po docs/book/po/messages.pot

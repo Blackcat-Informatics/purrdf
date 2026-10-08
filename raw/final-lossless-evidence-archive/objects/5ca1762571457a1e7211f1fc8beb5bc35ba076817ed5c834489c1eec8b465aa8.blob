@@ -1,0 +1,307 @@
+crates/sparql-eval/tests/rdflib_contextual.rs:401:        policy: Box::new(ApplicationPolicy {
+crates/sparql-eval/tests/rdflib_contextual.rs-402-            dataset_required: required,
+crates/sparql-eval/tests/rdflib_contextual.rs-403-            row_pipeline: false,
+crates/sparql-eval/tests/rdflib_contextual.rs-404-            reduced_adjacent: false,
+crates/sparql-eval/tests/rdflib_contextual.rs-405-            group_domain: None,
+crates/sparql-eval/tests/rdflib_contextual.rs-406-            inputs: Vec::new(),
+crates/sparql-eval/tests/rdflib_contextual.rs-407-            optional: None,
+crates/sparql-eval/tests/rdflib_contextual.rs-408-        }),
+crates/sparql-eval/tests/rdflib_contextual.rs-409-    };
+crates/sparql-eval/tests/rdflib_contextual.rs-410-    let plain = pattern(false);
+--
+crates/sparql-eval/tests/rdflib_contextual.rs:1214:        policy: Box::new(ApplicationPolicy {
+crates/sparql-eval/tests/rdflib_contextual.rs-1215-            dataset_required: false,
+crates/sparql-eval/tests/rdflib_contextual.rs-1216-            row_pipeline: true,
+crates/sparql-eval/tests/rdflib_contextual.rs-1217-            reduced_adjacent: false,
+crates/sparql-eval/tests/rdflib_contextual.rs-1218-            group_domain: None,
+crates/sparql-eval/tests/rdflib_contextual.rs-1219-            inputs: Vec::new(),
+crates/sparql-eval/tests/rdflib_contextual.rs-1220-            optional: None,
+crates/sparql-eval/tests/rdflib_contextual.rs-1221-        }),
+crates/sparql-eval/tests/rdflib_contextual.rs-1222-    };
+crates/sparql-eval/tests/rdflib_contextual.rs-1223-    let engine = NativeSparqlEngine::new();
+--
+crates/shapes/src/prebinding.rs:651:            policy: Box::new(ApplicationPolicy {
+crates/shapes/src/prebinding.rs-652-                dataset_required: false,
+crates/shapes/src/prebinding.rs-653-                row_pipeline: false,
+crates/shapes/src/prebinding.rs-654-                reduced_adjacent: false,
+crates/shapes/src/prebinding.rs-655-                group_domain: None,
+crates/shapes/src/prebinding.rs-656-                inputs: Vec::new(),
+crates/shapes/src/prebinding.rs-657-                optional: None,
+crates/shapes/src/prebinding.rs-658-            }),
+crates/shapes/src/prebinding.rs-659-        };
+crates/shapes/src/prebinding.rs-660-        let nested = GraphPattern::Filter {
+--
+crates/shapes/src/srl/reads.rs:511:            policy: Box::new(ApplicationPolicy {
+crates/shapes/src/srl/reads.rs-512-                dataset_required: false,
+crates/shapes/src/srl/reads.rs-513-                row_pipeline: false,
+crates/shapes/src/srl/reads.rs-514-                reduced_adjacent: false,
+crates/shapes/src/srl/reads.rs-515-                group_domain: None,
+crates/shapes/src/srl/reads.rs-516-                inputs: Vec::new(),
+crates/shapes/src/srl/reads.rs-517-                optional: None,
+crates/shapes/src/srl/reads.rs-518-            }),
+crates/shapes/src/srl/reads.rs-519-        };
+crates/shapes/src/srl/reads.rs-520-        let mut reads = Reads::default();
+--
+crates/sparql-eval/src/property_fn_plan.rs:1568:                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-eval/src/property_fn_plan.rs-1569-                        dataset_required: policy.dataset_required,
+crates/sparql-eval/src/property_fn_plan.rs-1570-                        row_pipeline: policy.row_pipeline,
+crates/sparql-eval/src/property_fn_plan.rs-1571-                        reduced_adjacent: policy.reduced_adjacent,
+crates/sparql-eval/src/property_fn_plan.rs-1572-                        group_domain: policy.group_domain.clone(),
+crates/sparql-eval/src/property_fn_plan.rs-1573-                        inputs: policy.inputs.clone(),
+crates/sparql-eval/src/property_fn_plan.rs-1574-                        optional,
+crates/sparql-eval/src/property_fn_plan.rs-1575-                    }),
+crates/sparql-eval/src/property_fn_plan.rs-1576-                }
+crates/sparql-eval/src/property_fn_plan.rs-1577-            }
+--
+crates/sparql-eval/src/property_fn_plan.rs:4510:                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-eval/src/property_fn_plan.rs-4511-                        dataset_required: policy.dataset_required,
+crates/sparql-eval/src/property_fn_plan.rs-4512-                        row_pipeline: policy.row_pipeline,
+crates/sparql-eval/src/property_fn_plan.rs-4513-                        reduced_adjacent: policy.reduced_adjacent,
+crates/sparql-eval/src/property_fn_plan.rs-4514-                        group_domain: policy.group_domain.clone(),
+crates/sparql-eval/src/property_fn_plan.rs-4515-                        inputs: policy.inputs.clone(),
+crates/sparql-eval/src/property_fn_plan.rs-4516-                        optional,
+crates/sparql-eval/src/property_fn_plan.rs-4517-                    }),
+crates/sparql-eval/src/property_fn_plan.rs-4518-                }
+crates/sparql-eval/src/property_fn_plan.rs-4519-            }
+--
+crates/sparql-eval/src/governor/soundness.rs:3939:            policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-eval/src/governor/soundness.rs-3940-                dataset_required: false,
+crates/sparql-eval/src/governor/soundness.rs-3941-                row_pipeline: false,
+crates/sparql-eval/src/governor/soundness.rs-3942-                reduced_adjacent: false,
+crates/sparql-eval/src/governor/soundness.rs-3943-                group_domain: None,
+crates/sparql-eval/src/governor/soundness.rs-3944-                inputs: vec![(Variable::new("context"), Variable::new("driver"))],
+crates/sparql-eval/src/governor/soundness.rs-3945-                optional: Some(purrdf_sparql_algebra::algebra::OptionalApplication {
+crates/sparql-eval/src/governor/soundness.rs-3946-                    retry_inputs: vec![(Variable::new("context"), Variable::new("remembered"))],
+crates/sparql-eval/src/governor/soundness.rs-3947-                    forget_marker: Variable::new("visibility"),
+crates/sparql-eval/src/governor/soundness.rs-3948-                }),
+--
+crates/sparql-eval/src/governor/soundness.rs:5023:                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-eval/src/governor/soundness.rs-5024-                        dataset_required: false,
+crates/sparql-eval/src/governor/soundness.rs-5025-                        row_pipeline: false,
+crates/sparql-eval/src/governor/soundness.rs-5026-                        reduced_adjacent: false,
+crates/sparql-eval/src/governor/soundness.rs-5027-                        group_domain: None,
+crates/sparql-eval/src/governor/soundness.rs-5028-                        inputs: vec![(Variable::new("context"), Variable::new("driver"))],
+crates/sparql-eval/src/governor/soundness.rs-5029-                        optional: self.coin().then(|| {
+crates/sparql-eval/src/governor/soundness.rs-5030-                            purrdf_sparql_algebra::algebra::OptionalApplication {
+crates/sparql-eval/src/governor/soundness.rs-5031-                                retry_inputs: vec![(
+crates/sparql-eval/src/governor/soundness.rs-5032-                                    Variable::new("context"),
+--
+crates/sparql-eval/src/expr.rs:3566:                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-eval/src/expr.rs-3567-                        dataset_required: policy.dataset_required,
+crates/sparql-eval/src/expr.rs-3568-                        row_pipeline: policy.row_pipeline,
+crates/sparql-eval/src/expr.rs-3569-                        reduced_adjacent: policy.reduced_adjacent,
+crates/sparql-eval/src/expr.rs-3570-                        group_domain: policy.group_domain.clone(),
+crates/sparql-eval/src/expr.rs-3571-                        inputs: policy.inputs.clone(),
+crates/sparql-eval/src/expr.rs-3572-                        optional,
+crates/sparql-eval/src/expr.rs-3573-                    }),
+crates/sparql-eval/src/expr.rs-3574-                },
+crates/sparql-eval/src/expr.rs-3575-                pattern,
+--
+crates/slice/src/ownership.rs:1151:            policy: Box::new(ApplicationPolicy {
+crates/slice/src/ownership.rs-1152-                dataset_required: false,
+crates/slice/src/ownership.rs-1153-                row_pipeline: false,
+crates/slice/src/ownership.rs-1154-                reduced_adjacent: false,
+crates/slice/src/ownership.rs-1155-                group_domain: None,
+crates/slice/src/ownership.rs-1156-                inputs: vec![(Variable::new("x"), Variable::new("driver"))],
+crates/slice/src/ownership.rs-1157-                optional: None,
+crates/slice/src/ownership.rs-1158-            }),
+crates/slice/src/ownership.rs-1159-        };
+crates/slice/src/ownership.rs-1160-        let nested = GraphPattern::Filter {
+--
+crates/sparql-eval/src/binop.rs:961:impl ApplicationMode for &purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-eval/src/binop.rs-962-    const DECLARED: bool = true;
+crates/sparql-eval/src/binop.rs-963-    fn policy(&self) -> Option<&purrdf_sparql_algebra::algebra::ApplicationPolicy> {
+crates/sparql-eval/src/binop.rs-964-        Some(self)
+crates/sparql-eval/src/binop.rs-965-    }
+crates/sparql-eval/src/binop.rs-966-}
+crates/sparql-eval/src/binop.rs-967-
+crates/sparql-eval/src/binop.rs-968-#[inline(never)]
+crates/sparql-eval/src/binop.rs-969-fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
+crates/sparql-eval/src/binop.rs-970-    node: &GraphPattern,
+--
+crates/sparql-eval/src/rdflib.rs:177:        policy: Box::new(ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-178-            dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-179-            row_pipeline: true,
+crates/sparql-eval/src/rdflib.rs-180-            reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-181-            group_domain: None,
+crates/sparql-eval/src/rdflib.rs-182-            inputs: mapping
+crates/sparql-eval/src/rdflib.rs-183-                .values()
+crates/sparql-eval/src/rdflib.rs-184-                .map(|slot| (slot.clone(), slot.clone()))
+crates/sparql-eval/src/rdflib.rs-185-                .collect(),
+crates/sparql-eval/src/rdflib.rs-186-            optional: None,
+--
+crates/sparql-eval/src/rdflib.rs:272:                ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-273-                    dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-274-                    row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-275-                    reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-276-                    group_domain: None,
+crates/sparql-eval/src/rdflib.rs-277-                    inputs,
+crates/sparql-eval/src/rdflib.rs-278-                    optional: None,
+crates/sparql-eval/src/rdflib.rs-279-                },
+crates/sparql-eval/src/rdflib.rs-280-            )
+crates/sparql-eval/src/rdflib.rs-281-        });
+--
+crates/sparql-eval/src/rdflib.rs:577:                    ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-578-                        dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-579-                        row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-580-                        reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-581-                        group_domain: None,
+crates/sparql-eval/src/rdflib.rs-582-                        inputs,
+crates/sparql-eval/src/rdflib.rs-583-                        optional,
+crates/sparql-eval/src/rdflib.rs-584-                    },
+crates/sparql-eval/src/rdflib.rs-585-                );
+crates/sparql-eval/src/rdflib.rs-586-                self.merge(applied, &left_compiled.mapping, &right_compiled.mapping)
+--
+crates/sparql-eval/src/rdflib.rs:663:                    ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-664-                        dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-665-                        row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-666-                        reduced_adjacent: true,
+crates/sparql-eval/src/rdflib.rs-667-                        group_domain: None,
+crates/sparql-eval/src/rdflib.rs-668-                        inputs: Vec::new(),
+crates/sparql-eval/src/rdflib.rs-669-                        optional: None,
+crates/sparql-eval/src/rdflib.rs-670-                    },
+crates/sparql-eval/src/rdflib.rs-671-                );
+crates/sparql-eval/src/rdflib.rs-672-                compiled
+--
+crates/sparql-eval/src/rdflib.rs:763:                    ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-764-                        dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-765-                        row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-766-                        reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-767-                        group_domain: Some(domain),
+crates/sparql-eval/src/rdflib.rs-768-                        inputs: Vec::new(),
+crates/sparql-eval/src/rdflib.rs-769-                        optional: None,
+crates/sparql-eval/src/rdflib.rs-770-                    },
+crates/sparql-eval/src/rdflib.rs-771-                );
+crates/sparql-eval/src/rdflib.rs-772-                let grouped = if variables.is_empty() {
+--
+crates/sparql-eval/src/rdflib.rs:795:                        ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-796-                            dataset_required: true,
+crates/sparql-eval/src/rdflib.rs-797-                            row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-798-                            reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-799-                            group_domain: None,
+crates/sparql-eval/src/rdflib.rs-800-                            inputs: Vec::new(),
+crates/sparql-eval/src/rdflib.rs-801-                            optional: None,
+crates/sparql-eval/src/rdflib.rs-802-                        },
+crates/sparql-eval/src/rdflib.rs-803-                    );
+crates/sparql-eval/src/rdflib.rs-804-                    return compiled;
+--
+crates/sparql-eval/src/rdflib.rs:885:                                ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-886-                                    dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-887-                                    row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-888-                                    reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-889-                                    group_domain: None,
+crates/sparql-eval/src/rdflib.rs-890-                                    inputs,
+crates/sparql-eval/src/rdflib.rs-891-                                    optional: None,
+crates/sparql-eval/src/rdflib.rs-892-                                },
+crates/sparql-eval/src/rdflib.rs-893-                            ),
+crates/sparql-eval/src/rdflib.rs-894-                            mapping: compiled.mapping,
+--
+crates/sparql-eval/src/rdflib.rs:1184:        ApplicationPolicy {
+crates/sparql-eval/src/rdflib.rs-1185-            dataset_required: false,
+crates/sparql-eval/src/rdflib.rs-1186-            row_pipeline: false,
+crates/sparql-eval/src/rdflib.rs-1187-            reduced_adjacent: false,
+crates/sparql-eval/src/rdflib.rs-1188-            group_domain: None,
+crates/sparql-eval/src/rdflib.rs-1189-            inputs,
+crates/sparql-eval/src/rdflib.rs-1190-            optional: None,
+crates/sparql-eval/src/rdflib.rs-1191-        },
+crates/sparql-eval/src/rdflib.rs-1192-    );
+crates/sparql-eval/src/rdflib.rs-1193-    let mut projection_names = None;
+--
+crates/rdf/src/projections/dataset_description.rs:860:            policy: Box::new(ApplicationPolicy {
+crates/rdf/src/projections/dataset_description.rs-861-                dataset_required: false,
+crates/rdf/src/projections/dataset_description.rs-862-                row_pipeline: false,
+crates/rdf/src/projections/dataset_description.rs-863-                reduced_adjacent: false,
+crates/rdf/src/projections/dataset_description.rs-864-                group_domain: None,
+crates/rdf/src/projections/dataset_description.rs-865-                inputs: Vec::new(),
+crates/rdf/src/projections/dataset_description.rs-866-                optional: None,
+crates/rdf/src/projections/dataset_description.rs-867-            }),
+crates/rdf/src/projections/dataset_description.rs-868-        };
+crates/rdf/src/projections/dataset_description.rs-869-        let volatile = GraphPattern::Filter {
+--
+crates/purrdf/src/reasoning.rs:1916:        let policy = Box::new(ApplicationPolicy {
+crates/purrdf/src/reasoning.rs-1917-            dataset_required: false,
+crates/purrdf/src/reasoning.rs-1918-            row_pipeline: false,
+crates/purrdf/src/reasoning.rs-1919-            reduced_adjacent: false,
+crates/purrdf/src/reasoning.rs-1920-            group_domain: None,
+crates/purrdf/src/reasoning.rs-1921-            inputs: Vec::new(),
+crates/purrdf/src/reasoning.rs-1922-            optional: None,
+crates/purrdf/src/reasoning.rs-1923-        });
+crates/purrdf/src/reasoning.rs-1924-        let pattern = GraphPattern::Apply {
+crates/purrdf/src/reasoning.rs-1925-            left: Child::new(left),
+--
+crates/sparql-algebra/tests/iterative_traits.rs:135:    pub(crate) struct ApplicationPolicy {
+crates/sparql-algebra/tests/iterative_traits.rs-136-        pub(crate) dataset_required: bool,
+crates/sparql-algebra/tests/iterative_traits.rs-137-        pub(crate) row_pipeline: bool,
+crates/sparql-algebra/tests/iterative_traits.rs-138-        pub(crate) reduced_adjacent: bool,
+crates/sparql-algebra/tests/iterative_traits.rs-139-        pub(crate) group_domain: Option<Box<[Variable]>>,
+crates/sparql-algebra/tests/iterative_traits.rs-140-        pub(crate) inputs: Vec<(Variable, Variable)>,
+crates/sparql-algebra/tests/iterative_traits.rs-141-        pub(crate) optional: Option<OptionalApplication>,
+crates/sparql-algebra/tests/iterative_traits.rs-142-    }
+crates/sparql-algebra/tests/iterative_traits.rs-143-
+crates/sparql-algebra/tests/iterative_traits.rs-144-    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+--
+crates/sparql-algebra/tests/iterative_traits.rs:291:            policy: Box::new(mirror::ApplicationPolicy {
+crates/sparql-algebra/tests/iterative_traits.rs-292-                dataset_required: policy.dataset_required,
+crates/sparql-algebra/tests/iterative_traits.rs-293-                row_pipeline: policy.row_pipeline,
+crates/sparql-algebra/tests/iterative_traits.rs-294-                reduced_adjacent: policy.reduced_adjacent,
+crates/sparql-algebra/tests/iterative_traits.rs-295-                group_domain: policy.group_domain.clone(),
+crates/sparql-algebra/tests/iterative_traits.rs-296-                inputs: policy.inputs.clone(),
+crates/sparql-algebra/tests/iterative_traits.rs-297-                optional: policy
+crates/sparql-algebra/tests/iterative_traits.rs-298-                    .optional
+crates/sparql-algebra/tests/iterative_traits.rs-299-                    .as_ref()
+crates/sparql-algebra/tests/iterative_traits.rs-300-                    .map(|optional| mirror::OptionalApplication {
+--
+crates/sparql-algebra/tests/iterative_traits.rs:897:                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+crates/sparql-algebra/tests/iterative_traits.rs-898-                        dataset_required: false,
+crates/sparql-algebra/tests/iterative_traits.rs-899-                        row_pipeline: false,
+crates/sparql-algebra/tests/iterative_traits.rs-900-                        reduced_adjacent: false,
+crates/sparql-algebra/tests/iterative_traits.rs-901-                        group_domain: None,
+crates/sparql-algebra/tests/iterative_traits.rs-902-                        inputs: vec![(Variable::new("input"), Variable::new("driver"))],
+crates/sparql-algebra/tests/iterative_traits.rs-903-                        optional: condition.map(|_| {
+crates/sparql-algebra/tests/iterative_traits.rs-904-                            purrdf_sparql_algebra::algebra::OptionalApplication {
+crates/sparql-algebra/tests/iterative_traits.rs-905-                                retry_inputs: vec![(
+crates/sparql-algebra/tests/iterative_traits.rs-906-                                    Variable::new("input"),
+--
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs:1092:        policy: Box::new(ApplicationPolicy {
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1093-            dataset_required: true,
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1094-            row_pipeline: false,
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1095-            reduced_adjacent: true,
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1096-            group_domain: Some(vec![a.clone(), b.clone(), caller.clone()].into_boxed_slice()),
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1097-            inputs: vec![(a.clone(), b.clone()), (b.clone(), caller.clone())],
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1098-            optional: Some(OptionalApplication {
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1099-                retry_inputs: vec![(b.clone(), a.clone()), (marker.clone(), caller.clone())],
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1100-                forget_marker: marker.clone(),
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1101-            }),
+--
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs:1116:        policy: Box::new(ApplicationPolicy {
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1117-            dataset_required: true,
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1118-            row_pipeline: false,
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1119-            reduced_adjacent: true,
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1120-            group_domain: Some(
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1121-                vec![alpha.clone(), beta.clone(), caller.clone()].into_boxed_slice(),
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1122-            ),
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1123-            inputs: vec![
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1124-                (alpha.clone(), beta.clone()),
+crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs-1125-                (beta.clone(), caller.clone()),
+--
+crates/sparql-algebra/src/algebra.rs:1055:pub struct ApplicationPolicy {
+crates/sparql-algebra/src/algebra.rs-1056-    /// A reached GRAPH operation requires a dataset rather than a single-graph host.
+crates/sparql-algebra/src/algebra.rs-1057-    pub dataset_required: bool,
+crates/sparql-algebra/src/algebra.rs-1058-    /// The RHS is a zero-or-one-row scalar continuation over an empty mapping.
+crates/sparql-algebra/src/algebra.rs-1059-    /// Composition may append scalar operators without materializing a stage.
+crates/sparql-algebra/src/algebra.rs-1060-    pub row_pipeline: bool,
+crates/sparql-algebra/src/algebra.rs-1061-    /// A stored `Reduced` operand compares only consecutive actual mappings.
+crates/sparql-algebra/src/algebra.rs-1062-    pub reduced_adjacent: bool,
+crates/sparql-algebra/src/algebra.rs-1063-    /// Actual mapping columns and row scheduling for a stored `Group` operand.
+crates/sparql-algebra/src/algebra.rs-1064-    /// Aggregate updates follow yielded input rows; `DISTINCT *` reads this domain.
+--
+crates/sparql-algebra/src/owned.rs:499:            policy: Box::new(crate::algebra::ApplicationPolicy {
+crates/sparql-algebra/src/owned.rs-500-                dataset_required: policy.dataset_required,
+crates/sparql-algebra/src/owned.rs-501-                row_pipeline: policy.row_pipeline,
+crates/sparql-algebra/src/owned.rs-502-                reduced_adjacent: policy.reduced_adjacent,
+crates/sparql-algebra/src/owned.rs-503-                group_domain: policy.group_domain.clone(),
+crates/sparql-algebra/src/owned.rs-504-                inputs: policy.inputs.clone(),
+crates/sparql-algebra/src/owned.rs-505-                optional: policy.optional.as_ref().map(|optional| {
+crates/sparql-algebra/src/owned.rs-506-                    crate::algebra::OptionalApplication {
+crates/sparql-algebra/src/owned.rs-507-                        retry_inputs: optional.retry_inputs.clone(),
+crates/sparql-algebra/src/owned.rs-508-                        forget_marker: optional.forget_marker.clone(),

@@ -1,0 +1,48 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "group-only-having-expression-projection-unbound",
+      "query": "SELECT (<http://example.org/b> AS ?this) WHERE { VALUES ?this { <http://example.org/a> } } GROUP BY ?this HAVING(?this = <http://example.org/a>)",
+      "initial": {},
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "group-only-having-expression-projection-bound",
+      "query": "SELECT (<http://example.org/b> AS ?this) WHERE { VALUES ?this { <http://example.org/a> } } GROUP BY ?this HAVING(?this = <http://example.org/a>)",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "iri",
+              "http://example.org/b"
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

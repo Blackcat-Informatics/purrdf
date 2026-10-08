@@ -1,0 +1,183 @@
+{
+  "version": "7.6.0",
+  "source_files": [
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py",
+      "sha256": "5b11d35dac2c6f608b8676056a13d786e526ec660aa494c081e01797165792fc"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/evaluate.py",
+      "sha256": "991944f756398773c4ddf0da0bf5a3c2285f2a67140c9976a8a806ba5d8402be"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/bindings/python/.venv/lib/python3.13/site-packages/rdflib/plugins/sparql/algebra.py",
+      "sha256": "22441c48e62b22c40ec17a1ffaf5360b7b08cfb971cfe8ad59a599e8766d81b3"
+    }
+  ],
+  "initBindings": {
+    "this": "http://example.org/a"
+  },
+  "triples": [
+    [
+      "a",
+      "p",
+      "o1"
+    ],
+    [
+      "a",
+      "p",
+      "o2"
+    ],
+    [
+      "b",
+      "p",
+      "o3"
+    ]
+  ],
+  "cases": {
+    "bind_then_read": {
+      "query": "SELECT ?this ?value WHERE { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value }",
+      "columns": [
+        "this",
+        "value"
+      ],
+      "rows": [
+        [
+          "<http://example.org/b>",
+          "<http://example.org/o1>"
+        ],
+        [
+          "<http://example.org/b>",
+          "<http://example.org/o2>"
+        ]
+      ]
+    },
+    "optional_override": {
+      "query": "SELECT ?this ?value WHERE { ?s <http://example.org/p> ?value OPTIONAL { BIND(<http://example.org/b> AS ?this) } }",
+      "columns": [
+        "this",
+        "value"
+      ],
+      "rows": [
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o1>"
+        ],
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o2>"
+        ],
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o3>"
+        ]
+      ]
+    },
+    "minus_override": {
+      "query": "SELECT ?this ?value WHERE { ?s <http://example.org/p> ?value MINUS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "columns": [
+        "this",
+        "value"
+      ],
+      "rows": [
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o1>"
+        ],
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o2>"
+        ],
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o3>"
+        ]
+      ]
+    },
+    "exists_override": {
+      "query": "SELECT ?this ?value WHERE { ?s <http://example.org/p> ?value FILTER EXISTS { BIND(<http://example.org/b> AS ?this) ?this <http://example.org/p> ?value } }",
+      "columns": [
+        "this",
+        "value"
+      ],
+      "rows": []
+    },
+    "group_override": {
+      "query": "SELECT ?this (COUNT(*) AS ?n) WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) } GROUP BY ?this",
+      "columns": [
+        "n",
+        "this"
+      ],
+      "rows": [
+        [
+          "\"3\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+          "<http://example.org/b>"
+        ]
+      ]
+    },
+    "star_override": {
+      "query": "SELECT * WHERE { ?s <http://example.org/p> ?value BIND(<http://example.org/b> AS ?this) }",
+      "columns": [
+        "s",
+        "this",
+        "value"
+      ],
+      "rows": [
+        [
+          "<http://example.org/a>",
+          "<http://example.org/b>",
+          "<http://example.org/o1>"
+        ],
+        [
+          "<http://example.org/a>",
+          "<http://example.org/b>",
+          "<http://example.org/o2>"
+        ],
+        [
+          "<http://example.org/b>",
+          "<http://example.org/b>",
+          "<http://example.org/o3>"
+        ]
+      ]
+    },
+    "nested_override": {
+      "query": "SELECT ?this ?value WHERE { ?this <http://example.org/p> ?value { BIND(<http://example.org/b> AS ?this) } }",
+      "columns": [
+        "this",
+        "value"
+      ],
+      "rows": [
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o1>"
+        ],
+        [
+          "<http://example.org/a>",
+          "<http://example.org/o2>"
+        ]
+      ]
+    },
+    "duplicate_override": {
+      "query": "SELECT ?this WHERE { BIND(<http://example.org/z> AS ?this) BIND(<http://example.org/w> AS ?this) }",
+      "columns": [
+        "this"
+      ],
+      "rows": [
+        [
+          "<http://example.org/w>"
+        ]
+      ]
+    },
+    "error_keeps_old": {
+      "query": "SELECT ?this WHERE { BIND((1/0) AS ?this) }",
+      "columns": [
+        "this"
+      ],
+      "rows": [
+        [
+          "<http://example.org/a>"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "group-volatile-accumulator-order-unbound",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) (SUM(<http://example.org/counter>(1)) AS ?other) WHERE { VALUES ?driver { 1 2 3 } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "other",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "9",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "group-volatile-accumulator-order-bound",
+      "query": "SELECT (SUM(<http://example.org/counter>(1)) AS ?this) (SUM(<http://example.org/counter>(1)) AS ?other) WHERE { VALUES ?driver { 1 2 3 } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "other",
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ],
+            [
+              "literal",
+              "9",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "group-distinct-volatile-use-update-unbound",
+      "query": "SELECT (SUM(DISTINCT <http://example.org/counter>(1)) AS ?this) WHERE { VALUES ?driver { 1 2 3 } }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    },
+    {
+      "name": "group-distinct-volatile-use-update-bound",
+      "query": "SELECT (SUM(DISTINCT <http://example.org/counter>(1)) AS ?this) WHERE { VALUES ?driver { 1 2 3 } }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "SELECT",
+        "columns": [
+          "this"
+        ],
+        "rows": [
+          [
+            [
+              "literal",
+              "12",
+              "http://www.w3.org/2001/XMLSchema#integer",
+              null
+            ]
+          ]
+        ],
+        "callback_invocations": 6
+      }
+    }
+  ]
+}

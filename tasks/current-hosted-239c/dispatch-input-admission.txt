@@ -1,0 +1,1 @@
+ci.yaml current source declares only simd_projection input; native_profile input absent and native profiling campaign unavailable/inactive on this branch. Supported final dispatch uses simd_projection=false only; no invented input submitted.

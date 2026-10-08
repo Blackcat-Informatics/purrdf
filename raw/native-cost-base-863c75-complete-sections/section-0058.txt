@@ -1,0 +1,34 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-base-863c75-ir/qualification_454_native_cost.purrdf_sparql_eval-0ecc65cc8c2d1ea3.purrdf_sparql_eval.85e4f8f062a88157-cgu.0.rcgu.o.rcgu.ll:290901
+; purrdf_sparql_eval::binop::eval_union::<purrdf_core::ir::dataset::RdfDataset>
+define void @_RINvNtCsbuIrFgshI6V_18purrdf_sparql_eval5binop10eval_unionNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr dead_on_unwind noalias nofree noundef writable writeonly sret([104 x i8]) align 8 captures(none) dereferenceable(104) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %2, i64 noundef range(i64 0, 64051194700380388) %3, ptr noalias nofree noundef align 16 dereferenceable(944) %4) unnamed_addr #9 !guid !35291 {
+  %6 = alloca [32 x i8], align 8
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  store i64 -2, ptr %6, align 8
+; call purrdf_sparql_eval::binop::eval_union_with::<purrdf_core::ir::dataset::RdfDataset>
+  call fastcc void @_RINvNtCsbuIrFgshI6V_18purrdf_sparql_eval5binop15eval_union_withNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEB4_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(104) %0, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(144) %1, ptr noalias nofree noundef nonnull readonly align 8 captures(address, read_provenance) %2, i64 noundef %3, ptr noalias nofree noundef align 8 captures(address) dereferenceable(32) %6, ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable_or_null(184) null, ptr noalias nofree noundef align 16 dereferenceable(944) %4)
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  ret void
+}
+
+ASSEMBLY
+_RINvNtCsbuIrFgshI6V_18purrdf_sparql_eval5binop10eval_unionNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEB4_:
+.Lfunc_begin884:
+	.cfi_startproc
+	pushq	%rbx
+	.cfi_def_cfa_offset 16
+	subq	$48, %rsp
+	.cfi_def_cfa_offset 64
+	.cfi_offset %rbx, -16
+	movq	%r8, (%rsp)
+	leaq	16(%rsp), %r8
+	xorl	%r9d, %r9d
+	movq	%rdi, %rbx
+	movq	$-2, 16(%rsp)
+	callq	_RINvNtCsbuIrFgshI6V_18purrdf_sparql_eval5binop15eval_union_withNtNtNtCstkel86B4QG_11purrdf_core2ir7dataset10RdfDatasetEB4_
+	movq	%rbx, %rax
+	addq	$48, %rsp
+	.cfi_def_cfa_offset 16
+	popq	%rbx
+	.cfi_def_cfa_offset 8
+	retq
+.Lfunc_end884:

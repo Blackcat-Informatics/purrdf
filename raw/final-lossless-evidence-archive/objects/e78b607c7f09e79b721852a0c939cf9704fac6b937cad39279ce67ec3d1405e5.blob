@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo test --locked --jobs 8 -p purrdf-sparql-eval --test rdflib_contextual --test prepared_parameters 

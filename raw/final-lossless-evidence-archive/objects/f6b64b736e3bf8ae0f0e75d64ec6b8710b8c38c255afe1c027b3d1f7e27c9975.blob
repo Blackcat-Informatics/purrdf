@@ -1,0 +1,44 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/hash)
+    Checking typenum v1.20.1
+    Checking hybrid-array v0.4.15
+    Checking crossbeam-utils v0.8.21
+    Checking block-buffer v0.12.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/lex)
+    Checking crypto-common v0.2.2
+    Checking regex-syntax v0.8.11
+    Checking cfg-if v1.0.4
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/xsd)
+    Checking const-oid v0.10.2
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-events)
+    Checking digest v0.11.3
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/cdt)
+    Checking regex-automata v0.4.14
+    Checking crossbeam-epoch v0.9.18
+    Checking cpufeatures v0.3.0
+    Checking sha2 v0.11.0
+    Checking crossbeam-deque v0.8.6
+    Checking libc v0.2.186
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/deflate)
+    Checking hashbrown v0.17.1
+    Checking rayon-core v1.13.0
+    Checking either v1.16.0
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/rdf-core)
+    Checking rayon v1.12.0
+    Checking getrandom v0.3.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/stack)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/crates/sparql-eval)
+error: value assigned to `enclosing_placeholders` is never read
+   --> crates/sparql-eval/src/binop.rs:318:9
+    |
+318 |         enclosing_placeholders = ctx.deferred_exists.clone();
+    |         ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `-D unused-assignments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_assignments)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error

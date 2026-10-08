@@ -1,0 +1,23 @@
+{
+  "head": "18489a91cb452b1773c60b469d4c30dc33a9a4a4",
+  "tree": "5d150fa4076cc75e293b517f79dd080b6ea807ed",
+  "installed_files": [
+    {
+      "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/purrdf_native.abi3.so",
+      "sha256": "1fbe83ff12fbcb7d7825ee5e814ece84642cba1951fdbf2f58ddae33ea59c9ab"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/__init__.py",
+      "sha256": "5c6db38682513f4d6d10815c8c65f22a68b03e208e92fae3e54fa02ffc8c945f"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/python/src/purrdf/compat/rdflib/__init__.py",
+      "sha256": "64631c4a1f85161785379bf09bfbe29c248ff9465f6c8ac7d3a56650ae4407e3"
+    },
+    {
+      "path": "/home/paudley/Active/purrdf/.worktrees/454-rdflib-shim-algebra-level-reassignment/bindings/python/.venv/lib/python3.13/site-packages/rdflib/__init__.py",
+      "sha256": "5b11d35dac2c6f608b8676056a13d786e526ec660aa494c081e01797165792fc"
+    }
+  ],
+  "oracle_version": "7.6.0"
+}

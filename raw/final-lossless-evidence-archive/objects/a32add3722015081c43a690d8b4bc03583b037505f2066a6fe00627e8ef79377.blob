@@ -1,0 +1,371 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t3-base-native-ir/qualification_454_native_cost.purrdf_sparql_eval-f1be5881d2e83378.purrdf_sparql_eval.5af75fb13b780118-cgu.0.rcgu.o.rcgu.ll:873970
+; <alloc::vec::Vec<purrdf_sparql_algebra::algebra::GraphPattern> as core::fmt::Debug>::fmt
+define internal noundef zeroext i1 @_RNvXsr_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtCscTZQnUyyJie_21purrdf_sparql_algebra7algebra12GraphPatternENtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmtCs7Od70DJOKqO_18purrdf_sparql_eval(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %0, ptr noalias nofree noundef align 8 dereferenceable(24) %1) unnamed_addr #2 personality ptr @rust_eh_personality !guid !117742 {
+  %3 = alloca [24 x i8], align 8
+  %4 = alloca [1 x i8], align 1
+  %5 = alloca [24 x i8], align 16
+  %6 = getelementptr inbounds nuw i8, ptr %0, i64 8
+  %7 = load ptr, ptr %6, align 8, !nonnull !1671, !noundef !1671
+  %8 = getelementptr inbounds nuw i8, ptr %0, i64 16
+  %9 = load i64, ptr %8, align 8, !noundef !1671
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !117743)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !117746), !dbg !107352, !noalias !117749
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !117752), !dbg !107360, !noalias !117749
+  %10 = load ptr, ptr %1, align 8, !dbg !107363, !alias.scope !117755, !noalias !117756, !nonnull !1671, !noundef !1671
+  %11 = getelementptr inbounds nuw i8, ptr %1, i64 8, !dbg !107363
+  %12 = load ptr, ptr %11, align 8, !dbg !107363, !alias.scope !117755, !noalias !117756, !nonnull !1671, !align !1837, !noundef !1671
+  %13 = getelementptr inbounds nuw i8, ptr %12, i64 24, !dbg !107363
+  %14 = load ptr, ptr %13, align 8, !dbg !107363, !invariant.load !1671, !noalias !117760, !nonnull !1671
+  %15 = tail call noundef zeroext i1 %14(ptr noundef nonnull %10, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.a647af78948fdeb0321157bdb82ef7e0.198.llvm.9794848731438112354, i64 noundef 1) #89, !dbg !107371, !noalias !117761, !inline_history !107373
+  %16 = mul nuw nsw i64 %9, 144
+  %17 = getelementptr inbounds nuw i8, ptr %7, i64 %16
+  %18 = icmp eq i64 %9, 0
+  br i1 %18, label %.loopexit, label %.preheader
+
+.preheader:                                       ; preds = %2
+  %19 = getelementptr inbounds nuw i8, ptr %1, i64 16
+  %20 = getelementptr inbounds nuw i8, ptr %5, i64 16
+  %21 = getelementptr inbounds nuw i8, ptr %3, i64 16
+  %22 = getelementptr inbounds nuw i8, ptr %3, i64 8
+  %23 = getelementptr inbounds nuw i8, ptr %7, i64 144
+  br i1 %15, label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel, label %24, !dbg !107380
+
+24:                                               ; preds = %.preheader
+  %25 = load i32, ptr %19, align 8, !dbg !107388, !noalias !117762, !noundef !1671
+  %26 = and i32 %25, 8388608, !dbg !107388
+  %27 = icmp eq i32 %26, 0, !dbg !107388
+  br i1 %27, label %40, label %28, !dbg !107407
+
+28:                                               ; preds = %24
+  %29 = tail call noundef zeroext i1 %14(ptr noundef nonnull %10, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.a647af78948fdeb0321157bdb82ef7e0.49.llvm.9794848731438112354, i64 noundef 1) #89, !dbg !107408, !noalias !117771, !inline_history !107413
+  br i1 %29, label %42, label %._crit_edge6, !dbg !107414
+
+._crit_edge6:                                     ; preds = %28
+  call void @llvm.lifetime.start.p0(ptr nonnull %5), !dbg !107417, !noalias !117762
+  call void @llvm.lifetime.start.p0(ptr nonnull %4), !dbg !107418, !noalias !117762
+  store i8 1, ptr %4, align 1, !dbg !107420, !noalias !117762
+  call void @llvm.lifetime.start.p0(ptr nonnull %3), !dbg !107423, !noalias !117762
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !117774), !dbg !107428
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !117777), !dbg !107428
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !117779), !dbg !107428
+  %30 = load <2 x ptr>, ptr %1, align 8, !dbg !107490, !alias.scope !117777, !noalias !117781
+  store <2 x ptr> %30, ptr %5, align 16, !dbg !107433, !alias.scope !117779, !noalias !117783
+  store ptr %4, ptr %20, align 16, !dbg !107433, !alias.scope !117779, !noalias !117783
+  %31 = load i64, ptr %19, align 8, !dbg !107440, !alias.scope !117777, !noalias !117781
+  store i64 %31, ptr %21, align 8, !dbg !107442, !alias.scope !117774, !noalias !117784
+  store ptr %5, ptr %3, align 8, !dbg !107442, !alias.scope !117774, !noalias !117784
+  store ptr @anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354, ptr %22, align 8, !dbg !107442, !alias.scope !117774, !noalias !117784
+; call purrdf_sparql_algebra::traits::node_debug
+  %32 = call fastcc noundef zeroext i1 @_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052(i64 noundef 0, ptr noundef nonnull readonly align 8 dereferenceable(144) %7, ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %3), !dbg !107444, !noalias !117785
+  br i1 %32, label %39, label %33, !dbg !107446
+
+33:                                               ; preds = %._crit_edge6
+  call void @llvm.experimental.noalias.scope.decl(metadata !117788), !dbg !107451
+  %34 = load ptr, ptr %3, align 8, !dbg !107452, !alias.scope !117788, !noalias !117791, !nonnull !1671, !noundef !1671
+  %35 = load ptr, ptr %22, align 8, !dbg !107452, !alias.scope !117788, !noalias !117791, !nonnull !1671, !align !1837, !noundef !1671
+  %36 = getelementptr inbounds nuw i8, ptr %35, i64 24, !dbg !107452
+  %37 = load ptr, ptr %36, align 8, !dbg !107452, !invariant.load !1671, !noalias !117793, !nonnull !1671
+  %38 = call noundef zeroext i1 %37(ptr noundef nonnull %34, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354, i64 noundef 2) #89, !dbg !107457, !noalias !117794, !inline_history !107413
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !dbg !107459, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !dbg !107460, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !107461, !noalias !117762
+  br label %42, !dbg !107462
+
+39:                                               ; preds = %._crit_edge6
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !dbg !107459, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !dbg !107460, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !107461, !noalias !117762
+  br label %42, !dbg !107463
+
+40:                                               ; preds = %24
+; call purrdf_sparql_algebra::traits::node_debug
+  %41 = tail call fastcc noundef zeroext i1 @_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052(i64 noundef 0, ptr noundef nonnull readonly align 8 dereferenceable(144) %7, ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %1), !dbg !107465, !noalias !117795
+  br label %42, !dbg !107465
+
+42:                                               ; preds = %40, %39, %33, %28
+  %43 = phi i1 [ true, %39 ], [ %38, %33 ], [ true, %28 ], [ %41, %40 ]
+  %44 = zext i1 %43 to i8, !dbg !107466
+  br label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel, !dbg !107466
+
+_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel: ; preds = %42, %.preheader
+  %45 = phi i8 [ %44, %42 ], [ 1, %.preheader ], !dbg !107467
+  %46 = icmp eq i64 %9, 1
+  br i1 %46, label %.loopexit.loopexit, label %.peel.next
+
+.peel.next:                                       ; preds = %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit
+  %.sroa.5.0 = phi i8 [ %75, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit ], [ %45, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel ], !dbg !107468
+  %47 = phi ptr [ %48, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit ], [ %23, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel ]
+  %48 = getelementptr inbounds nuw i8, ptr %47, i64 144
+  %49 = trunc nuw i8 %.sroa.5.0 to i1, !dbg !107470
+  br i1 %49, label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit, label %50, !dbg !107380
+
+50:                                               ; preds = %.peel.next
+  %51 = load i32, ptr %19, align 8, !dbg !107388, !noalias !117762, !noundef !1671
+  %52 = and i32 %51, 8388608, !dbg !107388
+  %53 = icmp eq i32 %52, 0, !dbg !107388
+  br i1 %53, label %56, label %62, !dbg !107407
+
+54:                                               ; preds = %56
+; call purrdf_sparql_algebra::traits::node_debug
+  %55 = call fastcc noundef zeroext i1 @_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052(i64 noundef 0, ptr noundef nonnull readonly align 8 dereferenceable(144) %47, ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %1), !dbg !107465, !noalias !117795
+  br label %72, !dbg !107465
+
+56:                                               ; preds = %50
+  call void @llvm.experimental.noalias.scope.decl(metadata !117798), !dbg !107474
+  %57 = load ptr, ptr %1, align 8, !dbg !107475, !alias.scope !117798, !noalias !117801, !nonnull !1671, !noundef !1671
+  %58 = load ptr, ptr %11, align 8, !dbg !107475, !alias.scope !117798, !noalias !117801, !nonnull !1671, !align !1837, !noundef !1671
+  %59 = getelementptr inbounds nuw i8, ptr %58, i64 24, !dbg !107475
+  %60 = load ptr, ptr %59, align 8, !dbg !107475, !invariant.load !1671, !noalias !117803, !nonnull !1671
+  %61 = call noundef zeroext i1 %60(ptr noundef nonnull %57, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.a647af78948fdeb0321157bdb82ef7e0.39.llvm.9794848731438112354, i64 noundef 2) #89, !dbg !107480, !noalias !117804, !inline_history !107413
+  br i1 %61, label %72, label %54, !dbg !107482
+
+62:                                               ; preds = %50
+  %.pre15 = load i64, ptr %19, align 8, !dbg !107440, !alias.scope !117805, !noalias !117807
+  call void @llvm.lifetime.start.p0(ptr nonnull %5), !dbg !107417, !noalias !117762
+  call void @llvm.lifetime.start.p0(ptr nonnull %4), !dbg !107418, !noalias !117762
+  store i8 1, ptr %4, align 1, !dbg !107420, !noalias !117762
+  call void @llvm.lifetime.start.p0(ptr nonnull %3), !dbg !107423, !noalias !117762
+  call void @llvm.experimental.noalias.scope.decl(metadata !117810), !dbg !107428
+  call void @llvm.experimental.noalias.scope.decl(metadata !117805), !dbg !107428
+  call void @llvm.experimental.noalias.scope.decl(metadata !117811), !dbg !107428
+  %63 = load <2 x ptr>, ptr %1, align 8, !dbg !107490, !noalias !117762
+  store <2 x ptr> %63, ptr %5, align 16, !dbg !107433, !alias.scope !117811, !noalias !117812
+  store ptr %4, ptr %20, align 16, !dbg !107433, !alias.scope !117811, !noalias !117812
+  store i64 %.pre15, ptr %21, align 8, !dbg !107442, !alias.scope !117810, !noalias !117813
+  store ptr %5, ptr %3, align 8, !dbg !107442, !alias.scope !117810, !noalias !117813
+  store ptr @anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354, ptr %22, align 8, !dbg !107442, !alias.scope !117810, !noalias !117813
+; call purrdf_sparql_algebra::traits::node_debug
+  %64 = call fastcc noundef zeroext i1 @_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052(i64 noundef 0, ptr noundef nonnull readonly align 8 dereferenceable(144) %47, ptr noalias nofree noundef nonnull align 8 dereferenceable(24) %3), !dbg !107444, !noalias !117785
+  br i1 %64, label %65, label %66, !dbg !107446
+
+65:                                               ; preds = %62
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !dbg !107459, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !dbg !107460, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !107461, !noalias !117762
+  br label %72, !dbg !107463
+
+66:                                               ; preds = %62
+  call void @llvm.experimental.noalias.scope.decl(metadata !117814), !dbg !107451
+  %67 = load ptr, ptr %3, align 8, !dbg !107452, !alias.scope !117814, !noalias !117791, !nonnull !1671, !noundef !1671
+  %68 = load ptr, ptr %22, align 8, !dbg !107452, !alias.scope !117814, !noalias !117791, !nonnull !1671, !align !1837, !noundef !1671
+  %69 = getelementptr inbounds nuw i8, ptr %68, i64 24, !dbg !107452
+  %70 = load ptr, ptr %69, align 8, !dbg !107452, !invariant.load !1671, !noalias !117816, !nonnull !1671
+  %71 = call noundef zeroext i1 %70(ptr noundef nonnull %67, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354, i64 noundef 2) #89, !dbg !107457, !noalias !117817, !inline_history !107413
+  call void @llvm.lifetime.end.p0(ptr nonnull %3), !dbg !107459, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %4), !dbg !107460, !noalias !117762
+  call void @llvm.lifetime.end.p0(ptr nonnull %5), !dbg !107461, !noalias !117762
+  br label %72, !dbg !107462
+
+72:                                               ; preds = %66, %65, %56, %54
+  %73 = phi i1 [ true, %65 ], [ %71, %66 ], [ true, %56 ], [ %55, %54 ]
+  %74 = zext i1 %73 to i8, !dbg !107466
+  br label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit, !dbg !107466
+
+_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit: ; preds = %.peel.next, %72
+  %75 = phi i8 [ %74, %72 ], [ 1, %.peel.next ], !dbg !107467
+  %76 = icmp eq ptr %48, %17
+  br i1 %76, label %.loopexit.loopexit, label %.peel.next, !llvm.loop !117818
+
+.loopexit.loopexit:                               ; preds = %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel
+  %.lcssa = phi i8 [ %45, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit.peel ], [ %75, %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList5entry.exit ], !dbg !107467
+  %77 = trunc nuw i8 %.lcssa to i1, !dbg !107499
+  br i1 %77, label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList6finish.exit, label %78, !dbg !107501
+
+.loopexit:                                        ; preds = %2
+  br i1 %15, label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList6finish.exit, label %78, !dbg !107501
+
+78:                                               ; preds = %.loopexit.loopexit, %.loopexit
+  call void @llvm.experimental.noalias.scope.decl(metadata !117819), !dbg !107507
+  %79 = load ptr, ptr %1, align 8, !dbg !107513, !alias.scope !117819, !noalias !117822, !nonnull !1671, !noundef !1671
+  %80 = load ptr, ptr %11, align 8, !dbg !107513, !alias.scope !117819, !noalias !117822, !nonnull !1671, !align !1837, !noundef !1671
+  %81 = getelementptr inbounds nuw i8, ptr %80, i64 24, !dbg !107513
+  %82 = load ptr, ptr %81, align 8, !dbg !107513, !invariant.load !1671, !noalias !117826, !nonnull !1671
+  %83 = call noundef zeroext i1 %82(ptr noundef nonnull %79, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) @anon.a647af78948fdeb0321157bdb82ef7e0.54.llvm.9794848731438112354, i64 noundef 1) #89, !dbg !107520, !noalias !117827, !inline_history !107522
+  br label %_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList6finish.exit, !dbg !107523
+
+_RNvMs6_NtNtCs2k2z8Zem4rB_4core3fmt8buildersNtB5_9DebugList6finish.exit: ; preds = %.loopexit.loopexit, %.loopexit, %78
+  %84 = phi i1 [ %83, %78 ], [ true, %.loopexit ], [ true, %.loopexit.loopexit ], !dbg !107524
+  ret i1 %84
+}
+
+ASSEMBLY
+_RNvXsr_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtCscTZQnUyyJie_21purrdf_sparql_algebra7algebra12GraphPatternENtNtCs2k2z8Zem4rB_4core3fmt5Debug3fmtCs7Od70DJOKqO_18purrdf_sparql_eval:
+.Lfunc_begin2048:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	pushq	%r15
+	.cfi_def_cfa_offset 24
+	pushq	%r14
+	.cfi_def_cfa_offset 32
+	pushq	%r13
+	.cfi_def_cfa_offset 40
+	pushq	%r12
+	.cfi_def_cfa_offset 48
+	pushq	%rbx
+	.cfi_def_cfa_offset 56
+	subq	$56, %rsp
+	.cfi_def_cfa_offset 112
+	.cfi_offset %rbx, -56
+	.cfi_offset %r12, -48
+	.cfi_offset %r13, -40
+	.cfi_offset %r14, -32
+	.cfi_offset %r15, -24
+	.cfi_offset %rbp, -16
+	movq	8(%rsi), %rax
+	movq	(%rsi), %r15
+	movq	8(%rdi), %r14
+	movq	16(%rdi), %r12
+	movq	%rsi, %rbx
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.198.llvm.9794848731438112354(%rip), %rsi
+	movl	$1, %edx
+	movq	24(%rax), %r13
+	movq	%r15, %rdi
+	callq	*%r13
+	movl	%eax, %ecx
+	testq	%r12, %r12
+	je	.LBB2048_20
+	movb	$1, %al
+	testb	%cl, %cl
+	jne	.LBB2048_8
+	testb	$-128, 18(%rbx)
+	jne	.LBB2048_3
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	movq	%rbx, %rdx
+	callq	_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052
+	cmpq	$1, %r12
+	je	.LBB2048_9
+	jmp	.LBB2048_10
+.LBB2048_3:
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.49.llvm.9794848731438112354(%rip), %rsi
+	movl	$1, %edx
+	movq	%r15, %rdi
+	callq	*%r13
+	movl	%eax, %ecx
+	movb	$1, %al
+	testb	%cl, %cl
+	jne	.LBB2048_8
+	vmovups	(%rbx), %xmm0
+	movq	16(%rbx), %rdx
+	leaq	7(%rsp), %rax
+	leaq	32(%rsp), %rcx
+	movb	$1, 7(%rsp)
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	movq	%rdx, 24(%rsp)
+	leaq	8(%rsp), %rdx
+	movq	%rcx, 8(%rsp)
+	vmovaps	%xmm0, 32(%rsp)
+	movq	%rax, 48(%rsp)
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354(%rip), %rax
+	movq	%rax, 16(%rsp)
+	callq	_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052
+	testb	%al, %al
+	je	.LBB2048_5
+	movb	$1, %al
+.LBB2048_8:
+	cmpq	$1, %r12
+	jne	.LBB2048_10
+.LBB2048_9:
+	movl	%eax, %ecx
+.LBB2048_20:
+	movb	$1, %al
+	testb	%cl, %cl
+	jne	.LBB2048_22
+	movq	8(%rbx), %rax
+	movq	(%rbx), %rdi
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.54.llvm.9794848731438112354(%rip), %rsi
+	movl	$1, %edx
+	movq	24(%rax), %rax
+	callq	*%rax
+.LBB2048_22:
+	addq	$56, %rsp
+	.cfi_def_cfa_offset 56
+	popq	%rbx
+	.cfi_def_cfa_offset 48
+	popq	%r12
+	.cfi_def_cfa_offset 40
+	popq	%r13
+	.cfi_def_cfa_offset 32
+	popq	%r14
+	.cfi_def_cfa_offset 24
+	popq	%r15
+	.cfi_def_cfa_offset 16
+	popq	%rbp
+	.cfi_def_cfa_offset 8
+	retq
+.LBB2048_5:
+	.cfi_def_cfa_offset 112
+	movq	16(%rsp), %rax
+	movq	8(%rsp), %rdi
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354(%rip), %rsi
+	movl	$2, %edx
+	movq	24(%rax), %rax
+	callq	*%rax
+	cmpq	$1, %r12
+	je	.LBB2048_9
+.LBB2048_10:
+	shlq	$4, %r12
+	addq	$144, %r14
+	leaq	32(%rsp), %r15
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354(%rip), %r13
+	leaq	(%r12,%r12,8), %rbp
+	leaq	8(%rsp), %r12
+	addq	$-144, %rbp
+	jmp	.LBB2048_11
+.LBB2048_16:
+	movb	$1, %cl
+	.p2align	4
+.LBB2048_19:
+	addq	$144, %r14
+	addq	$-144, %rbp
+	movl	%ecx, %eax
+	je	.LBB2048_20
+.LBB2048_11:
+	movb	$1, %cl
+	testb	$1, %al
+	jne	.LBB2048_19
+	testb	$-128, 18(%rbx)
+	jne	.LBB2048_15
+	movq	8(%rbx), %rax
+	movq	(%rbx), %rdi
+	movl	$2, %edx
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.39.llvm.9794848731438112354(%rip), %rsi
+	movq	24(%rax), %rax
+	callq	*%rax
+	movb	$1, %cl
+	testb	%al, %al
+	jne	.LBB2048_19
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	movq	%rbx, %rdx
+	callq	_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052
+	jmp	.LBB2048_18
+	.p2align	4
+.LBB2048_15:
+	vmovups	(%rbx), %xmm0
+	movq	16(%rbx), %rax
+	leaq	7(%rsp), %rcx
+	movb	$1, 7(%rsp)
+	xorl	%edi, %edi
+	movq	%r14, %rsi
+	movq	%r12, %rdx
+	movq	%rax, 24(%rsp)
+	movq	%r15, 8(%rsp)
+	movq	%r13, 16(%rsp)
+	vmovaps	%xmm0, 32(%rsp)
+	movq	%rcx, 48(%rsp)
+	callq	_RNvNtCscTZQnUyyJie_21purrdf_sparql_algebra6traits10node_debug.llvm.193933400824195052
+	testb	%al, %al
+	jne	.LBB2048_16
+	movq	16(%rsp), %rax
+	movq	8(%rsp), %rdi
+	movl	$2, %edx
+	leaq	anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354(%rip), %rsi
+	movq	24(%rax), %rax
+	callq	*%rax
+.LBB2048_18:
+	movl	%eax, %ecx
+	jmp	.LBB2048_19
+.Lfunc_end2048:

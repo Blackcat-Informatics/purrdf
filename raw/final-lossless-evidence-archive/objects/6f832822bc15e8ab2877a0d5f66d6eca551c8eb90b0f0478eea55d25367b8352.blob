@@ -1,0 +1,1 @@
+/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo rustc --locked --jobs 8 --release -p purrdf-python --lib --message-format=json-render-diagnostics --verbose -- --emit=link\,llvm-ir\,asm 

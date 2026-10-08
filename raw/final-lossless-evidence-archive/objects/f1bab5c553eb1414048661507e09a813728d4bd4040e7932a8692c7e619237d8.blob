@@ -1,0 +1,110 @@
+{
+  "oracle_version": "7.6.0",
+  "triples": [],
+  "cases": [
+    {
+      "name": "ask-empty-unit-unbound",
+      "query": "ASK WHERE {  }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": true,
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "ask-empty-unit-bound",
+      "query": "ASK WHERE {  }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": true,
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "ask-absent-pattern-unbound",
+      "query": "ASK WHERE { ?x <http://example.org/p> ?o . BIND(<http://example.org/counter>(1) AS ?tick) }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": false,
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "ask-absent-pattern-bound",
+      "query": "ASK WHERE { ?x <http://example.org/p> ?o . BIND(<http://example.org/counter>(1) AS ?tick) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": false,
+        "callback_invocations": 0
+      }
+    },
+    {
+      "name": "ask-rejected-witness-unbound",
+      "query": "ASK WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) FILTER(?tick = 4) }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": false,
+        "callback_invocations": 3
+      }
+    },
+    {
+      "name": "ask-rejected-witness-bound",
+      "query": "ASK WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) FILTER(?tick = 4) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": false,
+        "callback_invocations": 3
+      }
+    },
+    {
+      "name": "ask-second-witness-unbound",
+      "query": "ASK WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) FILTER(?tick = 2) }",
+      "initial": {},
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": true,
+        "callback_invocations": 2
+      }
+    },
+    {
+      "name": "ask-second-witness-bound",
+      "query": "ASK WHERE { VALUES ?x {1 2 3} BIND(<http://example.org/counter>(1) AS ?tick) FILTER(?tick = 2) }",
+      "initial": {
+        "this": "http://example.org/a"
+      },
+      "ordered": false,
+      "count_callback": true,
+      "oracle": {
+        "type": "ASK",
+        "answer": true,
+        "callback_invocations": 2
+      }
+    }
+  ]
+}

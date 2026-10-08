@@ -1,0 +1,182 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/t2-candidate-native-ir/qualification_454_native_cost.purrdf_sparql_algebra-2f54bfeaed8b20be.purrdf_sparql_algebra.1f9a9904874edf46-cgu.0.rcgu.o.rcgu.ll:140696
+; <purrdf_sparql_algebra::parser::Parser<false>>::having_clause
+define internal fastcc void @_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E13having_clauseB9_(ptr dead_on_unwind noalias nofree noundef nonnull writable writeonly align 8 captures(none) dereferenceable(208) %0, ptr noalias nofree noundef nonnull align 8 captures(none) dereferenceable(680) %1) unnamed_addr #0 !guid !24730 {
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24731)
+  %3 = getelementptr inbounds nuw i8, ptr %1, i64 120
+  %4 = load i64, ptr %3, align 8, !alias.scope !24731, !noalias !24734, !noundef !1058
+  %5 = getelementptr inbounds nuw i8, ptr %1, i64 624
+  %6 = load i64, ptr %5, align 8, !alias.scope !24731, !noalias !24734, !noundef !1058
+  %7 = icmp ult i64 %6, %4
+  br i1 %7, label %8, label %70
+
+8:                                                ; preds = %2
+  %9 = getelementptr inbounds nuw i8, ptr %1, i64 112
+  %10 = load ptr, ptr %9, align 8, !alias.scope !24731, !noalias !24734, !nonnull !1058, !noundef !1058
+  %11 = getelementptr inbounds nuw [56 x i8], ptr %10, i64 %6
+  %12 = load i64, ptr %11, align 8, !range !6119, !noalias !24736, !noundef !1058
+  %13 = icmp eq i64 %12, -2
+  br i1 %13, label %70, label %14
+
+14:                                               ; preds = %8
+  %15 = icmp ne i64 %12, -9223372036854775807
+  tail call void @llvm.assume(i1 %15)
+  %16 = icmp eq i64 %12, -9223372036854775797
+  br i1 %16, label %17, label %70
+
+17:                                               ; preds = %14
+  %18 = getelementptr inbounds nuw i8, ptr %11, i64 16
+  %19 = load i64, ptr %18, align 8, !noalias !24736, !noundef !1058
+  %20 = icmp eq i64 %19, 6
+  br i1 %20, label %21, label %70
+
+21:                                               ; preds = %17
+  %22 = getelementptr inbounds nuw i8, ptr %11, i64 8
+  %23 = load ptr, ptr %22, align 8, !noalias !24736, !nonnull !1058, !noundef !1058
+  %24 = load i8, ptr %23, align 1, !alias.scope !24737, !noalias !24740, !noundef !1058
+  %25 = add i8 %24, -65
+  %26 = icmp ult i8 %25, 26
+  %27 = select i1 %26, i8 32, i8 0
+  %28 = or i8 %27, %24
+  %29 = icmp eq i8 %28, 104
+  br i1 %29, label %30, label %70
+
+30:                                               ; preds = %21
+  %31 = getelementptr inbounds nuw i8, ptr %23, i64 1
+  %32 = load i8, ptr %31, align 1, !alias.scope !24737, !noalias !24740, !noundef !1058
+  %33 = add i8 %32, -65
+  %34 = icmp ult i8 %33, 26
+  %35 = select i1 %34, i8 32, i8 0
+  %36 = or i8 %35, %32
+  %37 = icmp eq i8 %36, 97
+  br i1 %37, label %38, label %70
+
+38:                                               ; preds = %30
+  %39 = getelementptr inbounds nuw i8, ptr %23, i64 2
+  %40 = load i8, ptr %39, align 1, !alias.scope !24737, !noalias !24740, !noundef !1058
+  %41 = add i8 %40, -65
+  %42 = icmp ult i8 %41, 26
+  %43 = select i1 %42, i8 32, i8 0
+  %44 = or i8 %43, %40
+  %45 = icmp eq i8 %44, 118
+  br i1 %45, label %46, label %70
+
+46:                                               ; preds = %38
+  %47 = getelementptr inbounds nuw i8, ptr %23, i64 3
+  %48 = load i8, ptr %47, align 1, !alias.scope !24737, !noalias !24740, !noundef !1058
+  %49 = add i8 %48, -65
+  %50 = icmp ult i8 %49, 26
+  %51 = select i1 %50, i8 32, i8 0
+  %52 = or i8 %51, %48
+  %53 = icmp eq i8 %52, 105
+  br i1 %53, label %54, label %70
+
+54:                                               ; preds = %46
+  %55 = getelementptr inbounds nuw i8, ptr %23, i64 4
+  %56 = load i8, ptr %55, align 1, !alias.scope !24737, !noalias !24740, !noundef !1058
+  %57 = add i8 %56, -65
+  %58 = icmp ult i8 %57, 26
+  %59 = select i1 %58, i8 32, i8 0
+  %60 = or i8 %59, %56
+  %61 = icmp eq i8 %60, 110
+  br i1 %61, label %62, label %70
+
+62:                                               ; preds = %54
+  %63 = getelementptr inbounds nuw i8, ptr %23, i64 5
+  %64 = load i8, ptr %63, align 1, !alias.scope !24737, !noalias !24740, !noundef !1058
+  %65 = add i8 %64, -65
+  %66 = icmp ult i8 %65, 26
+  %67 = select i1 %66, i8 32, i8 0
+  %68 = or i8 %67, %64
+  %69 = icmp eq i8 %68, 103
+  br i1 %69, label %71, label %70
+
+70:                                               ; preds = %62, %54, %46, %38, %30, %21, %17, %14, %8, %2
+; call <purrdf_sparql_algebra::parser::Parser<false>>::order_clause
+  tail call fastcc void @_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_(ptr noalias nofree noundef align 8 captures(address) dereferenceable(208) %0, ptr noalias nofree noundef align 8 dereferenceable(680) %1)
+  br label %73
+
+71:                                               ; preds = %62
+  %72 = add nuw i64 %6, 1
+  store i64 %72, ptr %5, align 8
+; call <purrdf_sparql_algebra::parser::Parser<false>>::having_constraint
+  tail call fastcc void @_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E17having_constraintB9_(ptr noalias nofree noundef align 8 captures(none) dereferenceable(208) %0, ptr noalias nofree noundef align 8 dereferenceable(680) %1)
+  br label %73
+
+73:                                               ; preds = %71, %70
+  ret void
+}
+
+ASSEMBLY
+_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E13having_clauseB9_:
+.Lfunc_begin306:
+	.cfi_startproc
+	movq	624(%rsi), %rax
+	cmpq	120(%rsi), %rax
+	jae	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movq	112(%rsi), %rcx
+	imulq	$56, %rax, %rdx
+	movq	(%rcx,%rdx), %r8
+	cmpq	$-2, %r8
+	je	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movabsq	$-9223372036854775807, %r9
+	orq	$10, %r9
+	cmpq	%r9, %r8
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	addq	%rdx, %rcx
+	cmpq	$6, 16(%rcx)
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movq	8(%rcx), %rcx
+	movzbl	(%rcx), %edx
+	leal	-65(%rdx), %r8d
+	cmpb	$26, %r8b
+	setb	%r8b
+	shlb	$5, %r8b
+	orb	%dl, %r8b
+	cmpb	$104, %r8b
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movzbl	1(%rcx), %edx
+	leal	-65(%rdx), %r8d
+	cmpb	$26, %r8b
+	setb	%r8b
+	shlb	$5, %r8b
+	orb	%dl, %r8b
+	cmpb	$97, %r8b
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movzbl	2(%rcx), %edx
+	leal	-65(%rdx), %r8d
+	cmpb	$26, %r8b
+	setb	%r8b
+	shlb	$5, %r8b
+	orb	%dl, %r8b
+	cmpb	$118, %r8b
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movzbl	3(%rcx), %edx
+	leal	-65(%rdx), %r8d
+	cmpb	$26, %r8b
+	setb	%r8b
+	shlb	$5, %r8b
+	orb	%dl, %r8b
+	cmpb	$105, %r8b
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movzbl	4(%rcx), %edx
+	leal	-65(%rdx), %r8d
+	cmpb	$26, %r8b
+	setb	%r8b
+	shlb	$5, %r8b
+	orb	%dl, %r8b
+	cmpb	$110, %r8b
+	jne	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+	movzbl	5(%rcx), %ecx
+	leal	-65(%rcx), %edx
+	cmpb	$26, %dl
+	setb	%dl
+	shlb	$5, %dl
+	orb	%cl, %dl
+	cmpb	$103, %dl
+	jne	.LBB306_10
+	incq	%rax
+	movq	%rax, 624(%rsi)
+	jmp	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E17having_constraintB9_
+.LBB306_10:
+	jmp	_RNvMs2_NtNtCs2Ie3PLnVZCk_21purrdf_sparql_algebra6parser7machineINtB7_6ParserKb0_E12order_clauseB9_
+.Lfunc_end306:

@@ -1,0 +1,1 @@
+uv sync --project bindings/python --locked --group dev --no-install-project 

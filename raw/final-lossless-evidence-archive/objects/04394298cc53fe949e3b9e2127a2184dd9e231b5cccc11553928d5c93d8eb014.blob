@@ -1,0 +1,612 @@
+.stage/rdflib-shim-algebra-level-reassignment/raw/native-cost-candidate-863c75-wasm-ir/qualification_454_native_cost.purrdf_sparql_eval-8d88597f61c9805d.purrdf_sparql_eval.3390c597aa620bea-cgu.0.rcgu.o.rcgu.ll:620537
+; <rayon_core::job::StackJob<rayon_core::latch::SpinLatch, rayon_core::join::join_context::call_b<rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, purrdf_sparql_eval::witness::RelationWitness), purrdf_sparql_eval::error::EvalError>>, rayon::iter::plumbing::bridge_producer_consumer::helper<rayon::slice::chunks::ChunksProducer<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, purrdf_sparql_eval::witness::RelationWitness), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>), purrdf_sparql_eval::parallel::MintedRow, purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::modifier::eval_group_with<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#6}, purrdf_sparql_eval::modifier::eval_group_with<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#7}, purrdf_sparql_eval::modifier::eval_group_with<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#8}>::{closure#1}>>::{closure#1}>::{closure#0}, rayon::iter::collect::consumer::CollectResult<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, purrdf_sparql_eval::witness::RelationWitness), purrdf_sparql_eval::error::EvalError>>> as rayon_core::job::Job>::execute
+define internal void @_RNvXs2_NtCslK0mx74N2F3_10rayon_core3jobINtB5_8StackJobNtNtB7_5latch9SpinLatchNCINvNvNtB7_4join12join_context6call_bINtNtNtNtCsl8FQoy0bfzx_5rayon4iter7collect8consumer13CollectResultINtNtCsb6ASFGx6cXz_4core6result6ResultTINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8parallel9MintedRowENtNtB47_7witness15RelationWitnessENtNtB47_5error9EvalErrorEENCINvNvNtB1W_8plumbing24bridge_producer_consumer6helperINtNtNtB1Y_5slice6chunks14ChunksProducerTjINtNtCsl8HMMB5r1Dk_11purrdf_core5small8SmallVecAINtNtB2Y_6option6OptionNtNtB47_7scratch12SolutionTermEj4_EIB3x_jEEEINtNtB1W_3map11MapConsumerINtB1S_15CollectConsumerB2T_ENCINvB45_22par_chunk_try_map_initB7u_TNtNtB47_4eval7EvalCtxIB3x_IB3x_INtNtB47_2vm6LinkedNtNtNtB7B_2ir4term6TermIdEEEEB43_B4Z_NCINvNtB47_8modifier15eval_group_withNtNtBbK_7dataset10RdfDatasetRSNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariableEs4_0NCBcj_s5_0NCBcj_s6_0Es_0EEs_0E0B1P_ENtB5_3Job7executeB47_(ptr nofree noundef captures(none) %0) unnamed_addr #0 !guid !109227 {
+  %2 = alloca [1 x i8], align 1
+  %3 = alloca [1 x i8], align 1
+  %4 = alloca [4 x i8], align 4
+  %5 = alloca [12 x i8], align 4
+  %6 = alloca [36 x i8], align 4
+  %7 = getelementptr inbounds nuw i8, ptr %0, i32 16
+  %8 = load ptr, ptr %7, align 4
+  %9 = getelementptr inbounds nuw i8, ptr %0, i32 20
+  %10 = load i64, ptr %9, align 4
+  store ptr null, ptr %7, align 4
+  %11 = icmp eq ptr %8, null
+  br i1 %11, label %128, label %12, !prof !1629
+
+12:                                               ; preds = %1
+  %13 = getelementptr inbounds nuw i8, ptr %0, i32 28
+  %14 = getelementptr inbounds nuw i8, ptr %6, i32 12
+  call void @llvm.lifetime.start.p0(ptr nonnull %6)
+  call void @llvm.memcpy.p0.p0.i32(ptr noundef nonnull align 4 dereferenceable(24) %14, ptr noundef nonnull align 4 dereferenceable(24) %13, i32 24, i1 false)
+  store ptr %8, ptr %6, align 4
+  %15 = getelementptr inbounds nuw i8, ptr %6, i32 4
+  store i64 %10, ptr %15, align 4
+  call void @llvm.lifetime.start.p0(ptr nonnull %5)
+  %16 = trunc i64 %10 to i32
+  %17 = inttoptr i32 %16 to ptr
+  %18 = lshr i64 %10, 32
+  %19 = trunc nuw i64 %18 to i32
+  %20 = inttoptr i32 %19 to ptr
+  %21 = getelementptr inbounds nuw i8, ptr %6, i32 24
+  %22 = load i32, ptr %8, align 4, !noalias !109228, !noundef !1617
+  %23 = load i32, ptr %17, align 4, !noalias !109228, !noundef !1617
+  %24 = sub i32 %22, %23
+  %25 = load i32, ptr %20, align 4, !noalias !109228, !noundef !1617
+  %26 = getelementptr inbounds nuw i8, ptr %20, i32 4
+  %27 = load i32, ptr %26, align 4, !noalias !109228, !noundef !1617
+; call rayon::iter::plumbing::bridge_producer_consumer::helper::<rayon::slice::chunks::ChunksProducer<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>)>, rayon::iter::map::MapConsumer<rayon::iter::collect::consumer::CollectConsumer<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, purrdf_sparql_eval::witness::RelationWitness), purrdf_sparql_eval::error::EvalError>>, purrdf_sparql_eval::parallel::par_chunk_try_map_init<(usize, purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>; 4]>, alloc::vec::Vec<usize>), (purrdf_sparql_eval::eval::EvalCtx, alloc::vec::Vec<alloc::vec::Vec<purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>>), purrdf_sparql_eval::parallel::MintedRow, purrdf_sparql_eval::witness::RelationWitness, purrdf_sparql_eval::modifier::eval_group_with<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#6}, purrdf_sparql_eval::modifier::eval_group_with<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#7}, purrdf_sparql_eval::modifier::eval_group_with<purrdf_core::ir::dataset::RdfDataset, &[purrdf_sparql_algebra::ast::Variable]>::{closure#8}>::{closure#1}>>
+  call fastcc void @_RINvNvNtNtCsl8FQoy0bfzx_5rayon4iter8plumbing24bridge_producer_consumer6helperINtNtNtB8_5slice6chunks14ChunksProducerTjINtNtCsl8HMMB5r1Dk_11purrdf_core5small8SmallVecAINtNtCsb6ASFGx6cXz_4core6option6OptionNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsiymUexJS71D_5alloc3vec3VecjEEEINtNtB6_3map11MapConsumerINtNtNtB6_7collect8consumer15CollectConsumerINtNtB2J_6result6ResultTIB4k_NtNtB3k_8parallel9MintedRowENtNtB3k_7witness15RelationWitnessENtNtB3k_5error9EvalErrorEENCINvB6w_22par_chunk_try_map_initB1Q_TNtNtB3k_4eval7EvalCtxIB4k_IB4k_INtNtB3k_2vm6LinkedNtNtNtB1X_2ir4term6TermIdEEEEB6u_B6W_NCINvNtB3k_8modifier15eval_group_withNtNtB9o_7dataset10RdfDatasetRSNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariableEs4_0NCB9X_s5_0NCB9X_s6_0Es_0EEB3k_(ptr noalias nofree noundef nonnull align 4 captures(address) dereferenceable(12) %5, i32 noundef %24, i1 noundef zeroext true, i32 noundef %25, i32 noundef %27, ptr noalias nofree noundef readonly align 4 captures(none) dereferenceable(12) %14, ptr noalias nofree noundef readonly align 4 captures(address) dereferenceable(12) %21) #74, !inline_history !109241
+  %28 = load ptr, ptr %5, align 4
+  %29 = getelementptr inbounds nuw i8, ptr %5, i32 4
+  %30 = load i64, ptr %29, align 4
+  call void @llvm.lifetime.end.p0(ptr nonnull %5)
+  call void @llvm.lifetime.end.p0(ptr nonnull %6)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !109242)
+  %31 = load i32, ptr %0, align 4, !range !1730, !alias.scope !109242, !noundef !1617
+  switch i32 %31, label %32 [
+    i32 0, label %.loopexit
+    i32 1, label %47
+  ]
+
+32:                                               ; preds = %12
+  %33 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  %34 = load ptr, ptr %33, align 4, !alias.scope !109242
+  %35 = getelementptr inbounds nuw i8, ptr %0, i32 8
+  %36 = load ptr, ptr %35, align 4, !alias.scope !109242, !nonnull !1617, !align !1640, !noundef !1617
+  %37 = load ptr, ptr %36, align 4, !invariant.load !1617, !noalias !109242
+  %38 = icmp eq ptr %37, null
+  br i1 %38, label %40, label %39
+
+39:                                               ; preds = %32
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %34) ]
+  tail call void %37(ptr noundef nonnull %34) #77, !noalias !109242, !inline_history !109245
+  br label %40
+
+40:                                               ; preds = %39, %32
+  %41 = getelementptr inbounds nuw i8, ptr %36, i32 4
+  %42 = load i32, ptr %41, align 4, !range !1639, !invariant.load !1617, !noalias !109242
+  %43 = icmp eq i32 %42, 0
+  br i1 %43, label %.loopexit, label %44
+
+44:                                               ; preds = %40
+  %45 = getelementptr inbounds nuw i8, ptr %36, i32 8
+  %46 = load i32, ptr %45, align 4, !range !1680, !invariant.load !1617, !noalias !109242
+  call void @llvm.assume(i1 true) [ "nonnull"(ptr %34) ]
+; call __rustc::__rust_dealloc
+  tail call void @_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc(ptr noundef nonnull %34, i32 noundef %42, i32 noundef range(i32 1, -2147483647) %46) #74, !noalias !109242
+  br label %.loopexit
+
+47:                                               ; preds = %12
+  %48 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  %49 = load ptr, ptr %48, align 4, !alias.scope !109242, !noundef !1617
+  %50 = getelementptr inbounds nuw i8, ptr %0, i32 12
+  %51 = load i32, ptr %50, align 4, !alias.scope !109242, !noundef !1617
+  %52 = icmp eq i32 %51, 0
+  br i1 %52, label %.loopexit, label %.preheader
+
+.preheader:                                       ; preds = %47, %.preheader
+  %53 = phi i32 [ %55, %.preheader ], [ 0, %47 ]
+  %54 = getelementptr inbounds nuw [48 x i8], ptr %49, i32 %53
+  %55 = add nuw i32 %53, 1
+; call core::ptr::drop_glue::<core::result::Result<(alloc::vec::Vec<purrdf_sparql_eval::parallel::MintedRow>, purrdf_sparql_eval::witness::RelationWitness), purrdf_sparql_eval::error::EvalError>>
+  tail call fastcc void @_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueINtNtB4_6result6ResultTINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8parallel9MintedRowENtNtB1z_7witness15RelationWitnessENtNtB1z_5error9EvalErrorEEB1z_(ptr noalias nofree noundef readonly align 8 dereferenceable(48) %54) #74, !noalias !109242
+  %56 = icmp eq i32 %55, %51
+  br i1 %56, label %.loopexit, label %.preheader
+
+.loopexit:                                        ; preds = %.preheader, %47, %44, %40, %12
+  store i32 1, ptr %0, align 4
+  %57 = getelementptr inbounds nuw i8, ptr %0, i32 4
+  store ptr %28, ptr %57, align 4
+  %58 = getelementptr inbounds nuw i8, ptr %0, i32 8
+  store i64 %30, ptr %58, align 4
+  %59 = getelementptr inbounds nuw i8, ptr %0, i32 52
+  %60 = getelementptr inbounds nuw i8, ptr %0, i32 64
+  %61 = load i8, ptr %60, align 4, !range !1671, !noundef !1617
+  %62 = trunc nuw i8 %61 to i1
+  br i1 %62, label %71, label %63
+
+63:                                               ; preds = %.loopexit
+  %64 = load ptr, ptr %59, align 4, !nonnull !1617, !align !1640, !noundef !1617
+  %65 = load ptr, ptr %64, align 4, !nonnull !1617, !noundef !1617
+  %66 = getelementptr inbounds nuw i8, ptr %0, i32 60
+  %67 = load i32, ptr %66, align 4, !noundef !1617
+  %68 = getelementptr inbounds nuw i8, ptr %0, i32 56
+  %69 = atomicrmw xchg ptr %68, i32 3 acq_rel, align 4
+  %70 = icmp eq i32 %69, 2
+  br i1 %70, label %76, label %127
+
+71:                                               ; preds = %.loopexit
+  call void @llvm.lifetime.start.p0(ptr nonnull %4)
+  %72 = load ptr, ptr %59, align 4, !nonnull !1617, !align !1640, !noundef !1617
+  %73 = load ptr, ptr %72, align 4, !nonnull !1617, !noundef !1617
+  %74 = atomicrmw add ptr %73, i32 1 monotonic, align 4
+  %75 = icmp slt i32 %74, 0
+  br i1 %75, label %102, label %95
+
+76:                                               ; preds = %63
+  %77 = getelementptr inbounds nuw i8, ptr %65, i32 244
+  %78 = load i32, ptr %77, align 4, !noundef !1617
+  %79 = icmp ult i32 %67, %78
+  br i1 %79, label %80, label %91
+
+80:                                               ; preds = %76
+  %81 = getelementptr inbounds nuw i8, ptr %65, i32 240
+  %82 = load ptr, ptr %81, align 4, !nonnull !1617, !noundef !1617
+  %83 = getelementptr inbounds nuw [64 x i8], ptr %82, i32 %67
+  call void @llvm.lifetime.start.p0(ptr nonnull %3)
+  %84 = load i8, ptr %83, align 1, !range !1671, !noundef !1617
+  %85 = trunc nuw i8 %84 to i1
+  store i8 %84, ptr %3, align 1
+  store i8 1, ptr %83, align 1
+  br i1 %85, label %86, label %87, !prof !1629
+
+86:                                               ; preds = %80
+; call core::panicking::assert_failed::<bool, bool>
+  call void @_RINvNtCsb6ASFGx6cXz_4core9panicking13assert_failedbbECsgTtq7Z12MIG_3std(i8 noundef 0, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) dereferenceable(1) %3, ptr noalias nofree noundef readonly captures(address, read_provenance) dereferenceable(1) @anon.adb29884fca2bb1c206270bc017e7524.26.llvm.1230355652799209856, ptr noundef nonnull @anon.adb29884fca2bb1c206270bc017e7524.25.llvm.1230355652799209856, ptr nonnull inttoptr (i32 65 to ptr), ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.adb29884fca2bb1c206270bc017e7524.28.llvm.1230355652799209856) #76
+  unreachable
+
+87:                                               ; preds = %80
+  call void @llvm.lifetime.end.p0(ptr nonnull %3)
+  %88 = getelementptr inbounds nuw i8, ptr %83, i32 1
+  %89 = load i8, ptr %88, align 1, !range !1671, !noundef !1617
+  %90 = trunc nuw i8 %89 to i1
+  br i1 %90, label %92, label %_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit
+
+91:                                               ; preds = %76
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCsb6ASFGx6cXz_4core9panicking18panic_bounds_check(i32 noundef %67, i32 noundef %78, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.adb29884fca2bb1c206270bc017e7524.16.llvm.1230355652799209856) #76
+  unreachable
+
+92:                                               ; preds = %87
+  store i8 0, ptr %88, align 1
+  %93 = getelementptr inbounds nuw i8, ptr %65, i32 248
+  %94 = atomicrmw sub ptr %93, i32 1 seq_cst, align 4
+  br label %_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit
+
+_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit: ; preds = %87, %92
+  store i8 0, ptr %83, align 1
+  br label %127
+
+95:                                               ; preds = %71
+  %96 = load ptr, ptr %72, align 4, !nonnull !1617, !noundef !1617
+  store ptr %96, ptr %4, align 4
+  %97 = getelementptr inbounds nuw i8, ptr %0, i32 60
+  %98 = load i32, ptr %97, align 4, !noundef !1617
+  %99 = getelementptr inbounds nuw i8, ptr %0, i32 56
+  %100 = atomicrmw xchg ptr %99, i32 3 acq_rel, align 4
+  %101 = icmp eq i32 %100, 2
+  br i1 %101, label %108, label %103
+
+102:                                              ; preds = %71
+  tail call void @llvm.trap()
+  unreachable
+
+103:                                              ; preds = %_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit3, %95
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !109246)
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !109249)
+  %104 = load ptr, ptr %4, align 4, !alias.scope !109252, !nonnull !1617, !noundef !1617
+  %105 = atomicrmw sub ptr %104, i32 1 release, align 4, !noalias !109252
+  %106 = icmp eq i32 %105, 1
+  br i1 %106, label %107, label %127
+
+107:                                              ; preds = %103
+  fence acquire
+; call <alloc::sync::Arc<rayon_core::registry::Registry>>::drop_slow
+  call void @_RNvMsn_NtCsiymUexJS71D_5alloc4syncINtB5_3ArcNtNtCslK0mx74N2F3_10rayon_core8registry8RegistryE9drop_slowBK_(ptr noalias nofree noundef nonnull align 4 dereferenceable(4) %4) #73
+  br label %127
+
+108:                                              ; preds = %95
+  %109 = getelementptr inbounds nuw i8, ptr %96, i32 244
+  %110 = load i32, ptr %109, align 4, !noundef !1617
+  %111 = icmp ult i32 %98, %110
+  br i1 %111, label %112, label %123
+
+112:                                              ; preds = %108
+  %113 = getelementptr inbounds nuw i8, ptr %96, i32 240
+  %114 = load ptr, ptr %113, align 4, !nonnull !1617, !noundef !1617
+  %115 = getelementptr inbounds nuw [64 x i8], ptr %114, i32 %98
+  call void @llvm.lifetime.start.p0(ptr nonnull %2)
+  %116 = load i8, ptr %115, align 1, !range !1671, !noundef !1617
+  %117 = trunc nuw i8 %116 to i1
+  store i8 %116, ptr %2, align 1
+  store i8 1, ptr %115, align 1
+  br i1 %117, label %118, label %119, !prof !1629
+
+118:                                              ; preds = %112
+; call core::panicking::assert_failed::<bool, bool>
+  call void @_RINvNtCsb6ASFGx6cXz_4core9panicking13assert_failedbbECsgTtq7Z12MIG_3std(i8 noundef 0, ptr noalias nofree noundef nonnull readonly captures(address, read_provenance) dereferenceable(1) %2, ptr noalias nofree noundef readonly captures(address, read_provenance) dereferenceable(1) @anon.adb29884fca2bb1c206270bc017e7524.26.llvm.1230355652799209856, ptr noundef nonnull @anon.adb29884fca2bb1c206270bc017e7524.25.llvm.1230355652799209856, ptr nonnull inttoptr (i32 65 to ptr), ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.adb29884fca2bb1c206270bc017e7524.28.llvm.1230355652799209856) #76
+  unreachable
+
+119:                                              ; preds = %112
+  call void @llvm.lifetime.end.p0(ptr nonnull %2)
+  %120 = getelementptr inbounds nuw i8, ptr %115, i32 1
+  %121 = load i8, ptr %120, align 1, !range !1671, !noundef !1617
+  %122 = trunc nuw i8 %121 to i1
+  br i1 %122, label %124, label %_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit3
+
+123:                                              ; preds = %108
+; call core::panicking::panic_bounds_check
+  tail call void @_RNvNtCsb6ASFGx6cXz_4core9panicking18panic_bounds_check(i32 noundef %98, i32 noundef %110, ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.adb29884fca2bb1c206270bc017e7524.16.llvm.1230355652799209856) #76
+  unreachable
+
+124:                                              ; preds = %119
+  store i8 0, ptr %120, align 1
+  %125 = getelementptr inbounds nuw i8, ptr %96, i32 248
+  %126 = atomicrmw sub ptr %125, i32 1 seq_cst, align 4
+  br label %_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit3
+
+_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit3: ; preds = %119, %124
+  store i8 0, ptr %115, align 1
+  br label %103
+
+127:                                              ; preds = %107, %103, %_RNvMs4_NtCslK0mx74N2F3_10rayon_core8registryNtB5_8Registry26notify_worker_latch_is_set.exit, %63
+  call void @llvm.lifetime.end.p0(ptr nonnull %4)
+  ret void
+
+128:                                              ; preds = %1
+; call core::option::unwrap_failed
+  tail call void @_RNvNtCsb6ASFGx6cXz_4core6option13unwrap_failed(ptr noalias nofree noundef readonly align 4 captures(address, read_provenance) dereferenceable(16) @anon.be3b8e25c234de5ff4778e8044e9d712.2041) #76
+  unreachable
+}
+
+ASSEMBLY
+_RNvXs2_NtCslK0mx74N2F3_10rayon_core3jobINtB5_8StackJobNtNtB7_5latch9SpinLatchNCINvNvNtB7_4join12join_context6call_bINtNtNtNtCsl8FQoy0bfzx_5rayon4iter7collect8consumer13CollectResultINtNtCsb6ASFGx6cXz_4core6result6ResultTINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8parallel9MintedRowENtNtB47_7witness15RelationWitnessENtNtB47_5error9EvalErrorEENCINvNvNtB1W_8plumbing24bridge_producer_consumer6helperINtNtNtB1Y_5slice6chunks14ChunksProducerTjINtNtCsl8HMMB5r1Dk_11purrdf_core5small8SmallVecAINtNtB2Y_6option6OptionNtNtB47_7scratch12SolutionTermEj4_EIB3x_jEEEINtNtB1W_3map11MapConsumerINtB1S_15CollectConsumerB2T_ENCINvB45_22par_chunk_try_map_initB7u_TNtNtB47_4eval7EvalCtxIB3x_IB3x_INtNtB47_2vm6LinkedNtNtNtB7B_2ir4term6TermIdEEEEB43_B4Z_NCINvNtB47_8modifier15eval_group_withNtNtBbK_7dataset10RdfDatasetRSNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariableEs4_0NCBcj_s5_0NCBcj_s6_0Es_0EEs_0E0B1P_ENtB5_3Job7executeB47_:
+.Lfunc_begin1430:
+	.functype	_RNvXs2_NtCslK0mx74N2F3_10rayon_core3jobINtB5_8StackJobNtNtB7_5latch9SpinLatchNCINvNvNtB7_4join12join_context6call_bINtNtNtNtCsl8FQoy0bfzx_5rayon4iter7collect8consumer13CollectResultINtNtCsb6ASFGx6cXz_4core6result6ResultTINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8parallel9MintedRowENtNtB47_7witness15RelationWitnessENtNtB47_5error9EvalErrorEENCINvNvNtB1W_8plumbing24bridge_producer_consumer6helperINtNtNtB1Y_5slice6chunks14ChunksProducerTjINtNtCsl8HMMB5r1Dk_11purrdf_core5small8SmallVecAINtNtB2Y_6option6OptionNtNtB47_7scratch12SolutionTermEj4_EIB3x_jEEEINtNtB1W_3map11MapConsumerINtB1S_15CollectConsumerB2T_ENCINvB45_22par_chunk_try_map_initB7u_TNtNtB47_4eval7EvalCtxIB3x_IB3x_INtNtB47_2vm6LinkedNtNtNtB7B_2ir4term6TermIdEEEEB43_B4Z_NCINvNtB47_8modifier15eval_group_withNtNtBbK_7dataset10RdfDatasetRSNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariableEs4_0NCBcj_s5_0NCBcj_s6_0Es_0EEs_0E0B1P_ENtB5_3Job7executeB47_ (i32) -> ()
+	.local  	i32, i32, i64, i32, i32, i32
+	global.get	__stack_pointer
+	i32.const	48
+	i32.sub 
+	local.tee	1
+	global.set	__stack_pointer
+	local.get	0
+	i32.load	16
+	local.set	2
+	local.get	0
+	i32.const	0
+	i32.store	16
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	block   	
+	local.get	2
+	i32.eqz
+	br_if   	0
+	local.get	0
+	i64.load	20:p2align=2
+	local.set	3
+	local.get	1
+	local.get	0
+	i64.load	44:p2align=2
+	i64.store	28:p2align=2
+	local.get	1
+	local.get	0
+	i64.load	36:p2align=2
+	i64.store	20:p2align=2
+	local.get	1
+	local.get	0
+	i64.load	28:p2align=2
+	i64.store	12:p2align=2
+	local.get	1
+	local.get	2
+	i32.store	0
+	local.get	1
+	local.get	3
+	i64.store	4:p2align=2
+	local.get	1
+	i32.const	36
+	i32.add 
+	local.get	2
+	i32.load	0
+	local.get	3
+	i32.wrap_i64
+	i32.load	0
+	i32.sub 
+	i32.const	1
+	local.get	3
+	i64.const	32
+	i64.shr_u
+	i32.wrap_i64
+	local.tee	2
+	i32.load	0
+	local.get	2
+	i32.load	4
+	local.get	1
+	i32.const	12
+	i32.add 
+	local.get	1
+	i32.const	24
+	i32.add 
+	call	_RINvNvNtNtCsl8FQoy0bfzx_5rayon4iter8plumbing24bridge_producer_consumer6helperINtNtNtB8_5slice6chunks14ChunksProducerTjINtNtCsl8HMMB5r1Dk_11purrdf_core5small8SmallVecAINtNtCsb6ASFGx6cXz_4core6option6OptionNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval7scratch12SolutionTermEj4_EINtNtCsiymUexJS71D_5alloc3vec3VecjEEEINtNtB6_3map11MapConsumerINtNtNtB6_7collect8consumer15CollectConsumerINtNtB2J_6result6ResultTIB4k_NtNtB3k_8parallel9MintedRowENtNtB3k_7witness15RelationWitnessENtNtB3k_5error9EvalErrorEENCINvB6w_22par_chunk_try_map_initB1Q_TNtNtB3k_4eval7EvalCtxIB4k_IB4k_INtNtB3k_2vm6LinkedNtNtNtB1X_2ir4term6TermIdEEEEB6u_B6W_NCINvNtB3k_8modifier15eval_group_withNtNtB9o_7dataset10RdfDatasetRSNtNtCs3T8KIHP36KE_21purrdf_sparql_algebra3ast8VariableEs4_0NCB9X_s5_0NCB9X_s6_0Es_0EEB3k_
+	local.get	1
+	i64.load	40:p2align=2
+	local.set	3
+	local.get	1
+	i32.load	36
+	local.set	4
+	block   	
+	block   	
+	block   	
+	local.get	0
+	i32.load	0
+	br_table 	{2, 1, 0}
+.LBB1430_2:
+	end_block
+	local.get	0
+	i32.load	4
+	local.set	5
+	block   	
+	local.get	0
+	i32.load	8
+	local.tee	2
+	i32.load	0
+	local.tee	6
+	i32.eqz
+	br_if   	0
+	local.get	5
+	local.get	6
+	call_indirect	 __indirect_function_table, (i32) -> ()
+.LBB1430_4:
+	end_block
+	local.get	2
+	i32.load	4
+	local.tee	6
+	i32.eqz
+	br_if   	1
+	local.get	5
+	local.get	6
+	local.get	2
+	i32.load	8
+	call	_RNvCs2NWS7XDLE6y_7___rustc14___rust_dealloc
+	br      	1
+.LBB1430_6:
+	end_block
+	local.get	0
+	i32.load	12
+	local.tee	5
+	i32.eqz
+	br_if   	0
+	local.get	0
+	i32.load	4
+	local.set	2
+.LBB1430_8:
+	loop    	
+	local.get	2
+	call	_RINvNtCsb6ASFGx6cXz_4core3ptr9drop_glueINtNtB4_6result6ResultTINtNtCsiymUexJS71D_5alloc3vec3VecNtNtCs4qtSUp8yRUQ_18purrdf_sparql_eval8parallel9MintedRowENtNtB1z_7witness15RelationWitnessENtNtB1z_5error9EvalErrorEEB1z_
+	local.get	2
+	i32.const	48
+	i32.add 
+	local.set	2
+	local.get	5
+	i32.const	-1
+	i32.add 
+	local.tee	5
+	br_if   	0
+.LBB1430_9:
+	end_loop
+	end_block
+	local.get	0
+	local.get	3
+	i64.store	8:p2align=2
+	local.get	0
+	local.get	4
+	i32.store	4
+	local.get	0
+	i32.const	1
+	i32.store	0
+	block   	
+	local.get	0
+	i32.load8_u	64
+	br_if   	0
+	local.get	0
+	i32.load	52
+	i32.load	0
+	local.set	2
+	local.get	0
+	i32.load	56
+	local.set	5
+	local.get	0
+	i32.const	3
+	i32.store	56
+	local.get	5
+	i32.const	2
+	i32.ne  
+	br_if   	8
+	local.get	0
+	i32.load	60
+	local.tee	0
+	local.get	2
+	i32.load	244
+	local.tee	5
+	i32.ge_u
+	br_if   	3
+	local.get	1
+	local.get	2
+	i32.load	240
+	local.get	0
+	i32.const	6
+	i32.shl 
+	i32.add 
+	local.tee	0
+	i32.load8_u	0
+	local.tee	5
+	i32.store8	0
+	local.get	0
+	i32.const	1
+	i32.store8	0
+	local.get	5
+	i32.const	1
+	i32.eq  
+	br_if   	2
+	block   	
+	local.get	0
+	i32.load8_u	1
+	i32.eqz
+	br_if   	0
+	local.get	0
+	i32.const	0
+	i32.store8	1
+	local.get	2
+	local.get	2
+	i32.load	248
+	i32.const	-1
+	i32.add 
+	i32.store	248
+.LBB1430_15:
+	end_block
+	local.get	0
+	i32.const	0
+	i32.store8	0
+	br      	8
+.LBB1430_16:
+	end_block
+	local.get	0
+	i32.load	52
+	local.tee	5
+	i32.load	0
+	local.tee	2
+	local.get	2
+	i32.load	0
+	local.tee	2
+	i32.const	1
+	i32.add 
+	i32.store	0
+	local.get	2
+	i32.const	0
+	i32.lt_s
+	br_if   	3
+	local.get	0
+	i32.load	56
+	local.set	4
+	local.get	5
+	i32.load	0
+	local.set	2
+	local.get	0
+	i32.const	3
+	i32.store	56
+	local.get	1
+	local.get	2
+	i32.store	0
+	local.get	4
+	i32.const	2
+	i32.ne  
+	br_if   	6
+	local.get	0
+	i32.load	60
+	local.tee	0
+	local.get	2
+	i32.load	244
+	local.tee	5
+	i32.ge_u
+	br_if   	5
+	local.get	1
+	local.get	2
+	i32.load	240
+	local.get	0
+	i32.const	6
+	i32.shl 
+	i32.add 
+	local.tee	0
+	i32.load8_u	0
+	local.tee	5
+	i32.store8	36
+	local.get	0
+	i32.const	1
+	i32.store8	0
+	local.get	5
+	i32.const	1
+	i32.eq  
+	br_if   	4
+	block   	
+	local.get	0
+	i32.load8_u	1
+	i32.eqz
+	br_if   	0
+	local.get	0
+	i32.const	0
+	i32.store8	1
+	local.get	2
+	local.get	2
+	i32.load	248
+	i32.const	-1
+	i32.add 
+	i32.store	248
+.LBB1430_22:
+	end_block
+	local.get	0
+	i32.const	0
+	i32.store8	0
+	br      	6
+.LBB1430_23:
+	end_block
+	i32.const	.Lanon.be3b8e25c234de5ff4778e8044e9d712.2041
+	call	_RNvNtCsb6ASFGx6cXz_4core6option13unwrap_failed
+	unreachable
+.LBB1430_24:
+	end_block
+	i32.const	0
+	local.get	1
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.26.llvm.1230355652799209856
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.25.llvm.1230355652799209856
+	i32.const	65
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.28.llvm.1230355652799209856
+	call	_RINvNtCsb6ASFGx6cXz_4core9panicking13assert_failedbbECsgTtq7Z12MIG_3std
+	unreachable
+.LBB1430_25:
+	end_block
+	local.get	0
+	local.get	5
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.16.llvm.1230355652799209856
+	call	_RNvNtCsb6ASFGx6cXz_4core9panicking18panic_bounds_check
+.LBB1430_26:
+	end_block
+	unreachable
+.LBB1430_27:
+	end_block
+	i32.const	0
+	local.get	1
+	i32.const	36
+	i32.add 
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.26.llvm.1230355652799209856
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.25.llvm.1230355652799209856
+	i32.const	65
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.28.llvm.1230355652799209856
+	call	_RINvNtCsb6ASFGx6cXz_4core9panicking13assert_failedbbECsgTtq7Z12MIG_3std
+	unreachable
+.LBB1430_28:
+	end_block
+	local.get	0
+	local.get	5
+	i32.const	anon.adb29884fca2bb1c206270bc017e7524.16.llvm.1230355652799209856
+	call	_RNvNtCsb6ASFGx6cXz_4core9panicking18panic_bounds_check
+	unreachable
+.LBB1430_29:
+	end_block
+	local.get	1
+	i32.load	0
+	local.tee	2
+	local.get	2
+	i32.load	0
+	local.tee	2
+	i32.const	-1
+	i32.add 
+	i32.store	0
+	local.get	2
+	i32.const	1
+	i32.ne  
+	br_if   	0
+	local.get	1
+	call	_RNvMsn_NtCsiymUexJS71D_5alloc4syncINtB5_3ArcNtNtCslK0mx74N2F3_10rayon_core8registry8RegistryE9drop_slowBK_
+.LBB1430_31:
+	end_block
+	local.get	1
+	i32.const	48
+	i32.add 
+	global.set	__stack_pointer
+	end_function
+.Lfunc_end1430:
