@@ -21,6 +21,10 @@ workspace = true
 name = "bench-corpus"
 path = "src/main.rs"
 
+[[bin]]
+name = "lubm-corpus"
+path = "src/lubm_main.rs"
+
 [dependencies]
 # The generator's SplitMix64 stream is `purrdf_hash::mix`, the zero-dependency
 # root every crate may reach. The W3C terms the corpus writes (`rdf:reifies`,
@@ -30,6 +34,7 @@ path = "src/main.rs"
 purrdf-hash = { workspace = true }
 purrdf-iri = { workspace = true }
 purrdf-xsd = { workspace = true }
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 # Test-only round-trip validation: every generated row must satisfy the

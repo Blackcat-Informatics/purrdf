@@ -3,6 +3,22 @@
 
 # purrdf-bench
 
+`lubm-corpus` separately generates the original native university workload.
+Its explicit sampling and byte law is [LUBM_PROFILE.md](LUBM_PROFILE.md).
+Every option is required; the output directory must not exist:
+
+```sh
+cargo run -p purrdf-bench --bin lubm-corpus -- \
+  --universities 1 --index 0 --seed 0 \
+  --ontology http://swat.cse.lehigh.edu/onto/univ-bench.owl \
+  --document-base http://example.org/lubm/ --out build/native-university
+```
+
+Department N-Triples files and a sorted, post-flush byte receipt are written
+without overwriting existing paths. Native repeatability does not claim UBA
+byte identity or historical query answers. The scale generator below retains
+its independent profile and pins.
+
 Benchmark tooling (never published): `bench-corpus`, the deterministic,
 shardable scale-corpus generator. Every IRI is minted purely from its index
 under a fixed seed, across five deliberately adversarial classes
