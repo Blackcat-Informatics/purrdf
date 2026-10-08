@@ -52,6 +52,7 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 purrdf-testkit = { workspace = true }
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 # Semi-naive join latency along the three axes a join's cost actually has: the

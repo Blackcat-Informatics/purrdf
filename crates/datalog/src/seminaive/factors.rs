@@ -202,23 +202,28 @@ fn full_matches(
     }
     let mut matches = Vec::with_capacity(partial.len());
     for mut solution in partial {
+        if governor.spent() {
+            break;
+        }
         solution.sources.sort_by_key(|source| source.body_index);
-        if factor
-            .negated
-            .iter()
-            .any(|&index| entry.runtime.negated[index].satisfied(&solution, snapshot.rel))
-        {
+        if factor.negated.iter().any(|&index| {
+            governor.spent()
+                || entry.runtime.negated[index].satisfied(&solution, snapshot.rel, governor)
+        }) {
             continue;
         }
         let mut blocked = false;
         for &index in &factor.negations {
-            if entry.runtime.negations[index].holds(GroupProbe {
-                solution: &solution,
-                rel: snapshot.rel,
-                guards: &NoGuards,
-                rule: entry.index,
-                clause: entry.rule,
-            })? {
+            if entry.runtime.negations[index].holds(
+                GroupProbe {
+                    solution: &solution,
+                    rel: snapshot.rel,
+                    guards: &NoGuards,
+                    rule: entry.index,
+                    clause: entry.rule,
+                },
+                governor,
+            )? {
                 blocked = true;
                 break;
             }
@@ -429,6 +434,9 @@ impl<'r> Product<'_, 'r> {
         buffer: &mut RoundBuffer<'r>,
         governor: &mut StepGovernor,
     ) {
+        if !governor.charge() {
+            return;
+        }
         // Height masking means a factor's locally shortest proof may not minimize the
         // global sum. Saturated sums in turn mask that sum: pure lex then decides.
         let threshold = global_threshold(
@@ -443,7 +451,6 @@ impl<'r> Product<'_, 'r> {
             .map(|frontier| frontier.at(threshold))
             .collect();
         let lexical = saturated_sum(winners.iter().map(|winner| winner.summed.sum));
-        governor.charge();
         let mut solution = SlotSolution::empty(self.entry.plan.variables().len());
         for winner in winners {
             let witness = if lexical {
@@ -490,7 +497,8 @@ pub(super) fn evaluate<'r>(
     {
         return Ok(buffer);
     }
-    if ground_blocked(entry, snapshot)? {
+    if ground_blocked(entry, snapshot, governor)? {
+        buffer.join_steps = governor.consumed;
         return Ok(buffer);
     }
     let mut relations = Vec::with_capacity(entry.runtime.factors.len());
@@ -558,32 +566,45 @@ pub(super) fn evaluate<'r>(
 
 /// Negative predicates with no positive outer slot are round-wide preconditions.
 /// Local variables remain local even when their authored name appears in another group.
-fn ground_blocked(entry: RuleEntry<'_>, snapshot: RoundSnapshot<'_>) -> Result<bool, EvalError> {
+fn ground_blocked(
+    entry: RuleEntry<'_>,
+    snapshot: RoundSnapshot<'_>,
+    governor: &mut StepGovernor,
+) -> Result<bool, EvalError> {
     let empty = SlotSolution::empty(entry.plan.variables().len());
     for (index, atom) in entry.runtime.negated.iter().enumerate() {
+        if governor.spent() {
+            return Ok(true);
+        }
         if !entry
             .runtime
             .factors
             .iter()
             .any(|factor| factor.negated.contains(&index))
-            && atom.satisfied(&empty, snapshot.rel)
+            && atom.satisfied(&empty, snapshot.rel, governor)
         {
             return Ok(true);
         }
     }
     for (index, group) in entry.runtime.negations.iter().enumerate() {
+        if governor.spent() {
+            return Ok(true);
+        }
         if !entry
             .runtime
             .factors
             .iter()
             .any(|factor| factor.negations.contains(&index))
-            && group.holds(GroupProbe {
-                solution: &empty,
-                rel: snapshot.rel,
-                guards: &NoGuards,
-                rule: entry.index,
-                clause: entry.rule,
-            })?
+            && group.holds(
+                GroupProbe {
+                    solution: &empty,
+                    rel: snapshot.rel,
+                    guards: &NoGuards,
+                    rule: entry.index,
+                    clause: entry.rule,
+                },
+                governor,
+            )?
         {
             return Ok(true);
         }
@@ -877,14 +898,19 @@ mod tests {
                 depth: &depth,
                 assumed: &[],
             };
-            let planned =
-                evaluate_rule(entry, snapshot, JoinStrategy::Planned, u64::MAX, &NoGuards)
-                    .expect("factor round completes");
+            let planned = evaluate_rule(
+                entry,
+                snapshot,
+                JoinStrategy::Planned,
+                StepGovernor::new(u64::MAX),
+                &NoGuards,
+            )
+            .expect("factor round completes");
             let binary = evaluate_rule(
                 entry,
                 snapshot,
                 JoinStrategy::ForcedBinary,
-                u64::MAX,
+                StepGovernor::new(u64::MAX),
                 &NoGuards,
             )
             .expect("exhaustive round completes");
@@ -1049,10 +1075,19 @@ mod tests {
             runtime: &runtime,
             delta: Delta::all(input.len()),
         };
-        let buffer = evaluate_rule(entry, snapshot, JoinStrategy::Planned, 1, &NoGuards)
-            .expect("a false body requires no positive product");
+        let buffer = evaluate_rule(
+            entry,
+            snapshot,
+            JoinStrategy::Planned,
+            StepGovernor::new(3),
+            &NoGuards,
+        )
+        .expect("a false body requires no positive product");
         assert!(buffer.entries.is_empty());
-        assert_eq!(buffer.join_steps, 0);
+        assert_eq!(
+            buffer.join_steps, 3,
+            "group, partition and matching row; no positive product"
+        );
     }
 
     /// Predicate and graph are projected values and connectivity edges, just like
@@ -1326,14 +1361,19 @@ mod tests {
                     runtime: &runtime,
                     delta: Delta::all(input.len()),
                 };
-                let planned =
-                    evaluate_rule(entry, snapshot, JoinStrategy::Planned, u64::MAX, &NoGuards)
-                        .expect("factored round completes");
+                let planned = evaluate_rule(
+                    entry,
+                    snapshot,
+                    JoinStrategy::Planned,
+                    StepGovernor::new(u64::MAX),
+                    &NoGuards,
+                )
+                .expect("factored round completes");
                 let binary = evaluate_rule(
                     entry,
                     snapshot,
                     JoinStrategy::ForcedBinary,
-                    u64::MAX,
+                    StepGovernor::new(u64::MAX),
                     &NoGuards,
                 )
                 .expect("exhaustive round completes");
