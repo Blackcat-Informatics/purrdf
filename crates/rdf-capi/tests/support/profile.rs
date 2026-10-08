@@ -445,7 +445,7 @@ pub(crate) fn run(input: &Path) -> IoResult<()> {
 fn telemetry_arguments(arguments: &[String]) -> Vec<String> {
     let mut delegated = arguments.to_vec();
     let verb = arguments.first().map(String::as_str);
-    if matches!(verb, Some("build" | "test")) {
+    if matches!(verb, Some("build" | "test" | "run")) {
         let separator = arguments
             .iter()
             .position(|arg| arg == "--")
@@ -491,7 +491,7 @@ fn cargo_shim_at(cargo: &Path, directory: &Path, arguments: Vec<String>) -> IoRe
     let prefix = directory.join(format!("cargo-{}-{stamp}", std::process::id()));
     let measured = matches!(
         arguments.first().map(String::as_str),
-        Some("build" | "test")
+        Some("build" | "test" | "run")
     );
     let target = if measured {
         Some(PathBuf::from(
@@ -506,6 +506,19 @@ fn cargo_shim_at(cargo: &Path, directory: &Path, arguments: Vec<String>) -> IoRe
         .map(|target| timing_snapshot(target))
         .transpose()?
         .unwrap_or_default();
+    let running = arguments.first().is_some_and(|arg| arg == "run");
+    let original_json = arguments
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--message-format" || arg.starts_with("--message-format="));
+    let jobs = if measured {
+        Some(cargo_jobs(
+            &arguments,
+            std::env::var("CARGO_BUILD_JOBS").ok().as_deref(),
+        ))
+    } else {
+        None
+    };
     let delegated = telemetry_arguments(&arguments);
     let mut recorder = Recorder::new(
         prefix.with_extension("json"),
@@ -514,24 +527,69 @@ fn cargo_shim_at(cargo: &Path, directory: &Path, arguments: Vec<String>) -> IoRe
             .with("delegated_argv", delegated.clone())
             .into(),
     )?;
+    let jobs = jobs
+        .map(|result| {
+            if result.is_err() {
+                recorder.check("effective-cargo-jobs-admission", || result)
+            } else {
+                result
+            }
+        })
+        .transpose()?;
     let mut command = Command::new(cargo);
     command
         .args(delegated)
         .current_dir(std::env::current_dir()?);
+    if let Some(jobs) = jobs {
+        command.env("CARGO_BUILD_JOBS", jobs.to_string());
+        recorder.evidence("effective_cargo_jobs", jobs.into())?;
+    }
     let result = recorder.run(
         "rust-preparation-codegen-link-and-test-command",
         &mut command,
     );
     let receipt = read(&prefix.with_extension("json"))?;
-    if result.is_ok() {
+    let stdout = phases::command_bytes(
+        receipt
+            .pointer("/phases/0/command")
+            .ok_or_else(|| invalid("Cargo child command missing"))?,
+        "stdout",
+    )?;
+    let run_output = if running {
+        Some(phases::run_output(&stdout)?)
+    } else {
+        None
+    };
+    if let Some((messages, _)) = &run_output {
+        let executable = recorder.check("selected-run-executable-identity", || {
+            let artifact = run_executable(messages)?;
+            Ok::<Value, std::io::Error>(
+                Object::new()
+                    .with("artifact", artifact.clone())
+                    .with(
+                        "executable",
+                        phases::identity(Path::new(
+                            artifact
+                                .get("executable")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| invalid("run executable missing"))?,
+                        ))?,
+                    )
+                    .into(),
+            )
+        })?;
+        recorder.evidence("run_executable", executable)?;
+    }
+    if result.is_ok() || running {
         // The caller may remove its private artifact directory as soon as this
         // shim returns. Bind the selected library while this child still owns it.
         let captured = recorder.check("selected-capi-artifact-identities", || {
-            let stdout = receipt
-                .pointer("/phases/0/command/stdout")
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid("Cargo child output missing"))?;
-            capture_capi_artifacts(&phases::cargo_messages(stdout.as_bytes(), true)?)
+            let messages = if let Some((messages, _)) = &run_output {
+                messages.clone()
+            } else {
+                phases::cargo_messages(&stdout, true)?
+            };
+            capture_capi_artifacts(&messages)
         })?;
         recorder.evidence("capi_artifacts", captured.into())?;
     }
@@ -549,7 +607,7 @@ fn cargo_shim_at(cargo: &Path, directory: &Path, arguments: Vec<String>) -> IoRe
             .collect();
         let timings = current_timings(target, &previous, &prefix, Some(&reported))?;
         recorder.evidence("timings", timings.clone().into())?;
-        if result.is_ok() && timings.is_empty() {
+        if (result.is_ok() || running) && timings.is_empty() {
             return Err(invalid(
                 "successful Cargo preparation produced no current timing report",
             ));
@@ -559,15 +617,209 @@ fn cargo_shim_at(cargo: &Path, directory: &Path, arguments: Vec<String>) -> IoRe
     // nested Csmoke's strict Cargo artifact parser and ordinary caller behavior.
     if let Some(command) = receipt.pointer("/phases/0/command") {
         use std::io::Write as _;
-        if let Some(text) = command.get("stdout").and_then(Value::as_str) {
-            std::io::stdout().write_all(text.as_bytes())?;
-        }
-        if let Some(text) = command.get("stderr").and_then(Value::as_str) {
-            std::io::stderr().write_all(text.as_bytes())?;
-        }
+        let output = if running && !original_json {
+            run_output
+                .as_ref()
+                .ok_or_else(|| invalid("run output missing"))?
+                .1
+        } else {
+            &stdout
+        };
+        std::io::stdout().write_all(output)?;
+        std::io::stderr().write_all(&phases::command_bytes(command, "stderr")?)?;
     }
     result?;
     Ok(())
+}
+
+fn cargo_jobs(arguments: &[String], inherited: Option<&str>) -> IoResult<u64> {
+    let mut selected = None;
+    let mut args = arguments.iter().take_while(|arg| *arg != "--");
+    while let Some(arg) = args.next() {
+        let value = if matches!(arg.as_str(), "--jobs" | "-j") {
+            Some(
+                args.next()
+                    .ok_or_else(|| invalid("Cargo jobs argument missing"))?
+                    .as_str(),
+            )
+        } else {
+            arg.strip_prefix("--jobs=")
+                .or_else(|| arg.strip_prefix("-j").filter(|value| !value.is_empty()))
+        };
+        if let Some(value) = value {
+            if selected.is_some() {
+                return Err(invalid("ambiguous Cargo jobs arguments"));
+            }
+            selected = Some(value);
+        }
+    }
+    let jobs = selected
+        .or(inherited)
+        .ok_or_else(|| invalid("explicit effective Cargo jobs missing"))?
+        .parse::<u64>()
+        .map_err(|error| invalid(error.to_string()))?;
+    if !(1..=8).contains(&jobs) {
+        return Err(invalid("effective Cargo jobs must be 1..8"));
+    }
+    Ok(jobs)
+}
+
+fn run_executable(messages: &[Value]) -> IoResult<&Value> {
+    for message in messages {
+        if message.get("reason").and_then(Value::as_str) == Some("compiler-artifact") {
+            artifact_metadata(message)?;
+        }
+    }
+    let selected = messages
+        .iter()
+        .filter(|message| {
+            message.get("reason").and_then(Value::as_str) == Some("compiler-artifact")
+                && message
+                    .pointer("/target/kind")
+                    .and_then(Value::as_array)
+                    .is_some_and(|kinds| {
+                        kinds.len() == 1 && matches!(kinds[0].as_str(), Some("bin" | "example"))
+                    })
+                && message
+                    .get("executable")
+                    .is_some_and(|value| !value.is_null())
+        })
+        .collect::<Vec<_>>();
+    let [artifact] = selected.as_slice() else {
+        return Err(invalid("Cargo run executable must be unique"));
+    };
+    artifact_metadata(artifact)?;
+    let executable = artifact
+        .get("executable")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("run executable malformed"))?;
+    if !Path::new(executable).is_absolute()
+        || artifact.pointer("/profile/test").and_then(Value::as_bool) != Some(false)
+        || !artifact
+            .get("filenames")
+            .and_then(Value::as_array)
+            .is_some_and(|files| files.iter().any(|path| path.as_str() == Some(executable)))
+        || !artifact
+            .pointer("/target/kind")
+            .and_then(Value::as_array)
+            .is_some_and(|kinds| {
+                kinds.len() == 1 && matches!(kinds[0].as_str(), Some("bin" | "example"))
+            })
+    {
+        return Err(invalid("run executable frame is malformed or unrelated"));
+    }
+    Ok(artifact)
+}
+
+fn child_messages(child: &Value) -> IoResult<Vec<Value>> {
+    let command = child
+        .pointer("/phases/0/command")
+        .ok_or_else(|| invalid("Cargo child command missing"))?;
+    let arguments = child
+        .pointer("/context/original_argv")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("Cargo child original arguments missing"))?
+        .iter()
+        .map(|arg| {
+            arg.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid("Cargo child argument malformed"))
+        })
+        .collect::<IoResult<Vec<_>>>()?;
+    let delegated: Value = telemetry_arguments(&arguments).into();
+    if arguments.is_empty()
+        || child.pointer("/context/delegated_argv") != Some(&delegated)
+        || command.get("argv") != Some(&delegated)
+    {
+        return Err(invalid(
+            "Cargo delegated arguments differ from admitted telemetry",
+        ));
+    }
+    if matches!(arguments[0].as_str(), "build" | "test" | "run") {
+        let environment = command
+            .get("env")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("effective child environment missing"))?;
+        let inherited = environment
+            .iter()
+            .filter(|value| value.get("key").and_then(Value::as_str) == Some("CARGO_BUILD_JOBS"))
+            .collect::<Vec<_>>();
+        let [inherited] = inherited.as_slice() else {
+            return Err(invalid(
+                "effective child Cargo jobs environment ambiguous or missing",
+            ));
+        };
+        let jobs = cargo_jobs(&arguments, inherited.get("value").and_then(Value::as_str))?;
+        if child
+            .pointer("/context/effective_cargo_jobs")
+            .and_then(Value::as_u64)
+            != Some(jobs)
+        {
+            return Err(invalid(
+                "recorded effective Cargo jobs differs from actual invocation",
+            ));
+        }
+    }
+    let stdout = phases::command_bytes(command, "stdout")?;
+    let running = child
+        .pointer("/context/original_argv/0")
+        .and_then(Value::as_str)
+        == Some("run");
+    let messages = if running {
+        phases::run_output(&stdout)?.0
+    } else {
+        phases::cargo_messages(&stdout, true)?
+    };
+    let phases = child
+        .get("phases")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("Cargo child phases missing"))?;
+    if phases.is_empty() {
+        return Err(invalid("Cargo child phases empty"));
+    }
+    for (index, phase) in phases.iter().enumerate() {
+        if phase.get("success").and_then(Value::as_bool) != Some(true)
+            && !(running
+                && index == 0
+                && phase.get("success").and_then(Value::as_bool) == Some(false)
+                && command
+                    .get("exit_code")
+                    .and_then(Value::as_i64)
+                    .is_some_and(|code| code > 0))
+        {
+            return Err(invalid("failed Cargo preparation cannot qualify"));
+        }
+    }
+    if running {
+        let exit = command
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| invalid("run executable exit status missing"))?;
+        if exit < 0 || phases[0].get("success").and_then(Value::as_bool) != Some(exit == 0) {
+            return Err(invalid("run executable exit and failure phase disagree"));
+        }
+        let artifact = run_executable(&messages)?;
+        let capture = child
+            .pointer("/context/run_executable")
+            .ok_or_else(|| invalid("compiled run executable identity missing"))?;
+        let identity = capture
+            .get("executable")
+            .ok_or_else(|| invalid("run executable identity missing"))?;
+        if capture.get("artifact") != Some(artifact)
+            || identity.get("path") != artifact.get("executable")
+            || identity.get("bytes").and_then(Value::as_u64).is_none()
+            || identity
+                .get("blake3")
+                .and_then(Value::as_str)
+                .and_then(purrdf_hash::hex::decode_32_canonical)
+                .is_none()
+        {
+            return Err(invalid(
+                "run executable capture differs from compiled frame",
+            ));
+        }
+    }
+    Ok(messages)
 }
 
 fn artifact_metadata(message: &Value) -> IoResult<()> {
@@ -777,11 +1029,7 @@ fn collect(directory: &Path, roots: &[(&str, &str)]) -> IoResult<Value> {
             {
                 timings.extend(reports.iter().cloned());
             }
-            let stdout = receipt
-                .pointer("/phases/0/command/stdout")
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid("Cargo child output missing"))?;
-            let messages = phases::cargo_messages(stdout.as_bytes(), true)?;
+            let messages = child_messages(&receipt)?;
             let captured = receipt
                 .pointer("/context/capi_artifacts")
                 .ok_or_else(|| invalid("child-time C library identity inventory missing"))?;
@@ -968,23 +1216,19 @@ pub(crate) fn valid_receipt(receipt: &Value) -> IoResult<u128> {
             }
             if key == "receipts" {
                 let child = read(Path::new(path))?;
-                if child
-                    .get("phases")
-                    .and_then(Value::as_array)
-                    .is_none_or(|phases| {
-                        phases.is_empty()
-                            || phases.iter().any(|phase| {
-                                phase.get("success").and_then(Value::as_bool) != Some(true)
-                            })
-                    })
+                let messages = child_messages(&child)?;
+                if matches!(
+                    child
+                        .pointer("/context/original_argv/0")
+                        .and_then(Value::as_str),
+                    Some("build" | "test" | "run")
+                ) && child.pointer("/context/effective_cargo_jobs")
+                    != receipt.pointer("/context/request/jobs")
                 {
-                    return Err(invalid("failed Cargo child cannot qualify"));
+                    return Err(invalid(
+                        "effective child Cargo jobs differs from admitted parent request",
+                    ));
                 }
-                let stdout = child
-                    .pointer("/phases/0/command/stdout")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| invalid("Cargo child output missing"))?;
-                let messages = phases::cargo_messages(stdout.as_bytes(), true)?;
                 let captured = child
                     .pointer("/context/capi_artifacts")
                     .ok_or_else(|| invalid("child-time C library identity inventory missing"))?;
@@ -1289,16 +1533,41 @@ pub(crate) mod tests {
                 "context",
                 Value::from(
                     Object::new()
+                        .with("original_argv", vec!["build", "--jobs", "8"])
+                        .with(
+                            "delegated_argv",
+                            telemetry_arguments(&["build", "--jobs", "8"].map(str::to_owned)),
+                        )
+                        .with("effective_cargo_jobs", 8_u64)
                         .with("capi_artifacts", captures.to_vec())
                         .with("timings", vec![phases::identity(&timing).unwrap()]),
                 ),
             )
             .with(
                 "phases",
-                vec![Value::from(Object::new().with("success", true).with(
-                    "command",
-                    Value::from(Object::new().with("stdout", stdout)),
-                ))],
+                vec![Value::from(
+                    Object::new().with("success", true).with(
+                        "command",
+                        Value::from(
+                            Object::new()
+                                .with("stdout", stdout)
+                                .with(
+                                    "argv",
+                                    telemetry_arguments(
+                                        &["build", "--jobs", "8"].map(str::to_owned),
+                                    ),
+                                )
+                                .with(
+                                    "env",
+                                    vec![Value::from(
+                                        Object::new()
+                                            .with("key", "CARGO_BUILD_JOBS")
+                                            .with("value", "8"),
+                                    )],
+                                ),
+                        ),
+                    ),
+                )],
             )
             .into();
         std::fs::write(&child, json::write_pretty(&document)).unwrap();
@@ -1703,7 +1972,7 @@ pub(crate) mod tests {
     pub(crate) fn receipt(root: &Path) -> Value {
         let child = root.join("cargo-child.json");
         let timing = root.join("cargo-timing.html");
-        std::fs::write(&child, r#"{"context":{"capi_artifacts":[]},"phases":[{"success":true,"command":{"stdout":""}}]}"#).unwrap();
+        std::fs::write(&child, r#"{"context":{"original_argv":["metadata"],"delegated_argv":["metadata"],"capi_artifacts":[]},"phases":[{"success":true,"command":{"argv":["metadata"],"stdout":""}}]}"#).unwrap();
         std::fs::write(&timing, "fixture Cargo timing report").unwrap();
         let cargo: Value = Object::new()
             .with("receipts", vec![phases::identity(&child).unwrap()])
@@ -1911,6 +2180,147 @@ pub(crate) mod tests {
         assert!(delegated.contains(&"--message-format=json-render-diagnostics".to_owned()));
         let argv = ["metadata", "--locked", "--format-version", "1"].map(str::to_owned);
         assert_eq!(telemetry_arguments(&argv), argv);
+        let run = [
+            "run", "--locked", "--jobs", "8", "--bin", "probe", "--", "--jobs", "99",
+        ]
+        .map(str::to_owned);
+        let delegated = telemetry_arguments(&run);
+        let separator = delegated.iter().position(|arg| arg == "--").unwrap();
+        assert_eq!(&delegated[separator..], &run[6..]);
+        assert_eq!(cargo_jobs(&run, Some("4")).unwrap(), 8);
+        assert_eq!(cargo_jobs(&["run".to_owned()], Some("8")).unwrap(), 8);
+        for (args, inherited) in [
+            (vec!["run"], None),
+            (vec!["run"], Some("0")),
+            (vec!["run", "--jobs", "9"], Some("8")),
+            (vec!["run", "--jobs"], Some("8")),
+            (vec!["run", "--jobs", "8", "-j4"], Some("8")),
+        ] {
+            assert!(
+                cargo_jobs(
+                    &args.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                    inherited
+                )
+                .is_err()
+            );
+        }
+
+        let holder = purrdf_testkit::temp_dir!().unwrap();
+        let executable = holder.path().join("refusing-program");
+        std::fs::write(&executable, "compiled executable fixture").unwrap();
+        let mut artifact = json::read(&phases::tests::artifact(
+            "probe",
+            false.into(),
+            vec![executable.to_str().unwrap()].into(),
+        ))
+        .unwrap();
+        *artifact.pointer_mut("/target/kind").unwrap() = vec!["bin"].into();
+        artifact
+            .as_object_mut()
+            .unwrap()
+            .insert("executable", executable.display().to_string());
+        let stdout = format!(
+            "{}\n{{\"reason\":\"build-finished\",\"success\":true}}\n{{\"runtime\":\"refusal\"}}\n",
+            json::write_compact(&artifact)
+        );
+        let path = collector_child(holder.path(), "refused-run", &stdout, &[]);
+        let mut child = read(&path).unwrap();
+        let args = ["run", "--jobs", "8"].map(str::to_owned);
+        *child.pointer_mut("/context/original_argv").unwrap() = args.to_vec().into();
+        *child.pointer_mut("/context/delegated_argv").unwrap() = telemetry_arguments(&args).into();
+        *child.pointer_mut("/phases/0/command/argv").unwrap() = telemetry_arguments(&args).into();
+        *child.pointer_mut("/phases/0/success").unwrap() = false.into();
+        child
+            .pointer_mut("/phases/0/command")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("exit_code", 1_u64);
+        child
+            .get_mut("context")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "run_executable",
+                Value::from(
+                    Object::new()
+                        .with("artifact", artifact)
+                        .with("executable", phases::identity(&executable).unwrap()),
+                ),
+            );
+        assert_eq!(child_messages(&child).unwrap().len(), 2);
+        std::fs::write(&path, json::write_pretty(&child)).unwrap();
+        let mut parent = receipt(holder.path());
+        *parent.pointer_mut("/context/cargo").unwrap() = collect(holder.path(), &[]).unwrap();
+        assert!(valid_receipt(&parent).is_ok());
+        let mut lower_jobs = parent.clone();
+        *lower_jobs.pointer_mut("/context/request/jobs").unwrap() = 4_u64.into();
+        assert!(valid_receipt(&lower_jobs).is_err());
+        assert_eq!(
+            read(&path)
+                .unwrap()
+                .pointer("/phases/0/success")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        *parent.pointer_mut("/phases/0/success").unwrap() = false.into();
+        assert!(valid_receipt(&parent).is_err());
+        for (pointer, value) in [
+            ("/context/run_executable", Value::Null),
+            ("/context/effective_cargo_jobs", 4_u64.into()),
+            (
+                "/context/run_executable/artifact/executable",
+                "/changed-executable".into(),
+            ),
+            (
+                "/context/run_executable/executable/path",
+                "/changed-executable".into(),
+            ),
+            ("/phases/0/command/exit_code", Value::Null),
+            ("/phases/0/success", true.into()),
+            (
+                "/phases/0/command/stdout",
+                "{\"reason\":\"build-finished\",\"success\":false}\n".into(),
+            ),
+        ] {
+            let mut changed = child.clone();
+            *changed.pointer_mut(pointer).unwrap() = value;
+            assert!(child_messages(&changed).is_err(), "{pointer}");
+        }
+        let mut unrelated_failure = child.clone();
+        unrelated_failure
+            .get_mut("phases")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(Object::new().with("success", false).into());
+        assert!(child_messages(&unrelated_failure).is_err());
+        let mut duplicate = phases::run_output(stdout.as_bytes()).unwrap().0;
+        let mut build_script = duplicate[0].clone();
+        *build_script.pointer_mut("/target/kind").unwrap() = vec!["custom-build"].into();
+        *build_script.pointer_mut("/target/name").unwrap() = "build-script-build".into();
+        duplicate.insert(0, build_script);
+        assert_eq!(run_executable(&duplicate).unwrap(), &duplicate[1]);
+        let mut malformed = duplicate.clone();
+        *malformed[0].pointer_mut("/filenames").unwrap() = Value::Null;
+        assert!(run_executable(&malformed).is_err());
+        duplicate.push(duplicate[1].clone());
+        assert!(run_executable(&duplicate).is_err());
+        let mut succeeded = child.clone();
+        *succeeded.pointer_mut("/phases/0/success").unwrap() = true.into();
+        *succeeded
+            .pointer_mut("/phases/0/command/exit_code")
+            .unwrap() = 0_u64.into();
+        assert!(child_messages(&succeeded).is_ok());
+        let mut failed_build = child;
+        let args = ["build", "--jobs", "8"].map(str::to_owned);
+        *failed_build.pointer_mut("/context/original_argv").unwrap() = args.to_vec().into();
+        *failed_build.pointer_mut("/context/delegated_argv").unwrap() =
+            telemetry_arguments(&args).into();
+        *failed_build.pointer_mut("/phases/0/command/argv").unwrap() =
+            telemetry_arguments(&args).into();
+        assert!(child_messages(&failed_build).is_err());
         let argv = [
             "build",
             "--profile",

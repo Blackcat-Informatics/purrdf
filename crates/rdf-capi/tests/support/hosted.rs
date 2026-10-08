@@ -712,7 +712,7 @@ pub(crate) fn run(case: &str) -> IoResult<()> {
                 "observed_available_parallelism",
                 std::thread::available_parallelism()?.get() as u64,
             )
-            .with("effective_cargo_jobs", parallelism)
+            .with("effective_cargo_jobs", 8_u64)
             .with("effective_libtest_threads", parallelism)
             .into(),
     )?;
@@ -720,7 +720,7 @@ pub(crate) fn run(case: &str) -> IoResult<()> {
     for warmth in ["cold", "warm"] {
         let mut request = Object::new().with("root", root.display().to_string()).with("directory", directory.display().to_string())
             .with("cargo", cargo.clone()).with("lane", lane).with("warmth", warmth)
-            .with("jobs", parallelism).with("test_threads", parallelism)
+            .with("jobs", 8_u64).with("test_threads", parallelism)
             .with("runner_class", format!("{}:{}:{}:{}:{hardware_digest}:{prerequisite_digest}", environment("ImageOS")?, environment("ImageVersion")?, environment("RUNNER_OS")?, environment("RUNNER_ARCH")?))
             .with("dependency_cache", "no artifact cache restored; registry/download cache is shared sequentially and may exist")
             .with("compiler_cache", "no compiler cache requested; wrappers/configuration captured by controller")

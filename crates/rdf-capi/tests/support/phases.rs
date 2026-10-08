@@ -47,6 +47,58 @@ pub(crate) fn cargo_messages(messages: &[u8], with_harness: bool) -> IoResult<Ve
         .collect()
 }
 
+/// Cargo's first typed terminal frame ends the compiler prefix. Everything
+/// afterward belongs to the executable, including arbitrary JSON and bytes.
+pub(crate) fn run_output(output: &[u8]) -> IoResult<(Vec<Value>, &[u8])> {
+    let mut frames = Vec::new();
+    let mut offset = 0;
+    for line in output.split_inclusive(|byte| *byte == b'\n') {
+        let parsed = cargo_messages(line, false)?;
+        let [frame] = parsed.as_slice() else {
+            return Err(invalid(
+                "Cargo run compiler prefix requires one frame per line",
+            ));
+        };
+        let reason = frame
+            .get("reason")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("Cargo run compiler frame reason missing"))?;
+        offset += line.len();
+        if reason == "build-finished" {
+            if frame.get("success").and_then(Value::as_bool) != Some(true) {
+                return Err(invalid("Cargo run compiler preparation failed"));
+            }
+            frames.push(frame.clone());
+            return Ok((frames, &output[offset..]));
+        }
+        if !matches!(
+            reason,
+            "compiler-artifact" | "compiler-message" | "build-script-executed" | "build-started"
+        ) {
+            return Err(invalid("unknown Cargo run compiler prefix frame"));
+        }
+        frames.push(frame.clone());
+    }
+    Err(invalid("Cargo run compiler terminal frame missing"))
+}
+
+/// Recover the retained bytes without lossy UTF-8 conversion of executable output.
+pub(crate) fn command_bytes(command: &Value, name: &str) -> IoResult<Vec<u8>> {
+    if let Some(hex) = command.get(&format!("{name}_bytes_hex")) {
+        return purrdf_hash::hex::decode_canonical(
+            hex.as_str()
+                .ok_or_else(|| invalid("command byte inventory malformed"))?,
+        )
+        .map_err(|error| invalid(error.to_string()));
+    }
+    Ok(command
+        .get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("command output missing"))?
+        .as_bytes()
+        .to_vec())
+}
+
 /// Select from an already admitted complete invocation, never across children.
 pub(crate) fn cdylib(messages: &[Value], package_id: &str, filename: &str) -> IoResult<Artifact> {
     let mut selected = None;
@@ -258,6 +310,11 @@ impl Recorder {
                     "stderr",
                     String::from_utf8_lossy(&output.stderr).into_owned(),
                 );
+            for (name, bytes) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+                if std::str::from_utf8(bytes).is_err() {
+                    invocation.insert(format!("{name}_bytes_hex"), purrdf_hash::hex::encode(bytes));
+                }
+            }
         }
         let failure = match &result {
             Ok(output) if output.status.success() => None,
@@ -537,6 +594,29 @@ pub(crate) mod tests {
         assert!(cdylib(&duplicate, "capi", "libpurrdf.so").is_err());
         assert!(cdylib(&messages, "unrelated", "libpurrdf.so").is_err());
         assert!(cdylib(&messages, "capi", "wrong.so").is_err());
+        let prefix = format!("{exact}\n{{\"reason\":\"build-finished\",\"success\":true}}\n");
+        for tail in [
+            b"".as_slice(),
+            b"7\t2\n",
+            b"{\"answer\":true}\nno final newline",
+            b"{malformed runtime JSON\n",
+            b"{\"reason\":\"build-finished\",\"success\":true}\n",
+            &[255, 0, 10],
+        ] {
+            let mut output = prefix.as_bytes().to_vec();
+            output.extend_from_slice(tail);
+            let (frames, runtime) = run_output(&output).unwrap();
+            assert_eq!(frames.len(), 2);
+            assert_eq!(runtime, tail);
+        }
+        for output in [
+            exact.clone(),
+            format!("{exact}\n{{\"reason\":\"build-finished\",\"success\":false}}\n"),
+            format!("{exact}\n{{\"reason\":\"build-finished\",\"success\":null}}\n"),
+            "{bad compiler frame\n".to_owned(),
+        ] {
+            assert!(run_output(output.as_bytes()).is_err());
+        }
     }
 
     #[test]
@@ -649,5 +729,18 @@ pub(crate) mod tests {
         );
         assert!(Recorder::new(path.clone(), Object::new().into()).is_err());
         std::fs::remove_dir(path).unwrap();
+        #[cfg(unix)]
+        {
+            let binary_path = holder.path().join("binary-output.json");
+            let mut binary = Recorder::new(binary_path.clone(), Object::new().into()).unwrap();
+            binary
+                .run("binary-child", Command::new("printf").arg("\\377\\000\\n"))
+                .unwrap();
+            let receipt = json::read(&std::fs::read_to_string(binary_path).unwrap()).unwrap();
+            assert_eq!(
+                command_bytes(receipt.pointer("/phases/0/command").unwrap(), "stdout").unwrap(),
+                [255, 0, 10]
+            );
+        }
     }
 }
