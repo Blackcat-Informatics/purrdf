@@ -286,7 +286,7 @@ done
 DATA="${RUN_ROOT}/lubm-data.nq"
 write_checked "${DATA}" "complete converted native corpus" cat "${nq_files[@]}"
 ACCEPTANCE="${RUN_ROOT}/graph-acceptance.json"
-lane_certify "${ACCEPTANCE}"
+lane_certify "${ACCEPTANCE}" "complete native graph acceptance"
 "${CHECK_BIN}" verify "${WORK}" "${CONVERTED}" "${DATA}" "${SEED}" "${INDEX}" "${UNIVERSITIES}" "${ONTO}" "${DOC_BASE}" "${ACCEPTANCE}" ||
   die "native receipt/graph acceptance failed; no query numbers are admissible"
 require_nonempty_file "${ACCEPTANCE}" "complete native graph acceptance"
