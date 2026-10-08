@@ -25,7 +25,10 @@ const CORPUS: &str = "../sparql-conformance/entailment-suite/w3c-owl2-rl";
 fn c_abi_smoke() -> std::io::Result<()> {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let root = Path::new(manifest).parent().unwrap().parent().unwrap();
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    // The profiling launcher delegates to this same Cargo with telemetry flags.
+    let cargo = std::env::var("PURRDF_PROFILE_CARGO")
+        .or_else(|_| std::env::var("CARGO"))
+        .unwrap_or_else(|_| "cargo".to_string());
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let receipt = match std::env::var_os("PURRDF_C_PHASE_RECEIPT") {
         Some(path) => PathBuf::from(path),
