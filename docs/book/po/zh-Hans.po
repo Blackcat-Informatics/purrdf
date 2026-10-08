@@ -22484,21 +22484,23 @@ msgstr ""
 
 #: src/project/releases.md:92
 msgid ""
-"Eleven workspace members are deliberately never published to crates.io: "
+"Twelve workspace members are deliberately never published to crates.io: "
 "`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-"
-"sparql-conformance` (the test harness), `purrdf-hash-conformance` (the "
-"frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf` binary), "
-"`purrdf-envelope-probe` (the micro-hardware envelope capture tool), `purrdf-"
-"bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting "
-"allocator the allocation tests and benches measure with), `purrdf-testkit` "
-"(the shared test support: goldens, temporary paths, frozen vectors and the "
-"`harness = false` runner), `wasm-link` (the wasm package's post-link step), "
-"`helper-census` (the structural census behind the shared-helpers gate), and "
-"`purrdf-python` (the extension crate, which ships to PyPI via maturin "
-"instead)."
+"sparql-conformance` (the test harness), `purrdf-conformance-kit` (the "
+"manifest, report and outcome grading the community corpus runner uses), "
+"`purrdf-hash-conformance` (the frozen-vector suites of `purrdf-hash`), "
+"`purrdf-cli` (the `purrdf` binary), `purrdf-envelope-probe` (the micro-"
+"hardware envelope capture tool), `purrdf-bench` (benchmark tooling), `purrdf-"
+"alloc-probe` (the shared counting allocator the allocation tests and benches "
+"measure with), `purrdf-testkit` (the shared test support: goldens, temporary "
+"paths, frozen vectors and the `harness = false` runner), `wasm-link` (the "
+"wasm package's post-link step), `helper-census` (the structural census "
+"behind the shared-helpers gate), and `purrdf-python` (the extension crate, "
+"which ships to PyPI via maturin instead)."
 msgstr ""
-"有十一个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构"
+"有十二个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构"
 "建，以 `libpurrdf` 的形式分发）、`purrdf-sparql-conformance`（测试框架）、"
+"`purrdf-conformance-kit`（社区语料运行器所使用的清单、报告与结果评分）、"
 "`purrdf-hash-conformance`（`purrdf-hash` 的冻结向量测试套件）、`purrdf-cli`"
 "（`purrdf` 二进制文件）、`purrdf-envelope-probe`（微型硬件包络采集工具）、"
 "`purrdf-bench`（基准测试工具）、`purrdf-alloc-probe`（分配测试与基准测试进行"
@@ -22507,9 +22509,9 @@ msgstr ""
 "具）、`helper-census`（共享辅助函数门禁背后的结构普查工具），以及 `purrdf-"
 "python`（扩展 crate，改为经由 maturin 发布到 PyPI）。"
 
-#: src/project/releases.md:104
+#: src/project/releases.md:106
 msgid ""
-"`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven "
+"`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the twelve "
 "that published crates depend on, and they reach them solely through `[dev-"
 "dependencies]`. Their root `[workspace.dependencies]` entries are therefore "
 "path-only, with no `version` key, which is what makes cargo drop them from "
@@ -22517,60 +22519,60 @@ msgid ""
 "of a published one, and `cargo publish`'s verification step resolves dev-"
 "dependencies too."
 msgstr ""
-"这十一个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 "
+"这十二个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 "
 "crate 所依赖，并且仅通过 `[dev-dependencies]` 引入。因此，它们在根 "
 "`[workspace.dependencies]` 中的条目只有路径、没有 `version` 键，这正是 cargo "
 "将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 crate 的带版"
 "本依赖，而 `cargo publish` 的验证步骤也会解析 dev-dependencies。"
 
-#: src/project/releases.md:112
+#: src/project/releases.md:114
 msgid "Cutting a release"
 msgstr "切出一个发布"
 
-#: src/project/releases.md:114
+#: src/project/releases.md:116
 msgid ""
 "The coherent flow from `main` uses the `make` helpers so the three lanes can "
 "never drift:"
 msgstr ""
 "从 `main` 出发的连贯流程使用 `make` 辅助目标，因此三条通道永远不会出现偏差："
 
-#: src/project/releases.md:118
+#: src/project/releases.md:120
 msgid ""
 "# 1. Bump all three version sources in lockstep (fails unless they end up "
 "equal).\n"
 msgstr "# 1. 同步递增全部三个版本来源（除非最终三者相等，否则失败）。\n"
 
-#: src/project/releases.md:120
+#: src/project/releases.md:122
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头文件。\n"
 
-#: src/project/releases.md:123
+#: src/project/releases.md:125
 msgid ""
 "# 3. Complete the changelog and reviewed summary, preserving migration "
 "guidance.\n"
 msgstr "# 3. 完善变更日志与经过审阅的摘要，保留迁移指导。\n"
 
-#: src/project/releases.md:125
+#: src/project/releases.md:127
 msgid "# Use make changelog only for history-generated notes.\n"
 msgstr "# 仅对根据提交历史生成的说明使用 make changelog。\n"
 
-#: src/project/releases.md:128
+#: src/project/releases.md:130
 msgid ""
 "# 4. Review, then commit the bump, generated header, changelog and summary.\n"
 msgstr "# 4. 审阅后，提交版本递增、生成的头文件、变更日志与摘要。\n"
 
-#: src/project/releases.md:130
+#: src/project/releases.md:132
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:131
+#: src/project/releases.md:133
 msgid ""
 "# 5. From an up-to-date main, run every release gate, then push all three "
 "tags.\n"
 msgstr "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
 
-#: src/project/releases.md:136
+#: src/project/releases.md:138
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version and "
@@ -22584,19 +22586,19 @@ msgstr ""
 "`VERSION` 与工作树一致、完整的变更日志小节与通过验证且经过审阅的摘要均存在，"
 "且三个标签均未在本地或远程存在。随后它按以下顺序运行各项关卡："
 
-#: src/project/releases.md:143
+#: src/project/releases.md:145
 msgid "`make check`: the Rust and wasm workspace gate and repository hygiene."
 msgstr "`make check`：Rust 与 wasm 工作区关卡及仓库卫生检查。"
 
-#: src/project/releases.md:144
+#: src/project/releases.md:146
 msgid "`make capi-check`: the generated C-ABI/header check and linked C smoke."
 msgstr "`make capi-check`：生成的 C-ABI/头文件检查，以及链接后的 C 冒烟测试。"
 
-#: src/project/releases.md:145
+#: src/project/releases.md:147
 msgid "`make pytest`: the native Python binding suite."
 msgstr "`make pytest`：原生 Python 绑定测试套件。"
 
-#: src/project/releases.md:146
+#: src/project/releases.md:148
 msgid ""
 "`make python-release-check`: build and audit both Python wheel/sdist pairs, "
 "check them with the pinned publisher tools, and install them together."
@@ -22604,11 +22606,11 @@ msgstr ""
 "`make python-release-check`：构建并审计两个 Python 分发包各自的 wheel/sdist，"
 "使用固定版本的发布工具检查它们，并将它们一同安装。"
 
-#: src/project/releases.md:148
+#: src/project/releases.md:150
 msgid "`make wasm-pkg-test`: the optimized size-gated npm/wasm package tests."
 msgstr "`make wasm-pkg-test`：经过优化、带体积关卡的 npm/wasm 包测试。"
 
-#: src/project/releases.md:149
+#: src/project/releases.md:151
 msgid ""
 "`make capi-bundle`: build and audit the native C distribution, including "
 "recipient notices and relocated linked smoke."
@@ -22616,7 +22618,7 @@ msgstr ""
 "`make capi-bundle`：构建并审计原生 C 分发包，包括接收方许可声明与重定位后的链"
 "接冒烟测试。"
 
-#: src/project/releases.md:152
+#: src/project/releases.md:154
 msgid ""
 "Only after every surface passes does it recheck the clean synchronized state "
 "and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag "
@@ -22634,11 +22636,11 @@ msgstr ""
 "完整的变更日志。共享检查器会在打标签与发布之前验证精确的版本及 64 KiB 的 "
 "UTF-8 体积上限；发布说明不会被截断。"
 
-#: src/project/releases.md:160
+#: src/project/releases.md:162
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:162
+#: src/project/releases.md:164
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -24937,15 +24939,3 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
-
-#~ msgid ""
-#~ "the nearest decimal with at most 18 fractional digits, ties toward zero; "
-#~ "`NaN`, `INF` and values of 2^127 or more are errors"
-#~ msgstr ""
-#~ "最多 18 位小数的最接近的 decimal，平局取靠近零的一方；`NaN`、`INF` 以及大"
-#~ "于等于 2^127 的值为错误"
-
-#~ msgid ""
-#~ "the fractional part discarded; `NaN`, `INF` and values outside the target "
-#~ "type are errors"
-#~ msgstr "舍去小数部分；`NaN`、`INF` 以及超出目标类型范围的值为错误"

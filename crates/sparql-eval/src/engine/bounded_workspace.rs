@@ -100,6 +100,7 @@ pub(super) fn check_inputs<D: DatasetView>(
 ) -> Result<(), RdfDiagnostic> {
     if view.storage_live_budget().is_some()
         && (!options.functions.is_empty()
+            || options.user_function_admission.is_some()
             || !options.property_functions().is_empty()
             || !options.aggregates().is_empty()
             || options.bnode_mint_prefix.is_some()

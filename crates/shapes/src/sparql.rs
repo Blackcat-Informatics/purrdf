@@ -66,6 +66,25 @@ pub(crate) fn eval_target_view<
     select: &str,
     substitutions: &[(String, Term)],
 ) -> Result<Vec<Term>, String> {
+    eval_target_with_invocation_view(
+        dataset,
+        select,
+        substitutions,
+        crate::query_law::Invocation::without_parameters(
+            crate::profile::QueryPurpose::SelectTarget,
+        ),
+    )
+}
+
+/// Execute the target role acquired from its exact shapes-source occurrence.
+pub(crate) fn eval_target_with_invocation_view<
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync + FocusGraphSource,
+>(
+    dataset: &D,
+    select: &str,
+    substitutions: &[(String, Term)],
+    invocation: crate::query_law::Invocation<'_>,
+) -> Result<Vec<Term>, String> {
     // The NAME borrows: a target's variable names are text out of the shapes
     // graph, already allocated there, and identical on every evaluation.
     let subs: Vec<Prebinding<'_>> = substitutions
@@ -75,7 +94,7 @@ pub(crate) fn eval_target_view<
             value: term.to_term_value(),
         })
         .collect();
-    let mut nodes = run_select_generic_view(dataset, select, &subs, &[], |solutions| {
+    let mut nodes = run_select_generic_view(dataset, select, &subs, &[], invocation, |solutions| {
         let this_index = solutions.column("this");
         let mut nodes: Vec<Term> = Vec::with_capacity(solutions.len());
         for row in solutions.rows() {
@@ -116,10 +135,15 @@ pub(crate) fn eval_target_ask_view<
         variable: "this",
         value: focus.to_term_value(),
     }];
-    run_ask_with_shacl_prebinding_view(dataset, ask, &subs)
+    run_ask_with_shacl_prebinding_view(
+        dataset,
+        ask,
+        &subs,
+        crate::query_law::Invocation::without_parameters(crate::profile::QueryPurpose::AskTarget),
+    )
 }
 
-/// Execute a SHACL-AF `sh:SPARQLConstraint` SELECT query for a single focus node,
+/// Execute a SHACL-SPARQL constraint SELECT query for a single focus node,
 /// mapping each solution row to a [`ValidationResult`].
 ///
 /// `$this` is pre-bound to `focus`, and when known `$shapesGraph` and
@@ -171,7 +195,51 @@ pub fn eval_sparql_constraint(
         annotations,
         shapes_graph_iri,
         current_shape,
+        None,
     )
+}
+
+/// The report-mapping context of this actual SPARQL constraint occurrence.
+#[derive(Clone, Copy)]
+pub(crate) struct SparqlReportContext<'a> {
+    pub(crate) capture: &'a crate::report::ReportCapture<'a>,
+    pub(crate) source_constraint: Option<&'a Term>,
+    pub(crate) bnode_mint_prefix: Option<&'a str>,
+}
+
+impl SparqlReportContext<'_> {
+    pub(crate) fn dated(self) -> bool {
+        self.capture.profile != crate::profile::ShaclProfile::LEGACY
+    }
+
+    /// The shared dated solution-to-report law used by constraints and SELECT
+    /// validators: explicit failure wins; a literal row message has first priority.
+    pub(crate) fn row_message(
+        self,
+        focus: &Term,
+        failure: Option<&TermValue>,
+        message: Option<&TermValue>,
+    ) -> Result<Option<Literal>, String> {
+        if !self.dated() {
+            return Ok(None);
+        }
+        if let Some(failure) = failure
+            && let Term::Literal(literal) = term_value_to_native(failure)
+            && literal.datatype_str() == crate::model::xsd::BOOLEAN
+            && matches!(
+                purrdf_iri::terminals::trim_ws(literal.value()),
+                "true" | "1"
+            )
+        {
+            return Err(self.capture.semantic_failure(focus, self.source_constraint));
+        }
+        Ok(
+            message.and_then(|message| match term_value_to_native(message) {
+                Term::Literal(message) => Some(message),
+                _ => None,
+            }),
+        )
+    }
 }
 
 /// Internal view-generic implementation of [`eval_sparql_constraint`].
@@ -193,6 +261,7 @@ pub(crate) fn eval_sparql_constraint_view<
     annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
+    report: Option<SparqlReportContext<'_>>,
 ) -> Result<Vec<ValidationResult>, String> {
     // Pre-bind `$this` to THIS focus node.
     // This MUST be per-focus substitution, not an unsubstituted run grouped by a free
@@ -218,6 +287,9 @@ pub(crate) fn eval_sparql_constraint_view<
     let project = |solutions: &InternedSolutions<'_, '_, D>| {
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        let dated = report.is_some_and(SparqlReportContext::dated);
+        let message_index = dated.then(|| solutions.column("message")).flatten();
+        let failure_index = dated.then(|| solutions.column("failure")).flatten();
         // The column of each result annotation's variable, resolved once per
         // solution set; empty (and allocation-free) for the common constraint that
         // declares none.
@@ -235,6 +307,13 @@ pub(crate) fn eval_sparql_constraint_view<
 
         let mut out: Vec<ValidationResult> = Vec::with_capacity(solutions.len());
         for row in solutions.rows() {
+            let failure = failure_index.and_then(|i| solutions.cell(row, i));
+            let message = message_index.and_then(|i| solutions.cell(row, i));
+            let row_message = report
+                .map(|report| report.row_message(focus, failure.as_ref(), message.as_ref()))
+                .transpose()?
+                .flatten();
+            let selected_messages = row_message.as_ref().map_or(messages, std::slice::from_ref);
             let result_path = path_index
                 .and_then(|i| solutions.cell(row, i))
                 .as_ref()
@@ -257,7 +336,7 @@ pub(crate) fn eval_sparql_constraint_view<
             // This is also the ONE reader of every column, and the reason the
             // interned egress converts per cell rather than per row: a constraint
             // with no `sh:message` never asks for a cell it does not report.
-            let messages = if messages.is_empty() {
+            let messages = if selected_messages.is_empty() {
                 Vec::new()
             } else {
                 template_bindings.clear();
@@ -270,7 +349,7 @@ pub(crate) fn eval_sparql_constraint_view<
                 if !template_bindings.iter().any(|(n, _)| n == "this") {
                     template_bindings.push(("this".to_owned(), focus.clone()));
                 }
-                crate::components::render_message_templates(messages, &template_bindings)
+                crate::components::render_message_templates(selected_messages, &template_bindings)
             };
             // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
             // binding of each annotation's variable, or its defaults when unbound.
@@ -305,8 +384,18 @@ pub(crate) fn eval_sparql_constraint_view<
         }
         Ok(out)
     };
-    run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project)
-        .map_err(|e| format!("SPARQLConstraint {e}"))
+    run_cached_select_with_shacl_prebinding_view(
+        dataset,
+        select,
+        parameters,
+        report.and_then(|report| report.bnode_mint_prefix),
+        crate::query_law::Invocation::without_parameters(
+            crate::profile::QueryPurpose::SelectConstraint,
+        ),
+        bind,
+        project,
+    )
+    .map_err(|e| format!("SPARQLConstraint {e}"))
 }
 
 /// The solution-set column of every result annotation's variable, looked up with
@@ -403,8 +492,18 @@ pub(crate) fn eval_scalar_query_view<
             value: term.to_term_value(),
         })
         .collect();
-    run_select_generic_view(dataset, select, &subs, &[], project_scalar)
-        .map_err(|e| format!("scalar expression {e}"))
+    run_select_generic_view(
+        dataset,
+        select,
+        &subs,
+        &[],
+        crate::query_law::Invocation::with_bindings(
+            crate::profile::QueryPurpose::ScalarExpression,
+            args,
+        ),
+        project_scalar,
+    )
+    .map_err(|e| format!("scalar expression {e}"))
 }
 
 /// [`eval_scalar_query_view`], with every blank node the evaluation mints (`BNODE()`)
@@ -431,6 +530,10 @@ pub(crate) fn eval_scalar_query_view_minting<
         &subs,
         &[],
         Some(bnode_mint_prefix),
+        crate::query_law::Invocation::with_bindings(
+            crate::profile::QueryPurpose::ScalarExpression,
+            args,
+        ),
         |outcome| project_solutions(outcome, project_scalar),
     )
     .map_err(|e| format!("scalar expression {e}"))
@@ -477,8 +580,19 @@ pub(crate) fn eval_cached_scalar_query_view<
     parameters: &[&str],
     bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
 ) -> Result<Option<Term>, String> {
-    run_cached_select_with_shacl_prebinding_view(dataset, select, parameters, bind, project_scalar)
-        .map_err(|e| format!("scalar expression {e}"))
+    run_cached_select_with_shacl_prebinding_view(
+        dataset,
+        select,
+        parameters,
+        None,
+        crate::query_law::Invocation::with_names(
+            crate::profile::QueryPurpose::ScalarExpression,
+            parameters,
+        ),
+        bind,
+        project_scalar,
+    )
+    .map_err(|e| format!("scalar expression {e}"))
 }
 
 /// Run a SHACL 1.2 SPARQL-based node expression (SPARQL Extensions §6.1
@@ -517,6 +631,7 @@ pub(crate) fn eval_select_nodes_view<
     variable: &str,
     bindings: &[(String, Term)],
     declared: &[&str],
+    invocation: crate::query_law::Invocation<'_>,
 ) -> Result<Vec<Term>, String> {
     let subs: Vec<Prebinding<'_>> = bindings
         .iter()
@@ -525,7 +640,7 @@ pub(crate) fn eval_select_nodes_view<
             value: term.to_term_value(),
         })
         .collect();
-    run_select_generic_view(dataset, select, &subs, declared, |solutions| {
+    run_select_generic_view(dataset, select, &subs, declared, invocation, |solutions| {
         let index = solutions.column(variable).ok_or_else(|| {
             format!("SELECT result has no ?{variable} column, but that is the projected variable")
         })?;
@@ -925,6 +1040,10 @@ pub fn enter_execution_scope(state: Arc<GovernorState>, sources: QuerySources) -
 /// in whatever order the validations finish. [`Self::default`] is the context of a
 /// thread with no validation in progress.
 ///
+/// Dated query admission and native XPath execution retain independent typed
+/// request/cause slots. Swapping both preserves each owner's source admission or
+/// regex selection and exact failure through suspension and nested restoration.
+///
 /// What is here, and what is deliberately not:
 ///
 /// * the function, property-function and aggregate registries, the parser options, the
@@ -946,6 +1065,7 @@ pub struct AmbientContext {
     sources: Option<Arc<QuerySources>>,
     cached_env: Option<CachedEnv>,
     call_depth: u32,
+    query_law: Option<Arc<crate::query_law::Runtime>>,
     native_xpath: Option<crate::xpath::Runtime>,
 }
 
@@ -960,6 +1080,7 @@ impl std::fmt::Debug for AmbientContext {
             .field("sources", &self.sources)
             .field("cached_env", &self.cached_env.is_some())
             .field("call_depth", &self.call_depth)
+            .field("query_law", &self.query_law.is_some())
             .field("native_xpath", &self.native_xpath.is_some())
             .finish()
     }
@@ -978,6 +1099,7 @@ impl AmbientContext {
             && self.sources.is_none()
             && self.native_xpath.is_none()
             && self.call_depth == 0
+            && self.query_law.is_none()
     }
 }
 
@@ -994,6 +1116,7 @@ pub fn replace_ambient_context(next: AmbientContext) -> AmbientContext {
         sources: CURRENT_SOURCES.with(|slot| slot.replace(next.sources)),
         cached_env: CACHED_ENV.with(|slot| slot.replace(next.cached_env)),
         call_depth: CURRENT_CALL_DEPTH.with(|slot| slot.replace(next.call_depth)),
+        query_law: crate::query_law::replace(next.query_law),
         native_xpath: crate::xpath::replace(next.native_xpath),
     }
 }
@@ -1065,6 +1188,7 @@ fn run_query_view<
     substitutions: &[Prebinding<'_>],
     declared_prebound: &[&str],
     bnode_mint_prefix: Option<&str>,
+    invocation: crate::query_law::Invocation<'_>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     let scopes = AmbientScopes::snapshot()?;
@@ -1074,6 +1198,21 @@ fn run_query_view<
         substitutions,
     };
     let options = scopes.options(dataset, declared_prebound, bnode_mint_prefix);
+    if let Some(law) = &scopes.query_law {
+        let prepared = SPARQL_ENGINE
+            .with(|engine| {
+                engine.prepare_interned_request(
+                    InternedRequest {
+                        query,
+                        base_iri: None,
+                        substitutions,
+                    },
+                    options,
+                )
+            })
+            .map_err(|error| format!("query evaluation error: {error}"))?;
+        law.admit(invocation, prepared.source_query())?;
+    }
 
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
@@ -1176,6 +1315,8 @@ struct AmbientScopes {
     /// The custom-function call depth, so a recursion that reaches SPARQL and comes
     /// back keeps counting instead of restarting at zero.
     call_depth: u32,
+    query_law: Option<Arc<crate::query_law::Runtime>>,
+    function_admission: Option<Arc<dyn purrdf_sparql_eval::UserFunctionAdmission>>,
     native_xpath: Option<crate::xpath::Configuration>,
 }
 
@@ -1200,12 +1341,18 @@ impl AmbientScopes {
         } else {
             None
         };
+        let query_law = crate::query_law::current();
+        let function_admission = query_law
+            .as_ref()
+            .map(crate::query_law::Runtime::function_admission);
         Ok(Self {
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
             env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
             governors,
             sources,
             call_depth: current_call_depth(),
+            query_law,
+            function_admission,
             native_xpath: crate::xpath::current(),
         })
     }
@@ -1259,9 +1406,14 @@ impl AmbientScopes {
             .with_remote(remote)
             .with_load(load)
             .with_declared_prebound(declared_prebound);
-        self.native_xpath.as_ref().map_or(options, |configuration| {
+        let options = self.native_xpath.as_ref().map_or(options, |configuration| {
             options.with_xpath_regex(configuration.profile, configuration.limits)
-        })
+        });
+        self.function_admission
+            .as_ref()
+            .map_or(options, |admission| {
+                options.with_user_function_admission(admission)
+            })
     }
 
     /// The configuration a prepared plan's admission depends on, held so a handle
@@ -1363,6 +1515,9 @@ pub(crate) struct ShaclExecution {
     execution: PreparedExecution,
     /// The registries `execution`'s plan was admitted under.
     prepared_under: PlanConfiguration,
+    /// The shape-context names the plan was prepared with declared pre-bound
+    /// ([`declared_shape_context`]).
+    declared: &'static [&'static str],
 }
 
 impl ShaclExecution {
@@ -1419,13 +1574,14 @@ impl ShaclExecution {
         let options = QueryOptions::new()
             .with_functions(scopes.functions())
             .with_env(&scopes.env)
-            .with_declared_prebound(absent_shape_context(parameters));
+            .with_declared_prebound(declared_shape_context(parameters, scopes));
         let execution = SPARQL_ENGINE
             .with(|engine| engine.prepare_execution(query, None, parameters, options))
             .map_err(crate::xpath::query_error)?;
         Ok(Self {
             execution,
             prepared_under: scopes.plan_configuration(),
+            declared: declared_shape_context(parameters, scopes),
         })
     }
 }
@@ -1492,6 +1648,23 @@ pub(crate) fn absent_shape_context(parameters: &[&str]) -> &'static [&'static st
     }
 }
 
+/// The shape-context names a run declares pre-bound without a value: those of
+/// [`absent_shape_context`], except under SHACL 1.2 SPARQL Extensions of
+/// 18 September 2026, whose potentially pre-bound variables are `this`, `value` and
+/// the parameters alone (Appendix A). There an unvalued `$shapesGraph` or
+/// `$currentShape` is the query's own variable, which an assignment in the text binds.
+fn declared_shape_context(parameters: &[&str], scopes: &AmbientScopes) -> &'static [&'static str] {
+    if scopes
+        .query_law
+        .as_ref()
+        .is_some_and(|law| law.profile() == crate::profile::ShaclProfile::WD_20260918)
+    {
+        &[]
+    } else {
+        absent_shape_context(parameters)
+    }
+}
+
 /// Whether `parameters` names every variable at most once.
 ///
 /// A repeated name is the one pre-binding shape a handle cannot express: it has no
@@ -1548,10 +1721,14 @@ fn run_bound_view<
     dataset: &D,
     handle: &mut ShaclExecution,
     bnode_mint_prefix: Option<&str>,
+    invocation: crate::query_law::Invocation<'_>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     let scopes = AmbientScopes::snapshot()?;
     let options = scopes.options(dataset, &[], bnode_mint_prefix);
+    if let Some(law) = &scopes.query_law {
+        law.admit(invocation, handle.execution.query())?;
+    }
 
     let Some(state) = scopes.governors.as_ref() else {
         return SPARQL_ENGINE
@@ -1657,7 +1834,9 @@ fn checkout_execution(
         // A fresh preparation starts with every slot `None` already.
         return ShaclExecution::prepare(query, parameters, scopes);
     };
-    if !handle.prepared_under.still_current(scopes) {
+    if !handle.prepared_under.still_current(scopes)
+        || handle.declared != declared_shape_context(parameters, scopes)
+    {
         return ShaclExecution::prepare(query, parameters, scopes);
     }
     // Every slot back to unbound, HERE, before the caller writes any of them. This is
@@ -1762,12 +1941,13 @@ fn run_cached_prepared_view<
     query: &str,
     parameters: &[&str],
     bnode_mint_prefix: Option<&str>,
+    invocation: crate::query_law::Invocation<'_>,
     bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
     visit: impl FnOnce(InternedOutcome<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     with_cached_execution(query, parameters, |handle| {
         bind(handle)?;
-        run_bound_view(dataset, handle, bnode_mint_prefix, visit)
+        run_bound_view(dataset, handle, bnode_mint_prefix, invocation, visit)
     })
 }
 
@@ -1844,12 +2024,20 @@ pub(crate) fn run_cached_select_with_shacl_prebinding_view<
     dataset: &D,
     select: &str,
     parameters: &[&str],
+    bnode_mint_prefix: Option<&str>,
+    invocation: crate::query_law::Invocation<'_>,
     bind: impl FnOnce(&mut ShaclExecution) -> Result<(), String>,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    run_cached_prepared_view(dataset, select, parameters, None, bind, |outcome| {
-        project_solutions(outcome, project)
-    })
+    run_cached_prepared_view(
+        dataset,
+        select,
+        parameters,
+        bnode_mint_prefix,
+        invocation,
+        bind,
+        |outcome| project_solutions(outcome, project),
+    )
 }
 
 /// Run an ASK under SHACL-SPARQL pre-binding on an already-bound handle.
@@ -1865,8 +2053,9 @@ pub(crate) fn run_bound_ask_with_shacl_prebinding_view<
 >(
     dataset: &D,
     handle: &mut ShaclExecution,
+    invocation: crate::query_law::Invocation<'_>,
 ) -> Result<bool, String> {
-    run_bound_view(dataset, handle, None, project_boolean)
+    run_bound_view(dataset, handle, None, invocation, project_boolean)
 }
 
 /// Run a CONSTRUCT under SHACL-SPARQL pre-binding on an already-bound handle.
@@ -1885,8 +2074,15 @@ pub(crate) fn run_bound_construct_with_shacl_prebinding_view<
     dataset: &D,
     handle: &mut ShaclExecution,
     bnode_mint_prefix: Option<&str>,
+    invocation: crate::query_law::Invocation<'_>,
 ) -> Result<Arc<RdfDataset>, String> {
-    run_bound_view(dataset, handle, bnode_mint_prefix, project_graph)
+    run_bound_view(
+        dataset,
+        handle,
+        bnode_mint_prefix,
+        invocation,
+        project_graph,
+    )
 }
 
 /// An RAII scope that installs `registry` as the current SHACL-AF function table for
@@ -2245,6 +2441,30 @@ pub fn current_call_depth() -> u32 {
     CURRENT_CALL_DEPTH.with(std::cell::Cell::get)
 }
 
+/// Whether the selected law pre-binds the shape context at all. SHACL 1.2 SPARQL
+/// Extensions of 18 September 2026 does not: its potentially pre-bound variables are
+/// `this`, `value` and the parameters (Appendix A), so `$shapesGraph` and
+/// `$currentShape` are the query's own variables there, valued or not. The
+/// compatibility law and the 2017 Recommendation pre-bind both.
+fn law_binds_shape_context() -> bool {
+    crate::query_law::current()
+        .is_none_or(|law| law.profile() != crate::profile::ShaclProfile::WD_20260918)
+}
+
+/// The shape context the selected law pre-binds: as given, or none under a law that
+/// pre-binds none ([`law_binds_shape_context`]). Every helper below reads the context
+/// through this, so a name list and its value list cannot disagree.
+fn bound_shape_context<'a, 't>(
+    shapes_graph_iri: Option<&'a str>,
+    current_shape: Option<&'t Term>,
+) -> (Option<&'a str>, Option<&'t Term>) {
+    if law_binds_shape_context() {
+        (shapes_graph_iri, current_shape)
+    } else {
+        (None, None)
+    }
+}
+
 /// Append the SHACL-SPARQL *shape context* pre-bindings — `$shapesGraph` and
 /// `$currentShape` — to a substitution buffer the caller owns.
 ///
@@ -2259,6 +2479,7 @@ pub(crate) fn push_shape_context(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     if let Some(iri) = shapes_graph_iri {
         subs.push(Prebinding {
             variable: "shapesGraph",
@@ -2310,6 +2531,7 @@ pub(crate) fn push_shape_context_names(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     if shapes_graph_iri.is_some() {
         names.push("shapesGraph");
     }
@@ -2328,6 +2550,7 @@ pub(crate) fn this_and_shape_context_names(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> &'static [&'static str] {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     match (shapes_graph_iri.is_some(), current_shape.is_some()) {
         (false, false) => &["this"],
         (true, false) => &["this", "shapesGraph"],
@@ -2352,6 +2575,7 @@ pub(crate) fn bind_shape_context(
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<usize, String> {
+    let (shapes_graph_iri, current_shape) = bound_shape_context(shapes_graph_iri, current_shape);
     if let Some(iri) = shapes_graph_iri {
         execution.bind(slot, TermValue::Iri(iri.to_owned()))?;
         slot += 1;
@@ -2375,6 +2599,7 @@ fn run_select_view<
     select: &str,
     substitutions: &[Prebinding<'_>],
     declared_prebound: &[&str],
+    invocation: crate::query_law::Invocation<'_>,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
     run_query_view(
@@ -2383,6 +2608,7 @@ fn run_select_view<
         substitutions,
         declared_prebound,
         None,
+        invocation,
         |outcome| project_solutions(outcome, project),
     )
 }
@@ -2401,9 +2627,17 @@ pub(crate) fn run_select_generic_view<
     select: &str,
     substitutions: &[Prebinding<'_>],
     declared_prebound: &[&str],
+    invocation: crate::query_law::Invocation<'_>,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    run_select_view(dataset, select, substitutions, declared_prebound, project)
+    run_select_view(
+        dataset,
+        select,
+        substitutions,
+        declared_prebound,
+        invocation,
+        project,
+    )
 }
 
 /// Run a SELECT query over the dataset using SHACL-SPARQL pre-binding semantics,
@@ -2418,9 +2652,19 @@ pub(crate) fn run_select_with_shacl_prebinding_view<
     dataset: &D,
     select: &str,
     substitutions: &[Prebinding<'_>],
+    bnode_mint_prefix: Option<&str>,
+    invocation: crate::query_law::Invocation<'_>,
     project: impl FnOnce(&InternedSolutions<'_, '_, D>) -> Result<R, String>,
 ) -> Result<R, String> {
-    run_select_view(dataset, select, substitutions, &[], project)
+    run_query_view(
+        dataset,
+        select,
+        substitutions,
+        &[],
+        bnode_mint_prefix,
+        invocation,
+        |outcome| project_solutions(outcome, project),
+    )
 }
 
 /// Run an ASK query using SHACL-SPARQL pre-binding semantics.
@@ -2439,8 +2683,17 @@ pub(crate) fn run_ask_with_shacl_prebinding_view<
     dataset: &D,
     ask: &str,
     substitutions: &[Prebinding<'_>],
+    invocation: crate::query_law::Invocation<'_>,
 ) -> Result<bool, String> {
-    run_query_view(dataset, ask, substitutions, &[], None, project_boolean)
+    run_query_view(
+        dataset,
+        ask,
+        substitutions,
+        &[],
+        None,
+        invocation,
+        project_boolean,
+    )
 }
 
 /// The number of query plans this thread's SHACL engine has memoized.
@@ -3528,7 +3781,13 @@ mod tests {
         let query = format!("ASK {{ ?this <{STILL_CURRENT_REL}> ?why }}");
         with_cached_execution(&query, &["this"], |execution| {
             execution.bind(0, TermValue::Iri(focus.to_owned()))?;
-            run_bound_ask_with_shacl_prebinding_view(&dataset, execution)
+            run_bound_ask_with_shacl_prebinding_view(
+                &dataset,
+                execution,
+                crate::query_law::Invocation::without_parameters(
+                    crate::profile::QueryPurpose::AskValidator,
+                ),
+            )
         })
     }
 

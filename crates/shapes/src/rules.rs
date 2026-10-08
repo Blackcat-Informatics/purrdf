@@ -788,7 +788,32 @@ pub fn infer(
     shapes: &Shapes,
     options: &RuleOptions,
 ) -> Result<Inference, String> {
-    infer_with(data, shapes, options, srl::eval::Reexecution::Incremental)
+    infer_complete(data, shapes, options).map_err(|error| error.to_string())
+}
+
+/// Execute rules under the shapes' current dated/native request, preserving
+/// typed admission and resource refusals independently of rule failure.
+/// # Errors
+/// Returns the actual current profile, source, governor or rule-execution refusal.
+pub fn infer_complete(
+    data: &ShaclData,
+    shapes: &Shapes,
+    options: &RuleOptions,
+) -> Result<Inference, crate::report::CompleteValidationError> {
+    let execute = || {
+        infer_with(data, shapes, options, srl::eval::Reexecution::Incremental)
+            .map_err(crate::report::CompleteValidationError::Execution)
+    };
+    if shapes.validation_options.shacl_profile == crate::profile::ShaclProfile::LEGACY
+        && shapes.validation_options.xpath_regex.is_none()
+    {
+        return execute();
+    }
+    let prepared = crate::engine::PreparedShapes::new(Arc::new(shapes.clone()));
+    match crate::profile::Request::admit(&prepared)? {
+        Some(request) => request.run(execute),
+        None => execute(),
+    }
 }
 
 /// The four rule-evaluation limits a host names, each `None` for the engine default.
@@ -1025,13 +1050,22 @@ fn check_rule_processors(rule: &Rule, options: &RuleOptions) -> Result<(), Strin
 /// The IR rule of a SHACL rule linked from `shapes` (none for a global rule).
 ///
 /// A global SPARQL rule whose CONSTRUCT is a conjunctive pattern is its element reading
-/// ([`srl::sparql_rule`]), evaluated semi-naively; every other rule is a producer.
+/// ([`srl::sparql_rule`]), evaluated semi-naively under compatibility execution.
+/// A selected dated query law keeps the producer route so the whole authored
+/// query is admitted at its actual scheduled execution, including an empty
+/// solution bag. This IR is rebuilt for each rule operation, not cached in a
+/// prepared shapes model or serialized product.
 fn ir_rule<'a>(rule: &'a Rule, shapes: Vec<&'a Shape>) -> srl::ir::IrRule<'a> {
     let elements = match &rule.body {
         RuleBody::Sparql {
             construct,
             parameters,
-        } if shapes.is_empty() && parameters.is_empty() => srl::sparql_rule::elements(construct),
+        } if shapes.is_empty()
+            && parameters.is_empty()
+            && crate::query_law::current().is_none() =>
+        {
+            srl::sparql_rule::elements(construct)
+        }
         _ => None,
     };
     srl::ir::IrRule {
@@ -1304,6 +1338,7 @@ pub(crate) fn execute_rule(
             } => sparql_rule_execution(
                 data,
                 &SparqlExecution {
+                    rule,
                     construct,
                     parameters,
                     focus_nodes: None,
@@ -1406,6 +1441,7 @@ pub(crate) fn execute_rule(
             } => sparql_rule_execution(
                 data,
                 &SparqlExecution {
+                    rule,
                     construct,
                     parameters,
                     focus_nodes: Some((&focus_nodes, &run, eligible)),
@@ -1513,6 +1549,8 @@ fn cartesian(subjects: &[Term], predicates: &[Term], objects: &[Term], out: &mut
 
 /// One SPARQL rule's execution parameters.
 struct SparqlExecution<'q> {
+    /// The actual authored rule, before any CONSTRUCT lowering.
+    rule: &'q Rule,
     /// The CONSTRUCT query text.
     construct: &'q str,
     /// The template parameters' pre-bindings.
@@ -1528,6 +1566,24 @@ struct SparqlExecution<'q> {
     shapes_graph_iri: Option<&'q str>,
 }
 
+impl SparqlExecution<'_> {
+    fn invocation<'a>(
+        &self,
+        law: Option<&'a crate::query_law::Runtime>,
+    ) -> Result<crate::query_law::Invocation<'a>, String> {
+        match law {
+            Some(law) => law.rule_invocation(self.rule, self.shape),
+            None => Ok(crate::query_law::Invocation::without_parameters(
+                if self.shape.is_some() {
+                    crate::profile::QueryPurpose::ConstructRule
+                } else {
+                    crate::profile::QueryPurpose::GlobalConstructRule
+                },
+            )),
+        }
+    }
+}
+
 /// A `sh:SPARQLRule` (or template instance) execution: the CONSTRUCT query once per
 /// focus node with `$this` pre-bound, or once without it for a global rule.
 fn sparql_rule_execution(
@@ -1536,6 +1592,7 @@ fn sparql_rule_execution(
     mint: &mut dyn FnMut() -> u64,
     out: &mut Vec<[Term; 3]>,
 ) -> Result<(), String> {
+    let query_law = crate::query_law::current();
     match run.focus_nodes {
         Some((focus_nodes, selected, eligible)) => {
             // SHACL-SPARQL pre-binds `$this`, `$shapesGraph` and `$currentShape`, and a
@@ -1572,6 +1629,7 @@ fn sparql_rule_execution(
                         data.sparql_view(),
                         execution,
                         Some(tag.as_str()),
+                        run.invocation(query_law.as_deref())?,
                     )?;
                     read_constructed(&graph, out);
                 }
@@ -1598,6 +1656,7 @@ fn sparql_rule_execution(
                     data.sparql_view(),
                     execution,
                     Some(tag.as_str()),
+                    run.invocation(query_law.as_deref())?,
                 )?;
                 read_constructed(&graph, out);
                 Ok(())
@@ -1994,9 +2053,11 @@ pub(crate) fn build_round_base(
 ///
 /// A message naming the rule and the defect.
 pub(crate) fn check_construct(
+    parser: &crate::shapes::Parser<'_>,
     rule_node: &Term,
     construct: &str,
     prebound: &[&str],
+    has_focus: bool,
 ) -> Result<(), String> {
     // The names the rule's evaluation pre-binds are constants to the grouping check
     // (SPARQL 1.1 §11.4), exactly as they are when it runs: `prebound`, and for a
@@ -2026,17 +2087,38 @@ pub(crate) fn check_construct(
              triples inferred into the data graph and cannot target a named graph"
         ));
     }
-    if !prebound.is_empty() {
-        crate::prebinding::check_construct(&query, prebound)
-            .map_err(|e| format!("SPARQL rule {rule_node}: {e}"))?;
+    let purpose = if has_focus {
+        crate::profile::QueryPurpose::ConstructRule
+    } else {
+        crate::profile::QueryPurpose::GlobalConstructRule
+    };
+    let parameters = if has_focus { &prebound[1..] } else { prebound };
+    let audit = crate::shapes::audit_query(parser.profile(), purpose, &query, parameters, || {
+        if prebound.is_empty() {
+            return Ok(());
+        }
+        crate::prebinding::check_construct(&query, prebound)?;
+        // A shape rule runs with the shape context declared pre-bound, valued or not
+        // (`crate::sparql::absent_shape_context`); a global rule pre-binds none of it.
+        if shape_rule {
+            crate::prebinding::check_shape_context_unassigned(&query)?;
+        }
+        Ok(())
+    });
+    let Err(refusal) = audit else {
+        return Ok(());
+    };
+    if !refusal.requires_parse_failure() {
+        return Ok(());
     }
-    // A shape rule runs with the shape context declared pre-bound, valued or not
-    // (`crate::sparql::absent_shape_context`); a global rule pre-binds none of it.
-    if shape_rule {
-        crate::prebinding::check_shape_context_unassigned(&query)
-            .map_err(|e| format!("SPARQL rule {rule_node}: {e}"))?;
-    }
-    Ok(())
+    Err(match refusal {
+        crate::shapes::QueryRefusal::Legacy(message) => {
+            format!("SPARQL rule {rule_node}: {message}")
+        }
+        dated @ crate::shapes::QueryRefusal::Dated(_) => {
+            parser.refuse_query(format!("SPARQL rule {rule_node}"), dated)
+        }
+    })
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────────

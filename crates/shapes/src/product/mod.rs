@@ -1189,7 +1189,13 @@ impl<'a> ShapesProductView<'a> {
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
     ) -> Result<PreparedShapes, ShapesProductError> {
-        self.admit_bound(profile, host, None)
+        self.admit_bound(
+            profile,
+            host,
+            None,
+            &crate::engine::ValidationOptions::default(),
+        )
+        .map_err(crate::report::CompleteValidationError::into_product)
     }
 
     /// **The common path, bound to the product the caller MEANT.** Restore the
@@ -1236,7 +1242,40 @@ impl<'a> ShapesProductView<'a> {
         host: &HostBindings<'_>,
         expected_identity: &[u8; 32],
     ) -> Result<PreparedShapes, ShapesProductError> {
-        self.admit_bound(profile, host, Some(expected_identity))
+        self.admit_bound(
+            profile,
+            host,
+            Some(expected_identity),
+            &crate::engine::ValidationOptions::default(),
+        )
+        .map_err(crate::report::CompleteValidationError::into_product)
+    }
+
+    /// Restore through [`Self::admit`] under the current validation request.
+    /// Dated source admission and function reconstruction use this exact bundle;
+    /// options are never read from the memo or serialized into it.
+    /// # Errors
+    /// Returns typed product, profile or dated declaration refusals before execution.
+    pub fn admit_with_options(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<PreparedShapes, crate::report::CompleteValidationError> {
+        self.admit_bound(profile, host, None, options)
+    }
+
+    /// Current-request restoration with the existing artifact identity expectation.
+    /// # Errors
+    /// Returns the same refusals as [`Self::admit_with_options`], or a wrong artifact.
+    pub fn admit_expecting_with_options(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        expected_identity: &[u8; 32],
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<PreparedShapes, crate::report::CompleteValidationError> {
+        self.admit_bound(profile, host, Some(expected_identity), options)
     }
 
     /// The ONE admission path, with the caller's expectation as its only variable.
@@ -1251,7 +1290,12 @@ impl<'a> ShapesProductView<'a> {
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
         expected_identity: Option<&[u8; 32]>,
-    ) -> Result<PreparedShapes, ShapesProductError> {
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<PreparedShapes, crate::report::CompleteValidationError> {
+        options
+            .shacl_profile
+            .resolve_xpath(options.xpath_regex)
+            .map_err(crate::report::CompleteValidationError::XPathProfile)?;
         if let Some(expected) = expected_identity {
             self.verify_expected_identity(expected)?;
         }
@@ -1267,6 +1311,15 @@ impl<'a> ShapesProductView<'a> {
         self.refuse_ungovernable_decode()?;
 
         let dataset = dataset::open_dataset(self.section(SECTION_DATASET)?)?;
+        let admitted_sources = if options.shacl_profile == crate::profile::ShaclProfile::LEGACY {
+            None
+        } else {
+            Some(crate::shapes::source_occurrences(
+                &dataset,
+                &self.provenance,
+                options.shacl_profile,
+            )?)
+        };
         let parts = ast::decode_ast(self.section(SECTION_AST)?)?;
 
         // The shapes graph's own SPARQL-bodied function declarations, re-derived
@@ -1296,13 +1349,18 @@ impl<'a> ShapesProductView<'a> {
             &parts.custom_functions,
             &parts.node_shapes,
             &mut functions,
+            options.shacl_profile,
         )
         .map_err(|error| {
+            if options.shacl_profile != crate::profile::ShaclProfile::LEGACY {
+                return error;
+            }
             malformed(format!(
                 "this product's carried shapes dataset does not re-derive its own SPARQL function \
                  declarations under the parse inputs the product records ({error}); re-prepare \
                  the product from a shapes graph this build parses"
             ))
+            .into()
         })?;
         link::link_shapes(
             &parts.node_shapes,
@@ -1323,14 +1381,16 @@ impl<'a> ShapesProductView<'a> {
                 "this product's model and its recorded parse inputs name different box-role \
                  vocabularies; re-prepare the product from its shapes graph, because PurRDF mints \
                  no vocabulary IRIs and the two halves must describe one parse",
-            ));
+            )
+            .into());
         }
         if parts.shapes_graph.as_deref() != self.provenance.shapes_graph() {
             return Err(malformed(
                 "this product's model and its recorded parse inputs name different shapes-graph \
                  IRIs; re-prepare the product from its shapes graph, because that IRI is what \
                  `$shapesGraph` binds in every SHACL-SPARQL body",
-            ));
+            )
+            .into());
         }
 
         let shapes = Shapes {
@@ -1339,11 +1399,15 @@ impl<'a> ShapesProductView<'a> {
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::default()),
-            validation_options: crate::engine::ValidationOptions::default(),
+            validation_options: options.clone(),
             target_types: parts.target_types,
             shapes_graph: parts.shapes_graph,
             mandatory_diagnostics: crate::lint::mandatory_diagnostics(&dataset),
             shapes_dataset: dataset,
+            // Rich reporting re-derives source occurrences from the authenticated
+            // retained dataset on demand; the legacy memo restore stays cold.
+            sparql_sources: admitted_sources
+                .map_or_else(std::sync::OnceLock::new, std::sync::OnceLock::from),
             parse_provenance: self.provenance.clone(),
         };
 
@@ -1379,7 +1443,13 @@ impl<'a> ShapesProductView<'a> {
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
     ) -> Result<PreparedShapes, ShapesProductError> {
-        self.rebuild_bound(profile, host, None)
+        self.rebuild_bound(
+            profile,
+            host,
+            None,
+            &crate::engine::ValidationOptions::default(),
+        )
+        .map_err(crate::report::CompleteValidationError::into_product)
     }
 
     /// **The forward-compatibility path, bound to the product the caller MEANT.**
@@ -1412,7 +1482,40 @@ impl<'a> ShapesProductView<'a> {
         host: &HostBindings<'_>,
         expected_identity: &[u8; 32],
     ) -> Result<PreparedShapes, ShapesProductError> {
-        self.rebuild_bound(profile, host, Some(expected_identity))
+        self.rebuild_bound(
+            profile,
+            host,
+            Some(expected_identity),
+            &crate::engine::ValidationOptions::default(),
+        )
+        .map_err(crate::report::CompleteValidationError::into_product)
+    }
+
+    /// Restore through [`Self::rebuild`] under the current validation request.
+    /// Dated source admission and function reconstruction use this exact bundle;
+    /// options are never read from the memo or serialized into it.
+    /// # Errors
+    /// Returns typed product, profile or dated declaration refusals before execution.
+    pub fn rebuild_with_options(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<PreparedShapes, crate::report::CompleteValidationError> {
+        self.rebuild_bound(profile, host, None, options)
+    }
+
+    /// Current-request restoration with the existing artifact identity expectation.
+    /// # Errors
+    /// Returns the same refusals as [`Self::rebuild_with_options`], or a wrong artifact.
+    pub fn rebuild_expecting_with_options(
+        self,
+        profile: &ShapesProfile,
+        host: &HostBindings<'_>,
+        expected_identity: &[u8; 32],
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<PreparedShapes, crate::report::CompleteValidationError> {
+        self.rebuild_bound(profile, host, Some(expected_identity), options)
     }
 
     /// The ONE rebuild path, with the caller's expectation as its only variable —
@@ -1423,7 +1526,12 @@ impl<'a> ShapesProductView<'a> {
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
         expected_identity: Option<&[u8; 32]>,
-    ) -> Result<PreparedShapes, ShapesProductError> {
+        options: &crate::engine::ValidationOptions,
+    ) -> Result<PreparedShapes, crate::report::CompleteValidationError> {
+        options
+            .shacl_profile
+            .resolve_xpath(options.xpath_regex)
+            .map_err(crate::report::CompleteValidationError::XPathProfile)?;
         if let Some(expected) = expected_identity {
             self.verify_expected_identity(expected)?;
         }
@@ -1434,25 +1542,28 @@ impl<'a> ShapesProductView<'a> {
         // The carried dataset IS the shapes graph's resolved `owl:imports` closure — the
         // packer resolved it before it wrote this product — so it re-derives without
         // resolving again.
-        let mut shapes = crate::shapes::from_resolved_dataset(
+        let mut shapes = crate::shapes::from_resolved_dataset_with_options(
             &dataset,
             self.provenance.base(),
             self.provenance.doc_prefixes(),
             self.provenance.box_role_vocab().cloned(),
             self.provenance.shapes_graph().map(ToOwned::to_owned),
+            options,
         )
         .map_err(|error| {
+            if options.shacl_profile != crate::profile::ShaclProfile::LEGACY {
+                return error;
+            }
             malformed(format!(
                 "this product's carried shapes dataset does not re-derive as a shapes graph under \
                  the parse inputs the product records ({error}); re-prepare the product from a \
                  shapes graph this build parses"
             ))
+            .into()
         })?;
         // The graphs the packer's resolution absorbed are a parse input the carried
         // dataset cannot re-derive; the product recorded them.
-        shapes
-            .parse_provenance
-            .set_included_graphs(self.provenance.included_graphs().to_vec());
+        shapes.record_included_graphs(self.provenance.included_graphs().to_vec());
 
         CertifiedParts::from_rebuilt(self.declared_identity(), shapes, host)
             .map(CertifiedParts::into_prepared)

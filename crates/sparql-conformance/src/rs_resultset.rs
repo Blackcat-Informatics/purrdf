@@ -28,7 +28,7 @@ use purrdf_sparql_results::ParsedSolutions;
 use crate::manifest::query_rows;
 
 /// The `rs:` vocabulary namespace.
-const RS_NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/result-set#";
+const RS_NS: &str = purrdf_iri::vocab::rs::NS;
 
 /// The two result forms the W3C DAWG RDF vocabulary carries.
 #[derive(Debug)]

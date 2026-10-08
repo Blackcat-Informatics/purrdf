@@ -204,6 +204,78 @@ places the shapes graph under its caller-provided name. Independently parsed
 documents must establish their separate blank scopes before shape preparation;
 retaining raw local IDs across datasets is never an identity rule.
 
+### Complete contextual reports
+
+`engine::validate_complete_dataset(Arc<RdfDataset>, Arc<Shapes>)` and
+`PreparedShapes::bind_complete_shared_dataset` retain the exact immutable data
+and shapes acquisitions alongside each report. Independently acquired graphs
+have separate blank identities even when their bytes and labels agree; passing
+the retained shapes dataset itself deliberately shares its identity. The
+projected-dataset and explicit shapes-graph binding doors preserve the same
+correspondence. Prepared complete bindings also accept bounded focus terms or
+their own `FocusId` values.
+
+`CompleteValidationReport::results()` preserves result multiplicity and exposes
+the actual `sh:sparql` source constraint, including recursive details. That
+evidence is captured at the evaluated parser occurrence. A changed public AST
+cannot inherit evidence merely because another query or result has equal text.
+`to_graph()` returns the emitted RDF graph, its report root, and correspondence
+from emitted blank nodes to their original scoped source identities. Report,
+path and query-minted blanks have no authored-source correspondence. Separate
+query acquisitions mint distinct blanks with deterministic execution identities.
+
+The complete doors use the shapes' current request law. Existing closed report types,
+default entry points and prepared-product bytes retain their contracts;
+`legacy()` projects a complete report to the existing closed value. A complete
+operation returns typed source-evidence or execution refusals rather than a
+partial conformance verdict. `validate_with_governors` shares one fresh budget
+among its queries and returns the actual tripped governor and consumption.
+
+Cold binding and warm validation costs are measured separately in the native
+`shared_views` benchmark's `shacl_complete_reports` group, using matched Core and
+SELECT fixtures.
+
+### Dated SHACL requests
+
+`ValidationOptions::with_profile` selects a `ShaclProfile` for parsing, binding
+and validation. `LEGACY` is the default. The named bundles pair their query
+admission law with the native XPath law required for `sh:pattern`, `REGEX` and
+`REPLACE`:
+
+| SHACL selector | Required XPath law |
+| --- | --- |
+| `REC_20170720` | [F&O 2.0 Second Edition, 2010-12-14](https://www.w3.org/TR/2010/REC-xpath-functions-20101214/), including incorporated errata |
+| `WD_20260918` | [F&O 3.1 Recommendation, 2017-03-21](https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/) |
+
+The Recommendation's recognized constraint/component declarations receive its
+graph-wide pre-binding checks. The draft's execution restrictions apply when
+the query is reached with potentially pre-bound variables; a deactivated
+constraint or empty focus set does not execute it. Functions, targets,
+expressions and rules carry their own actual query purpose and declared
+parameters, including optional parameters not supplied by an invocation.
+Original query algebra is checked before substitutions. Neither a function nor
+a global rule receives an invented focus binding.
+
+`engine::parse_shapes_with_options` and `shapes::from_dataset_with_options` admit
+the selected contract during parsing. An existing preparation can take new
+options through `with_validation_options`; its next bind re-admits the current
+law before targets. A bound validator keeps that admission. Every dated bind
+checks declared Core patterns even when they are untargeted or deactivated.
+Query expressions retain ordinary SPARQL lazy evaluation.
+
+`ValidationOptions::with_xpath_regex` may change finite limits for the required
+XPath law. An incompatible law returns `XPathProfileConflict` with the required
+and requested profiles. Native-wrapper bindings compose with the same dated
+request and preserve its typed source/admission errors. Successful warm programs
+still undergo current admission and fresh execution budgets.
+
+Prepared products retain their existing format and identity. The options-aware
+`admit_with_options`, `admit_expecting_with_options`, `rebuild_with_options` and
+`rebuild_expecting_with_options` restore source occurrences and declared
+functions under the requested dated law. Compatibility or different-law
+metadata cannot confer admission. The existing restoration methods select
+`LEGACY`.
+
 ### Dated native XPath patterns
 
 Unselected validation retains its compatibility pattern behavior. Select

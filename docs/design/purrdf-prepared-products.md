@@ -352,6 +352,17 @@ promise a number something actually spent.
 
 ## 6. The shipped profile is named, explicitly selected, and mints nothing
 
+The product's capability profile and a validation request's dated SHACL law are
+separate. `ValidationOptions::shacl_profile` is not a serialized model field and
+does not change product bytes or identity. The options-aware admission/rebuild
+methods validate original source occurrences and restore declared functions
+under that request's law before installing them. Their default siblings select
+the compatibility law. Changing a restored preparation's options requires a
+fresh bind: prior source metadata, target acquisition or successful native
+programs cannot admit an incompatible current request. Source reconstruction
+reuses the authenticated dataset and original import/base/prefix/graph context;
+it does not rebuild carried shared class analysis during memo admission.
+
 There is one profile, `purrdf-shacl-core-v1`, and it is selected by name. It is
 not a default, and there is no fallback: a caller names `ShapesProfile::CORE` and
 cannot mint a profile of its own, because a profile a caller can spell is a claim

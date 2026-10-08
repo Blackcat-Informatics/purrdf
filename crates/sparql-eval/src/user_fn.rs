@@ -188,6 +188,178 @@ pub struct UserFunction {
     pub return_constraint: TypeConstraint,
 }
 
+/// A typed refusal of a SPARQL-bodied function's actual invocation.
+///
+/// The original error remains available through [`Self::cause`] across nested
+/// function calls and parallel worker reduction. Clones share its identity;
+/// equality compares that identity rather than its rendered message.
+#[derive(Clone)]
+pub struct UserFunctionRefusal {
+    cause: Arc<dyn std::error::Error + Send + Sync>,
+    observer: Option<Arc<dyn UserFunctionAdmission>>,
+}
+
+impl UserFunctionRefusal {
+    /// Retain an exact caller-owned cause. This allocates only on refusal.
+    pub fn new(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            cause: Arc::new(cause),
+            observer: None,
+        }
+    }
+
+    /// The original typed cause, including its downcast identity.
+    #[must_use]
+    pub fn cause(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.cause.as_ref()
+    }
+
+    fn with_observer(mut self, observer: &Arc<dyn UserFunctionAdmission>) -> Self {
+        self.observer = Some(Arc::clone(observer));
+        self
+    }
+
+    /// Retain the selected cause before diagnostic conversion discards its type.
+    /// An engine request decorates this observer until its final source checkpoint
+    /// has decided whether the query error is authoritative.
+    pub(crate) fn observe(&self) {
+        if let Some(observer) = &self.observer {
+            observer.observe_refusal(self);
+        }
+    }
+}
+
+purrdf_hash::debug_non_exhaustive!(UserFunctionRefusal { cause });
+
+impl PartialEq for UserFunctionRefusal {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cause, &other.cause)
+    }
+}
+
+impl Eq for UserFunctionRefusal {}
+
+impl core::fmt::Display for UserFunctionRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.cause, f)
+    }
+}
+
+impl std::error::Error for UserFunctionRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause())
+    }
+}
+
+/// A caller-selected law for actual SPARQL-bodied function invocations.
+///
+/// Admission sees the original prepared query and every declared parameter,
+/// including optional parameters omitted on this call. It runs after argument
+/// validation and the invocation's governor charge, before substitution or body
+/// evaluation. A mandatory unbound argument or a short-circuited expression does
+/// not invoke it. Implementations must make admission deterministic and safe for
+/// concurrent calls; retain diagnostic evidence in [`Self::observe_refusal`],
+/// which receives only the authoritative query error after the engine's final
+/// source checkpoint. Operational source failures and suppressed errors are not
+/// observed.
+///
+/// Ordinary requests install no law and perform no callback or allocation.
+pub trait UserFunctionAdmission: Send + Sync {
+    /// Admit this original query under the function's declared parameter set.
+    ///
+    /// # Errors
+    ///
+    /// Return the exact typed cause when the selected law refuses invocation.
+    fn admit(
+        &self,
+        function: &UserFunction,
+        query: &purrdf_sparql_algebra::Query,
+    ) -> Result<(), UserFunctionRefusal>;
+
+    /// Recover the exact cause selected for the returned engine diagnostic after
+    /// its final source checkpoint. Worker-local refusals that lose to an earlier
+    /// error, and query refusals replaced by an operational failure, are not observed.
+    fn observe_refusal(&self, refusal: &UserFunctionRefusal);
+}
+
+/// Request-local publication of an admission cause after storage precedence is
+/// settled. The empty path allocates nothing; selected requests lazily allocate
+/// one decorator after their configured context passes workspace admission.
+#[derive(Default)]
+pub(crate) struct RefusalPublication {
+    admission: std::sync::OnceLock<DeferredAdmission>,
+}
+
+type DeferredAdmission = (
+    Arc<dyn UserFunctionAdmission>,
+    Arc<DeferredFunctionAdmission>,
+);
+
+impl RefusalPublication {
+    pub(crate) fn admission(
+        &self,
+        owner: &Arc<dyn UserFunctionAdmission>,
+    ) -> &Arc<dyn UserFunctionAdmission> {
+        &self
+            .admission
+            .get_or_init(|| {
+                let deferred = Arc::new(DeferredFunctionAdmission {
+                    owner: Arc::clone(owner),
+                    refusal: std::sync::Mutex::new(None),
+                });
+                (deferred.clone(), deferred)
+            })
+            .0
+    }
+
+    /// Publish only a returned query error. A discarded pending capsule has no
+    /// observer owner, so it cannot retain its decorator in an Arc cycle.
+    pub(crate) fn finish<T, E>(
+        &self,
+        result: Result<T, E>,
+        is_query_error: impl FnOnce(&E) -> bool,
+    ) -> Result<T, E> {
+        if let Some((_, admission)) = self.admission.get() {
+            let refusal = admission
+                .refusal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if result.as_ref().is_err_and(is_query_error)
+                && let Some(refusal) = refusal
+            {
+                admission.owner.observe_refusal(&refusal);
+            }
+        }
+        result
+    }
+}
+
+struct DeferredFunctionAdmission {
+    owner: Arc<dyn UserFunctionAdmission>,
+    refusal: std::sync::Mutex<Option<UserFunctionRefusal>>,
+}
+
+impl UserFunctionAdmission for DeferredFunctionAdmission {
+    fn admit(
+        &self,
+        function: &UserFunction,
+        query: &purrdf_sparql_algebra::Query,
+    ) -> Result<(), UserFunctionRefusal> {
+        self.owner.admit(function, query)
+    }
+
+    fn observe_refusal(&self, refusal: &UserFunctionRefusal) {
+        *self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(UserFunctionRefusal {
+            cause: Arc::clone(&refusal.cause),
+            observer: None,
+        });
+    }
+}
+
 /// A native (host-Rust) user function body: a closure over the already-evaluated,
 /// dataset-independent argument values.
 ///
@@ -1216,6 +1388,12 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
         return Ok(None);
     }
 
+    if let Some(admission) = ctx.user_function_admission {
+        admission
+            .admit(func, body.query())
+            .map_err(|refusal| EvalError::FunctionAdmission(refusal.with_observer(admission)))?;
+    }
+
     // The body is copied, rewritten and evaluated from here, wherever in the caller's
     // evaluation the call sits: see `crate::stack`.
     crate::stack::check("user-defined function call")?;
@@ -1686,6 +1864,602 @@ mod tests {
         UserFnParam {
             var: var.to_owned(),
             constraint: TypeConstraint::default(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    mod invocation_admission {
+        use super::*;
+
+        #[derive(Debug)]
+        struct InvocationCause(Arc<str>, Option<Arc<std::sync::atomic::AtomicU64>>);
+
+        impl core::fmt::Display for InvocationCause {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                // Fault injection happens after raw evaluator reduction and at
+                // diagnostic rendering, before the final carrier checkpoint.
+                if let Some(generation) = &self.1 {
+                    generation.store(9, std::sync::atomic::Ordering::Relaxed);
+                }
+                f.write_str("invocation refused")
+            }
+        }
+
+        impl std::error::Error for InvocationCause {}
+
+        /// A native-only admission oracle. All refused bodies have the same Display
+        /// message; the observer must recover their actual typed body identities.
+        struct InvocationCall {
+            parameters: Vec<String>,
+            thread: std::thread::ThreadId,
+        }
+
+        #[derive(Default)]
+        struct InvocationLaw {
+            refused: Vec<Arc<str>>,
+            calls: std::sync::Mutex<Vec<InvocationCall>>,
+            observed: std::sync::Mutex<Vec<Arc<str>>>,
+            concurrent_calls: Option<std::sync::Barrier>,
+            source_generation: Option<Arc<std::sync::atomic::AtomicU64>>,
+        }
+
+        impl UserFunctionAdmission for InvocationLaw {
+            fn admit(
+                &self,
+                function: &UserFunction,
+                query: &purrdf_sparql_algebra::Query,
+            ) -> Result<(), UserFunctionRefusal> {
+                let parsed = purrdf_sparql_algebra::SparqlParser::new()
+                    .parse_query(&function.body)
+                    .expect("fixture body parses without substitutions");
+                assert_eq!(query, &parsed, "admission must see the original query");
+                self.calls.lock().expect("calls").push(InvocationCall {
+                    parameters: function.params.iter().map(|p| p.var.clone()).collect(),
+                    thread: std::thread::current().id(),
+                });
+                if let Some(barrier) = &self.concurrent_calls {
+                    barrier.wait();
+                }
+                if self.refused.contains(&function.body) {
+                    Err(UserFunctionRefusal::new(InvocationCause(
+                        Arc::clone(&function.body),
+                        self.source_generation.clone(),
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn observe_refusal(&self, refusal: &UserFunctionRefusal) {
+                let exact = refusal
+                    .cause()
+                    .downcast_ref::<InvocationCause>()
+                    .expect("exact invocation cause survives the evaluator");
+                self.observed
+                    .lock()
+                    .expect("observed")
+                    .push(Arc::clone(&exact.0));
+            }
+        }
+
+        #[test]
+        fn invocation_refusal_retains_exact_source_and_clone_identity() {
+            use std::error::Error;
+            let first = UserFunctionRefusal::new(InvocationCause(body_text("first"), None));
+            let same = first.clone();
+            let other = UserFunctionRefusal::new(InvocationCause(body_text("second"), None));
+            assert_eq!(first, same);
+            assert_ne!(first, other);
+            assert_eq!(first.to_string(), other.to_string());
+            let error = EvalError::FunctionAdmission(first);
+            assert_eq!(error.clone(), error);
+            assert_eq!(error.diagnostic_code(), None);
+            assert_eq!(
+                crate::protocol::FailureCode::from(&error),
+                crate::protocol::FailureCode::Evaluation
+            );
+            assert_eq!(
+                error
+                    .source()
+                    .expect("source")
+                    .downcast_ref::<InvocationCause>()
+                    .expect("typed cause")
+                    .0
+                    .as_ref(),
+                "first"
+            );
+        }
+
+        #[test]
+        fn invocation_law_observes_actual_calls_and_all_optional_parameters() {
+            let body = body_text("SELECT (?n AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            registry.insert(
+                EX_INC,
+                UserFunction {
+                    params: vec![int_param("n"), int_param("optional")],
+                    required: 1,
+                    body: Arc::clone(&body),
+                    kind: UserFnBody::Select,
+                    return_constraint: TypeConstraint::default(),
+                },
+            );
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![body],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let dataset = empty_dataset();
+            let engine = NativeSparqlEngine::new();
+            for projection in [
+                format!("IF(false, <{EX_INC}>(1), 7)"),
+                format!("<{EX_INC}>(?missing)"),
+            ] {
+                let query = format!("SELECT ({projection} AS ?v) WHERE {{}}");
+                engine
+                    .query_with_options_view(
+                        &dataset,
+                        SparqlRequest {
+                            query: &query,
+                            base_iri: None,
+                            substitutions: &[],
+                        },
+                        QueryOptions::EMPTY
+                            .with_functions(&bound)
+                            .with_user_function_admission(&law),
+                    )
+                    .expect("not invoked");
+            }
+            assert!(exact.calls.lock().expect("calls").is_empty());
+            assert!(exact.observed.lock().expect("observed").is_empty());
+            let query = format!("SELECT (<{EX_INC}>(3) AS ?v) WHERE {{}}");
+            let request = SparqlRequest {
+                query: &query,
+                base_iri: None,
+                substitutions: &[],
+            };
+            engine
+                .query_with_options_view(
+                    &dataset,
+                    request,
+                    QueryOptions::EMPTY.with_functions(&bound),
+                )
+                .expect("ordinary execution has no admission callback");
+            assert!(exact.calls.lock().expect("calls").is_empty());
+            engine
+                .query_with_options_view(
+                    &dataset,
+                    request,
+                    QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law),
+                )
+                .expect_err("actual invocation refuses");
+            let calls = exact.calls.lock().expect("calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].parameters, ["n", "optional"]);
+            assert_eq!(exact.observed.lock().expect("observed").len(), 1);
+        }
+
+        struct InvocationSource {
+            page: Arc<RdfDataset>,
+            generation: Arc<std::sync::atomic::AtomicU64>,
+        }
+
+        impl purrdf_core::PageProvider for InvocationSource {
+            fn page_count(&self) -> u64 {
+                1
+            }
+
+            fn generation(&self) -> purrdf_core::PageGeneration {
+                purrdf_core::PageGeneration(
+                    self.generation.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            }
+
+            fn materialize(
+                &self,
+                _: purrdf_core::PageId,
+            ) -> Result<purrdf_core::PageMaterialization, purrdf_core::PageFault> {
+                Ok(purrdf_core::PageMaterialization::new(
+                    Arc::clone(&self.page),
+                    purrdf_core::PageProvider::generation(self),
+                    0,
+                ))
+            }
+        }
+
+        /// The provider changes generation while rendering the selected query
+        /// diagnostic, after raw evaluation has returned. No data page is read:
+        /// the actual final carrier checkpoint must select the source failure
+        /// over that diagnostic and withhold its losing invocation capsule.
+        #[test]
+        fn invocation_observation_waits_for_final_source_checkpoint() {
+            use crate::{FallibleSparqlError, GovernorState, QueryGovernors};
+            use purrdf_core::{PageGeneration, PagedDataset, PagedQueryError, PagedQueryLimits};
+
+            let body = body_text("SELECT (11 AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            registry.insert(
+                EX_INC,
+                UserFunction {
+                    body: Arc::clone(&body),
+                    ..select_body_function()
+                },
+            );
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let query = format!("SELECT (<{EX_INC}>() AS ?v) WHERE {{}}");
+            let construct = format!(
+                "CONSTRUCT {{ <http://example.org/s> <http://example.org/p> ?v }} WHERE {{ BIND(<{EX_INC}>() AS ?v) }}"
+            );
+            let engine = NativeSparqlEngine::new();
+            let prepared = engine.prepare_query(&query, None).expect("prepared query");
+            let graph = engine
+                .prepare_query(&construct, None)
+                .expect("prepared graph");
+            for entry in [
+                "query",
+                "prepared",
+                "governed",
+                "prepared-governed",
+                "operation",
+                "explain",
+                "execute",
+                "construct",
+            ] {
+                for fail_source in [false, true] {
+                    let generation = Arc::new(std::sync::atomic::AtomicU64::new(8));
+                    let paged = PagedDataset::from_provider(Arc::new(InvocationSource {
+                        page: empty_dataset(),
+                        generation: Arc::clone(&generation),
+                    }))
+                    .expect("seal source at generation eight");
+                    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+                    let exact = Arc::new(InvocationLaw {
+                        refused: vec![Arc::clone(&body)],
+                        source_generation: fail_source.then(|| Arc::clone(&generation)),
+                        ..InvocationLaw::default()
+                    });
+                    let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+                    let options = QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law);
+                    let request = SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    };
+                    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+                    let error = match entry {
+                        "query" => engine
+                            .query_fallible_view(&view, request, options)
+                            .map(|_| ()),
+                        "prepared" => engine
+                            .query_prepared_fallible_view(&view, &prepared, &[], options)
+                            .map(|_| ()),
+                        "governed" => engine
+                            .query_governed_fallible_view(
+                                &view,
+                                request,
+                                options,
+                                &QueryGovernors::METERED,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        "prepared-governed" => engine
+                            .query_prepared_governed_fallible_view(
+                                &view,
+                                &prepared,
+                                &[],
+                                options,
+                                &QueryGovernors::METERED,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        "operation" => engine
+                            .query_prepared_governed_fallible_in_operation(
+                                &view,
+                                &prepared,
+                                &[],
+                                options,
+                                &state,
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        "explain" => engine
+                            .explain_query_with_options_fallible_view(&view, &query, None, options)
+                            .map(|_| ()),
+                        "execute" => {
+                            let mut execution = engine
+                                .prepare_execution(&query, None, &[], options)
+                                .expect("prepared execution");
+                            engine
+                                .execute_fallible(&mut execution, &view, options, |_| ())
+                                .map(|_| ())
+                        }
+                        "construct" => engine
+                            .construct_prepared_fallible_in_operation_into_view(
+                                &view,
+                                &graph,
+                                &[],
+                                options,
+                                &state,
+                                &mut RdfDatasetBuilder::new(),
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.map_evidence(|evidence| evidence.view)),
+                        _ => unreachable!("the entries above name actual public execution doors"),
+                    }
+                    .expect_err("invocation or its final source checkpoint refuses");
+                    assert_eq!(exact.calls.lock().expect("calls").len(), 1, "{entry}");
+                    assert!(error.evidence().requested_pages.is_empty(), "{entry}");
+                    if fail_source {
+                        assert!(
+                            matches!(
+                                error,
+                                FallibleSparqlError::Operational {
+                                    error: PagedQueryError::StaleGeneration {
+                                        page: None,
+                                        expected: PageGeneration(8),
+                                        actual: PageGeneration(9),
+                                    },
+                                    ..
+                                }
+                            ),
+                            "{entry}: {error:?}"
+                        );
+                        assert!(
+                            exact.observed.lock().expect("observed").is_empty(),
+                            "{entry}: source failure must discard the losing query cause"
+                        );
+                    } else {
+                        assert!(
+                            matches!(error, FallibleSparqlError::Query { .. }),
+                            "{entry}: {error:?}"
+                        );
+                        assert_eq!(
+                            *exact.observed.lock().expect("observed"),
+                            [Arc::clone(&body)],
+                            "{entry}: ready source publishes the exact invocation cause"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn invocation_law_is_inherited_by_nested_function_children() {
+            let inner = body_text("SELECT (11 AS ?result) WHERE {}");
+            let outer = body_text(&format!("SELECT (<{EX_INC}>() AS ?result) WHERE {{}}"));
+            let mut registry = UserFunctionRegistry::default();
+            for (iri, body) in [(EX_INC, Arc::clone(&inner)), (EX_LOOP, outer)] {
+                registry.insert(
+                    iri,
+                    UserFunction {
+                        body,
+                        ..select_body_function()
+                    },
+                );
+            }
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![Arc::clone(&inner)],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let query = format!("SELECT (<{EX_LOOP}>() AS ?v) WHERE {{}}");
+            NativeSparqlEngine::new()
+                .query_with_options_view(
+                    &empty_dataset(),
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law),
+                )
+                .expect_err("nested invocation refuses");
+            assert_eq!(exact.calls.lock().expect("calls").len(), 2);
+            assert_eq!(*exact.observed.lock().expect("observed"), [inner]);
+        }
+
+        /// Exercise the production indexed worker primitive with actual forked
+        /// evaluator contexts. Ordinary group routing remains conservative: a
+        /// SPARQL-bodied function is not made parallel-safe by this admission hook.
+        #[test]
+        fn invocation_worker_errors_select_exact_canonical_cause_before_observation() {
+            let first = body_text("SELECT (11 AS ?result) WHERE {}");
+            let second = body_text("SELECT (22 AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            for (iri, body) in [(EX_INC, Arc::clone(&first)), (EX_EVEN, Arc::clone(&second))] {
+                registry.insert(
+                    iri,
+                    UserFunction {
+                        body,
+                        ..select_body_function()
+                    },
+                );
+            }
+            registry.register_native(
+                EX_NATIVE_ERR,
+                Arity::Exact(0),
+                Volatility::Stable,
+                Arc::new(|_| Err(EvalError::function("earlier host failure"))),
+            );
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let dataset = empty_dataset();
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .expect("two-worker test pool");
+            for (iris, expected) in [([EX_INC, EX_EVEN], &first), ([EX_EVEN, EX_INC], &second)] {
+                let exact = Arc::new(InvocationLaw {
+                    refused: vec![Arc::clone(&first), Arc::clone(&second)],
+                    concurrent_calls: Some(std::sync::Barrier::new(2)),
+                    ..InvocationLaw::default()
+                });
+                let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+                let queries: Vec<_> = iris
+                    .into_iter()
+                    .map(|iri| {
+                        purrdf_sparql_algebra::SparqlParser::new()
+                            .parse_query(&format!("SELECT (<{iri}>() AS ?v) WHERE {{}}"))
+                            .expect("worker query parses")
+                    })
+                    .collect();
+                let error = pool.install(|| {
+                    let _parallel = crate::parallel::force_parallel_for_test(true);
+                    let _chunk = crate::parallel::force_chunk_size_for_test(1);
+                    let parent = EvalCtx::new(&dataset)
+                        .with_user_functions(&bound)
+                        .with_user_function_admission(Some(&law));
+                    let result: Result<(Vec<()>, purrdf_core::SmallVec<[(); 1]>), EvalError> =
+                        crate::parallel::par_chunk_try_map_init(
+                            false,
+                            &queries,
+                            || parent.fork_for_worker(),
+                            |child, _rows, query| {
+                                evaluate_query_evaluated(query, child)?;
+                                Ok(())
+                            },
+                            |_| (),
+                        );
+                    result.expect_err("both worker queries refuse")
+                });
+                let calls = exact.calls.lock().expect("calls");
+                assert_eq!(calls.len(), 2);
+                assert_ne!(
+                    calls[0].thread, calls[1].thread,
+                    "actual distinct workers invoked admission"
+                );
+                assert!(
+                    exact.observed.lock().expect("observed").is_empty(),
+                    "workers do not publish diagnostic causes"
+                );
+                let EvalError::FunctionAdmission(ref refusal) = error else {
+                    panic!("expected retained invocation refusal, got {error:?}");
+                };
+                assert_eq!(
+                    &refusal
+                        .cause()
+                        .downcast_ref::<InvocationCause>()
+                        .expect("typed worker cause")
+                        .0,
+                    expected
+                );
+                assert_eq!(
+                    crate::engine::eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                    "native-sparql-query-eval"
+                );
+                assert_eq!(
+                    *exact.observed.lock().expect("observed"),
+                    [Arc::clone(expected)]
+                );
+            }
+
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![Arc::clone(&second)],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let queries: Vec<_> = [EX_NATIVE_ERR, EX_EVEN]
+                .into_iter()
+                .map(|iri| {
+                    purrdf_sparql_algebra::SparqlParser::new()
+                        .parse_query(&format!("SELECT (<{iri}>() AS ?v) WHERE {{}}"))
+                        .expect("worker query parses")
+                })
+                .collect();
+            let error = pool.install(|| {
+                let _parallel = crate::parallel::force_parallel_for_test(true);
+                let _chunk = crate::parallel::force_chunk_size_for_test(1);
+                let parent = EvalCtx::new(&dataset)
+                    .with_user_functions(&bound)
+                    .with_user_function_admission(Some(&law));
+                let result: Result<(Vec<()>, purrdf_core::SmallVec<[(); 1]>), EvalError> =
+                    crate::parallel::par_chunk_try_map_init(
+                        false,
+                        &queries,
+                        || parent.fork_for_worker(),
+                        |child, _rows, query| {
+                            evaluate_query_evaluated(query, child)?;
+                            Ok(())
+                        },
+                        |_| (),
+                    );
+                result.expect_err("earlier host worker fails")
+            });
+            assert_eq!(
+                error,
+                EvalError::function_operational("earlier host failure")
+            );
+            assert_eq!(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                EvalError::FUNCTION_OPERATIONAL_CODE
+            );
+            assert_eq!(exact.calls.lock().expect("calls").len(), 1);
+            assert!(
+                exact.observed.lock().expect("observed").is_empty(),
+                "losing typed worker cause must not replace the earlier failure"
+            );
+        }
+
+        #[test]
+        fn ordinary_group_routing_keeps_sparql_functions_serial_and_observes_actual_error() {
+            let first = body_text("SELECT (11 AS ?result) WHERE {}");
+            let second = body_text("SELECT (22 AS ?result) WHERE {}");
+            let mut registry = UserFunctionRegistry::default();
+            for (iri, body) in [(EX_INC, Arc::clone(&first)), (EX_EVEN, Arc::clone(&second))] {
+                registry.insert(
+                    iri,
+                    UserFunction {
+                        body,
+                        ..select_body_function()
+                    },
+                );
+            }
+            let bound = BoundFunctionRegistry::bound_for_test(registry);
+            let exact = Arc::new(InvocationLaw {
+                refused: vec![Arc::clone(&first), Arc::clone(&second)],
+                ..InvocationLaw::default()
+            });
+            let law: Arc<dyn UserFunctionAdmission> = exact.clone();
+            let query = format!(
+                "SELECT ?g (SUM(IF(?g = 1, <{EX_INC}>(), <{EX_EVEN}>())) AS ?v) WHERE {{ VALUES ?g {{ 1 2 }} }} GROUP BY ?g"
+            );
+            let parsed = purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(&query)
+                .expect("group parses");
+            let dataset = empty_dataset();
+            let context = EvalCtx::new(&dataset)
+                .with_user_functions(&bound)
+                .with_user_function_admission(Some(&law));
+            assert!(
+                !context.pattern_is_parallel_safe(crate::eval::query_pattern(&parsed)),
+                "admission must not weaken the existing function safety gate"
+            );
+            let caller = std::thread::current().id();
+            let _parallel = crate::parallel::force_parallel_for_test(true);
+            NativeSparqlEngine::new()
+                .query_with_options_view(
+                    &dataset,
+                    SparqlRequest {
+                        query: &query,
+                        base_iri: None,
+                        substitutions: &[],
+                    },
+                    QueryOptions::EMPTY
+                        .with_functions(&bound)
+                        .with_user_function_admission(&law),
+                )
+                .expect_err("first actual function refuses");
+            let calls = exact.calls.lock().expect("calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].thread, caller);
+            assert_eq!(*exact.observed.lock().expect("observed"), [first]);
         }
     }
 
