@@ -1,0 +1,75 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/jsonschema)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.49s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.32s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables ecma-ranges`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_html_entities`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.06s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2233 file(s); entailment-overclaim ban swept 36 of 245 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2242 unit(s) outside that set).
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/jsonschema)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.49s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/viz_samples /home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/target/gate-scratch/check-generated.BhafSB/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/target/gate-scratch/check-generated.BhafSB/visualization
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/deflate)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/alloc-probe)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/testkit)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/cdt)
+    Finished `test` profile [optimized] target(s) in 25.78s
+     Running unittests src/lib.rs (/opt/.cargo/slots/b9ada488ae5db77d/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1158 filtered out; finished in 0.00s
+
+make license-bundles
+python3 scripts/fetch-locked-deps.py
+python3 scripts/package-licenses.py --write
+license bundles generated: 35 profiles

@@ -1,0 +1,3 @@
+94a83793d0b56b37d551d804766dba238ef7478cda877719b339da6e26ad0610  /home/paudley/.local/bin/mdbook
+5a66cb701edbe83ba98604e7eca65893c7408ef161e635829b96af7abd0ce62c  /home/paudley/.cargo/bin/mdbook-gettext
+2cb5942d28118fac0f25f55111fc7549399fc1480e8c8ee40ac6bbf546428fd8  /home/paudley/.cargo/bin/mdbook-xgettext

@@ -1,0 +1,41 @@
+row	term	anchored_units	raw_specimen_occurrences	refused_units	poison_controls
+3	named graph	2956	0	0	1
+4	dataset	2956	0	0	1
+5	blank node	36	0	0	1
+6	literal	98	0	0	1
+7	datatype	2956	0	0	1
+8	language tag	8	0	0	1
+10	ontology	35	0	0	1
+11	knowledge graph	0	0	0	0
+13	entailment	98	0	0	1
+15	materialization	45	0	0	1
+17	canonicalization	74	0	0	1
+21	determinism	78	0	0	1
+22	provenance	32	0	0	1
+23	triple term (RDF 1.2)	53	0	0	2
+26	base direction (`--ltr`/`--rtl`)	8	0	0	1
+28	composite datatype (`SEP-0009`)	4	0	0	1
+30	ledger (`xfail` ledger)	58	0	0	1
+32	SPARQL extensions outside `purrdf-core` (formerly "out-of-core")	2	0	0	1
+40	Research Object (RO-Crate)	0	0	0	0
+42	surface (API surface)	77	0	0	1
+44	mint (an IRI, a witness, a blank node)	34	0	0	1
+45	reach (a host, a surface)	96	0	0	1
+46	dropped loudly (a reported drop)	5	0	0	2
+47	full-text search	9	0	0	1
+48	validation report	5	0	0	1
+50	base IRI	15	0	0	1
+51	fail closed	9	0	0	2
+52	oracle (test oracle)	13	0	0	1
+53	consistency (OWL / DL)	5	0	0	1
+54	artifact	50	0	0	1
+55	vendored (a test suite frozen in-repo)	29	0	0	1
+56	prepare / preparation (a query plan, a shapes product)	54	0	0	2
+57	well-formed	22	0	0	1
+58	drift (a generated file, a scoreboard, a corpus)	10	0	0	1
+59	writer (serializer, GTS writer)	20	0	0	1
+62	fails loudly (raises an error)	3	0	0	2
+63	warrant (an entailment warrant)	2	0	0	1
+64	context lens (JSON-LD)	1	0	0	1
+
+# Raw substrings in anchored visible Chinese prose (including accepted lookaround neighbours)

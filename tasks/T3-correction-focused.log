@@ -1,0 +1,45 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/hash)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/iri)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/jsonschema)
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 1m 02s
+     Running unittests src/main.rs (/opt/purrdf-260-t3-full/build/debug/build/helper-census/4b6541df90e9b283/out/helper_census-4b6541df90e9b283)
+
+running 11 tests
+test glossary::pattern::tests::syntax_and_resource_errors_are_not_no_match ... ok
+test glossary::po::tests::continuations_context_plural_and_suppression ... ok
+test glossary::po::tests::malformed_inputs_fail ... ok
+test glossary::surface::tests::fences_and_exact_runs ... ok
+test glossary::surface::tests::form_feed_is_neither_title_separator_nor_fence_closing_space ... ok
+test glossary::surface::tests::hidden_destinations_visible_labels_and_offsets ... ok
+test glossary::surface::tests::multiline_inline_links_preserve_labels_offsets_and_block_boundaries ... ok
+test glossary::tests::table_escapes_and_malformed_contract ... ok
+test glossary::pattern::tests::python_unicode_classes_and_case ... ok
+test glossary::tests::whole_document_global_diagnostics_have_real_lines ... ok
+test glossary::tests::selected_glossary_runs_all_default_controls ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 2.94s
+
+     Running tests/glossary_callers.rs (/opt/purrdf-260-t3-full/build/debug/build/helper-census/be3a91921e7fc7f0/out/glossary_callers-be3a91921e7fc7f0)
+
+running 1 test
+test production_parity_refuses_missing_native_glossary_callers ... FAILED
+
+failures:
+
+---- production_parity_refuses_missing_native_glossary_callers stdout ----
+
+thread 'production_parity_refuses_missing_native_glossary_callers' (2379137) panicked at crates/helper-census/tests/glossary_callers.rs:127:44:
+called `Result::unwrap()` on an `Err` value: Custom { kind: NotFound, error: "/opt/purrdf-260-t3-full/build/debug/build/helper-census/be3a91921e7fc7f0/out/glossary_callers-be3a91921e7fc7f0 is not inside a cargo build directory: no ancestor holds CACHEDIR.TAG" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    production_parity_refuses_missing_native_glossary_callers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p helper-census --test glossary_callers`

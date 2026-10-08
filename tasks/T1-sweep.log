@@ -1,0 +1,5 @@
+Command: CARGO_BUILD_JOBS=8 cargo run -p helper-census --jobs 8 --locked -- --glossary-gate --inventory .stage/zh-hans-glossary-gate-harden-the/glossary-sweep.tsv
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/helper-census --glossary-gate --inventory .stage/zh-hans-glossary-gate-harden-the/glossary-sweep.tsv`
+OK: 69 rows, 43 rejections, 24 K tokens respected by 4181 translated units; 3 tracked translated Markdown documents; 1716 self-tests
+Exit code: 0

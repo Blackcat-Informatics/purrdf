@@ -1,0 +1,3 @@
+Command: python3 scripts/check-i18n-glossary.py
+OK: 43 rejected rendering(s) and 24 keep-English token(s) from 69 glossary row(s) respected by 4181 translated unit(s) (docs/book/po/zh-Hans.po plus 3 tracked translated Markdown file(s), global rows only).
+Exit code: 0

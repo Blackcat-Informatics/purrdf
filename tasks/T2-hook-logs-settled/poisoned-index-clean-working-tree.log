@@ -1,0 +1,4 @@
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the staged index against 6273b6173f3b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+pre-commit: glossary-gate failed:
+  helper-census glossary: /tmp/tmp.BiyQBSvCOd/docs/book/po/zh-Hans.po:24269: keep-English token "RDF" does not survive visibly; row "specification and product names" (/tmp/tmp.BiyQBSvCOd/docs/book/po/glossary-zh-Hans.md:189)
+pre-commit: the staged snapshot fails the gates above; fix and re-stage.

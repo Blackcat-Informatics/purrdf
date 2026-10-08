@@ -1,0 +1,145 @@
+diff --git crates/helper-census/examples/glossary_hook_probe.rs crates/helper-census/examples/glossary_hook_probe.rs
+index 8312218a5..afc23b2f6 100644
+--- crates/helper-census/examples/glossary_hook_probe.rs
++++ crates/helper-census/examples/glossary_hook_probe.rs
+@@ -18,7 +18,70 @@ struct Restore {
+ 
+ impl Drop for Restore {
+     fn drop(&mut self) {
+-        std::fs::write(&self.path, &self.bytes).expect("restore exact catalogue bytes");
++        if let Err(error) = std::fs::write(&self.path, &self.bytes) {
++            // Preserve an existing panic while reporting the restoration failure;
++            // an ordinary failed restoration must still fail qualification.
++            if std::thread::panicking() {
++                // A failed diagnostic write must not create a second panic.
++                let _ = writeln!(
++                    std::io::stderr().lock(),
++                    "failed to restore exact catalogue bytes at {}: {error}",
++                    self.path.display()
++                );
++            } else {
++                panic!(
++                    "failed to restore exact catalogue bytes at {}: {error}",
++                    self.path.display()
++                );
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn restore_writes_exact_original_bytes() {
++        let root = purrdf_testkit::TempDir::for_unit_test().unwrap();
++        let path = root.path().join("catalogue.po");
++        let original = b"original\0catalogue\n".to_vec();
++        std::fs::write(&path, "poisoned catalogue").unwrap();
++        drop(Restore {
++            path: path.clone(),
++            bytes: original.clone(),
++        });
++        assert_eq!(std::fs::read(path).unwrap(), original);
++    }
++
++    #[test]
++    fn restore_failure_on_normal_exit_is_refused() {
++        let root = purrdf_testkit::TempDir::for_unit_test().unwrap();
++        // Writing to an existing directory fails without permission assumptions.
++        let path = root.path().to_owned();
++        assert!(
++            std::panic::catch_unwind(move || drop(Restore {
++                path,
++                bytes: b"original".to_vec(),
++            }))
++            .is_err()
++        );
++    }
++
++    #[test]
++    fn restore_failure_during_unwind_preserves_original_panic() {
++        let root = purrdf_testkit::TempDir::for_unit_test().unwrap();
++        let path = root.path().to_owned();
++        let error = std::panic::catch_unwind(move || {
++            let _restore = Restore {
++                path,
++                bytes: b"original".to_vec(),
++            };
++            panic!("original probe panic");
++        })
++        .unwrap_err();
++        assert_eq!(error.downcast_ref::<&str>(), Some(&"original probe panic"));
+     }
+ }
+ 
+diff --git crates/helper-census/src/glossary/mod.rs crates/helper-census/src/glossary/mod.rs
+index 116849c4a..33b059c50 100644
+--- crates/helper-census/src/glossary/mod.rs
++++ crates/helper-census/src/glossary/mod.rs
+@@ -148,6 +148,13 @@ fn parse_glossary(text: &str, path: &Path) -> Result<Vec<Row>, String> {
+         let mut anchor_patterns = Vec::new();
+         let mut token_patterns = Vec::new();
+         for anchor in &anchors {
++            if keep && regex_body(anchor).is_some() {
++                return Err(format!(
++                    "glossary:{} row {:?}: K rows require literal anchors, not {anchor:?}",
++                    index + 1,
++                    cells[1]
++                ));
++            }
+             let source = regex_body(anchor).map_or_else(|| literal(anchor), str::to_owned);
+             anchor_patterns.push(
+                 Pattern::anchor(&source).map_err(|error| {
+@@ -1412,6 +1419,38 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn keep_english_requires_literal_anchors_and_non_keep_regex_remains_active() {
++        let table = |anchor: &str, basis: &str| {
++            format!(
++                "| {} |\n| - | - | - | - | - | - | - |\n| 1 | literal | {anchor} | literal | {basis} | — | |\n",
++                HEADER.join(" | ")
++            )
++        };
++        for anchor in ["`/literal(?!ly)/`", "`literal`、`/other/`"] {
++            let error = parse_glossary(&table(anchor, "K"), Path::new("fixture.md")).unwrap_err();
++            assert!(error.contains("glossary:3 row \"literal\""));
++            assert!(error.contains("K rows require literal anchors"));
++        }
++        let literal_rows =
++            parse_glossary(&table("`literal`", "K"), Path::new("fixture.md")).unwrap();
++        assert_eq!(
++            offences("fixture.po:7", Some("literal"), "字面。", &literal_rows)
++                .unwrap()
++                .len(),
++            1
++        );
++        assert!(
++            offences("fixture.po:7", Some("literal"), "literal。", &literal_rows)
++                .unwrap()
++                .is_empty()
++        );
++        let regex_rows =
++            parse_glossary(&table("`/literal(?!ly)/`", "E"), Path::new("fixture.md")).unwrap();
++        assert!(regex_rows[0].anchored("literal").unwrap());
++        assert!(!regex_rows[0].anchored("literally").unwrap());
++    }
++
+     #[test]
+     fn selected_glossary_runs_all_default_controls() {
+         let root = purrdf_testkit::paths::workspace_root();
+diff --git docs/book/po/glossary-zh-Hans.md docs/book/po/glossary-zh-Hans.md
+index ead8f264d..dda3d4c12 100644
+--- docs/book/po/glossary-zh-Hans.md
++++ docs/book/po/glossary-zh-Hans.md
+@@ -76,6 +76,7 @@ How the gate reads the table:
+   fenced blocks in a `msgstr` are never matched (a page may write
+   「不要写 `蕴含`」).
+ * **K rows** — every Anchor token is an invariant: if the `msgid` carries it
++  literally (a slash-delimited regex is invalid on a K row),
+   as a whole token (case-sensitively, not inside another word — `RDF` in
+   `RDFLib` does not count), the `msgstr` must carry the same whole token
+   (`RDF` inside `PurRDF` does not satisfy it).

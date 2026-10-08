@@ -1,0 +1,109 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-events)
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling libc v0.2.186
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/deflate)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/cdt)
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+   Compiling ctutils v0.4.2
+   Compiling sha2 v0.11.0
+   Compiling either v1.16.0
+   Compiling universal-hash v0.6.1
+   Compiling hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling ctr v0.10.1
+   Compiling polyval v0.7.3
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling ghash v0.6.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/stack)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/ed25519)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-algebra)
+   Compiling structured-zstd v0.0.49
+   Compiling aes-gcm v0.11.1
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/alloc-probe)
+   Compiling rayon v1.12.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 58.64s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 13.14s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.47s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2.14s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_unicode_tables ecma-ranges`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.39s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_html_entities`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.02s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+Traceback (most recent call last):
+  File "/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/scripts/check-doc-claims.py", line 6843, in <module>
+    raise SystemExit(main(sys.argv))
+                     ~~~~^^^^^^^^^^
+  File "/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/scripts/check-doc-claims.py", line 6789, in main
+    fragment_problems, fragment_files = banned_stale_fragment_names(surface)
+                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/scripts/check-doc-claims.py", line 1037, in banned_stale_fragment_names
+    text = _read(path)
+  File "/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/scripts/check-doc-claims.py", line 241, in _read
+    return _committed(path)
+  File "/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/scripts/check-doc-claims.py", line 235, in _committed
+    return path.read_text(encoding="utf-8")
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/pathlib/_local.py", line 546, in read_text
+    return PathBase.read_text(self, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/pathlib/_abc.py", line 632, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/paudley/.local/share/uv/python/cpython-3.13.5-linux-x86_64-gnu/lib/python3.13/pathlib/_local.py", line 537, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/scripts/check-i18n-glossary.py'
+make: *** [Makefile:82: metadata] Error 1

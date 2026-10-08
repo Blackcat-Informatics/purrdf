@@ -1,0 +1,6 @@
+Command: CARGO_BUILD_JOBS=8 cargo run -p helper-census --jobs 8 --locked -- --glossary-gate --self-test
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 14.05s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/helper-census --glossary-gate --self-test`
+OK: 69 glossary rows, 43 rejections, 24 K tokens, 1716 production-path self-tests
+Exit code: 0

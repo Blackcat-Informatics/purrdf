@@ -1,0 +1,93 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking const-oid v0.10.2
+   Compiling libc v0.2.186
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-events)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf-core)
+    Checking hashbrown v0.17.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+    Checking digest v0.11.3
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/cdt)
+    Checking either v1.16.0
+   Compiling getrandom v0.3.4
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/alloc-probe)
+    Checking twox-hash v2.1.2
+    Checking fastrand v2.4.1
+    Checking inout v0.2.2
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-algebra)
+    Checking cmov v0.5.4
+    Checking sha2 v0.11.0
+    Checking crossbeam-epoch v0.9.18
+    Checking cpubits v0.1.1
+    Checking structured-zstd v0.0.49
+    Checking cipher v0.5.2
+    Checking aead v0.6.1
+    Checking ctutils v0.4.2
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/testkit)
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/stack)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/ed25519)
+    Checking universal-hash v0.6.1
+    Checking ctr v0.10.1
+    Checking aes v0.9.3
+    Checking visual-hashing v1.0.0
+   Compiling proc-macro2 v1.0.106
+    Checking polyval v0.7.3
+   Compiling quote v1.0.46
+   Compiling heck v0.5.0
+    Checking utf8parse v0.2.2
+    Checking rayon v1.12.0
+    Checking ghash v0.6.0
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking anstyle-parse v1.0.0
+    Checking is_terminal_polyfill v1.70.2
+    Checking aes-gcm v0.11.1
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+   Compiling wasm-bindgen-shared v0.2.125
+    Checking anstream v1.0.0
+   Compiling rustversion v1.0.22
+   Compiling target-lexicon v0.13.5
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/hash-conformance)
+    Checking once_cell v1.21.4
+    Checking clap_builder v4.6.0
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-results)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/shex)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/gts)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/datalog)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/json)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/sparql-eval)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/columnar)
+   Compiling bumpalo v3.20.3
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/entail)
+   Compiling wasm-bindgen v0.2.125
+   Compiling pyo3-build-config v0.29.0
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/bench)
+   Compiling syn v2.0.118
+    Checking leb128fmt v0.1.0
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+    Checking wasm-encoder v0.259.0
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/wasm-link)
+   Compiling clap_derive v4.6.1
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling pyo3-macros-backend v0.29.0
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/retrieval)
+    Checking clap v4.6.1
+   Compiling wasm-bindgen-macro v0.2.125
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/slice)
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/envelope-probe)
+make: *** [Makefile:94: check] Terminated

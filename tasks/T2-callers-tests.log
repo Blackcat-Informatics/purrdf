@@ -1,0 +1,10 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 0.44s
+     Running tests/glossary_callers.rs (/opt/.cargo/slots/b9ada488ae5db77d/0/build/debug/build/helper-census/2c857e2886dce291/out/glossary_callers-2c857e2886dce291)
+
+running 2 tests
+test production_parity_refuses_missing_native_glossary_callers ... ok
+test external_inputs_and_content_selected_renamed_markdown ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.78s
+

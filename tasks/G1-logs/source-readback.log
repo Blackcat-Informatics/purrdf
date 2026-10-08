@@ -1,0 +1,14 @@
+crates/helper-census/src/glossary/mod.rs: OK
+crates/helper-census/examples/glossary_hook_probe.rs: OK
+docs/book/po/glossary-zh-Hans.md: OK
+Cargo.toml: OK
+Cargo.lock: OK
+rust-toolchain.toml: OK
+Makefile: OK
+.github/workflows/ci.yaml: OK
+crates/helper-census/Cargo.toml: OK
+crates/helper-census/tests/glossary_callers.rs: OK
+scripts/check-gate-parity.py: OK
+scripts/check-shared-helpers.py: OK
+docs/book/po/zh-Hans.po: OK
+scripts/check-i18n-render.py: OK

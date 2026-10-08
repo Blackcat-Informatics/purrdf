@@ -1,0 +1,39 @@
+{
+  "assignees": [
+    {
+      "id": "MDQ6VXNlcjUyNzU1NQ==",
+      "login": "paudley",
+      "name": "Patrick Audley",
+      "databaseId": 527555
+    }
+  ],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "PR #249 landed most of the second adversarial review's residuals, but the reviewer's list included cases worth a final pass now that real `msgstr`s are coming (issue on the pour is filed separately):\n\n- Anchored substring collisions inside an anchored paragraph beyond the three lookarounds added (`\u8f93\u51fa\u5904\u7406` under provenance, `\u51b3\u5b9a\u6027\u80fd` under determinism were fixed; sweep for new ones as the glossary grows \u2014 the reviewer's method: scan every English paragraph containing an anchor for Chinese renderings that embed a rejected string).\n- An anchor that appears only in a link URL of the `msgid` (should not anchor the row).\n- `research \u5bf9\u8c61 (Research Object)` acceptance is house-typography-dependent; confirm the half-width-paren form matches policy or document the refusal.\n- K-survival is whole-token since #249; add a self-test case per K row so a regression is caught row-by-row.\n\nAll are prevention \u2014 zero collisions existed in the book at review time. Small, self-contained, gate-only.",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-09-03T15:33:11Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    }
+  ],
+  "milestone": {
+    "number": 2,
+    "title": "3.1-release",
+    "description": "",
+    "dueOn": null
+  },
+  "number": 260,
+  "state": "OPEN",
+  "title": "zh-Hans glossary gate: harden the anchored-substring residuals (reviewer R1\u2013R4 leftovers)",
+  "updatedAt": "2026-10-02T17:56:46Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/260"
+}

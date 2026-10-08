@@ -1,0 +1,6 @@
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the staged index against 6273b6173f3b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/260-zh-hans-glossary-gate-harden-the 4db9f7947] refactor(i18n): route glossary checks through the native gate
+ 12 files changed, 357 insertions(+), 728 deletions(-)
+ create mode 100644 crates/helper-census/examples/glossary_hook_probe.rs
+ create mode 100644 crates/helper-census/tests/glossary_callers.rs
+ delete mode 100644 scripts/check-i18n-glossary.py

@@ -1,0 +1,12 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 0.25s
+     Running unittests examples/glossary_hook_probe.rs (/opt/purrdf-260-t3-full/settled-build/debug/build/helper-census/7e79ca5a495ede52/out/glossary_hook_probe-7e79ca5a495ede52)
+
+running 3 tests
+failed to restore exact catalogue bytes at /opt/purrdf-260-t3-full/settled-build/tmp/purrdf-3017139-0-1791444829121795613: Is a directory (os error 21)
+test tests::restore_failure_during_unwind_preserves_original_panic ... ok
+test tests::restore_failure_on_normal_exit_is_refused ... ok
+test tests::restore_writes_exact_original_bytes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

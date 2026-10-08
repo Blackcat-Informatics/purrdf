@@ -1,0 +1,9 @@
+Command: CARGO_BUILD_JOBS=8 python3 scripts/check-layers.py
+OK: 208 first-party normal edges across 42 members match layers.toml (0 planned edges, 0 planned crates); 6 crates forbid unsafe_code
+Exit code: 0
+
+Command: cargo fmt -p helper-census --check
+Exit code: 0
+
+Command: git diff --check
+Exit code: 0

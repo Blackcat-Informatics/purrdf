@@ -1,0 +1,35 @@
+    Finished `test` profile [optimized] target(s) in 0.05s
+     Running unittests src/main.rs (/opt/.cargo/slots/b9ada488ae5db77d/0/build/debug/build/helper-census/2fb2e3fd4c1dbfce/out/helper_census-2fb2e3fd4c1dbfce)
+
+running 10 tests
+test glossary::pattern::tests::syntax_and_resource_errors_are_not_no_match ... ok
+test glossary::po::tests::malformed_inputs_fail ... ok
+test glossary::po::tests::continuations_context_plural_and_suppression ... ok
+test glossary::surface::tests::fences_and_exact_runs ... ok
+test glossary::surface::tests::hidden_destinations_visible_labels_and_offsets ... ok
+test glossary::surface::tests::multiline_inline_links_preserve_labels_offsets_and_block_boundaries ... ok
+test glossary::tests::table_escapes_and_malformed_contract ... ok
+test glossary::pattern::tests::python_unicode_classes_and_case ... ok
+test glossary::tests::whole_document_global_diagnostics_have_real_lines ... ok
+test glossary::tests::selected_glossary_runs_all_default_controls ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in 3.04s
+
+     Running tests/glossary_callers.rs (/opt/.cargo/slots/b9ada488ae5db77d/0/build/debug/build/helper-census/2c857e2886dce291/out/glossary_callers-2c857e2886dce291)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/non_rust_ratchet.rs (/opt/.cargo/slots/b9ada488ae5db77d/0/build/debug/build/helper-census/57ff80eebd0feaf4/out/non_rust_ratchet-57ff80eebd0feaf4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.00s
+
+     Running tests/policy_guards.rs (/opt/.cargo/slots/b9ada488ae5db77d/0/build/debug/build/helper-census/c0bd1ace1986e6e5/out/policy_guards-c0bd1ace1986e6e5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

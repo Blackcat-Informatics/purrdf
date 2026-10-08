@@ -1,0 +1,4 @@
+Command: CARGO_BUILD_JOBS=8 cargo clippy -p helper-census --all-targets --jobs 8 --locked -- -D warnings
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.27s
+Exit code: 0

@@ -1,0 +1,187 @@
+Thu Oct  8 06:11:26 UTC 2026
+4db9f79477e81377181584e27c5ab28b5766d91a
+ crates/helper-census/src/glossary/surface.rs   | 28 +++++++++++-
+ crates/helper-census/tests/glossary_callers.rs | 60 +++++++++++++-------------
+ 2 files changed, 56 insertions(+), 32 deletions(-)
+diff --git crates/helper-census/src/glossary/surface.rs crates/helper-census/src/glossary/surface.rs
+index 4a43ae985..ee6b609d1 100644
+--- crates/helper-census/src/glossary/surface.rs
++++ crates/helper-census/src/glossary/surface.rs
+@@ -62,9 +62,13 @@ fn balanced(bytes: &[u8], at: usize, open: u8, close: u8) -> Option<usize> {
+             continue;
+         }
+         if open == b'(' && matches!(ch, b'\'' | b'"') {
++            // CommonMark 0.31.2 §6.3 separates destination/title by spaces,
++            // tabs and up to one line ending, not Unicode whitespace or FF.
++            // https://spec.commonmark.org/0.31.2/#links
+             if quote == Some(ch) {
+                 quote = None;
+-            } else if quote.is_none() && depth == 1 && bytes[pos - 1].is_ascii_whitespace() {
++            } else if quote.is_none() && depth == 1 && purrdf_lex::terminals::is_ws(bytes[pos - 1])
++            {
+                 quote = Some(ch);
+             }
+         }
+@@ -110,9 +114,14 @@ pub(super) fn project(text: &str) -> Surface {
+         let delimiter = matches!(marker, Some(b'`' | b'~')) && width >= 3;
+         if let Some((ch, min)) = fence {
+             mask(&mut prose, offset, offset + bytes.len());
++            // CommonMark 0.31.2 §4.5 permits only spaces/tabs after the
++            // closing fence. CR/LF here terminate this physical line.
++            // https://spec.commonmark.org/0.31.2/#fenced-code-blocks
+             if marker == Some(ch)
+                 && width >= min
+-                && trimmed[width..].iter().all(u8::is_ascii_whitespace)
++                && trimmed[width..]
++                    .iter()
++                    .all(|&byte| purrdf_lex::terminals::is_ws(byte))
+             {
+                 fence = None;
+                 mask(&mut visible, offset, offset + bytes.len());
+@@ -243,6 +252,21 @@ mod tests {
+         assert_eq!(result.prose.lines().count(), text.lines().count());
+     }
+ 
++    #[test]
++    fn form_feed_is_neither_title_separator_nor_fence_closing_space() {
++        // Markdown's space/tab and physical CR/LF do not include form feed.
++        assert_eq!(
++            balanced(b"(url\x0c\"title)tail\")", 0, b'(', b')'),
++            Some(12)
++        );
++        assert_eq!(balanced(b"(url \"title)tail\")", 0, b'(', b')'), Some(18));
++        let text = "```\n资料类型\n```\x0c\n具名图\n```\nvisible\n";
++        let result = project(text);
++        assert!(!result.prose.contains("资料类型"));
++        assert!(!result.prose.contains("具名图"));
++        assert!(result.prose.contains("visible"));
++    }
++
+     #[test]
+     fn multiline_inline_links_preserve_labels_offsets_and_block_boundaries() {
+         let text = "[visible\nRDF](\nhttps://example.invalid/provenance(foo\\)bar)\n\"IRI\nGMEOW title\"\n)\n![alt\nRust](\nhttps://example.invalid/SPARQL\n)\n<https://example.invalid/OWL>\n\n````\n[code](\nhttps://example.invalid/SHACL\n)\n````\n[broken](\n\nprovenance)\nend";
+diff --git crates/helper-census/tests/glossary_callers.rs crates/helper-census/tests/glossary_callers.rs
+index 5315e3e24..c4919a17e 100644
+--- crates/helper-census/tests/glossary_callers.rs
++++ crates/helper-census/tests/glossary_callers.rs
+@@ -11,12 +11,6 @@ const GATE: &str = "cargo run -q --locked -p helper-census -- --glossary-gate";
+ const PO: &str = "docs/book/po/zh-Hans.po";
+ const GLOSSARY: &str = "docs/book/po/glossary-zh-Hans.md";
+ 
+-fn write(root: &Path, relative: &str, text: &str) {
+-    let path = root.join(relative);
+-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+-    std::fs::write(path, text).unwrap();
+-}
+-
+ fn git(root: &Path, args: &[&str]) {
+     let mut command = Command::new("git");
+     for name in [
+@@ -74,11 +68,12 @@ fn external_inputs_and_content_selected_renamed_markdown() {
+     let root = fixture.path().join("repository");
+     std::fs::create_dir(&root).unwrap();
+     git(&root, &["init", "-q"]);
+-    write(
+-        &root,
+-        PO,
+-        &std::fs::read_to_string(source.join(PO)).unwrap(),
+-    );
++    std::fs::create_dir_all(root.join("docs/book/po")).unwrap();
++    std::fs::write(
++        root.join(PO),
++        std::fs::read_to_string(source.join(PO)).unwrap(),
++    )
++    .unwrap();
+     let external_po = fixture.path().join("external.po");
+     let external_glossary = fixture.path().join("external-glossary.md");
+     std::fs::copy(source.join(GLOSSARY), &external_glossary).unwrap();
+@@ -87,11 +82,11 @@ fn external_inputs_and_content_selected_renamed_markdown() {
+         "msgid \"RDF toolkit\"\nmsgstr \"RDF 工具包。\"\n",
+     )
+     .unwrap();
+-    write(
+-        &root,
+-        "not-language-named.md",
++    std::fs::write(
++        root.join("not-language-named.md"),
+         "普通中文。\n```text\n资料类型\n具名图\n```\n普通中文。\n",
+-    );
++    )
++    .unwrap();
+     git(&root, &["add", "."]);
+     assert_verdict(
+         &scan(&root, &external_po, &external_glossary),
+@@ -105,13 +100,13 @@ fn external_inputs_and_content_selected_renamed_markdown() {
+         true,
+         "1 tracked translated Markdown",
+     );
+-    write(&root, "renamed.md", "普通中文。资料类型。\n");
++    std::fs::write(root.join("renamed.md"), "普通中文。资料类型。\n").unwrap();
+     assert_verdict(
+         &scan(&root, &external_po, &external_glossary),
+         false,
+         "renamed.md:1:",
+     );
+-    write(&root, "renamed.md", "普通中文。\n");
++    std::fs::write(root.join("renamed.md"), "普通中文。\n").unwrap();
+     std::fs::write(&external_po, "msgid \"RDF toolkit\"\nmsgstr \"工具包。\"\n").unwrap();
+     assert_verdict(
+         &scan(&root, &external_po, &external_glossary),
+@@ -138,14 +133,15 @@ fn production_parity_refuses_missing_native_glossary_callers() {
+         root.join("scripts/check-gate-parity.py"),
+     )
+     .unwrap();
++    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+     for entry in std::fs::read_dir(source.join(".github/workflows")).unwrap() {
+         let entry = entry.unwrap();
+         let relative = format!(".github/workflows/{}", entry.file_name().to_str().unwrap());
+-        write(
+-            root,
+-            &relative,
+-            &std::fs::read_to_string(entry.path()).unwrap(),
+-        );
++        std::fs::write(
++            root.join(relative),
++            std::fs::read_to_string(entry.path()).unwrap(),
++        )
++        .unwrap();
+     }
+     let parity = || {
+         Command::new("python3")
+@@ -153,20 +149,24 @@ fn production_parity_refuses_missing_native_glossary_callers() {
+             .output()
+             .unwrap()
+     };
+-    write(root, "Makefile", &makefile);
++    std::fs::write(root.join("Makefile"), &makefile).unwrap();
+     assert_verdict(&parity(), true, "hygiene gates");
+-    write(root, "Makefile", &makefile.replace(GATE, "true"));
++    std::fs::write(root.join("Makefile"), makefile.replace(GATE, "true")).unwrap();
+     assert_verdict(&parity(), false, "helper-census --glossary-gate");
+     // The docs job reaches check-i18n transitively; omit only that occurrence,
+     // preserving make check's native gate to exercise the reverse direction.
+     let split = makefile.find("check-i18n:").unwrap();
+     let (before, after) = makefile.split_at(split);
+-    write(
+-        root,
+-        "Makefile",
+-        &format!("{before}{}", after.replacen(GATE, "true", 1)),
+-    );
++    std::fs::write(
++        root.join("Makefile"),
++        format!("{before}{}", after.replacen(GATE, "true", 1)),
++    )
++    .unwrap();
+     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yaml")).unwrap();
+-    write(root, ".github/workflows/ci.yaml", &ci.replace(GATE, "true"));
++    std::fs::write(
++        root.join(".github/workflows/ci.yaml"),
++        ci.replace(GATE, "true"),
++    )
++    .unwrap();
+     assert_verdict(&parity(), false, "helper-census --glossary-gate");
+ }
+7294741f9485508114c81444bf51955f7d6bdaa7532fcfe4700f6e33c3827ce1  crates/helper-census/src/glossary/surface.rs
+61b02a4786f234ee9404a63de170ef7cba66b6d60b5a0da9e5a1cfeb95a6926e  crates/helper-census/tests/glossary_callers.rs
+134b8ccd5b8aa23cb9190cd9cad3024aef4c5b1c38fde3cdc13be5d1812ca830  docs/book/po/zh-Hans.po
+e09c403a3413afcd1baf366a4f2a99bbe5450a1347650fd93554f0334527c11a  docs/book/po/glossary-zh-Hans.md

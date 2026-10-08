@@ -1,0 +1,9 @@
+    Finished `test` profile [optimized] target(s) in 0.36s
+     Running tests/glossary_callers.rs (/opt/purrdf-260-t3-full/settled-build/debug/build/helper-census/be3a91921e7fc7f0/out/glossary_callers-be3a91921e7fc7f0)
+
+running 2 tests
+test production_parity_refuses_missing_native_glossary_callers ... ok
+test external_inputs_and_content_selected_renamed_markdown ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.88s
+

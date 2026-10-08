@@ -1,0 +1,27 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling hybrid-array v0.4.15
+   Compiling regex-automata v0.4.14
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/lex)
+   Compiling syn v2.0.118
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/xsd)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/testkit)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/jsonschema)
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.89s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/1/target/debug/examples/glossary_hook_probe /home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the .stage/zh-hans-glossary-gate-harden-the/tasks/T2-hook-logs`
+PASS: poisoned-index-clean-working-tree; real hook status exit status: 1
+PASS: clean-index-poisoned-working-tree; real hook status exit status: 0
+PASS: isolated index only; catalogue bytes restored

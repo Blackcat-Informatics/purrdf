@@ -1,0 +1,32 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+error: environment variable `CARGO_TARGET_TMPDIR` not defined at compile time
+  --> crates/helper-census/examples/glossary_hook_probe.rs:47:20
+   |
+47 |         let root = purrdf_testkit::temp_dir!().unwrap();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `CARGO_TARGET_TMPDIR` may not be available for the current Cargo target
+   = help: Cargo sets build script variables at run time. Use `std::env::var("CARGO_TARGET_TMPDIR")` instead
+   = note: this error originates in the macro `::core::env` which comes from the expansion of the macro `purrdf_testkit::temp_dir` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: environment variable `CARGO_TARGET_TMPDIR` not defined at compile time
+  --> crates/helper-census/examples/glossary_hook_probe.rs:60:20
+   |
+60 |         let root = purrdf_testkit::temp_dir!().unwrap();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `CARGO_TARGET_TMPDIR` may not be available for the current Cargo target
+   = help: Cargo sets build script variables at run time. Use `std::env::var("CARGO_TARGET_TMPDIR")` instead
+   = note: this error originates in the macro `::core::env` which comes from the expansion of the macro `purrdf_testkit::temp_dir` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: environment variable `CARGO_TARGET_TMPDIR` not defined at compile time
+  --> crates/helper-census/examples/glossary_hook_probe.rs:74:20
+   |
+74 |         let root = purrdf_testkit::temp_dir!().unwrap();
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: `CARGO_TARGET_TMPDIR` may not be available for the current Cargo target
+   = help: Cargo sets build script variables at run time. Use `std::env::var("CARGO_TARGET_TMPDIR")` instead
+   = note: this error originates in the macro `::core::env` which comes from the expansion of the macro `purrdf_testkit::temp_dir` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `helper-census` (example "glossary_hook_probe" test) due to 3 previous errors

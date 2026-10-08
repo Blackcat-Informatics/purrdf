@@ -1,0 +1,56 @@
+{
+  "issue": 260,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "zh-Hans glossary gate: harden the anchored-substring residuals (reviewer R1\u2013R4 leftovers)",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "249": "fix(i18n): glossary gate \u2014 in-paragraph collision lookarounds, whole-token keep-English survival, regex anchors (review residuals of #245)",
+    "245": "ci(i18n): CJK-aware prose gates, pinned mdbook-i18n-helpers, and a gate over the rendered zh-Hans book (phase 0)",
+    "1": "CI-gated wasm size budget for the purrdf-wasm build",
+    "2": "Standalone deployed RDF-1.2 playground over the purrdf wasm build"
+  },
+  "related": [
+    {
+      "number": 256,
+      "title": "zh-Hans: pour the Phase 1 drafts into the gettext catalogue and publish /zh-Hans/",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 344,
+      "title": "SIMD sweep: the stable-channel ceiling, fast variant functions, and a full hot-path audit",
+      "state": "CLOSED"
+    },
+    {
+      "number": 375,
+      "title": "Prep v3.0 release",
+      "state": "CLOSED"
+    },
+    {
+      "number": 284,
+      "title": "purrdf-markdown: a structural Markdown-to-RDF 1.2 slicer under a caller-supplied vocabulary",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "performance": 1,
+    "none": 12
+  },
+  "coverage": [
+    "issue #260 + 0 comment(s) via github",
+    "link crawl: 4 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['zh-Hans', 'glossary', 'gate:']: 6 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits"
+  ]
+}

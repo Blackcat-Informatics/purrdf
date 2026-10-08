@@ -1,0 +1,4 @@
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/260-zh-hans-glossary-gate-harden-the/crates/helper-census)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+     Running `/opt/.cargo/slots/b9ada488ae5db77d/0/target/debug/helper-census --non-rust-ratchet --merge-base-with origin/main --target worktree`
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the working tree against 6273b6173f3b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
