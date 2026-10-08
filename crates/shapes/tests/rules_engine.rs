@@ -519,6 +519,28 @@ fn element_readings_infer_what_their_producers_do() {
     assert!(!has(&elements, "a", "age", &int(21)));
 }
 
+/// OPTIONAL keeps this real SHACL CONSTRUCT on the opaque Producer path. All
+/// returned rows, including fresh template blanks, must reach the shared join
+/// and commit instead of collapsing to a single existential witness.
+#[test]
+fn opaque_shacl_producers_preserve_multirow_fresh_templates() {
+    let inferred = run(
+        "ex:a ex:p 1 . ex:b ex:p 2 .",
+        r#"ex:producer a sh:SPARQLRule ; sh:runOnce true ; sh:construct
+            "CONSTRUCT { _:note ex:of ?s ; ex:value ?o } WHERE { ?s ex:p ?o OPTIONAL { ?s ex:absent ?unused } }" ."#,
+        &RuleOptions::default(),
+    ).expect("opaque producer evaluates");
+    assert_eq!(inferred.len(), 4, "{inferred:?}");
+    let notes: std::collections::BTreeSet<_> = inferred.iter().map(|(s, _, _)| s).collect();
+    assert_eq!(notes.len(), 2, "one fresh note per producer solution");
+    for note in notes {
+        let rows: Vec<_> = inferred.iter().filter(|(s, _, _)| s == note).collect();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|(_, p, _)| *p == iri("of").to_string()));
+        assert!(rows.iter().any(|(_, p, _)| *p == iri("value").to_string()));
+    }
+}
+
 /// A counter with no bound infers one new term per iteration forever: it is refused at
 /// the DEFAULT round limit, naming the limit, the numbers, the rule and the knob — and
 /// never called divergent, which no limit proves. Its bounded neighbour terminates.
