@@ -6,7 +6,7 @@
 //! `compare POLICY.json` validates complete collections before reporting costs.
 //! Invoked as `cargo` from the arm's private PATH, this executable adds only
 //! supported Cargo telemetry options and delegates to the captured real Cargo.
-//! `hosted-run CASE`, `hosted-restore DIRECTORY` and `hosted-compare DIRECTORY`
+//! `hosted-run CASE`, `hosted-reclaim CASE`, `hosted-restore DIRECTORY` and `hosted-compare DIRECTORY`
 //! bind the existing workflow's
 //! complete optional campaign to the same runner and comparison paths.
 
@@ -28,7 +28,9 @@ fn main() -> std::io::Result<()> {
         return profile::cargo_shim(arguments.collect());
     }
     let operation = arguments.next().ok_or_else(|| {
-        std::io::Error::other("expected run, compare, hosted-run, hosted-restore or hosted-compare")
+        std::io::Error::other(
+            "expected run, compare, hosted-run, hosted-reclaim, hosted-restore or hosted-compare",
+        )
     })?;
     let input = arguments.next().ok_or_else(|| {
         std::io::Error::other("missing request/policy path, hosted case or campaign directory")
@@ -40,10 +42,11 @@ fn main() -> std::io::Result<()> {
         "run" => profile::run(std::path::Path::new(&input)),
         "compare" => profile::compare(std::path::Path::new(&input)),
         "hosted-run" => hosted::run(&input),
+        "hosted-reclaim" => hosted::reclaim(&input),
         "hosted-restore" => hosted::restore(std::path::Path::new(&input)),
         "hosted-compare" => hosted::compare(std::path::Path::new(&input)),
         _ => Err(std::io::Error::other(
-            "expected run, compare, hosted-run, hosted-restore or hosted-compare",
+            "expected run, compare, hosted-run, hosted-reclaim, hosted-restore or hosted-compare",
         )),
     }
 }

@@ -15,7 +15,7 @@ use crate::expression::{
 };
 use crate::model::{rdf, sh, shnex, sparql_ns};
 use crate::spec::{ExprKind, non_function_keys, primary_keys};
-use crate::term::{NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term};
 
 use crate::shapes::{
     AnnotatedConstraint, ClosedMode, ComponentValidator, Constraint, ConstraintAnnotation,
@@ -531,61 +531,7 @@ impl Parser<'_> {
         let mut sparql_cnodes: Vec<Term> = self.objects_of(id, sh::SPARQL);
         crate::term::sort_terms_canonical(&mut sparql_cnodes);
         for c_node in sparql_cnodes {
-            // sh:select is required.
-            let raw_select = self
-                .first_object_of(&c_node, sh::SELECT)
-                .and_then(|t| match t {
-                    Term::Literal(lit) => Some(lit.value().to_owned()),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "sh:sparql constraint on shape {id} is missing a sh:select string literal"
-                    )
-                })?;
-            // SHACL-AF sh:prefixes may be declared on the shape or the sh:sparql node.
-            let select = format!("{}{raw_select}", self.prefix_header(&[id, &c_node])?);
-
-            // Parse-time query validation via the native parser (hard-fail on
-            // unparsable queries). SHACL-SPARQL requires a SELECT; ASK/CONSTRUCT/
-            // DESCRIBE parse but cannot bind ?this and would panic at eval — reject
-            // at the boundary.
-            // The query runs with `$this` and the shape context pre-bound.
-            match SparqlParser::new()
-                .with_prebound_variables(crate::sparql::THIS_AND_SHAPE_CONTEXT)
-                .parse_query(&select)
-            {
-                Ok(query @ Query::Select { .. }) => {
-                    // The query runs with $this pre-bound to each focus node;
-                    // the pre-binding restrictions of SHACL 1.2 SPARQL
-                    // Extensions, Appendix A (no
-                    // MINUS / SERVICE / VALUES, no `AS $this`, subqueries must
-                    // project $this) reject it as a hard failure at load.
-                    // Typed ([`crate::error::ShapesError::Prebinding`]) like every other
-                    // executed query's violation: this constraint executes wherever the
-                    // shape does.
-                    if let Err(e) = crate::prebinding::check_select(&query, &["this"])
-                        .and_then(|()| crate::prebinding::check_shape_context_unassigned(&query))
-                    {
-                        return Err(self.refuse_prebinding(
-                            crate::error::PrebindingViolation::new(
-                                format!("sh:sparql constraint {c_node} on shape {id}"),
-                                e,
-                            ),
-                        ));
-                    }
-                }
-                Ok(_) => {
-                    return Err(format!(
-                        "sh:sparql constraint on shape {id} must be a SELECT query (ASK/CONSTRUCT/DESCRIBE are not valid SHACL-SPARQL)"
-                    ));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "sh:sparql constraint on shape {id} has an unparsable sh:select query: {e}"
-                    ));
-                }
-            }
+            let select = self.sparql_constraint_query(id, &c_node)?;
 
             // Optional per-constraint sh:message / sh:severity overrides.
             let messages = self.messages_of(&c_node)?;
@@ -601,6 +547,25 @@ impl Parser<'_> {
             let annotated = self.constraint_annotation(id, &[(sh::SPARQL, &c_node)])?;
             if self.deactivated_of(&c_node)? {
                 continue;
+            }
+            if !matches!(annotated, Annotated::Deactivated) {
+                self.sparql_sources
+                    .borrow_mut()
+                    .constraints
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        (is_property_shape, out.constraints.len()),
+                        crate::shapes::ConstraintOccurrence::Sparql(
+                            crate::shapes::SparqlOccurrence {
+                                source_constraint: c_node.clone(),
+                                select: select.clone(),
+                                messages: messages.clone(),
+                                severity: severity.clone(),
+                                annotations: annotations.clone(),
+                            },
+                        ),
+                    );
             }
             out.push(
                 Constraint::Sparql {
@@ -741,7 +706,14 @@ impl Parser<'_> {
         // pushed with its reifier annotations. Statements of a usage SHACL-SPARQL
         // says to ignore (no validator for this shape kind), or of a component
         // missing a required parameter, represent no constraint.
-        let mut usages: Vec<(Constraint, Vec<(String, Term)>)> = Vec::new();
+        struct Usage {
+            constraint: Constraint,
+            triples: Vec<(String, Term)>,
+            validator_messages: Vec<Literal>,
+            component_messages: Vec<Literal>,
+            parameters: Vec<String>,
+        }
+        let mut usages = Vec::new();
         let mut inert: Vec<(String, Term)> = Vec::new();
         let mut components: Vec<&Component> = self.component_registry.components.values().collect();
         components.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -786,28 +758,24 @@ impl Parser<'_> {
                 }
                 continue;
             };
-            // The selected validator is the query this use executes, with `$this`, the
-            // parameters and (for ASK) `$value` pre-bound: a pre-binding violation in it
-            // is the failure SHACL 1.2 SPARQL Extensions, Appendix A requires ("MUST
-            // report a failure when it is operating on a shapes graph that contains
-            // SHACL-SPARQL queries ... that are executed with pre-bound variables and
-            // violate any of these MUST restrictions"). A violating validator no use
-            // selects never executes and does not refuse; `lint` lists it.
-            if let Some(message) = &validator.prebinding {
-                return Err(
-                    self.refuse_prebinding(crate::error::PrebindingViolation::new(
-                        format!(
-                            "{}, which shape {id} executes on a {} shape",
-                            validator.declaration(component.id.as_str()),
-                            if is_property_shape {
-                                "property"
-                            } else {
-                                "node"
-                            },
-                        ),
-                        message.clone(),
-                    )),
-                );
+            // REC component declarations were admitted graph-wide. Compatibility
+            // keeps its selected-validator boundary; the draft checks actual
+            // execution, so deactivation and empty focus/value sets do not trip it.
+            if let Some(message) = &validator.prebinding
+                && message.requires_parse_failure()
+            {
+                return Err(self.refuse_query(
+                    format!(
+                        "{}, which shape {id} executes on a {} shape",
+                        validator.declaration(component.id.as_str()),
+                        if is_property_shape {
+                            "property"
+                        } else {
+                            "node"
+                        },
+                    ),
+                    message.clone(),
+                ));
             }
 
             for bindings in instances {
@@ -833,8 +801,8 @@ impl Parser<'_> {
                     .unwrap_or_default();
 
                 let triples = triples_of(&bindings);
-                usages.push((
-                    Constraint::Component {
+                usages.push(Usage {
+                    constraint: Constraint::Component {
                         component: component.id.clone(),
                         source_shape: id.clone(),
                         bindings,
@@ -844,18 +812,50 @@ impl Parser<'_> {
                         annotations: validator.annotations.clone(),
                     },
                     triples,
-                ));
+                    validator_messages: validator.messages.clone(),
+                    component_messages: component.messages.clone(),
+                    parameters: component
+                        .parameters
+                        .iter()
+                        .map(|parameter| parameter.name.clone())
+                        .collect(),
+                });
             }
         }
         for (predicate, value) in &inert {
             self.apply_to_nothing(id, predicate, value)?;
         }
-        for (constraint, triples) in usages {
+        for Usage {
+            constraint,
+            triples,
+            validator_messages,
+            component_messages,
+            parameters,
+        } in usages
+        {
             let triples: Vec<(&str, &Term)> = triples
                 .iter()
                 .map(|(predicate, value)| (predicate.as_str(), value))
                 .collect();
             let annotated = self.constraint_annotation(id, &triples)?;
+            if !matches!(annotated, Annotated::Deactivated) {
+                self.sparql_sources
+                    .borrow_mut()
+                    .constraints
+                    .entry(id.clone())
+                    .or_default()
+                    .insert(
+                        (is_property_shape, out.constraints.len()),
+                        crate::shapes::ConstraintOccurrence::Component(
+                            crate::shapes::ComponentOccurrence {
+                                definition: constraint.clone(),
+                                validator_messages,
+                                component_messages,
+                                parameters,
+                            },
+                        ),
+                    );
+            }
             out.push(constraint, annotated);
         }
 

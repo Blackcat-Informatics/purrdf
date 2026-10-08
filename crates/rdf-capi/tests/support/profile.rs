@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 type IoResult<T> = std::io::Result<T>;
-fn read(path: &Path) -> IoResult<Value> {
+pub(crate) fn read(path: &Path) -> IoResult<Value> {
     json::read_with(
         &std::fs::read_to_string(path)?,
         json::Limits {
@@ -383,31 +383,7 @@ pub(crate) fn run(input: &Path) -> IoResult<()> {
     recorder.check("unchanged-warm-arm", || {
         if let Some(previous) = &request.previous {
             let prior = read(Path::new(previous))?;
-            valid_receipt(&prior)?;
-            if prior.pointer("/context/identity") != Some(&identity) {
-                return Err(invalid(
-                    "warm arm source/tools/configuration/target inventory changed",
-                ));
-            }
-            let prior_request = prior
-                .pointer("/context/request")
-                .ok_or_else(|| invalid("prior request missing"))?;
-            for key in [
-                "root",
-                "directory",
-                "cargo",
-                "lane",
-                "jobs",
-                "test_threads",
-                "runner_class",
-                "dependency_cache",
-                "compiler_cache",
-                "page_cache",
-            ] {
-                if prior_request.get(key) != request.to_json().get(key) {
-                    return Err(invalid(format!("warm arm changed {key}")));
-                }
-            }
+            unchanged_warm(&prior, &identity, &request.to_json())?;
         }
         Ok(())
     })?;
@@ -853,7 +829,76 @@ fn collect(directory: &Path, roots: &[(&str, &str)]) -> IoResult<Value> {
     Ok(collected.into())
 }
 
-fn valid_receipt(receipt: &Value) -> IoResult<u128> {
+fn unchanged_warm(prior: &Value, identity: &Value, request: &Value) -> IoResult<()> {
+    valid_receipt(prior)?;
+    if prior.pointer("/context/identity") != Some(identity) {
+        return Err(invalid(
+            "warm arm source/tools/configuration/target inventory changed",
+        ));
+    }
+    let prior_request = prior
+        .pointer("/context/request")
+        .ok_or_else(|| invalid("prior request missing"))?;
+    for key in [
+        "root",
+        "directory",
+        "cargo",
+        "lane",
+        "jobs",
+        "test_threads",
+        "runner_class",
+        "dependency_cache",
+        "compiler_cache",
+        "page_cache",
+    ] {
+        if prior_request.get(key) != request.get(key) {
+            return Err(invalid(format!("warm arm changed {key}")));
+        }
+    }
+    Ok(())
+}
+
+/// Admit both completed warmth receipts through the same request and proof homes.
+pub(crate) fn completed_pair(
+    cold: &Value,
+    warm: &Value,
+    directory: &Path,
+    lane: &str,
+) -> IoResult<()> {
+    for (receipt, warmth) in [(cold, "cold"), (warm, "warm")] {
+        let value = receipt
+            .pointer("/context/request")
+            .ok_or_else(|| invalid("completed request missing"))?;
+        let request = Request::from_json(value).map_err(|error| invalid(error.to_string()))?;
+        validate_request(&request)?;
+        if Path::new(&request.directory) != directory
+            || request.lane != lane
+            || request.warmth != warmth
+        {
+            return Err(invalid(
+                "completed receipt does not belong to the admitted case",
+            ));
+        }
+        if warmth == "warm"
+            && request.previous.as_deref()
+                != directory.join(format!("{lane}-cold-receipt.json")).to_str()
+        {
+            return Err(invalid(
+                "completed warm receipt names a different cold receipt",
+            ));
+        }
+        valid_receipt(receipt)?;
+    }
+    unchanged_warm(
+        cold,
+        warm.pointer("/context/identity")
+            .ok_or_else(|| invalid("completed warm identity missing"))?,
+        warm.pointer("/context/request")
+            .ok_or_else(|| invalid("completed warm request missing"))?,
+    )
+}
+
+pub(crate) fn valid_receipt(receipt: &Value) -> IoResult<u128> {
     if receipt.get("schema").and_then(Value::as_str) != Some("purrdf-process-phases-v1") {
         return Err(invalid("unknown or missing receipt schema"));
     }
@@ -1219,7 +1264,7 @@ pub(crate) fn compare(input: &Path) -> IoResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1653,7 +1698,7 @@ mod tests {
         );
     }
 
-    fn receipt(root: &Path) -> Value {
+    pub(crate) fn receipt(root: &Path) -> Value {
         let child = root.join("cargo-child.json");
         let timing = root.join("cargo-timing.html");
         std::fs::write(&child, r#"{"context":{"capi_artifacts":[]},"phases":[{"success":true,"command":{"stdout":""}}]}"#).unwrap();

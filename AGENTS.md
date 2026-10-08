@@ -73,6 +73,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
 | `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`, `golden`), the workspace root and Rust-source walks for tests and generators (`paths`), seeded test draws over `purrdf_hash::mix` (`rng`), an exact rational oracle that rounds an integer, a decimal or a float's binary value to `f64`, `f32` or a fixed decimal scale with integer arithmetic only (`exact`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on wasm32); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
+| `purrdf-conformance-kit` (`crates/conformance-kit`) | Portable conformance grading over parsed inputs: inventory, catalog and review-registry admission, structural `mf:` manifest decoding, complete SHACL report comparison by contextual graph isomorphism, solution-bag comparison and EARL outcomes; the community SHACL runner in `purrdf-sparql-conformance` grades through it (`publish = false`) |
 | `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality), the digest, base16 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every function body in shipping code and in every test, bench and example target (local names renamed, literals abstracted, borrow, deref and value-adapter forms such as `&x`, `x.as_str()` and `x.clone()` dropped, bodies from 20 tokens up with small ones keeping their literals) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml`; also hosts the non-Rust ratchet (`--non-rust-ratchet`, see [Hard constraints](#2-hard-constraints-violating-these-fails-ci-or-review)) (`publish = false`, host tool) |
 
@@ -353,14 +354,14 @@ make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # purrdf_testkit::bench benchmarks (report-only; not a gate)
 make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
-make lubm       # the LUBM comparison workload, per entailment regime (report-only; network + JRE)
+make lubm       # the LUBM comparison workload, per entailment regime (report-only; network)
 make watdiv     # the WatDiv comparison workload over a frozen dataset (report-only; network)
 make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
 
 `scale-corpus`, `lubm` and `watdiv` are the three comparison lanes. None is a
-gate and none runs in `make check`: `lubm` needs a JRE and fetches a
-GPL-2.0-or-later generator, `watdiv` fetches a 58 MB frozen dataset that expands
+gate and none runs in `make check`: `lubm` runs the original native Rust university generator and fetches the
+external ontology and query set by digest, `watdiv` fetches a 58 MB frozen dataset that expands
 past a gigabyte, and neither vendors a byte. They share one implementation of
 the laws that make their numbers evidence — `scripts/lane-common.sh` — so a
 repair to one is a repair to all three. `docs/BENCHMARKS.md` owns the
@@ -460,9 +461,9 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (31 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Eleven members never reach
+is single-sourced in `[workspace.package]`. Twelve members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
-`purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
+`purrdf-conformance-kit`, `purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
 `purrdf-bench`, `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link`,
 `helper-census`, and `purrdf-python` (PyPI via maturin instead).
 `purrdf-alloc-probe` and `purrdf-testkit` are dev-dependencies of published

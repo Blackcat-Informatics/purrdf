@@ -23,6 +23,16 @@ const AFTER: [&str; 8] = [
     "downstream",
 ];
 const BEFORE: [&str; 3] = ["monolithic", "capi", "downstream"];
+const EXECUTION: &str = r#"set -o pipefail
+campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+mkdir -p "$campaign/$PROFILE_CASE"
+cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+"$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt""#;
+const RECLAMATION: &str = "\"$PURRDF_HOSTED_CONTROLLER\" hosted-reclaim \"$PROFILE_CASE\"";
 
 fn selection(case: &str) -> IoResult<(&str, bool)> {
     if case == "profile-before-capi" {
@@ -211,26 +221,7 @@ fn workflow_contract(text: &str) -> IoResult<()> {
             return Err(invalid(format!("required workflow job {job} missing")));
         }
     }
-    let workflow_cases = jobs
-        .pointer("/native-profile/strategy/matrix/case")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid("profiling matrix missing"))?;
-    let mut actual = workflow_cases
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or_else(|| invalid("non-string hosted case"))
-        })
-        .collect::<IoResult<Vec<_>>>()?;
-    actual.sort_unstable();
-    let mut expected = cases();
-    expected.sort();
-    if actual != expected {
-        return Err(invalid(
-            "hosted matrix loses or duplicates an admitted comparison arm",
-        ));
-    }
+    serial_workflow(jobs)?;
     for job in [
         "native-profile-admission",
         "native-profile",
@@ -265,12 +256,6 @@ fn workflow_contract(text: &str) -> IoResult<()> {
             "actions/download-artifact@",
             "name",
             format!("{prefix}-admission"),
-        ),
-        (
-            "native-profile",
-            "actions/upload-artifact@",
-            "name",
-            format!("{prefix}-arm-${{{{ matrix.case }}}}"),
         ),
         (
             "native-profile-comparison",
@@ -308,6 +293,172 @@ fn workflow_contract(text: &str) -> IoResult<()> {
     Ok(())
 }
 
+fn serial_workflow(jobs: &Value) -> IoResult<()> {
+    let job = jobs
+        .get("native-profile")
+        .ok_or_else(|| invalid("measured job missing"))?;
+    if job.get("strategy").is_some()
+        || job.get("timeout-minutes").and_then(Value::as_u64) != Some(360)
+        || job.get("needs").and_then(Value::as_str) != Some("native-profile-admission")
+    {
+        return Err(invalid(
+            "all measured cases require one bounded admitted runner",
+        ));
+    }
+    for (name, candidate) in jobs
+        .as_object()
+        .ok_or_else(|| invalid("workflow jobs must be an object"))?
+        .iter()
+    {
+        if name != "native-profile"
+            && candidate
+                .get("steps")
+                .and_then(Value::as_array)
+                .is_some_and(|steps| {
+                    steps
+                        .iter()
+                        .any(|step| step.pointer("/env/PROFILE_CASE").is_some())
+                })
+        {
+            return Err(invalid("measured cases cannot move to another runner"));
+        }
+    }
+    let steps = job
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("measured steps missing"))?;
+    if steps.iter().any(|step| {
+        step.get("uses")
+            .and_then(Value::as_str)
+            .is_some_and(|uses| uses.starts_with("actions/cache@"))
+    }) {
+        return Err(invalid(
+            "measured runner must not restore artifact/compiler caches",
+        ));
+    }
+    let setup = steps
+        .iter()
+        .filter(|step| step.get("id").and_then(Value::as_str) == Some("profile-setup"))
+        .collect::<Vec<_>>();
+    if setup.len() != 1 || !setup[0].get("run").and_then(Value::as_str).is_some_and(|run| {
+        [
+            "CARGO_TARGET_DIR=\"$campaign/controller-target\" CARGO_BUILD_BUILD_DIR=\"$campaign/controller-build\"",
+            "cargo build --locked -p purrdf-capi --example native_ci_profile --profile test --jobs 8",
+            "date +%s%N > \"$campaign/resources/setup-finished.txt\"",
+        ].iter().all(|required| run.contains(required))
+    }) {
+        return Err(invalid("one shared controller build and setup endpoint must precede all measured cases"));
+    }
+    let setup_index = steps
+        .iter()
+        .position(|step| step.get("id").and_then(Value::as_str) == Some("profile-setup"))
+        .ok_or_else(|| invalid("shared setup missing"))?;
+    if steps[..=setup_index]
+        .iter()
+        .any(|step| step.pointer("/env/PROFILE_CASE").is_some())
+    {
+        return Err(invalid(
+            "shared setup must complete before the first measured case",
+        ));
+    }
+    let prefix = "native-profile-${{ github.run_id }}-${{ github.run_attempt }}";
+    if !steps.iter().any(|step| {
+        step.get("uses").and_then(Value::as_str).is_some_and(|uses| uses.starts_with("actions/upload-artifact@"))
+            && step.get("if").and_then(Value::as_str) == Some("always()")
+            && step.pointer("/with/name").and_then(Value::as_str) == Some(format!("{prefix}-resources").as_str())
+            && step.pointer("/with/path").and_then(Value::as_str) == Some("/opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/resources/")
+            && step.pointer("/with/if-no-files-found").and_then(Value::as_str) == Some("error")
+    }) {
+        return Err(invalid("shared setup and post-upload reclamation evidence must be retained"));
+    }
+    let mut actual = Vec::new();
+    for (index, step) in steps.iter().enumerate() {
+        let Some(case) = step.pointer("/env/PROFILE_CASE") else {
+            continue;
+        };
+        let case = case
+            .as_str()
+            .ok_or_else(|| invalid("non-string hosted case"))?;
+        let run = step.get("run").and_then(Value::as_str);
+        if run == Some(RECLAMATION) {
+            if index < 2
+                || steps[index - 2]
+                    .get("run")
+                    .and_then(Value::as_str)
+                    .map(str::trim_end)
+                    != Some(EXECUTION)
+            {
+                return Err(invalid("reclamation must follow execution and its upload"));
+            }
+            continue;
+        }
+        if run.map(str::trim_end) != Some(EXECUTION) || step.get("if").is_some() {
+            return Err(invalid(
+                "measured case must execute the exact production recipe",
+            ));
+        }
+        selection(case)?;
+        actual.push(case);
+        let upload = steps
+            .get(index + 1)
+            .ok_or_else(|| invalid("case upload missing"))?;
+        let reclaim = steps
+            .get(index + 2)
+            .ok_or_else(|| invalid("case reclamation missing"))?;
+        let upload_id = format!("upload_{}", case.replace('-', "_"));
+        let artifact = format!("{prefix}-arm-{case}");
+        let retained_paths = ["*.json", "*.txt", "*.diff", "*-cargo/*.json", "*-cargo/*.html"]
+            .map(|suffix| format!("/opt/purrdf-native-profile/${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}/{case}/{suffix}"))
+            .join("\n");
+        if upload.get("id").and_then(Value::as_str) != Some(upload_id.as_str())
+            || !upload
+                .get("uses")
+                .and_then(Value::as_str)
+                .is_some_and(|uses| uses.starts_with("actions/upload-artifact@"))
+            || upload.get("if").and_then(Value::as_str) != Some("always()")
+            || upload.pointer("/with/name").and_then(Value::as_str) != Some(artifact.as_str())
+            || upload
+                .pointer("/with/path")
+                .and_then(Value::as_str)
+                .map(str::trim_end)
+                != Some(retained_paths.as_str())
+            || upload
+                .pointer("/with/if-no-files-found")
+                .and_then(Value::as_str)
+                != Some("error")
+            || reclaim.get("run").and_then(Value::as_str) != Some(RECLAMATION)
+            || reclaim.pointer("/env/PROFILE_CASE").and_then(Value::as_str) != Some(case)
+            || reclaim.get("if").is_some()
+        {
+            return Err(invalid(
+                "case requires its exact failure-preserving upload then reclamation",
+            ));
+        }
+        for (key, output) in [
+            ("PURRDF_HOSTED_UPLOAD_ID", "artifact-id"),
+            ("PURRDF_HOSTED_UPLOAD_DIGEST", "artifact-digest"),
+        ] {
+            let binding = format!("${{{{ steps.{upload_id}.outputs.{output} }}}}");
+            if reclaim
+                .get("env")
+                .and_then(|env| env.get(key))
+                .and_then(Value::as_str)
+                != Some(binding.as_str())
+            {
+                return Err(invalid(
+                    "reclamation must bind the actual successful upload outputs",
+                ));
+            }
+        }
+    }
+    if actual != cases().iter().map(String::as_str).collect::<Vec<_>>() {
+        return Err(invalid(
+            "serial workflow loses, duplicates or reorders a measured case",
+        ));
+    }
+    Ok(())
+}
+
 fn cargo_c_version(stdout: &str) -> IoResult<()> {
     let release = stdout
         .trim()
@@ -329,6 +480,40 @@ fn executable(program: &str) -> IoResult<PathBuf> {
         .ok_or_else(|| invalid(format!("required executable {program} missing")))
 }
 
+fn shared_setup(campaign: &Path) -> IoResult<Value> {
+    let resources = campaign.join("resources");
+    let mut endpoints = Vec::new();
+    let mut files = Vec::new();
+    for name in ["setup-start.txt", "setup-finished.txt"] {
+        let path = resources.join(name);
+        endpoints.push(
+            std::fs::read_to_string(&path)?
+                .trim()
+                .parse::<u128>()
+                .map_err(|error| invalid(error.to_string()))?,
+        );
+        files.push(super::phases::identity(&path)?);
+    }
+    if endpoints[0] > endpoints[1] {
+        return Err(invalid("shared setup wall clock moved backwards"));
+    }
+    for name in [
+        "setup-disk-before.txt",
+        "setup-disk-after.txt",
+        "actual-rustc.txt",
+        "actual-cargo.txt",
+    ] {
+        files.push(super::phases::identity(&resources.join(name))?);
+    }
+    Ok(Object::new()
+        .with("started_unix_ns", endpoints[0].to_string())
+        .with("finished_unix_ns", endpoints[1].to_string())
+        .with("observed_wall_window_ns", (endpoints[1] - endpoints[0]).to_string())
+        .with("files", files)
+        .with("interpretation", "runner provisioning and controller build happen once; not summed per case; case preparation excludes earlier measured cases")
+        .into())
+}
+
 pub(crate) fn run(case: &str) -> IoResult<()> {
     let (lane, legacy) = selection(case)?;
     let campaign = campaign()?;
@@ -347,13 +532,15 @@ pub(crate) fn run(case: &str) -> IoResult<()> {
     std::fs::write(directory.join("actual-cpuinfo.txt"), cpu)?;
     std::fs::write(directory.join("actual-memory-before.txt"), memory)?;
     let setup: Value = Object::new().with("case", case)
-        .with("setup_started_unix_ns", std::fs::read_to_string(campaign.join("setup-start.txt"))?.trim())
+        .with("shared_setup", shared_setup(&campaign)?)
+        .with("case_preparation_started_unix_ns", unix_ns()?)
+        .with("case_order", cases())
         .with("image_os", environment("ImageOS")?).with("image_version", environment("ImageVersion")?)
         .with("runner_os", environment("RUNNER_OS")?).with("runner_arch", environment("RUNNER_ARCH")?)
         .with("observed_hardware", hardware)
-        .with("dependency_cache", "no artifact cache restored; registry/download cache may exist")
+        .with("dependency_cache", "no artifact cache restored; registry/download cache is shared sequentially and may exist")
         .with("compiler_cache", "no compiler cache requested; wrappers/configuration captured by controller")
-        .with("page_cache", "uncontrolled hosted OS page cache; cold refers ONLY to empty Cargo target/build directories")
+        .with("page_cache", "uncontrolled hosted OS page cache shared sequentially; cold refers ONLY to empty private Cargo target/build directories")
         .into();
     let mut recorder = Recorder::new(directory.join("setup.json"), setup)?;
     let filesystem = recorder.run(
@@ -471,9 +658,9 @@ pub(crate) fn run(case: &str) -> IoResult<()> {
             .with("cargo", cargo.clone()).with("lane", lane).with("warmth", warmth)
             .with("jobs", parallelism).with("test_threads", parallelism)
             .with("runner_class", format!("{}:{}:{}:{}:{hardware_digest}:{prerequisite_digest}", environment("ImageOS")?, environment("ImageVersion")?, environment("RUNNER_OS")?, environment("RUNNER_ARCH")?))
-            .with("dependency_cache", "no artifact cache restored; registry/download cache may exist")
+            .with("dependency_cache", "no artifact cache restored; registry/download cache is shared sequentially and may exist")
             .with("compiler_cache", "no compiler cache requested; wrappers/configuration captured by controller")
-            .with("page_cache", "uncontrolled hosted OS page cache; cold refers ONLY to empty Cargo target/build directories");
+            .with("page_cache", "uncontrolled hosted OS page cache shared sequentially; cold refers ONLY to empty private Cargo target/build directories");
         if warmth == "warm" {
             request.insert(
                 "previous",
@@ -499,7 +686,135 @@ pub(crate) fn run(case: &str) -> IoResult<()> {
             std::fs::read("/proc/meminfo")?,
         )?;
     }
+    write(
+        &directory.join("retained-validation.json"),
+        &completed_case(&directory, lane)?,
+    )?;
     Ok(())
+}
+
+fn completed_case(directory: &Path, lane: &str) -> IoResult<Value> {
+    let cold = directory.join(format!("{lane}-cold-receipt.json"));
+    let warm = directory.join(format!("{lane}-warm-receipt.json"));
+    profile::completed_pair(
+        &profile::read(&cold)?,
+        &profile::read(&warm)?,
+        directory,
+        lane,
+    )?;
+    Ok(Object::new()
+        .with("cold", super::phases::identity(&cold)?)
+        .with("warm", super::phases::identity(&warm)?)
+        .into())
+}
+
+fn real_directory(path: &Path) -> IoResult<()> {
+    if !std::fs::symlink_metadata(path)?.file_type().is_dir()
+        || std::fs::canonicalize(path)? != path
+    {
+        return Err(invalid(
+            "owned directory must be real and exactly contained, never a symlink",
+        ));
+    }
+    Ok(())
+}
+
+fn private_build_trees(directory: &Path) -> IoResult<[PathBuf; 2]> {
+    real_directory(directory)?;
+    let trees = [directory.join("target"), directory.join("build")];
+    for tree in &trees {
+        real_directory(tree)?;
+    }
+    Ok(trees)
+}
+
+fn upload_identity(id: &str, digest: &str) -> IoResult<Value> {
+    let parsed = id
+        .parse::<u64>()
+        .map_err(|error| invalid(error.to_string()))?;
+    if parsed == 0
+        || parsed.to_string() != id
+        || purrdf_hash::hex::decode_32_canonical(digest).is_none()
+    {
+        return Err(invalid(
+            "successful upload requires its canonical artifact id and SHA-256 digest",
+        ));
+    }
+    Ok(Object::new()
+        .with("id", parsed)
+        .with("sha256", digest)
+        .into())
+}
+
+fn reclaim_at(directory: &Path, lane: &str, recorder: &mut Recorder) -> IoResult<()> {
+    let trees = recorder.check("contained-private-build-trees", || {
+        private_build_trees(directory)
+    })?;
+    let proof = recorder.check("retained-evidence-before-reclamation", || {
+        let proof = completed_case(directory, lane)?;
+        if profile::read(&directory.join("retained-validation.json"))? != proof {
+            return Err(invalid(
+                "retained case evidence changed after validation/upload",
+            ));
+        }
+        Ok(proof)
+    })?;
+    recorder.evidence(
+        "retained_validation",
+        super::phases::identity(&directory.join("retained-validation.json"))?,
+    )?;
+    recorder.evidence("retained_receipts", proof.clone())?;
+    recorder.run(
+        "private-build-footprints",
+        Command::new("du").arg("-sb").args(&trees),
+    )?;
+    recorder.run(
+        "disk-before-reclamation",
+        Command::new("df").arg("-B1").arg(directory),
+    )?;
+    for (tree, name) in trees
+        .iter()
+        .zip(["remove-private-target", "remove-private-build"])
+    {
+        recorder.check(name, || std::fs::remove_dir_all(tree))?;
+    }
+    recorder.check("retained-evidence-after-reclamation", || {
+        if completed_case(directory, lane)? != proof {
+            return Err(invalid(
+                "retained receipts changed during private build reclamation",
+            ));
+        }
+        Ok(())
+    })?;
+    recorder.run(
+        "disk-after-reclamation",
+        Command::new("df").arg("-B1").arg(directory),
+    )?;
+    Ok(())
+}
+
+/// Revalidate completed, uploaded proof before removing only this case's build caches.
+pub(crate) fn reclaim(case: &str) -> IoResult<()> {
+    let (lane, _) = selection(case)?;
+    let campaign = campaign()?;
+    real_directory(&campaign)?;
+    let resources = campaign.join("resources");
+    real_directory(&resources)?;
+    let path = resources.join(format!("reclaim-{case}.json"));
+    if path.exists() {
+        return Err(invalid("refusing to overwrite a reclamation receipt"));
+    }
+    let upload = upload_identity(
+        &environment("PURRDF_HOSTED_UPLOAD_ID")?,
+        &environment("PURRDF_HOSTED_UPLOAD_DIGEST")?,
+    )?;
+    let context = Object::new()
+        .with("case", case)
+        .with("uploaded_artifact", upload)
+        .with("artifact_name", format!("native-profile-{}-arm-{case}", current_identity()?))
+        .with("disk_interpretation", "boundary du/df observations and reclaimed private build bytes; within-command disk high-water mark is not measured");
+    let mut recorder = Recorder::new(path, context.into())?;
+    reclaim_at(&campaign.join(case), lane, &mut recorder)
 }
 
 pub(crate) fn unix_ns() -> IoResult<String> {
@@ -546,7 +861,7 @@ fn execution_window(paths: &[String]) -> IoResult<Value> {
         return Err(invalid("empty hosted execution window"));
     }
     Ok(Object::new().with("lanes", windows).with("observed_wall_window_ns", (last - first).to_string())
-        .with("interpretation", "observed first-start to last-finish window includes runner scheduling; arms are not a synchronized barrier experiment; cross-runner clock synchronization is not independently certified; do not infer speedup from this window")
+        .with("interpretation", "observed serial first-start to last-finish window includes intervening cases, validation, upload and reclamation; it is not an observed six-runner critical path and establishes no parallel speedup")
         .into())
 }
 
@@ -669,7 +984,13 @@ mod tests {
     fn actual_workflow_preserves_full_optional_inventory_and_failure_uploads() {
         let text = include_str!("../../../../.github/workflows/ci.yaml");
         workflow_contract(text).unwrap();
-        assert!(workflow_contract(&text.replace("after-integration-4, ", "")).is_err());
+        assert!(
+            workflow_contract(&text.replace(
+                "PROFILE_CASE: after-integration-4",
+                "PROFILE_CASE: after-integration-3"
+            ))
+            .is_err()
+        );
         assert!(workflow_contract(&text.replace("if: always()", "if: success()")).is_err());
         assert!(workflow_contract(&text.replacen("native_profile:\n        description: Capture matched native compilation and C phase cold/warm arms\n        type: boolean\n        default: false", "native_profile:\n        type: boolean\n        default: true", 1)).is_err());
         for (current, stale) in [
@@ -682,8 +1003,8 @@ mod tests {
                 "pattern: native-profile-*",
             ),
             (
-                "name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-${{ matrix.case }}",
-                "name: native-profile-${{ matrix.case }}",
+                "name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-lib",
+                "name: native-profile-after-lib",
             ),
             (
                 "name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-comparison",
@@ -692,6 +1013,283 @@ mod tests {
         ] {
             assert!(workflow_contract(&text.replace(current, stale)).is_err());
         }
+        for (current, altered) in [
+            ("    timeout-minutes: 360", "    timeout-minutes: 361"),
+            ("PROFILE_CASE: after-lib", "PROFILE_CASE: after-unknown"),
+            (
+                "hosted-run \"$PROFILE_CASE\" 2>&1",
+                "echo \"$PROFILE_CASE\" 2>&1",
+            ),
+            (
+                "set -o pipefail\n          campaign=",
+                "exit 0\n          campaign=",
+            ),
+            (
+                "steps.upload_after_lib.outputs.artifact-id",
+                "steps.upload_after_doc.outputs.artifact-id",
+            ),
+            (
+                "steps.upload_after_lib.outputs.artifact-digest",
+                "steps.upload_after_doc.outputs.artifact-digest",
+            ),
+            ("-arm-after-doc", "-arm-after-lib"),
+            ("-resources\n", "-resources-stale\n"),
+            ("/after-lib/*-cargo/*.html", "/after-lib/target/**"),
+            (
+                "resources/setup-finished.txt",
+                "resources/setup-finished-stale.txt",
+            ),
+        ] {
+            assert!(
+                workflow_contract(&text.replace(current, altered)).is_err(),
+                "{current}"
+            );
+        }
+        assert!(workflow_contract(&text.replace("    timeout-minutes: 360\n", "    timeout-minutes: 360\n    strategy:\n      matrix:\n        case: [after-lib]\n")).is_err());
+        assert!(workflow_contract(&text.replacen("      - name: Start task-owned disk setup evidence", "      - uses: actions/cache@fixture\n      - name: Start task-owned disk setup evidence", 1)).is_err());
+        let split = format!(
+            "{text}\n  another-measured-runner:\n    runs-on: ubuntu-latest\n    steps:\n      - env:\n          PROFILE_CASE: after-lib\n        run: echo wrong-runner\n"
+        );
+        assert!(workflow_contract(&split).is_err());
+        let start = text
+            .find("      - name: Execute validated cold and unchanged warm after-doc\n")
+            .unwrap();
+        let end = text
+            .find("      - name: Execute validated cold and unchanged warm after-integration-1\n")
+            .unwrap();
+        assert!(workflow_contract(&format!("{}{}", &text[..start], &text[end..])).is_err());
+    }
+
+    #[test]
+    fn shared_setup_requires_ordered_endpoints_and_all_owned_source_records() {
+        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let resources = temporary.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        assert!(shared_setup(temporary.path()).is_err());
+        for (name, bytes) in [
+            ("setup-start.txt", "10\n"),
+            ("setup-finished.txt", "20\n"),
+            ("setup-disk-before.txt", "fixture disk before"),
+            ("setup-disk-after.txt", "fixture disk after"),
+            ("actual-rustc.txt", "fixture compiler"),
+            ("actual-cargo.txt", "fixture cargo"),
+        ] {
+            std::fs::write(resources.join(name), bytes).unwrap();
+        }
+        let setup = shared_setup(temporary.path()).unwrap();
+        assert_eq!(
+            setup.get("observed_wall_window_ns").and_then(Value::as_str),
+            Some("10")
+        );
+        assert_eq!(
+            setup.get("files").and_then(Value::as_array).unwrap().len(),
+            6
+        );
+        for endpoint in ["invalid", "9"] {
+            std::fs::write(resources.join("setup-finished.txt"), endpoint).unwrap();
+            assert!(shared_setup(temporary.path()).is_err());
+        }
+        std::fs::write(resources.join("setup-finished.txt"), "20").unwrap();
+        std::fs::remove_file(resources.join("actual-cargo.txt")).unwrap();
+        assert!(shared_setup(temporary.path()).is_err());
+    }
+
+    fn retained_case(directory: &Path) {
+        std::fs::create_dir(directory).unwrap();
+        let mut cold = profile::tests::receipt(directory);
+        let request = cold
+            .pointer_mut("/context/request")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        request.insert(
+            "root",
+            directory.with_file_name("source").display().to_string(),
+        );
+        request.insert("directory", directory.display().to_string());
+        request.insert("cargo", "/opt/fixture/cargo");
+        let mut warm = cold.clone();
+        let request = warm
+            .pointer_mut("/context/request")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        request.insert("warmth", "warm");
+        request.insert(
+            "previous",
+            directory
+                .join("lib-cold-receipt.json")
+                .display()
+                .to_string(),
+        );
+        write(&directory.join("lib-cold-receipt.json"), &cold).unwrap();
+        write(&directory.join("lib-warm-receipt.json"), &warm).unwrap();
+        write(
+            &directory.join("retained-validation.json"),
+            &completed_case(directory, "lib").unwrap(),
+        )
+        .unwrap();
+        for name in ["target", "build"] {
+            std::fs::create_dir(directory.join(name)).unwrap();
+            std::fs::write(
+                directory.join(name).join("unit-fixture"),
+                "private cache fixture",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn uploaded_case_reclamation_preserves_proof_and_all_siblings() {
+        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let directory = temporary.path().join("case");
+        retained_case(&directory);
+        for name in ["source", "controller-target", "sibling"] {
+            std::fs::create_dir(temporary.path().join(name)).unwrap();
+            std::fs::write(temporary.path().join(name).join("sentinel"), name).unwrap();
+        }
+        let proof = completed_case(&directory, "lib").unwrap();
+        let mut recorder =
+            Recorder::new(temporary.path().join("reclaim.json"), Object::new().into()).unwrap();
+        reclaim_at(&directory, "lib", &mut recorder).unwrap();
+        assert!(!directory.join("target").exists());
+        assert!(!directory.join("build").exists());
+        assert_eq!(completed_case(&directory, "lib").unwrap(), proof);
+        for name in ["source", "controller-target", "sibling"] {
+            assert_eq!(
+                std::fs::read_to_string(temporary.path().join(name).join("sentinel")).unwrap(),
+                name
+            );
+        }
+        let receipt = profile::read(&temporary.path().join("reclaim.json")).unwrap();
+        assert!(
+            receipt
+                .get("phases")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|phase| phase.get("success").and_then(Value::as_bool) == Some(true))
+        );
+    }
+
+    #[test]
+    fn incomplete_or_changed_case_refuses_before_reclaiming_any_cache() {
+        for change in [
+            "missing-warm",
+            "failed-warm",
+            "wrong-directory",
+            "wrong-previous",
+            "invalid-jobs",
+            "changed-source",
+            "changed-proof",
+            "changed-child",
+            "wrong-lane",
+        ] {
+            let temporary = purrdf_testkit::temp_dir!().unwrap();
+            let directory = temporary.path().join("case");
+            retained_case(&directory);
+            let path = directory.join("lib-warm-receipt.json");
+            let mut warm = profile::read(&path).unwrap();
+            let mutation = match change {
+                "missing-warm" => {
+                    std::fs::remove_file(&path).unwrap();
+                    None
+                }
+                "failed-warm" => Some(("/phases/0/success", false.into())),
+                "wrong-directory" => Some(("/context/request/directory", "/opt/other-case".into())),
+                "wrong-previous" => Some((
+                    "/context/request/previous",
+                    "/opt/other-cold-receipt.json".into(),
+                )),
+                "invalid-jobs" => Some(("/context/request/jobs", 0_u64.into())),
+                "changed-source" => {
+                    Some(("/context/identity/configuration", "different config".into()))
+                }
+                "changed-proof" => {
+                    std::fs::write(directory.join("retained-validation.json"), "{}").unwrap();
+                    None
+                }
+                "changed-child" => {
+                    std::fs::write(directory.join("cargo-child.json"), "changed child bytes")
+                        .unwrap();
+                    None
+                }
+                "wrong-lane" => None,
+                _ => unreachable!(),
+            };
+            if let Some((pointer, value)) = mutation {
+                *warm.pointer_mut(pointer).unwrap() = value;
+                std::fs::write(&path, json::write_pretty(&warm)).unwrap();
+            }
+            let mut recorder =
+                Recorder::new(temporary.path().join("reclaim.json"), Object::new().into()).unwrap();
+            assert!(
+                reclaim_at(
+                    &directory,
+                    if change == "wrong-lane" { "doc" } else { "lib" },
+                    &mut recorder
+                )
+                .is_err(),
+                "{change}"
+            );
+            for name in ["target", "build"] {
+                assert_eq!(
+                    std::fs::read_to_string(directory.join(name).join("unit-fixture")).unwrap(),
+                    "private cache fixture",
+                    "{change}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn private_cache_boundaries_and_upload_outputs_are_mandatory() {
+        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let directory = temporary.path().join("case");
+        retained_case(&directory);
+        assert!(private_build_trees(&directory).is_ok());
+        assert!(private_build_trees(temporary.path()).is_err());
+        assert!(private_build_trees(&directory.join("target").join("..")).is_err());
+        std::fs::remove_dir_all(directory.join("build")).unwrap();
+        assert!(private_build_trees(&directory).is_err());
+        assert!(directory.join("target/unit-fixture").exists());
+        let digest = purrdf_hash::hex::encode(&[0xab; 32]);
+        assert!(upload_identity("123", &digest).is_ok());
+        for id in ["", "0", "01", "-1", "18446744073709551616"] {
+            assert!(upload_identity(id, &digest).is_err());
+        }
+        for invalid_digest in [
+            "",
+            "sha256:not-a-digest",
+            &digest[..63],
+            &digest.to_uppercase(),
+        ] {
+            assert!(upload_identity("123", invalid_digest).is_err());
+        }
+        assert!(reclaim("after-unknown").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_case_or_cache_never_reclaims_foreign_bytes() {
+        let temporary = purrdf_testkit::temp_dir!().unwrap();
+        let directory = temporary.path().join("case");
+        retained_case(&directory);
+        let foreign = temporary.path().join("foreign");
+        std::fs::create_dir(&foreign).unwrap();
+        std::fs::write(foreign.join("sentinel"), "protected").unwrap();
+        let alias = temporary.path().join("alias");
+        std::os::unix::fs::symlink(&directory, &alias).unwrap();
+        assert!(private_build_trees(&alias).is_err());
+        std::fs::remove_dir_all(directory.join("target")).unwrap();
+        std::os::unix::fs::symlink(&foreign, directory.join("target")).unwrap();
+        assert!(private_build_trees(&directory).is_err());
+        assert_eq!(
+            std::fs::read_to_string(foreign.join("sentinel")).unwrap(),
+            "protected"
+        );
+        assert!(directory.join("build/unit-fixture").exists());
     }
     #[test]
     fn cargo_c_identity_refuses_successful_generic_help_and_wrong_release() {

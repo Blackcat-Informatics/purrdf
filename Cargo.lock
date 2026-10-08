@@ -445,6 +445,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-lex",
  "purrdf-rdf",
+ "purrdf-sparql-results",
  "purrdf-testkit",
  "purrdf-xsd",
 ]
@@ -510,6 +511,20 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "structured-zstd",
+]
+
+[[package]]
+name = "purrdf-conformance-kit"
+version = "3.0.1"
+dependencies = [
+ "purrdf-cdt",
+ "purrdf-core",
+ "purrdf-hash",
+ "purrdf-iri",
+ "purrdf-lex",
+ "purrdf-rdf",
+ "purrdf-sparql-results",
+ "purrdf-testkit",
 ]
 
 [[package]]
@@ -857,11 +872,14 @@ version = "3.0.1"
 dependencies = [
  "purrdf",
  "purrdf-cdt",
+ "purrdf-conformance-kit",
  "purrdf-core",
  "purrdf-entail",
  "purrdf-gts",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
+ "purrdf-shapes",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",

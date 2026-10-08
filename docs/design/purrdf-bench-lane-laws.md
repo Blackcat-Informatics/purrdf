@@ -13,22 +13,20 @@ The comparison lanes — `scripts/scale-corpus.sh`, `scripts/lubm-lane.sh` and
 step 1**, and no timing or answer row is asserted anywhere, which is the right posture
 for numbers that depend on the host.
 
-Be exact about the boundary, because it has moved. `make check` does drive both lanes —
-fourteen tests invoke `make lubm`/`make watdiv` — but every one stops at the binary
-probe or a knob validator, because past that point a lane wants the network and a JDK.
-And several printed numbers ARE now asserted, against pins: both corpus digests, the
-WatDiv entity census, both query-set digests, two counts, LUBM's published answers for
-Q1 and Q14, and **all twenty WatDiv per-query row counts** — the largest block of the
-three, and the one an earlier version of this sentence omitted while presenting itself as
-an enumeration.
+The local gate exercises actual Make knob/binary/arena refusals and native
+university generation/verification fixtures without fetching external corpora.
+The complete comparison campaigns remain separate runtime evidence: they exercise
+real external acquisition, conversion, query evaluation and workload coverage.
 
-What remains unguarded is everything a lane does from step 1 onward on a real corpus.
-**A defect there is invisible to every gate here**: the lane will print a well-formed
-report about nothing, and the only reader who can tell is one who already knew what the
-number should be.
+WatDiv retains frozen corpus/census/query/regression pins. Native university
+acceptance instead checks complete receipts, per-file and aggregate RDF equivalence,
+and graph-derived Q1/Q14 URI sets. Neither an empty corpus nor a partial, malformed,
+unsupported or subset result establishes a complete workload. Each external-output
+parent must be outside Git worktrees or ignored by a tracked .gitignore; personal
+exclusions cannot authorize retaining externally sourced schema/query bytes.
 
-Everything below exists because of that asymmetry. A lane cannot be trusted to be
-correct because it passed; it can only be trusted because it refuses.
+A lane cannot be trusted merely because it passed: refusal controls need valid
+neighbours and actual source/artifact identities.
 
 ## The parity rule, and why the thin wrappers are not duplication
 
@@ -202,14 +200,9 @@ rows — is reported by a guard that names the dataset, the conversion and the
 normalisation as suspects and says in as many words that zero everywhere is not a
 fast run. Ahead of it sat a per-query oracle. A zero is a real answer, so the
 oracle *has* a recorded value for a query that matched nothing, and it fired
-first: the operator was told "Q1 answered 0 rows; LUBM publishes 4 … the corpus
-or the conversion is wrong" about a corpus in which nothing matched at all, and
-the paragraph written for precisely that case never printed.
-
-Demonstrated in both directions with a stand-in that answers every query zero
-rows while delegating conversion to the real binary — so the corpus still matches
-its pin and the run is vacuous in exactly the way the guard describes. Before the
-reordering the lane died on the oracle's message; after it, on the vacuous one.
+first instead of naming the wholly vacuous corpus. Broad no-work/no-answer guards
+precede oracle qualification. Native Q1 may legitimately be zero when its original
+fixed course is outside the selected university range; graph-derived Q14 must be positive.
 
 ## The query set: counted, certified, re-checked
 
@@ -250,19 +243,16 @@ which is before step 1 when a `*_BIN` knob supplies one, and at the build step
 otherwise. Those refusals are therefore testable offline and are tested. The guards that decide whether to compare a digest
 against its pin sit at step 5, past generation and conversion — and every test that
 drives a lane stops it before step 1, either at the binary probe or at a knob
-validator, so that no test needs the network or a JDK. (Six of the fourteen point the arena somewhere
+validator, so that no test needs the network or native generation. (Six of the fourteen point the arena somewhere
 uncreatable; the rest do not need to, because the binary probe comes first.) Such a test
 therefore cannot observe a step-5 guard at all, and asserting that its failure message
 is absent is trivially true — which is why the step-5 laws are proved against the
 shared helpers directly instead, in `crates/bench/tests/lane_common_laws.rs`.
 
-That is worth writing down because it was got wrong twice in this file's own subject
-matter. Both directions of the corpus-pin guard are established by RUNNING the lane:
-at default knobs it prints that the digest matches the recorded pin, and with a
-non-default `LUBM_ONTO` — an absolute IRI the generator stamps into every document,
-and therefore an input to that digest — it completes and prints that no pin was
-checked, naming the knob. Before the knob was added to the guard it died against the
-default corpus's pin while blaming generation, conversion or concatenation order.
+The native university verifier checks receipt bytes, exact inventory and parsed
+source/converted graph equivalence for every configuration. It derives Q1/Q14 URI
+sets from the actual graph. Custom ontology namespaces project every schema RDF
+position through the shared RDF model while retaining the original external identity.
 
 ## A refusal is a claim in two directions
 
@@ -274,12 +264,9 @@ reason rather than to succeed: a run given a good knob and an uncreatable arena
 must fail **on the arena**, which is what shows execution got past the knob check
 rather than merely that it exited non-zero.
 
-Two of these were caught by that discipline rather than by review. Refusing a
-LUBM generation because nothing needed renaming would have rejected a corpus from
-a *fixed* generator, where the load-bearing check — that a corpus exists — sat
-two lines below unexecuted. And a prefix check written against raw template text
-refused legal output, because the loose prefix pattern also matches inside a
-quoted literal and inside an IRI path, which instantiation substitutes.
+A rejection control needs a valid neighbour. Native receipt acceptance therefore
+exercises unchanged bytes, altered inventory, payload and conversion identities;
+namespace projection controls include both schema positions and preserved foreign IRIs.
 
 A control that cannot distinguish the case it exists for is not a control. The
 fixture proving the LUBM block splitter survives the published file's own

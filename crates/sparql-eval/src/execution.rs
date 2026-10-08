@@ -418,6 +418,17 @@ impl PreparedExecution {
         self.workspace.retained_bytes()
     }
 
+    /// The original prepared query as its text parsed, before parameter
+    /// substitution and before preparation joined its assignments of the
+    /// parameters with their bound values
+    /// ([`PreparedQuery::source_query`](crate::PreparedQuery::source_query)).
+    /// Invocation admission reads this together with [`Self::parameters`] so
+    /// absent optional bindings cannot narrow the declared pre-binding law.
+    #[must_use]
+    pub fn query(&self) -> &Query {
+        self.prepared.source_query()
+    }
+
     /// The declared parameters, in declaration order.
     #[must_use]
     pub fn parameters(&self) -> &[Variable] {

@@ -2272,6 +2272,15 @@ fn eval_node_expr_at_depth(
                 }
                 bindings.push((name.to_owned(), value.clone()));
             }
+            // The request law uses every potential scope/argument name, even
+            // when an argument's expression later produces no binding. The
+            // compatibility path retains its existing allocation behavior.
+            let mut potential = crate::query_law::current().map(|_| {
+                bindings
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>()
+            });
             // SHACL 1.2 SPARQL Extensions §7.2 writes a custom function's `sh:select`
             // / `sh:sparqlExpr` body that references its arguments as `$arg0`,
             // `$arg1`, … directly, so the argument scope is pre-bound here under
@@ -2286,6 +2295,9 @@ fn eval_node_expr_at_depth(
             // the query a different answer than the author wrote.
             for (arg_key, arg_expr) in scope.args() {
                 let name = arg_key.variable_name();
+                if let Some(potential) = &mut potential {
+                    potential.push(name.clone());
+                }
                 let values = eval_unlowered(
                     store,
                     focus,
@@ -2306,6 +2318,17 @@ fn eval_node_expr_at_depth(
                     }
                 }
             }
+            let purpose = if *key == "sh:sparqlExpr" {
+                crate::profile::QueryPurpose::ScalarExpression
+            } else {
+                crate::profile::QueryPurpose::SelectExpression
+            };
+            let invocation = match &potential {
+                Some(parameters) => {
+                    crate::query_law::Invocation::with_declarations(purpose, parameters)
+                }
+                None => crate::query_law::Invocation::with_bindings(purpose, &bindings),
+            };
             // Every name the context binds, valued or not: `$this`, the scope's
             // bindings and the call's argument names.
             let declared: Vec<String> = std::iter::once("this".to_owned())
@@ -2319,6 +2342,7 @@ fn eval_node_expr_at_depth(
                 variable,
                 &bindings,
                 &declared,
+                invocation,
             )
             .map_err(|e| format!("{key} node expression: {e}"))
         }

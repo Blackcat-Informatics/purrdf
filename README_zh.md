@@ -392,7 +392,7 @@ make metadata      # regenerate and verify projections and license bundles
 make check         # formatting, clippy, build, tests and hygiene
 make bench         # report-only microbenchmarks
 make scale-corpus  # deterministic corpus generation
-make lubm          # comparison lane; pinned network inputs and a JRE
+make lubm          # comparison lane; native Rust generator, pinned external ontology/queries
 make watdiv        # comparison lane; frozen network dataset
 ```
 
