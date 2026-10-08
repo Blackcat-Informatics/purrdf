@@ -632,6 +632,15 @@ fn selected_capi_artifacts(messages: &[Value]) -> IoResult<Vec<phases::Artifact>
                 .is_some_and(|kinds| kinds.iter().any(|kind| kind == "cdylib"))
         {
             artifact_metadata(message)?;
+            // Cargo preserves a library target's declared crate kinds when
+            // emitting its Rust test executable; that does not produce a C library.
+            if message
+                .pointer("/profile/test")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| invalid("artifact test role missing or malformed"))?
+            {
+                continue;
+            }
             let package = message
                 .get("package_id")
                 .and_then(Value::as_str)
@@ -1360,6 +1369,65 @@ mod tests {
         std::fs::write(child, json::write_pretty(&changed)).unwrap();
         assert!(collect(root, &[]).is_err());
         assert!(valid_receipt(&outer).is_err());
+    }
+
+    #[test]
+    fn libtest_frames_preserve_inventory_without_inventing_c_libraries() {
+        let holder = purrdf_testkit::temp_dir!().unwrap();
+        let library = holder.path().join(format!(
+            "{}purrdf{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        ));
+        std::fs::write(&library, "fixture runtime library").unwrap();
+        let frame =
+            phases::tests::artifact("capi", false.into(), vec![library.to_str().unwrap()].into());
+        let runtime = json::read(&frame).unwrap();
+        let executable = holder.path().join("purrdf-libtest");
+        let mut harness = runtime.clone();
+        *harness.pointer_mut("/profile/test").unwrap() = true.into();
+        *harness.get_mut("filenames").unwrap() = vec![executable.to_str().unwrap()].into();
+        harness
+            .as_object_mut()
+            .unwrap()
+            .insert("executable", executable.to_str().unwrap());
+        let stdout = json::write_compact(&harness);
+        let messages = phases::cargo_messages(stdout.as_bytes(), true).unwrap();
+        let captures = capture_capi_artifacts(&messages).unwrap();
+        assert_eq!(captures, [] as [Value; 0]);
+        assert!(validate_capi_artifacts(&messages, &captures.clone().into()).is_ok());
+        let _child = collector_child(holder.path(), "libtest", &stdout, &captures);
+        let collected = collect(holder.path(), &[]).unwrap();
+        assert_eq!(
+            collected
+                .get("compiler_artifacts")
+                .unwrap()
+                .as_array()
+                .unwrap(),
+            &messages
+        );
+
+        let mixed = vec![harness.clone(), runtime.clone()];
+        let captured = capture_capi_artifacts(&mixed).unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(validate_capi_artifacts(&mixed, &captured.into()).is_ok());
+        for role in [Value::Null, "test".into(), 1.into()] {
+            let mut malformed = harness.clone();
+            *malformed.pointer_mut("/profile/test").unwrap() = role;
+            assert!(capture_capi_artifacts(&[malformed]).is_err());
+        }
+        let mut missing = harness;
+        missing
+            .get_mut("profile")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("test");
+        assert!(capture_capi_artifacts(&[missing]).is_err());
+        let mut missing_library = runtime.clone();
+        *missing_library.get_mut("filenames").unwrap() = vec![executable.to_str().unwrap()].into();
+        assert!(capture_capi_artifacts(&[missing_library]).is_err());
+        assert!(capture_capi_artifacts(&[runtime.clone(), runtime]).is_err());
     }
 
     #[test]
