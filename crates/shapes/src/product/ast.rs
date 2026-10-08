@@ -2542,7 +2542,7 @@ impl FnTable {
     }
 }
 
-impl ModelWalk for FnTable {
+impl ModelWalk<'_> for FnTable {
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }

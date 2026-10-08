@@ -1268,12 +1268,15 @@ fn evaluate_shape_focus_nodes(
             // this governed branch pays for it: the ungoverned one has no signal.
             crate::sparql::poll_between_evaluations(Some(&governors))?;
             if include_focus(focus) {
-                out.extend(crate::constraints::validate_shape_with_plan_at(
-                    data,
-                    focus,
-                    shapes.box_role_vocab.as_ref(),
-                    plan,
-                )?);
+                out.extend(
+                    crate::xpath::root_result(crate::constraints::validate_shape_with_plan_at(
+                        data,
+                        focus,
+                        shapes.box_role_vocab.as_ref(),
+                        plan,
+                    ))
+                    .map_err(crate::xpath::restore_root_error)?,
+                );
             }
         }
         return Ok(out);
@@ -1301,6 +1304,7 @@ fn evaluate_shape_focus_nodes(
     // other reconstructs an environment that never existed on the calling thread.
     let relations = crate::sparql::current_property_functions();
     let parser_options = crate::sparql::current_parser_options();
+    let native_xpath = crate::xpath::current();
     crate::parallel::try_map_chunks(
         focus_nodes,
         || {
@@ -1313,20 +1317,24 @@ fn evaluate_shape_focus_nodes(
                 parser_options
                     .clone()
                     .map(crate::sparql::enter_parser_options_scope),
+                native_xpath.clone().map(crate::xpath::enter),
             )
         },
         |_scopes, out, focus| {
             if include_focus(focus) {
-                out.extend(crate::constraints::validate_shape_with_plan_at(
-                    data,
-                    focus,
-                    shapes.box_role_vocab.as_ref(),
-                    plan,
+                out.extend(crate::xpath::root_result(
+                    crate::constraints::validate_shape_with_plan_at(
+                        data,
+                        focus,
+                        shapes.box_role_vocab.as_ref(),
+                        plan,
+                    ),
                 )?);
             }
-            Ok::<(), String>(())
+            Ok::<(), crate::xpath::RootError>(())
         },
     )
+    .map_err(crate::xpath::restore_root_error)
 }
 
 fn finish_report(
@@ -1505,6 +1513,8 @@ pub struct PreparedShapes {
     /// Shared by `Arc` so a clone of a preparation shares the memoized lowering
     /// rather than deriving a second one.
     lowered: OnceLock<Arc<LoweredShapes>>,
+    /// Successful native pattern slots, allocated only by an explicit selection.
+    xpath_caches: OnceLock<crate::xpath::Caches>,
     /// Where this preparation came from, recorded by the expression that built it.
     ///
     /// Shared rather than owned so that binding a preparation to a dataset — the
@@ -1575,6 +1585,7 @@ impl PreparedShapes {
             shapes,
             classes,
             lowered: OnceLock::new(),
+            xpath_caches: OnceLock::new(),
             provenance: Arc::new(provenance),
         }
     }
@@ -1655,7 +1666,38 @@ impl PreparedShapes {
     #[must_use]
     pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
         Arc::make_mut(&mut self.shapes).validation_options = options;
+        // A copy-on-write shape tree has a new declaration ownership domain.
+        // Existing bindings/configurations retain the old tree and its caches.
+        self.xpath_caches = OnceLock::new();
         self
+    }
+
+    /// Select a dated native XPath law and finite limits for every later bind.
+    ///
+    /// Target queries are evaluated under this selection at binding, and the
+    /// binding retains that exact selection for every subsequent validation.
+    #[must_use]
+    pub fn with_xpath_regex(
+        self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> crate::xpath::XPathPreparedShapes {
+        crate::xpath::XPathPreparedShapes::new(self, profile, limits)
+    }
+
+    pub(crate) fn xpath_configuration(
+        &self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> crate::xpath::Configuration {
+        crate::xpath::Configuration {
+            profile,
+            limits,
+            shapes: Arc::clone(&self.shapes),
+            caches: Arc::clone(self.xpath_caches.get_or_init(|| {
+                Arc::new(std::sync::Mutex::new(crate::xpath::CacheSlots::default()))
+            })),
+        }
     }
 
     /// Bind shared shape analysis to a new data holder. All dataset-dependent
@@ -2679,11 +2721,29 @@ pub fn validate_with_governors(
     shapes: &Shapes,
     governors: &QueryGovernors,
 ) -> Result<GovernedValidation, ShapesError> {
+    governed_validation(governors, || {
+        validate_with_focus_filter(data, shapes, |_, _| true)
+    })
+}
+
+/// One budget around an existing binding and validation operation.
+pub(crate) fn governed_validation<E>(
+    governors: &QueryGovernors,
+    operation: impl FnOnce() -> Result<ValidationReport, E>,
+) -> Result<GovernedValidation, E> {
     let state = Arc::new(GovernorState::new(governors));
     let outcome = {
         let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
-        validate_with_focus_filter(data, shapes, |_, _| true)
+        operation()
     };
+    governed_outcome(outcome, &state)
+}
+
+/// The actual shared trip outranks a query-site refusal; no partial report escapes.
+fn governed_outcome<E>(
+    outcome: Result<ValidationReport, E>,
+    state: &GovernorState,
+) -> Result<GovernedValidation, E> {
     let evidence = state.evidence();
     // The trip is read from the state, not from the error text: `crate::sparql` turns a
     // trip into an `Err` at the query site so no truncated bag can reach a verdict, and
@@ -2866,23 +2926,15 @@ pub fn validate_change_with_governors(
         let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
         change_pass(validator, delta)
     };
-    let evidence = state.evidence();
     // `?` before the trip is read, and it cannot swallow one: the expansion
     // executes no query text, so nothing can charge the state until the scope is
     // already decided. An `Err` here is therefore a refusal of the binding, never
     // a budget that stopped a query nobody ran.
     let (scope, outcome) = pass?;
-    match (outcome, state.tripped()) {
-        (_, Some(tripped)) => Ok(GovernedChangeValidation {
-            scope,
-            outcome: GovernedValidation::BudgetExhausted { tripped, evidence },
-        }),
-        (Ok(report), None) => Ok(GovernedChangeValidation {
-            scope,
-            outcome: GovernedValidation::Complete { report, evidence },
-        }),
-        (Err(message), None) => Err(message),
-    }
+    Ok(GovernedChangeValidation {
+        scope,
+        outcome: governed_outcome(outcome, &state)?,
+    })
 }
 
 /// The loop itself, with the scope reported SEPARATELY from the validation's own
@@ -3705,13 +3757,37 @@ pub fn validate_graphs_with_shapes_graph(
     options: &ValidationOptions,
     imports: &ShapesImports,
 ) -> Result<ValidationReport, ShapesError> {
+    let (data, shapes) = parse_graphs_with_shapes_graph(
+        data_nt,
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        options,
+        imports,
+    )?;
+    validate_dataset(data.as_ref(), &shapes)
+}
+
+/// The two graphs [`validate_graphs_with_shapes_graph`] validates, parsed: the N-Triples
+/// data graph, and the shapes graph read over `imports` with the data graph's
+/// `sh:shapesGraph` links folded in and `options` set on it. The one parse both the
+/// compatibility validation and its selected-law twin
+/// ([`crate::xpath::validate_graphs_with_shapes_graph`]) run.
+pub(crate) fn parse_graphs_with_shapes_graph(
+    data_nt: &str,
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    options: &ValidationOptions,
+    imports: &ShapesImports,
+) -> Result<(Arc<RdfDataset>, Shapes), ShapesError> {
     let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
         .map_err(|errors| errors.join("\n"))?;
     let imports = linked_imports(data.as_ref(), imports)?;
     let mut shapes =
         parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, &imports)?;
     shapes.set_validation_options(options.clone());
-    validate_dataset(data.as_ref(), &shapes)
+    Ok((data, shapes))
 }
 
 /// `imports` with the `sh:shapesGraph` links of the data graph `data` folded in

@@ -460,6 +460,7 @@ dependencies = [
  "purrdf-lex",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-testkit",
  "purrdf-validate",
  "sha2",
 ]

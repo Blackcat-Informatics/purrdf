@@ -1147,7 +1147,7 @@ mod tests {
             .update(
                 &mut dataset,
                 "INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }",
-                None,
+                None, None,
             )
             .expect("update applies");
         assert_eq!(dataset.size(), 1);

@@ -121,6 +121,17 @@ impl PyQuadStore {
     /// `AGG(<{NAMESPACE}NAME>, args…)` (see
     /// [`statistical_aggregates`](purrdf_validate::query::statistical_aggregates)). Unset (the default)
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
+    ///
+    /// `xpath_regex` selects the dated native XPath law `REGEX` and `REPLACE` evaluate
+    /// under, by its stable name: `"xpath-2.0-2010-12-14"` (XPath F&O 2.0 Second
+    /// Edition) or `"xpath-3.1-2017-03-21"` (XPath F&O 3.1), the module's
+    /// `XPATH_REGEX_PROFILES`. The name is matched exactly; any other value raises
+    /// `ValueError` naming the accepted ones. `None` (the default) keeps the
+    /// compatibility pattern behaviour unchanged. Under a selected law a pattern or flag
+    /// the law refuses is an expression error, exactly as SPARQL treats any other one (a
+    /// `FILTER` drops the row), while a native resource refusal (a `xpath-*` code, under
+    /// the finite production bounds) aborts the call with `ValueError` rather than
+    /// answering empty or false.
     #[pyo3(signature = (
         query,
         *,
@@ -132,6 +143,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None,
         division=None,
     ))]
     #[allow(
@@ -150,6 +162,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
         division: Option<String>,
     ) -> PyResult<Py<PyAny>> {
         presentation::settled(move || {
@@ -163,6 +176,7 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
             };
             let inner = &self.inner;
             // Snapshot + engine build + evaluation run detached (GIL released);
@@ -224,8 +238,8 @@ impl PyQuadStore {
     /// of being noticed only once it has finished.
     ///
     /// `substitutions` / `extension_namespaces` / `property_fn_namespaces` /
-    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` behave exactly
-    /// as on [`query`](Self::query). A relation's rows are charged through the same
+    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` /
+    /// `xpath_regex` behave exactly as on [`query`](Self::query). A relation's rows are charged through the same
     /// governors as every other row source, so a ceiling bounds a call as it bounds a
     /// scan.
     #[pyo3(signature = (
@@ -239,6 +253,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -266,6 +281,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -285,6 +301,7 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
             };
             let args = GovernorArgs {
                 fuel,
@@ -342,7 +359,8 @@ impl PyQuadStore {
     /// leaves every one of the ten names an ordinary unregistered custom-aggregate IRI.
     ///
     /// `property_fn_namespaces` / `relations` / `relations_from_graph` / `path_relations` behave exactly as on
-    /// [`query_governed`](Self::query_governed): a registered relation is reachable from the
+    /// [`query_governed`](Self::query_governed), and `xpath_regex` selects the pattern law
+    /// of the closure query exactly as it does there: a registered relation is reachable from the
     /// closure query exactly as it is from an ordinary one, so registering an IRI here and
     /// omitting it there cannot silently change which rows the SAME predicate position
     /// yields. `relations_from_graph` reads its table — and `path_relations` snapshots its
@@ -385,6 +403,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -417,6 +436,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -457,6 +477,7 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
             };
             let outcome = run_governed(py, args, cancel, move |governors| {
                 let dataset = inner
@@ -529,8 +550,8 @@ impl PyQuadStore {
 
     /// Run a SPARQL UPDATE against the store (COW-atomic: a failed update leaves the
     /// store unchanged). `extension_namespaces` / `property_fn_namespaces` /
-    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` configure the
-    /// engine exactly as on [`query`](Self::query); a registered relation is reachable
+    /// `standpoint_predicates` / `relations` / `relations_from_graph` / `path_relations` /
+    /// `xpath_regex` configure the engine exactly as on [`query`](Self::query); a registered relation is reachable
     /// from a `DELETE`/`INSERT … WHERE` clause, which is a triple-pattern context
     /// exactly as a query's is. A `relations_from_graph` table is read — and a
     /// `path_relations` traversal is snapshotted — from the PRE-update state, which is
@@ -545,6 +566,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None,
         division=None,
     ))]
     #[allow(
@@ -562,6 +584,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
         division: Option<String>,
     ) -> PyResult<()> {
         presentation::settled(move || {
@@ -572,6 +595,7 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
             };
             // Snapshot + evaluation run detached (GIL released); the fresh frozen
             // base is adopted after reacquiring.
@@ -639,6 +663,7 @@ impl PyQuadStore {
         relations_from_graph=None,
         path_relations=None,
         aggregate_namespace=None,
+        xpath_regex=None,
         division=None,
         fuel=None,
         deadline_ms=None,
@@ -664,6 +689,7 @@ impl PyQuadStore {
         relations_from_graph: Option<&Bound<'_, PyDict>>,
         path_relations: Option<&Bound<'_, PyDict>>,
         aggregate_namespace: Option<String>,
+        xpath_regex: Option<&str>,
         division: Option<String>,
         fuel: Option<u64>,
         deadline_ms: Option<u64>,
@@ -681,6 +707,7 @@ impl PyQuadStore {
                 extension_namespaces,
                 property_fn_namespaces,
                 standpoint_predicates,
+                xpath_regex: crate::xpath_regex::selection(xpath_regex)?,
             };
             let args = GovernorArgs {
                 fuel,

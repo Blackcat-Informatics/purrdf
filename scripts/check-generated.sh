@@ -55,7 +55,14 @@ cargo run -p purrdf-core --example gen_unicode_blocks --locked \
 #   idna            - purrdf-iri: the RFC 5892 derived property and the IDNA tables
 #   ecma-properties - purrdf-jsonschema: the names an ECMA-262 `\p{…}` may spell
 #   ecma-ranges     - purrdf-jsonschema: those properties' ranges, simple folding
-for set in normalization text idna ecma-properties ecma-ranges; do
+#   xpath           - purrdf-core: XPath categories, blocks and case variants
+# The same generator also emits the two tables both dated XPath laws take from
+# W3C Recommendations, not from the database: it reads them out of the copies
+# vendored verbatim, and byte-frozen, under `vectors/w3c-recs/`.
+#   xpath-dated-names  - purrdf-core: XML 1.0 Second Edition `\i` and `\c`
+#   xpath-dated-blocks - purrdf-core: XML Schema Part 2 Second Edition blocks
+for set in normalization text idna ecma-properties ecma-ranges xpath \
+  xpath-dated-names xpath-dated-blocks; do
   cargo run -p purrdf-lex --example gen_unicode_tables --locked -- "$set" \
     | rustfmt --edition 2024 --emit stdout \
     > "$tmp/unicode-$set.rs"
@@ -121,6 +128,9 @@ sync_file "$tmp/unicode-text.rs" crates/text/src/unicode_tables.rs
 sync_file "$tmp/unicode-idna.rs" crates/iri/src/idna_tables.rs
 sync_file "$tmp/unicode-ecma-properties.rs" crates/jsonschema/src/ecma/property_tables.rs
 sync_file "$tmp/unicode-ecma-ranges.rs" crates/jsonschema/src/ecma/unicode_ranges.rs
+sync_file "$tmp/unicode-xpath.rs" crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs
+sync_file "$tmp/unicode-xpath-dated-names.rs" crates/rdf-core/src/xsd_regex/xpath/dated_names.rs
+sync_file "$tmp/unicode-xpath-dated-blocks.rs" crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs
 sync_file "$tmp/html-entities.rs" crates/lex/src/html/entities.rs
 
 # Recompute every dictionary row, cost, collision report, canonical artifact and

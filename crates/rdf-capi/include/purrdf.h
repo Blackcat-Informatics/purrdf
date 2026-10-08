@@ -218,7 +218,7 @@
  * `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
  * answer `purrdf_abi_version` the way `0.8.0` does.
  *
- * # `0.9.0` → `0.10.0`: two added symbols
+ * # `0.9.0` → `0.10.0`: added symbols and one appended status
  *
  * `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
  * `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
@@ -239,6 +239,23 @@
  * carrier (directly, or inside `PurrdfGovernedEntailmentEvidence`) must recompile; it
  * rides this bump rather than a later one because `0.10.0` has shipped in nothing, the
  * reason the `0.8.0` paragraph gives for bundling.
+ *
+ * The same unshipped bump adds the dated regular-expression law selection: fourteen
+ * `*_xpath_regex` entry points — `purrdf_query_xpath_regex`,
+ * `purrdf_query_json_xpath_regex`, `purrdf_query_governed_xpath_regex`,
+ * `purrdf_query_entailment_governed_xpath_regex`, `purrdf_update_governed_xpath_regex`,
+ * `purrdf_shacl_validate_to_sarif_xpath_regex`,
+ * `purrdf_shacl_validate_changes_to_sarif_xpath_regex`,
+ * `purrdf_shapes_product_admit_xpath_regex`,
+ * `purrdf_shapes_product_admit_expecting_xpath_regex`,
+ * `purrdf_shapes_product_rebuild_xpath_regex`,
+ * `purrdf_shapes_product_rebuild_expecting_xpath_regex`,
+ * `purrdf_shacl_entail_to_ntriples_xpath_regex`, `purrdf_shacl_apply_rules_xpath_regex`
+ * and `purrdf_shacl_eval_node_expr_xpath_regex` — each the entry point without
+ * the suffix with a nullable `regex_profile` before its out-parameters (before
+ * `governors` on the governed ones), NULL meaning the unchanged entry point; and it
+ * APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
+ * signature and its behaviour, so this is additive and rides the same bump.
  */
 #define PURRDF_ABI_MINOR 10
 
@@ -322,6 +339,15 @@ enum PurrdfStatus
      * (`purrdf_shapes_import_error_iri_count`, `purrdf_shapes_import_error_iri`).
      */
     PURRDF_STATUS_SHAPES_IMPORT_ERROR = 12,
+    /**
+     * A dated native XPath regular-expression law, selected through a
+     * `*_xpath_regex` entry point's `regex_profile`, withheld a compile, match,
+     * storage or replacement resource, or the host refused its storage. The message
+     * names the resource (`xpath-pattern-bytes`, `xpath-match-steps`, ...), and a
+     * SPARQL request's presentation record carries the same code. No result, answer
+     * or report is returned: a refusal is never an empty or non-matching result.
+     */
+    PURRDF_STATUS_REGEX_RESOURCE_ERROR = 13,
     /**
      * A panic was caught at the FFI boundary (should never reach the caller in
      * normal operation).
@@ -2558,6 +2584,36 @@ int32_t purrdf_query(const PurrdfDataset *dataset,
                      PurrdfError **out_error);
 
 /**
+ * [`purrdf_query`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` (nullable, NUL-terminated UTF-8) names the dated XPath law that
+ * `REGEX`, `REPLACE` and the other pattern built-ins compile and match under:
+ * exactly `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second Edition) or
+ * `xpath-3.1-2017-03-21` (XPath F&O 3.1), run under the production native limits.
+ * NULL is [`purrdf_query`]: the compatibility regular expressions, unchanged. Any
+ * other name — an undated `xpath-3.1`, another letter case, the empty string — is
+ * `PURRDF_STATUS_INVALID_ARGUMENT`, and the message lists the accepted names.
+ *
+ * A pattern the selected law does not admit is a SPARQL expression error, exactly as
+ * an invalid pattern is under compatibility: a `FILTER` keeps no row for it. A
+ * pattern or input the law cannot process within its limits is not: the call fails
+ * with `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and returns no result.
+ *
+ * # Safety
+ * As [`purrdf_query`]; `regex_profile` must be null or a NUL-terminated C string
+ * live for the call.
+ */
+int32_t purrdf_query_xpath_regex(const PurrdfDataset *dataset,
+                                 const char *query,
+                                 const char *base_iri,
+                                 const char *regex_profile,
+                                 int32_t *out_kind,
+                                 PurrdfRowCursor **out_rows,
+                                 PurrdfDataset **out_graph,
+                                 uint8_t *out_boolean,
+                                 PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query and serialize the result to the SPARQL 1.1 Query
  * Results JSON format (SELECT and ASK) into `*out_buffer` (UTF-8). A
  * CONSTRUCT/DESCRIBE graph is rendered as N-Quads inside a documented
@@ -2623,6 +2679,27 @@ int32_t purrdf_query_json(const PurrdfDataset *dataset,
                           PurrdfError **out_error);
 
 /**
+ * [`purrdf_query_json`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_query_xpath_regex`]'s: NULL is [`purrdf_query_json`]
+ * unchanged, `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21` selects that dated
+ * XPath law, any other name is `PURRDF_STATUS_INVALID_ARGUMENT`, and a law's
+ * resource refusal is `PURRDF_STATUS_REGEX_RESOURCE_ERROR` with no buffer written.
+ *
+ * # Safety
+ * As [`purrdf_query_json`]; `regex_profile` must be null or a NUL-terminated C
+ * string live for the call.
+ */
+int32_t purrdf_query_json_xpath_regex(const PurrdfDataset *dataset,
+                                      const char *query,
+                                      const char *base_iri,
+                                      const char *provenance_prefix,
+                                      const char *provenance_iri,
+                                      const char *regex_profile,
+                                      PurrdfBuffer **out_buffer,
+                                      PurrdfError **out_error);
+
+/**
  * Execute a SPARQL query under caller-supplied governors.
  *
  * `*out_outcome` is a [`PurrdfQueryOutcomeKind`]. A complete outcome writes the ordinary
@@ -2661,6 +2738,36 @@ int32_t purrdf_query_governed(const PurrdfDataset *dataset,
                               PurrdfGovernorEvidence *out_evidence,
                               PurrdfPartialCertificate *out_partial,
                               PurrdfError **out_error);
+
+/**
+ * [`purrdf_query_governed`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_query_xpath_regex`]'s: NULL is
+ * [`purrdf_query_governed`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` selects that dated XPath law, and any other name is
+ * `PURRDF_STATUS_INVALID_ARGUMENT`. The law's own limits are independent of
+ * `governors`: a governor trip is still status `OK` with its certificate, while a
+ * law's resource refusal is `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and leaves the
+ * result kind `-1`.
+ *
+ * # Safety
+ * As [`purrdf_query_governed`]; `regex_profile` must be null or a NUL-terminated C
+ * string live for the call.
+ */
+int32_t purrdf_query_governed_xpath_regex(const PurrdfDataset *dataset,
+                                          const char *query,
+                                          const char *base_iri,
+                                          const char *aggregate_namespace,
+                                          const char *regex_profile,
+                                          const PurrdfQueryGovernors *governors,
+                                          int32_t *out_outcome,
+                                          int32_t *out_kind,
+                                          PurrdfRowCursor **out_rows,
+                                          PurrdfDataset **out_graph,
+                                          uint8_t *out_boolean,
+                                          PurrdfGovernorEvidence *out_evidence,
+                                          PurrdfPartialCertificate *out_partial,
+                                          PurrdfError **out_error);
 
 /**
  * Execute SPARQL over an explicitly named entailment closure under governors.
@@ -2732,6 +2839,44 @@ int32_t purrdf_query_entailment_governed(const PurrdfDataset *dataset,
                                          PurrdfError **out_error);
 
 /**
+ * [`purrdf_query_entailment_governed`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_query_xpath_regex`]'s and governs the query phase over
+ * the closure: NULL is [`purrdf_query_entailment_governed`] unchanged,
+ * `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21` selects that dated XPath law, and
+ * any other name is `PURRDF_STATUS_INVALID_ARGUMENT`. A law's resource refusal is
+ * `PURRDF_STATUS_REGEX_RESOURCE_ERROR`, with no result and no report.
+ *
+ * # Safety
+ * As [`purrdf_query_entailment_governed`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_query_entailment_governed_xpath_regex(const PurrdfDataset *dataset,
+                                                     const char *query,
+                                                     const char *base_iri,
+                                                     const char *regime,
+                                                     const char *program,
+                                                     const char *const *import_iris,
+                                                     const char *const *import_documents,
+                                                     size_t import_count,
+                                                     const char *const *premise_iris,
+                                                     size_t premise_iri_count,
+                                                     const uint64_t *max_stored_facts,
+                                                     const uint64_t *max_join_steps,
+                                                     const char *aggregate_namespace,
+                                                     const char *regex_profile,
+                                                     const PurrdfQueryGovernors *governors,
+                                                     int32_t *out_outcome,
+                                                     int32_t *out_kind,
+                                                     PurrdfRowCursor **out_rows,
+                                                     PurrdfDataset **out_graph,
+                                                     uint8_t *out_boolean,
+                                                     PurrdfGovernedEntailmentEvidence *out_evidence,
+                                                     PurrdfPartialCertificate *out_partial,
+                                                     PurrdfBuffer **out_report,
+                                                     PurrdfError **out_error);
+
+/**
  * Apply one SPARQL UPDATE request under caller-supplied governors.
  *
  * `*out_outcome` is a [`PurrdfUpdateOutcomeKind`]. On `APPLIED`, the dataset handle now
@@ -2758,6 +2903,31 @@ int32_t purrdf_update_governed(PurrdfDataset *dataset,
                                int32_t *out_outcome,
                                PurrdfGovernorEvidence *out_evidence,
                                PurrdfError **out_error);
+
+/**
+ * [`purrdf_update_governed`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_query_xpath_regex`]'s and governs every pattern
+ * built-in the request's `WHERE` clauses and templates evaluate: NULL is
+ * [`purrdf_update_governed`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` selects that dated XPath law, and any other name is
+ * `PURRDF_STATUS_INVALID_ARGUMENT`. A law's resource refusal is
+ * `PURRDF_STATUS_REGEX_RESOURCE_ERROR`, and the dataset handle keeps its snapshot:
+ * no mutation applies.
+ *
+ * # Safety
+ * As [`purrdf_update_governed`]; `regex_profile` must be null or a NUL-terminated C
+ * string live for the call.
+ */
+int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset,
+                                           const char *request,
+                                           const char *base_iri,
+                                           const char *aggregate_namespace,
+                                           const char *regex_profile,
+                                           const PurrdfQueryGovernors *governors,
+                                           int32_t *out_outcome,
+                                           PurrdfGovernorEvidence *out_evidence,
+                                           PurrdfError **out_error);
 
 /**
  * Write the number of result variables (columns) to `*out`.
@@ -3097,6 +3267,42 @@ int32_t purrdf_shacl_validate_to_sarif(const char *shapes_ttl,
                                        PurrdfError **out_error);
 
 /**
+ * [`purrdf_shacl_validate_to_sarif`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` (nullable, NUL-terminated UTF-8) names the dated XPath law every
+ * `sh:pattern` constraint, and every SPARQL pattern built-in a SHACL-SPARQL target,
+ * constraint or rule evaluates, compiles and matches under: exactly
+ * `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second Edition) or `xpath-3.1-2017-03-21`
+ * (XPath F&O 3.1), run under the production native limits. NULL is
+ * [`purrdf_shacl_validate_to_sarif`]: the compatibility regular expressions,
+ * unchanged. Any other name — an undated `xpath-3.1`, another letter case, the empty
+ * string — is `PURRDF_STATUS_INVALID_ARGUMENT`, and the message lists the accepted
+ * names.
+ *
+ * An `sh:pattern` the selected law does not admit is reported as SHACL reports an
+ * ill-formed pattern, in the SARIF log. A pattern or value the law cannot process
+ * within its limits is not: the call fails with `PURRDF_STATUS_REGEX_RESOURCE_ERROR`
+ * and writes no report, so a refusal is never read as a conforming graph.
+ *
+ * # Safety
+ * As [`purrdf_shacl_validate_to_sarif`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shacl_validate_to_sarif_xpath_regex(const char *shapes_ttl,
+                                                   const char *shapes_base_iri,
+                                                   const char *shapes_graph_iri,
+                                                   const char *data_nt,
+                                                   const char *const *conformance_disallows,
+                                                   size_t conformance_disallows_count,
+                                                   const char *const *import_iris,
+                                                   const char *const *import_documents,
+                                                   size_t import_count,
+                                                   bool subclass_of_in_shapes_graph,
+                                                   const char *regex_profile,
+                                                   PurrdfBuffer **out_buffer,
+                                                   PurrdfError **out_error);
+
+/**
  * Validate a CHANGE to a data graph (N-Triples) against a shapes graph (Turtle),
  * writing the SARIF 2.1.0 report bytes to `*out_buffer` and the scope that report
  * describes to `*out_scope`, `*out_focus_nodes` and `*out_reason`.
@@ -3180,6 +3386,40 @@ int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
                                                PurrdfError **out_error);
 
 /**
+ * [`purrdf_shacl_validate_changes_to_sarif`] under a caller-selected
+ * regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+ * [`purrdf_shacl_validate_changes_to_sarif`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` selects that dated XPath law for the bound expansion and its
+ * validation alike, and any other name is `PURRDF_STATUS_INVALID_ARGUMENT`. A law's
+ * resource refusal is `PURRDF_STATUS_REGEX_RESOURCE_ERROR`; no report, scope or reason
+ * is written.
+ *
+ * # Safety
+ * As [`purrdf_shacl_validate_changes_to_sarif`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shacl_validate_changes_to_sarif_xpath_regex(const char *shapes_ttl,
+                                                           const char *shapes_base_iri,
+                                                           const char *shapes_graph_iri,
+                                                           const char *data_nt,
+                                                           const char *added_nt,
+                                                           const char *removed_nt,
+                                                           const char *const *conformance_disallows,
+                                                           size_t conformance_disallows_count,
+                                                           const char *const *import_iris,
+                                                           const char *const *import_documents,
+                                                           size_t import_count,
+                                                           bool subclass_of_in_shapes_graph,
+                                                           const char *regex_profile,
+                                                           PurrdfBuffer **out_buffer,
+                                                           int32_t *out_scope,
+                                                           size_t *out_focus_nodes,
+                                                           PurrdfBuffer **out_reason,
+                                                           PurrdfError **out_error);
+
+/**
  * Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
  * materialized dataset (base graph plus every inferred triple) as canonical
  * N-Triples bytes to `*out_buffer` (free with `purrdf_buffer_free`).
@@ -3239,6 +3479,39 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfBuffer **out_diagnostics,
                                         PurrdfError **out_error);
+
+/**
+ * [`purrdf_shacl_entail_to_ntriples`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+ * [`purrdf_shacl_entail_to_ntriples`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` selects that dated XPath law for every `REGEX`/`REPLACE` a
+ * `sh:SPARQLRule`, a SHACL-AF function or a node expression evaluates and every
+ * `sh:pattern` a rule condition decides, under the production native limits, and any
+ * other name is `PURRDF_STATUS_INVALID_ARGUMENT`, listing the accepted names. A pattern
+ * the law does not define behaves as an ill-formed pattern does on the compatibility
+ * path; a pattern or value the law cannot process within its limits fails the call with
+ * `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no dataset.
+ *
+ * # Safety
+ * As [`purrdf_shacl_entail_to_ntriples`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shacl_entail_to_ntriples_xpath_regex(const char *shapes_ttl,
+                                                    const char *shapes_base_iri,
+                                                    const char *shapes_graph_iri,
+                                                    const char *data_nt,
+                                                    const char *const *import_iris,
+                                                    const char *const *import_documents,
+                                                    size_t import_count,
+                                                    const uint64_t *max_term_generating_rounds,
+                                                    const uint64_t *max_generated_terms,
+                                                    const uint64_t *max_stored_facts,
+                                                    const uint64_t *max_join_steps,
+                                                    const char *regex_profile,
+                                                    PurrdfBuffer **out_buffer,
+                                                    PurrdfBuffer **out_diagnostics,
+                                                    PurrdfError **out_error);
 
 /**
  * Run a rule set over a data graph (N-Triples) and write the INFERENCE GRAPH — the
@@ -3318,6 +3591,43 @@ int32_t purrdf_shacl_apply_rules(const char *data_nt,
                                  PurrdfBuffer **out_proof,
                                  PurrdfBuffer **out_diagnostics,
                                  PurrdfError **out_error);
+
+/**
+ * [`purrdf_shacl_apply_rules`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+ * [`purrdf_shacl_apply_rules`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` selects that dated XPath law for either rule source — every
+ * `REGEX`/`REPLACE` a SHACL rule, a SHACL-AF function, a node expression or a SPARQL 1.2
+ * RL filter or assignment evaluates, and every `sh:pattern` a rule condition decides —
+ * under the production native limits, and any other name is
+ * `PURRDF_STATUS_INVALID_ARGUMENT`, listing the accepted names. A pattern the law does not
+ * define behaves as an ill-formed pattern does on the compatibility path; a pattern or
+ * value the law cannot process within its limits fails the call with
+ * `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no inference.
+ *
+ * # Safety
+ * As [`purrdf_shacl_apply_rules`]; `regex_profile` must be null or a NUL-terminated C
+ * string live for the call.
+ */
+int32_t purrdf_shacl_apply_rules_xpath_regex(const char *data_nt,
+                                             const char *shapes_ttl,
+                                             const char *shapes_base_iri,
+                                             const char *shapes_graph_iri,
+                                             const char *srl,
+                                             const char *srl_base_iri,
+                                             const uint64_t *max_term_generating_rounds,
+                                             const uint64_t *max_generated_terms,
+                                             const uint64_t *max_stored_facts,
+                                             const uint64_t *max_join_steps,
+                                             const char *const *import_iris,
+                                             const char *const *import_documents,
+                                             size_t import_count,
+                                             const char *regex_profile,
+                                             PurrdfBuffer **out_inferred,
+                                             PurrdfBuffer **out_proof,
+                                             PurrdfBuffer **out_diagnostics,
+                                             PurrdfError **out_error);
 
 /**
  * Check a SPARQL 1.2 RL rule set WITHOUT evaluating it — the grammar, the `IMPORTS`
@@ -3418,6 +3728,42 @@ int32_t purrdf_shacl_eval_node_expr(const char *shapes_ttl,
                                     PurrdfBuffer **out_terms,
                                     PurrdfBuffer **out_diagnostics,
                                     PurrdfError **out_error);
+
+/**
+ * [`purrdf_shacl_eval_node_expr`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+ * [`purrdf_shacl_eval_node_expr`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` selects that dated XPath law for every `sh:pattern` a filter
+ * shape decides and every `REGEX`/`REPLACE` a function call or SPARQL-based expression
+ * evaluates, under the production native limits, and any other name is
+ * `PURRDF_STATUS_INVALID_ARGUMENT`, listing the accepted names. A pattern the law does not
+ * define behaves as an ill-formed pattern does on the compatibility path; a pattern or
+ * value the law cannot process within its limits fails the call with
+ * `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and writes no output.
+ *
+ * # Safety
+ * As [`purrdf_shacl_eval_node_expr`]; `regex_profile` must be null or a NUL-terminated C
+ * string live for the call.
+ */
+int32_t purrdf_shacl_eval_node_expr_xpath_regex(const char *shapes_ttl,
+                                                const char *shapes_base_iri,
+                                                const char *data_nt,
+                                                const char *expr,
+                                                const char *expr_at,
+                                                const char *const *expr_via,
+                                                size_t expr_via_count,
+                                                const char *expr_turtle,
+                                                const char *focus,
+                                                const char *const *scope,
+                                                size_t scope_count,
+                                                const char *const *import_iris,
+                                                const char *const *import_documents,
+                                                size_t import_count,
+                                                const char *regex_profile,
+                                                PurrdfBuffer **out_terms,
+                                                PurrdfBuffer **out_diagnostics,
+                                                PurrdfError **out_error);
 
 /**
  * Certify a shapes graph (Turtle) COLD — the loader's verdict, every result of validating
@@ -3567,6 +3913,28 @@ int32_t purrdf_shapes_product_admit(const uint8_t *product,
                                     PurrdfError **out_error);
 
 /**
+ * [`purrdf_shapes_product_admit`] under a caller-selected regular-expression law.
+ *
+ * `regex_profile` is [`purrdf_shacl_validate_to_sarif_xpath_regex`]'s: NULL is
+ * [`purrdf_shapes_product_admit`] unchanged, `xpath-2.0-2010-12-14` or
+ * `xpath-3.1-2017-03-21` validates the restored preparation under that dated XPath
+ * law, and any other name is `PURRDF_STATUS_INVALID_ARGUMENT`. The law is request
+ * configuration, not product content: the same product admits under either law and
+ * its identity does not change. A law's resource refusal is
+ * `PURRDF_STATUS_REGEX_RESOURCE_ERROR`, with no report.
+ *
+ * # Safety
+ * As [`purrdf_shapes_product_admit`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shapes_product_admit_xpath_regex(const uint8_t *product,
+                                                size_t product_len,
+                                                const char *data_nt,
+                                                const char *regex_profile,
+                                                PurrdfBuffer **out_buffer,
+                                                PurrdfError **out_error);
+
+/**
  * ADMIT a prepared product ONLY IF its input binding is `expect_identity`, validate
  * `data_nt` (N-Triples) with it, and write the SARIF 2.1.0 report bytes to
  * `*out_buffer` (free with `purrdf_buffer_free`).
@@ -3603,6 +3971,24 @@ int32_t purrdf_shapes_product_admit_expecting(const uint8_t *product,
                                               PurrdfError **out_error);
 
 /**
+ * [`purrdf_shapes_product_admit_expecting`] under a caller-selected
+ * regular-expression law, exactly as [`purrdf_shapes_product_admit_xpath_regex`] adds
+ * one to [`purrdf_shapes_product_admit`]. The identity comparison is unchanged and
+ * runs before any validation.
+ *
+ * # Safety
+ * As [`purrdf_shapes_product_admit_expecting`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shapes_product_admit_expecting_xpath_regex(const uint8_t *product,
+                                                          size_t product_len,
+                                                          const char *data_nt,
+                                                          const char *expect_identity,
+                                                          const char *regex_profile,
+                                                          PurrdfBuffer **out_buffer,
+                                                          PurrdfError **out_error);
+
+/**
  * REBUILD a prepared product — re-deriving its preparation from the shapes
  * dataset it carries, ignoring its memo — validate `data_nt` (N-Triples) with it,
  * and write the SARIF 2.1.0 report bytes to `*out_buffer` (free with
@@ -3636,6 +4022,22 @@ int32_t purrdf_shapes_product_rebuild(const uint8_t *product,
                                       const char *data_nt,
                                       PurrdfBuffer **out_buffer,
                                       PurrdfError **out_error);
+
+/**
+ * [`purrdf_shapes_product_rebuild`] under a caller-selected regular-expression law,
+ * exactly as [`purrdf_shapes_product_admit_xpath_regex`] adds one to
+ * [`purrdf_shapes_product_admit`].
+ *
+ * # Safety
+ * As [`purrdf_shapes_product_rebuild`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shapes_product_rebuild_xpath_regex(const uint8_t *product,
+                                                  size_t product_len,
+                                                  const char *data_nt,
+                                                  const char *regex_profile,
+                                                  PurrdfBuffer **out_buffer,
+                                                  PurrdfError **out_error);
 
 /**
  * REBUILD a prepared product ONLY IF its input binding is `expect_identity` —
@@ -3678,6 +4080,24 @@ int32_t purrdf_shapes_product_rebuild_expecting(const uint8_t *product,
                                                 const char *expect_identity,
                                                 PurrdfBuffer **out_buffer,
                                                 PurrdfError **out_error);
+
+/**
+ * [`purrdf_shapes_product_rebuild_expecting`] under a caller-selected
+ * regular-expression law, exactly as [`purrdf_shapes_product_admit_xpath_regex`] adds
+ * one to [`purrdf_shapes_product_admit`]. The identity comparison is unchanged and
+ * runs before the re-derivation.
+ *
+ * # Safety
+ * As [`purrdf_shapes_product_rebuild_expecting`]; `regex_profile` must be null or a
+ * NUL-terminated C string live for the call.
+ */
+int32_t purrdf_shapes_product_rebuild_expecting_xpath_regex(const uint8_t *product,
+                                                            size_t product_len,
+                                                            const char *data_nt,
+                                                            const char *expect_identity,
+                                                            const char *regex_profile,
+                                                            PurrdfBuffer **out_buffer,
+                                                            PurrdfError **out_error);
 
 /**
  * CERTIFY a prepared product: independently re-derive its shapes dataset's canonical

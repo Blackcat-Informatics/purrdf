@@ -63,8 +63,14 @@
 //!
 //! Report-only, `cargo bench -p purrdf-core --bench xsd_regex` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
+//!
+//! The `native_xpath_*` groups measure the explicitly dated native program:
+//! cold compilation of the same grammar shapes, capture-producing matching,
+//! and replacement. Backreferences, nullable repetitions and finite work
+//! refusal have their own cases. All expectations are checked before timing;
+//! the compatibility and native programs retain their distinct contracts.
 
-use purrdf_core::xsd_regex::compile;
+use purrdf_core::xsd_regex::{compile, xpath};
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 use purrdf_testkit::rng::SplitMix64;
 use purrdf_testkit::text::lowercase_filler as filler;
@@ -199,5 +205,361 @@ fn bench_xsd_regex_match(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_xsd_regex_compile, bench_xsd_regex_match);
+fn bench_native_xpath_compile(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_xpath_compile");
+    for (profile, name) in [
+        (xpath::Profile::Xpath20, "xpath20"),
+        (xpath::Profile::Xpath31, "xpath31"),
+    ] {
+        for &(label, pattern, flags) in CASES {
+            if profile == xpath::Profile::Xpath20 && flags == "q" {
+                continue;
+            }
+            xpath::compile(profile, pattern, flags, xpath::Limits::new())
+                .expect("native benchmark pattern compiles");
+            group.bench_function(BenchmarkId::new(name, label), |bencher| {
+                bencher.iter(|| {
+                    black_box(
+                        xpath::compile(
+                            black_box(profile),
+                            black_box(pattern),
+                            black_box(flags),
+                            xpath::Limits::new(),
+                        )
+                        .expect("native benchmark pattern compiles"),
+                    );
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+fn bench_native_xpath_execute(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_xpath_execute");
+    let limits = xpath::Limits::new();
+    for (label, source, input, expected) in [
+        ("literal", "needle", "hay needle stack", true),
+        ("plain_ascii", "^[a-z0-9]+$", "abc123", true),
+        ("unicode_category", r"^\p{L}+$", "é𐀀", true),
+        ("class_subtraction", "^[a-z-[aeiou]]+$", "rhythm", true),
+        ("backreference", r"^([a-z]+)-\1$", "repeated-repeated", true),
+        (
+            "backreference_negative",
+            r"^([a-z]+)-\1$",
+            "repeated-repeatea",
+            false,
+        ),
+        (
+            "capture_repetition",
+            "^(a|b){1,16}$",
+            "abababababababab",
+            true,
+        ),
+        ("nullable", "^(a?)*b$", "aaaaab", true),
+    ] {
+        let program = xpath::compile(xpath::Profile::Xpath31, source, "", limits).unwrap();
+        assert_eq!(
+            program.is_match(input, limits).unwrap(),
+            expected,
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+    }
+    let source = xpath::compile(xpath::Profile::Xpath31, "(a|b)", "", limits).unwrap();
+    let input = "abab".repeat(64);
+    assert_eq!(
+        source.replace_all(&input, "$1$1", limits).unwrap(),
+        "aabbaabb".repeat(64)
+    );
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("replacement", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                source
+                    .replace_all(black_box(&input), black_box("$1$1"), limits)
+                    .unwrap(),
+            )
+        });
+    });
+    let program = xpath::compile(xpath::Profile::Xpath31, "(a?){1000}", "", limits).unwrap();
+    let withheld = limits.with(xpath::Resource::MatchSteps, 100);
+    assert!(program.find("", withheld).unwrap_err().is_operational());
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("work_refusal", |bencher| {
+        bencher.iter(|| black_box(program.find(black_box(""), withheld).unwrap_err()));
+    });
+    group.finish();
+}
+
+/// Ordinary large inputs at the production default limits.
+///
+/// `run/*` and `general/*` match the same 32 KiB run of letters: `[a-z]+`
+/// scans it once with one pending state for every shorter stop, while
+/// `([a-z])+` repeats a capturing body and so keeps one pending state per
+/// iteration. `run_128k` is a run longer than the default pending-state bound.
+/// `search/*` look for an absent needle in 1 MiB of filler. `literal` and
+/// `choice` skip every start whose character cannot begin a match, `anchored`
+/// tries only the first start, and `leading_run` resumes after the run a
+/// failed start already covered. `no_lead` hides those facts behind an empty
+/// group, so the program runs from every start: the cost they avoid.
+///
+/// `adversary/*` are the shapes the backtracking machine alone refused far
+/// below these sizes, each over 1 MiB at the production defaults: searches
+/// with several unbounded runs that never match, repetitions of groups over
+/// prose and over `ab` pairs, and a nested nullable repetition. Every one now
+/// runs on the linear-time machines after a bounded backtracking attempt;
+/// `adversary/nested_nullable` is the 41-byte input that was refused.
+///
+/// `counted/*` are the counted repetitions the thread machine refused at
+/// these sizes, where a group repeated from every start kept one thread per
+/// distinct count: each search finds no match, through `find` (a reverse scan
+/// marking match starts) and through `is_match` (a forward scan), and the
+/// set machine keeps every repetition's counts as one set. In
+/// `counted/exact_100000` the set of live counts grows at every position of
+/// the forward scan, so no state repeats and each position costs a closure.
+/// `walk/*` follow one start as one thread: `ambiguous_1_1000` over a
+/// 2,001-byte match whose iterations can end anywhere, `replace_runs` over
+/// thousands of such matches in a mebibyte, and `empty_first_huge` below a
+/// minimum beyond `u64` whose body prefers the empty string. `scale/*` are
+/// sixty-four mebibytes of prose without a match and matched whole.
+/// `refused/backreference_blowup` is the time the step bound allows the
+/// exponential exploration a backreference can still reach.
+fn bench_native_xpath_large(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_xpath_large");
+    let limits = xpath::Limits::new();
+    let compiled = |source: &str| {
+        xpath::compile(xpath::Profile::Xpath31, source, "", limits)
+            .unwrap_or_else(|error| panic!("{source}: {error}"))
+    };
+    let letters = "abcdefghijklmnopqrstuvwxyz".repeat(5042);
+    let short = &letters[..32 * 1024];
+    for (label, source, input) in [
+        ("run/32k", "[a-z]+", short),
+        ("general/32k", "([a-z])+", short),
+        ("run_128k", "[a-z]+", letters.as_str()),
+    ] {
+        let program = compiled(source);
+        let span = program.find(input, limits).unwrap().unwrap().get(0);
+        assert_eq!(span, Some(0..input.len()), "{label}");
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+    }
+    let mut rng = SplitMix64::new(0x0047_2600_BE4C_0002);
+    let haystack = filler(&mut rng, 1024 * 1024);
+    for (label, source) in [
+        ("search/literal", "needle"),
+        ("search/choice", "needle|haystack"),
+        ("search/anchored", "^needle"),
+        ("search/leading_run", ".*needle"),
+        ("search/no_lead", "(?:)needle"),
+    ] {
+        let program = compiled(source);
+        assert!(!program.is_match(&haystack, limits).unwrap(), "{label}");
+        group.throughput(Throughput::Bytes(haystack.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.is_match(black_box(&haystack), limits).unwrap()));
+        });
+    }
+    let text = purrdf_testkit::text::word_prose(1024 * 1024);
+    let words = text.trim_end();
+    let pairs = "ab".repeat(512 * 1024);
+    let nested = format!("{}b", "a".repeat(40));
+    for (label, source, input, matched) in [
+        ("adversary/multi_run", "node.*graph.*zzz", words, false),
+        ("adversary/two_run", "alpha.*zzz", words, false),
+        ("adversary/word_group", "^([a-z]+ ?)+$", words, true),
+        ("adversary/word_space_group", r"^(\w+\s)*\w+$", words, true),
+        ("adversary/choice_group", "^(a|b)*$", pairs.as_str(), true),
+        ("adversary/pair_group", "^(ab)*$", pairs.as_str(), true),
+        (
+            "adversary/pair_noncapturing",
+            "^(?:ab)*$",
+            pairs.as_str(),
+            true,
+        ),
+        (
+            "adversary/nested_nullable",
+            "^(a|aa)*$|^(a*)*b$",
+            nested.as_str(),
+            true,
+        ),
+    ] {
+        let program = compiled(source);
+        let found = program.find(input, limits).unwrap();
+        assert_eq!(found.is_some(), matched, "{label}");
+        // The compatibility engine gives the same whole-match answer.
+        let compatibility = compile(source, "").unwrap();
+        assert_eq!(
+            found.and_then(|captures| captures.get(0)),
+            compatibility
+                .as_regex()
+                .find(input)
+                .map(|span| span.range()),
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+    }
+    let random_ab = |bytes: usize, seed: u64| -> String {
+        purrdf_testkit::rng::splitmix64_bytes(bytes, seed)
+            .iter()
+            .map(|byte| if byte & 1 == 0 { 'a' } else { 'b' })
+            .collect()
+    };
+    let pairs_128k = "ab".repeat(64 * 1024);
+    let quads = "abcd".repeat(256 * 1024);
+    let ab_400k = random_ab(400 * 1024, 0x0047_2600_BE4C_0003);
+    let ab_800k = random_ab(800 * 1024, 0x0047_2600_BE4C_0004);
+    let ab_4m = random_ab(4 << 20, 0x0047_2600_BE4C_0005);
+    let prose_4m = purrdf_testkit::text::word_prose(4 << 20);
+    let prose_8m = purrdf_testkit::text::word_prose(8 << 20);
+    for (label, source, input) in [
+        ("counted/pair_1_1000", "(ab){1,1000}c", pairs_128k.as_str()),
+        ("counted/pair_2_50", "(ab){2,50}c", pairs.as_str()),
+        ("counted/pair_1_100", "(ab){1,100}c", pairs.as_str()),
+        ("counted/choice_pair_1_20", "(ab|cd){1,20}e", quads.as_str()),
+        ("counted/nested_3_5_9", "((a|b){3}){5,9}c", ab_400k.as_str()),
+        ("counted/nested_2_2_5", "((a|b){2}){2,5}c", ab_800k.as_str()),
+        ("counted/choice_1_30", "(a|b){1,30}c", ab_4m.as_str()),
+        ("counted/choice_3_9", "(a|b){3,9}c", ab_4m.as_str()),
+        (
+            "counted/word_space_3_5",
+            r"(\w+\s){3,5}zzz",
+            prose_4m.as_str(),
+        ),
+        (
+            "counted/multi_run_8m",
+            "node.*graph.*zzz",
+            prose_8m.as_str(),
+        ),
+    ] {
+        let program = compiled(source);
+        assert!(program.find(input, limits).unwrap().is_none(), "{label}");
+        assert!(!program.is_match(input, limits).unwrap(), "{label}");
+        // The compatibility engine gives the same answer.
+        assert!(!compile(source, "").unwrap().is_match(input), "{label}");
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(input), limits).unwrap()));
+        });
+        group.bench_function(format!("{label}/is_match"), |bencher| {
+            bencher.iter(|| black_box(program.is_match(black_box(input), limits).unwrap()));
+        });
+    }
+    // An exact count above the input's pairs, whose set of live counts grows
+    // at every position: no state repeats, and every position costs a closure.
+    let exact = compiled("(a|b){100000}c");
+    let ab_1m = &ab_4m[..1 << 20];
+    assert!(!exact.is_match(ab_1m, limits).unwrap());
+    assert!(exact.find(ab_1m, limits).unwrap().is_none());
+    group.throughput(Throughput::Bytes(ab_1m.len() as u64));
+    group.bench_function("counted/exact_100000", |bencher| {
+        bencher.iter(|| black_box(exact.find(black_box(ab_1m), limits).unwrap()));
+    });
+    group.bench_function("counted/exact_100000/is_match", |bencher| {
+        bencher.iter(|| black_box(exact.is_match(black_box(ab_1m), limits).unwrap()));
+    });
+    // One start's ambiguous counted body over a long match, a replacement of
+    // thousands of its matches, and an empty-preferring body below a minimum
+    // beyond u64: the walk keeps one thread whatever the counts.
+    let run_b = format!("{}b", "a".repeat(1 << 20));
+    let mut runs = "a".repeat(100_000);
+    let mut index = 0_usize;
+    while runs.len() < 1 << 20 {
+        runs.push_str(&"a".repeat(1 + (index * 7 + index / 5) % 13));
+        runs.push(if index.is_multiple_of(3) { 'c' } else { 'b' });
+        index += 1;
+    }
+    let ambiguous = compiled("(a|aa){1,1000}b");
+    let span = ambiguous.find(&run_b, limits).unwrap().unwrap().get(0);
+    assert_eq!(span, Some(run_b.len() - 2001..run_b.len()));
+    group.throughput(Throughput::Bytes(run_b.len() as u64));
+    group.bench_function("walk/ambiguous_1_1000", |bencher| {
+        bencher.iter(|| black_box(ambiguous.find(black_box(&run_b), limits).unwrap()));
+    });
+    let replaced = ambiguous.replace_all(&runs, "[$1]", limits).unwrap();
+    assert_eq!(
+        replaced,
+        compile("(a|aa){1,1000}b", "")
+            .unwrap()
+            .replace_all(&runs, "[$1]")
+            .unwrap()
+    );
+    group.throughput(Throughput::Bytes(runs.len() as u64));
+    group.bench_function("walk/replace_runs", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                ambiguous
+                    .replace_all(black_box(&runs), "[$1]", limits)
+                    .unwrap(),
+            )
+        });
+    });
+    let short_run_b = &run_b[run_b.len() - 100_001..];
+    let huge = compiled("(|a){18446744073709551616}b");
+    let captures = huge.find(short_run_b, limits).unwrap().unwrap();
+    assert_eq!(captures.get(0), Some(0..short_run_b.len()));
+    assert_eq!(
+        captures.get(1),
+        Some(short_run_b.len() - 2..short_run_b.len() - 1)
+    );
+    group.throughput(Throughput::Bytes(short_run_b.len() as u64));
+    group.bench_function("walk/empty_first_huge", |bencher| {
+        bencher.iter(|| black_box(huge.find(black_box(short_run_b), limits).unwrap()));
+    });
+    // Sixty-four mebibytes: an abandoned attempt, a reverse scan and a walk.
+    let prose_64m = purrdf_testkit::text::word_prose(64 << 20);
+    for (label, source, matched) in [
+        ("scale/multi_run_64m", "node.*graph.*zzz", false),
+        ("scale/word_group_64m", "^([a-z]+ ?)+$", true),
+    ] {
+        let program = compiled(source);
+        assert_eq!(
+            program.find(&prose_64m, limits).unwrap().is_some(),
+            matched,
+            "{label}"
+        );
+        group.throughput(Throughput::Bytes(prose_64m.len() as u64));
+        group.bench_function(label, |bencher| {
+            bencher.iter(|| black_box(program.find(black_box(&prose_64m), limits).unwrap()));
+        });
+    }
+    // A backreference keeps the backtracking machine, and its exponential
+    // exploration is refused by the step bound: the time that bound allows.
+    let blowup = compiled(r"^(a|aa)*c\1$");
+    let forty = "a".repeat(40);
+    let refused = blowup.is_match(&forty, limits).unwrap_err();
+    assert!(
+        matches!(&refused, xpath::Error::Resource(refusal) if refusal.resource == xpath::Resource::MatchSteps),
+        "{refused}"
+    );
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("refused/backreference_blowup", |bencher| {
+        bencher.iter(|| black_box(blowup.is_match(black_box(&forty), limits).unwrap_err()));
+    });
+    let literal: String = ('a'..='z').cycle().take(30_000).collect();
+    compiled(&literal);
+    group.throughput(Throughput::Bytes(literal.len() as u64));
+    group.bench_function("compile_literal_30k", |bencher| {
+        bencher.iter(|| black_box(compiled(black_box(&literal))));
+    });
+    group.finish();
+}
+
+bench_group!(
+    benches,
+    bench_xsd_regex_compile,
+    bench_xsd_regex_match,
+    bench_native_xpath_compile,
+    bench_native_xpath_execute,
+    bench_native_xpath_large
+);
 bench_main!(benches);

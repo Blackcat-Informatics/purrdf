@@ -108,6 +108,7 @@ pub mod shacl;
 mod shadow_stack;
 mod stream;
 mod term;
+mod xpath_regex;
 mod xsd;
 
 #[cfg(target_arch = "wasm32")]

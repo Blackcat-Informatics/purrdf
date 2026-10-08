@@ -151,6 +151,10 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-update-parse` | The update request does not parse. | Fix the update at the reported position. |
 | `native-sparql-query-explain` | Evaluation under `--explain` failed; the evaluator's error is in the message. | Address the underlying evaluation error. |
 | `native-sparql-query-eval` | Query evaluation failed with an error no more specific code classifies; the evaluator's error is in the message. | Address the underlying evaluation error. |
+| `native-sparql-internal` | An evaluator invariant was violated. The execution cannot produce a valid answer. | Report the failure with its query and input; it requires an engine repair. |
+| `native-sparql-composite-bound` | Constructing a composite datatype value exceeded its element or lexical-byte resource bound. | Reduce the value being constructed. |
+| `native-sparql-float-environment` | The calling thread's floating-point environment cannot preserve the distance arithmetic's specified IEEE-754 results. | Evaluate on a thread with the supported floating-point environment. |
+| `native-sparql-function-operational` | A host function or relation failed during execution: an opaque returned error, a caught panic, a resource ceiling, or an invalid protocol response. | Repair the callee or adjust the resource limit; this cannot establish a validation verdict. |
 | `native-sparql-source-read` | Operational storage refused a forward/reverse lookup or complete row drain. The error is fatal, including inside `SERVICE SILENT`; no partial answer is published. | Repair the source or adjust its explicit resource limits before retrying. |
 | `native-sparql-workspace-unpriced` | A bounded operational view was given an execution shape without a certified working-memory bound, or a raw evaluator entry without a held drain reservation. | Use the engine's fallible projected basic-graph-pattern `SELECT` entry with its default dataset and empty extension configuration, or choose a resident view. |
 | `native-sparql-workspace-bound-overflow` | Certified workspace arithmetic exceeds `u64`. | Reduce the query's intermediate cardinality or pattern count. |
@@ -192,6 +196,67 @@ whose terms do not form a well-formed dataset.
 | `native-sparql-subst-triple-predicate` | A substituted quoted triple has a predicate that is not an IRI. | Use an IRI predicate. |
 | `native-sparql-subst-literal-datatype` | A substituted literal's datatype is not an IRI. | Use an IRI datatype. |
 | `native-sparql-subst-langtag` | A pre-bound literal's language tag is not one the lexing profile accepts. | Supply a well-formed language tag. |
+| `native-sparql-xpath-operational` | A selected dated XPath law failed operationally in a way that names no single `xpath-*` resource. The query is aborted and publishes no answer. | Report the failure with its query and input. |
+
+## `xpath-*` — dated native XPath regular expressions (`purrdf-core`)
+
+These codes arise only when a caller selects a dated XPath law
+(`xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`) for SPARQL `REGEX` and
+`REPLACE`, SHACL `sh:pattern` or ShEx pattern facets. Without a selection, the
+compatibility regular expressions run and none of these codes appears.
+`purrdf_core::xsd_regex::xpath::Resource::code` is their single owner. Each one
+names the `Resource` that a `Limits` bound withheld (`Error::Resource`, with the
+exact requirement and the bound), or whose storage the host refused to allocate
+(`Error::Allocation`). The production bound `Limits::new()` sets is given in
+each row, and zero withholds a resource completely.
+
+Every `xpath-*` code is **operational**. It is never a syntax verdict and never a
+non-match: an invalid pattern or flag (FORX0001), an empty-matching replacement
+pattern (FORX0003) or invalid replacement text (FORX0004) is the host's ordinary
+invalid-pattern outcome instead, which is a SPARQL expression error, a SHACL
+finding or a failed ShEx facet. A refusal fails the whole operation. A query
+publishes no answer, an update changes nothing, and a validation writes no report;
+the refusal never becomes an unbound value, a `false` filter or a conforming
+graph. The C ABI reports it as `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13).
+
+The bounds apply to every pattern. For a fixed pattern without a backreference,
+matching is linear in input length, but its cost can depend on repetition counts.
+The following measured searches cost 1 to 3.2 matcher steps per input byte at
+the production bounds:
+- literal and single-character runs;
+- counted repetitions such as `(ab){1,1000}c` or `(\w+\s){3,5}zzz`;
+- whole-input group matches such as `^([a-z]+ ?)+$`;
+- searches with several unbounded runs, such as `node.*graph.*zzz`.
+
+A step cost about 3.5 to 11 ns on the measured host. The low-cost measured
+searches reached about 74 to 83 MiB before step refusal; this is not a universal
+input threshold or timing guarantee. Large finite or nested repetitions can
+reach step or storage bounds on much shorter input, including yes-or-no tests.
+Locating the match itself (SPARQL `REPLACE`, for example) also costs more in
+these measured examples:
+- `(a|aa){1,100000}b` costs about 98 steps per byte, so it is refused past
+  about 2.5 MiB of match;
+- `(|a){18446744073709551616}b`, an empty-preferring body below a minimum
+  beyond 64 bits, costs about 250, so it is refused past about 1 MiB.
+
+A counted repetition nested in another, both with bodies that can repeat
+empty, keeps one entry per count value. Storage depends on the combination of
+counts: `((a?){100000}){100000}` is one measured storage refusal, not a minimum
+count threshold. Searching for the match of `((a?){1000}){1000}b` over 100 KB
+reaches the step bound. A backreference keeps the backtracking matcher, whose exponential
+exploration (`^(a|aa)*c\1$` over forty `a`) the step bound refuses after
+about 3 s of work.
+
+| Code | Meaning | Remedy |
+| --- | --- | --- |
+| `xpath-pattern-bytes` | `Resource::PatternBytes`: the pattern source has more UTF-8 bytes than the bound (64 KiB). The source is refused before parsing, whether or not its syntax is valid. | Shorten the pattern. |
+| `xpath-compile-steps` | `Resource::CompileSteps`: compiling the pattern needs more compiler operations, scanned characters and set operations included, than the bound (4,000,000). | Simplify the pattern, for example its character-class arithmetic. |
+| `xpath-program-nodes` | `Resource::ProgramNodes`: the compiled program needs more nodes than the bound (262,144). | Simplify the pattern or reduce its counted repetitions. |
+| `xpath-compile-slots` | `Resource::CompileSlots`: building the program needs more construction cells than the bound (2,097,152). | Simplify the pattern or reduce its counted repetitions. |
+| `xpath-match-steps` | `Resource::MatchSteps`: matching needs more matcher operations, search advances and compared code points included, than the bound (250,000,000). Refusal depends on the pattern and input, including backtracking, large finite repetitions and the measured searches described above. | Remove the backreference, simplify repetition, or match shorter input. |
+| `xpath-match-states` | `Resource::MatchStates`: matching needs more simultaneously pending alternative states than the bound (65,536). | Reduce the pattern's alternation and repetition. |
+| `xpath-match-slots` | `Resource::MatchSlots`: the live states, captures and continuations need more cells than the bound (1,048,576). The measured low-cost patterns hold a few hundred cells independently of input length; nested empty-capable repetitions can reach the bound depending on their combination of counts. | Reduce the pattern's captures and repetition, or match shorter input. |
+| `xpath-output-bytes` | `Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB). | Replace over shorter input or with shorter replacement text. |
 
 ## `reasoning-*` — SPARQL under an entailment regime (`purrdf`)
 

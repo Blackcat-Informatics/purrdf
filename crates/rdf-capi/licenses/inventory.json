@@ -672,6 +672,7 @@
         "crates/lex/src/unicode_tables.rs",
         "crates/iri/src/idna_tables.rs",
         "crates/rdf-core/src/xsd_regex/blocks.rs",
+        "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs",
         "crates/text/src/unicode_tables.rs",
         "crates/jsonschema/src/ecma/property_tables.rs",
         "crates/jsonschema/src/ecma/unicode_ranges.rs",

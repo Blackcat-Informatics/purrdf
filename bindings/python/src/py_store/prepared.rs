@@ -263,6 +263,12 @@ pub(crate) struct PyPreparedQuery {
     /// answer `heldIn` the same way the engine `prepare` admitted the plan under
     /// would have.
     standpoint_predicates: Option<(String, String)>,
+    /// The dated native XPath law `Store.prepare`'s `xpath_regex` selected, if any.
+    ///
+    /// Like [`Self::standpoint_predicates`] it is read at EVALUATION time, off the
+    /// engine, by `REGEX` and `REPLACE`, so the fresh engine [`run`](Self::run) builds
+    /// is given it again; `None` keeps the compatibility pattern behaviour.
+    xpath_regex: Option<crate::xpath_regex::Selection>,
     /// The precision policy `Store.prepare`'s `division` named: the plan is admitted
     /// under it and every [`run`](Self::run) evaluates under it, so a quotient reads the
     /// same on the first run and the hundredth.
@@ -336,14 +342,17 @@ impl PyPreparedQuery {
             // object at all. What a fresh engine gives up is the join-order memo
             // between runs, which is a plan-shaped hint rather than the plan.
             //
-            // `standpoint_predicates` is reapplied to it because that axis is read at
-            // evaluation time, off the engine, not admitted into the plan — and the
-            // re-admission below is handed this same engine, so a re-admitted plan is
-            // read under the configuration the evaluation runs under.
+            // `standpoint_predicates` and `xpath_regex` are reapplied to it because those
+            // axes are read at evaluation time, off the engine, not admitted into the
+            // plan — and the re-admission below is handed this same engine, so a
+            // re-admitted plan is read under the configuration the evaluation runs under.
             let mut engine = NativeSparqlEngine::new();
             if let Some((according_to, sharpens)) = self.standpoint_predicates.clone() {
                 engine = engine
                     .with_standpoint_predicates(StandpointPredicates::new(according_to, sharpens));
+            }
+            if let Some((profile, limits)) = self.xpath_regex {
+                engine = engine.with_xpath_regex(profile, limits);
             }
             // A relation read out of the store's graph is rebuilt against THIS run's
             // dataset and the plan re-admitted under it, so the whole answer comes
@@ -469,6 +478,7 @@ pub(super) fn prepare(
     property_functions: Option<&PropertyFunctionRegistry>,
     aggregates: Option<&AggregateRegistry>,
     standpoint_predicates: Option<(String, String)>,
+    xpath_regex: Option<crate::xpath_regex::Selection>,
     graph_derived: Option<GraphDerivedRelations>,
     division: DivisionPolicy,
 ) -> PyResult<PyPreparedQuery> {
@@ -497,6 +507,7 @@ pub(super) fn prepare(
         env,
         graph_derived,
         standpoint_predicates,
+        xpath_regex,
         division,
     })
 }

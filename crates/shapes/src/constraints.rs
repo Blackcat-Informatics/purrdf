@@ -2530,13 +2530,13 @@ fn eval_constraint<'a, S: ResultSink>(
             // Compile at most once per Constraint instance (across all focus
             // nodes and value nodes) using the OnceLock cache.  Behaviour is
             // identical to the per-call path: Err ⇒ violation on every value.
-            let compiled = compiled.get_or_init(|| build_regex(regex, flags.map(String::as_str)));
+            let compiled = crate::xpath::facet(compiled, regex, flags.map(String::as_str))?;
             // SHACL has no shape-error channel on this path, so a pattern that
             // does not compile stays a violation (the W3C suite depends on
             // that). But discarding the compiler's typed error made a BROKEN
             // SHAPE indistinguishable from bad data; carry its precise message
             // into every result's `sh:resultMessage` instead.
-            let compile_error = compiled.as_ref().err().map(|error| {
+            let compile_error = compiled.compile_error().map(|error| {
                 format!(
                     "invalid sh:pattern {regex:?}{}: {error}",
                     flags.map_or_default(|f| format!(" with sh:flags {f:?}"))
@@ -2556,11 +2556,7 @@ fn eval_constraint<'a, S: ResultSink>(
                 None => messages.to_vec(),
             };
             for value in value_nodes {
-                let violates = match (compiled, value.lexical(ds)) {
-                    (Err(_), _) => true,   // bad regex → violation on every value node
-                    (Ok(_), None) => true, // blank node → violation
-                    (Ok(pattern), Some(lex)) => !pattern.is_match(lex),
-                };
+                let violates = !compiled.matches(value.lexical(ds))?;
                 if violates {
                     emit!(ValidationResult {
                         focus_node: focus_node.to_term(ds),
@@ -4326,7 +4322,7 @@ fn compare_literal_views(
 /// each a hard error rather than a truncation or a fallback. All of this is
 /// recorded in `docs/CONFORMANCE.md` and pinned by the first-party corpus under
 /// `crates/rdf-core/corpus/xsd-regex/`.
-fn build_regex(
+pub(crate) fn build_regex(
     pattern: &str,
     flags: Option<&str>,
 ) -> Result<purrdf_core::xsd_regex::CompiledPattern, purrdf_core::xsd_regex::XsdRegexError> {

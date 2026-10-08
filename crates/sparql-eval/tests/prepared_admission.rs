@@ -388,6 +388,10 @@ fn parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance() 
             purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,
             "{refused}"
         );
+        assert!(
+            refused.message.contains("evaluation stack exhausted"),
+            "{refused}"
+        );
         assert!(governed);
     }
     let answered = purrdf_stack::on_stack_scoped(512 * 1024 * 1024, || {

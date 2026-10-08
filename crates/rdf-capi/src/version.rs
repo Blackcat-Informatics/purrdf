@@ -197,7 +197,7 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `0.8.0` paragraph gives: a library exporting one more symbol than `0.8.0` must not
 /// answer `purrdf_abi_version` the way `0.8.0` does.
 ///
-/// # `0.9.0` → `0.10.0`: two added symbols
+/// # `0.9.0` → `0.10.0`: added symbols and one appended status
 ///
 /// `0.9.0` shipped as the ABI of the `3.0.1` libraries. This bump adds
 /// `purrdf_xsd_canonical_lexical` — the XSD canonical lexical form of a typed value —
@@ -218,6 +218,23 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// carrier (directly, or inside `PurrdfGovernedEntailmentEvidence`) must recompile; it
 /// rides this bump rather than a later one because `0.10.0` has shipped in nothing, the
 /// reason the `0.8.0` paragraph gives for bundling.
+///
+/// The same unshipped bump adds the dated regular-expression law selection: fourteen
+/// `*_xpath_regex` entry points — `purrdf_query_xpath_regex`,
+/// `purrdf_query_json_xpath_regex`, `purrdf_query_governed_xpath_regex`,
+/// `purrdf_query_entailment_governed_xpath_regex`, `purrdf_update_governed_xpath_regex`,
+/// `purrdf_shacl_validate_to_sarif_xpath_regex`,
+/// `purrdf_shacl_validate_changes_to_sarif_xpath_regex`,
+/// `purrdf_shapes_product_admit_xpath_regex`,
+/// `purrdf_shapes_product_admit_expecting_xpath_regex`,
+/// `purrdf_shapes_product_rebuild_xpath_regex`,
+/// `purrdf_shapes_product_rebuild_expecting_xpath_regex`,
+/// `purrdf_shacl_entail_to_ntriples_xpath_regex`, `purrdf_shacl_apply_rules_xpath_regex`
+/// and `purrdf_shacl_eval_node_expr_xpath_regex` — each the entry point without
+/// the suffix with a nullable `regex_profile` before its out-parameters (before
+/// `governors` on the governed ones), NULL meaning the unchanged entry point; and it
+/// APPENDS `PurrdfStatus::RegexResourceError = 13`. Every existing prototype keeps its
+/// signature and its behaviour, so this is additive and rides the same bump.
 pub const PURRDF_ABI_MINOR: u32 = 10;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;

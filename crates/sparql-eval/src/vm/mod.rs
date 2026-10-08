@@ -138,14 +138,14 @@ enum ConstCell<I: Copy> {
 enum RegexSlot {
     /// The pattern or flags are computed per row, and so is the regex.
     PerRow,
-    /// The pattern and flags are constants, compiled at link time (`None`: they do not
-    /// compile).
-    Linked(Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>),
+    /// The pattern and flags are constants. Their link-time verdict is applied
+    /// when the call executes, preserving lazy branches and operational errors.
+    Linked(crate::xpath_regex::LinkedPattern),
 }
 
 impl RegexSlot {
     /// The link-time pattern, when there is one.
-    const fn linked(&self) -> Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>> {
+    const fn linked(&self) -> Option<&crate::xpath_regex::LinkedPattern> {
         match self {
             Self::PerRow => None,
             Self::Linked(compiled) => Some(compiled),
@@ -246,7 +246,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             .iter()
             .map(|constant| match constant {
                 Some((pattern, flags)) => {
-                    RegexSlot::Linked(helpers::cached_regex(ctx, pattern, flags))
+                    RegexSlot::Linked(crate::xpath_regex::LinkedPattern::link(ctx, pattern, flags))
                 }
                 None => RegexSlot::PerRow,
             })
@@ -607,13 +607,19 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     let value = match (text, pattern, flags) {
                         (Some(text), Some(pattern), Some(flags)) => {
                             let flags = flags.0.as_str();
-                            let compiled = match &regexes[slot as usize] {
-                                RegexSlot::Linked(compiled) => compiled.clone(),
-                                RegexSlot::PerRow => helpers::cached_regex(ctx, &pattern.0, flags),
-                            };
-                            compiled
-                                .map(|re| helpers::intern_boolean(ctx, re.is_match(&text.0)))
-                                .transpose()?
+                            let compiled = crate::xpath_regex::resolve(
+                                ctx,
+                                &pattern.0,
+                                flags,
+                                regexes[slot as usize].linked(),
+                            )?;
+                            match compiled {
+                                Some(re) => re
+                                    .is_match(&text.0)?
+                                    .map(|holds| helpers::intern_boolean(ctx, holds))
+                                    .transpose()?,
+                                None => None,
+                            }
                         }
                         _ => None,
                     };

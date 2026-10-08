@@ -44,23 +44,47 @@ const ROWS: usize = 1_500;
 #[cfg(not(target_arch = "wasm32"))]
 fn bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential() {
     use purrdf_sparql_eval::{Arity, UserFunctionRegistry, Volatility};
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
 
     let dataset = dataset();
-    let mask = Arc::new(AtomicU64::new(0));
+    let mask = Arc::new((Mutex::new(0_u64), Condvar::new()));
+    let require_overlap = Arc::new(AtomicBool::new(false));
     let visits = Arc::new(AtomicUsize::new(0));
     let mut registry = UserFunctionRegistry::default();
     let seen = Arc::clone(&mask);
     let counted = Arc::clone(&visits);
+    let overlap = Arc::clone(&require_overlap);
     registry.register_native(
         format!("{EX}fork_tick"),
         Arity::Exact(1),
         Volatility::Stable,
         Arc::new(move |_: &[&purrdf_core::TermValue]| {
             let worker = rayon::current_thread_index().expect("query executes in its pool");
-            seen.fetch_or(1 << worker, Ordering::Relaxed);
+            let (workers, arrived) = &*seen;
+            let mut workers = workers.lock().expect("predicate witness lock");
+            *workers |= 1 << worker;
+            if workers.count_ones() > 1 {
+                arrived.notify_all();
+            } else if overlap.load(Ordering::Relaxed) {
+                // Runnable Rayon chunks need not be stolen. Hold the first actual
+                // predicate invocation until a distinct worker reaches the same
+                // production callback. The timeout is a hard failure, not a retry
+                // or a timing claim; serial neighbours never enter this wait.
+                let (observed, _) = arrived
+                    .wait_timeout_while(workers, Duration::from_secs(30), |mask| {
+                        mask.count_ones() < 2
+                    })
+                    .expect("predicate witness wait");
+                workers = observed;
+                assert!(
+                    workers.count_ones() > 1,
+                    "parallel OPTIONAL predicate could not reach a distinct worker"
+                );
+            }
+            drop(workers);
             counted.fetch_add(1, Ordering::Relaxed);
-            std::thread::yield_now();
             Ok(Some(purrdf_core::TermValue::boolean(true)))
         }),
     );
@@ -94,10 +118,11 @@ fn bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential()
                 false,
             ),
         ] {
-            mask.store(0, Ordering::Relaxed);
+            *mask.0.lock().expect("reset predicate witness") = 0;
+            require_overlap.store(forks && threads > 1, Ordering::Relaxed);
             visits.store(0, Ordering::Relaxed);
             let observed = pool.install(|| observe(&dataset, &query, options, &governors));
-            let workers = mask.load(Ordering::Relaxed).count_ones();
+            let workers = mask.0.lock().expect("read predicate witness").count_ones();
             assert_eq!(visits.load(Ordering::Relaxed), ROWS, "{label}/{threads}");
             assert!(
                 observed.tripped.is_none(),
