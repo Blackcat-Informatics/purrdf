@@ -13,37 +13,9 @@
 //! WHY THESE TESTS COST NOTHING, AND WHAT THAT BUYS
 //! ================================================
 //!
-//! Neither lane is a continuous-integration gate: LUBM needs a JRE and a network fetch of a
-//! GPL-2.0 generator, WatDiv needs a 58 MB download that expands past a gigabyte. A test that
-//! required either would put a network dependency and a JRE dependency inside `make check`, which
-//! is not a trade this repository makes for a report-only lane.
-//!
-//! So the lanes validate `LUBM_BIN` / `WATDIV_BIN` BEFORE step 1 — before a byte is fetched,
-//! before the JRE is looked for, before eight megabytes of RDF/XML are generated on the binary's
-//! behalf. That ordering is worth having on its own (a knob error should not cost a download),
-//! and it is what lets every test in this file run OFFLINE, in milliseconds, on a machine with no
-//! `java` and no cache at all.
-//!
-//! NO TEST HERE SKIPS, AND THAT IS A DESIGN CONSTRAINT RATHER THAN A PREFERENCE
-//! ===========================================================================
-//!
-//! Two tests in this file used to `return` early when `java` was absent or when
-//! `target/release/purrdf` had not been built — and one of them was the direct regression test for
-//! the digest-over-a-nonexistent-corpus defect. No continuous-integration job installs a JRE or
-//! builds the CLI before `cargo test --workspace`, so both were unconditional no-ops there. They
-//! announced it with `eprintln!`, which libtest CAPTURES for a passing test: the announcement was
-//! invisible and the suite reported two more passes than it had run.
-//!
-//! A test that cannot run in an environment is restructured so it does not NEED that environment.
-//! Both of the laws in question are about the BINARY, and the binary is validated before step 1,
-//! so both are reachable with a stand-in and an arena that cannot be created — no JRE, no network,
-//! no build. The stand-ins are shell scripts that behave the way the lane requires: they answer
-//! `--version`, and they either perform the lane's conversion probe or deliberately fail it. That
-//! is what a wrapper an operator writes does too, which is why accepting them is the over-refusal
-//! counter-check rather than a weakening.
-//!
-//! The REAL `purrdf` binary is proved acceptable by `make lubm` and `make watdiv` themselves,
-//! which is where a real binary belongs; this file pins the laws, not the build.
+//! These tests exercise actual Make entrypoints and reject bad knobs, arenas and
+//! executables before artifact acquisition or generation. No network corpus is
+//! needed to establish those early refusals.
 
 mod support;
 
@@ -133,7 +105,7 @@ fn run_lane_with_bin(lane: &str, bin_knob: &str, out_knob: &str, binary: &str) -
 /// `/nonexistent-<tag>/deeper` is uncreatable for an ordinary user and creatable
 /// for root, and test containers commonly run as root. There, the lane would pass
 /// arena creation and fall through into the artifacts step -- downloading tens of
-/// megabytes, wanting a JDK for the LUBM lane, and contradicting the no-network
+/// megabytes, wanting native generation for the LUBM lane, and contradicting the no-network
 /// property these tests are built on -- while also leaving a directory under `/`.
 ///
 /// A REGULAR FILE as the parent makes `mkdir` fail with `ENOTDIR` for every uid,
@@ -278,7 +250,7 @@ fn every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest() {
 //
 // Both are now refused BEFORE step 1, because each lane's binary check is a ROUND TRIP rather than
 // a `--version` call: the binary is handed one triple and must hand back the artifact the lane is
-// about. That is what makes this test reachable with no JRE, no network and no build — the fault
+// about. That is what makes this test reachable with no generation, no network and no build — the fault
 // is in the binary, and the binary is checked before anything is fetched.
 // ---------------------------------------------------------------------------------------------
 
@@ -376,7 +348,7 @@ fn every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes
     // CLI that silently drops its input looks like from outside, and it is the shape that reached
     // step 5 of the LUBM lane and published a digest for a corpus that was never written.
     //
-    // It needs NO JRE, NO network and NO built binary: the lane's own conversion probe runs before
+    // It needs NO generation, NO network and NO built binary: the lane's own conversion probe runs before
     // step 1, so the refusal happens on the knob rather than six steps later.
     let dir = scratch("purrdf-bench-lane", "silent-drop");
     let stand_in = convert_stand_in(dir.join("silent-drop-purrdf"), "");
@@ -395,7 +367,7 @@ fn every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes
             "make {lane}: the refusal must name the knob and quote the bytes it used; \
              output:\n{combined}"
         );
-        // Refused BEFORE step 1: nothing fetched, no JRE looked for, no corpus generated on the
+        // Refused BEFORE step 1: nothing fetched, no generation looked for, no corpus generated on the
         // strength of a binary that produces nothing.
         assert!(
             !combined.contains("1/7 artifacts"),
@@ -651,7 +623,7 @@ fn every_lane_names_its_arena_knob_when_the_arena_cannot_be_created() {
 // every run, and a test that only ever feeds it bad input passes exactly as happily.
 //
 // These cost nothing to run. Every one of them fires before the artifacts step, so there is no
-// network, no JRE and no 58 MB download anywhere in this section — the same property that lets
+// network, no generation and no 58 MB download anywhere in this section — the same property that lets
 // the binary-knob tests above run in the gate.
 // ---------------------------------------------------------------------------------------------
 
@@ -747,6 +719,36 @@ fn the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed() {
 }
 
 #[test]
+fn the_lubm_join_budget_is_admitted_before_acquisition() {
+    for value in ["0", "-1", "+1", "junk", "9223372036854775808"] {
+        let (code, output) = run_lane_with_knobs(
+            "lubm",
+            "LUBM_OUT",
+            &[format!("LUBM_MAX_JOIN_STEPS={value}")],
+        );
+        assert_ne!(code, 0, "{value}: {output}");
+        assert!(output.contains("LUBM_MAX_JOIN_STEPS"), "{value}: {output}");
+        assert!(!output.contains("1/7 artifacts"), "{value}: {output}");
+    }
+    let (unusable, root) = uncreatable_arena("join-budget-admission");
+    for value in ["1", "001", "100000000", "9223372036854775807"] {
+        let (code, stdout, stderr) = run_make(&[
+            "lubm",
+            &format!("LUBM_MAX_JOIN_STEPS={value}"),
+            &format!("LUBM_OUT={unusable}"),
+        ]);
+        let output = format!("{stdout}\n{stderr}");
+        assert_ne!(code, 0, "{value}: {output}");
+        assert!(
+            !output.contains("LUBM_MAX_JOIN_STEPS must be"),
+            "{value}: {output}"
+        );
+        assert!(output.contains("LUBM_OUT="), "{value}: {output}");
+    }
+    std::fs::remove_dir_all(root).expect("remove owned admission fixture");
+}
+
+#[test]
 fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
     // `LUBM_UNIVERSITIES=0` generates no corpus at all, so it is refused by name. The valid
     // neighbour is 1 — the default and the count the published LUBM answers are quoted for — which
@@ -774,8 +776,8 @@ fn the_lubm_lane_refuses_a_zero_university_count_and_accepts_one() {
     let _ = std::fs::remove_dir_all(&unusable_root);
     assert!(
         !combined.contains("LUBM_UNIVERSITIES must be"),
-        "make lubm: one university is the DEFAULT and the count LUBM's published answers are \
-         quoted for; refusing it would break every ordinary run; output:\n{combined}"
+        "make lubm: one university is the DEFAULT and the native university count is \
+         ordinary; refusing it would break every ordinary run; output:\n{combined}"
     );
     assert_ne!(
         code, 0,
@@ -839,20 +841,7 @@ fn the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri() {
 
 #[test]
 fn the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute() {
-    // `LUBM_ONTO` is stamped into every document the generator writes, so it is an
-    // input to the corpus digest as surely as the seed is, and it had been left out of
-    // the guard that decides whether to assert that digest against its pin.
-    //
-    // WHAT THIS TEST CAN AND CANNOT SEE, stated because the first version of it could
-    // see nothing. The knob VALIDATION runs before step 1, so it is testable here. The
-    // PIN GUARD lives at step 5, past generation and conversion, so no test in this
-    // file can reach it: every test here points the arena somewhere uncreatable
-    // precisely so the run stops before the network and the JDK. Asserting
-    // `!contains("does not match its recorded pin")` after an arena failure is
-    // trivially true and proves nothing — a non-control, which is what an earlier
-    // draft of this test was. The pin guard's two directions are demonstrated by
-    // running the lane instead, and `docs/design/purrdf-bench-lane-laws.md` records
-    // what that demonstration showed.
+    // Actual early knob refusal must name the ontology before acquisition.
     let (code, combined) =
         run_lane_with_knobs("lubm", "LUBM_OUT", &["LUBM_ONTO=not-an-iri".to_string()]);
     assert_ne!(
@@ -1058,4 +1047,49 @@ fn a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names() {
     }
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn native_lubm_seed_index_keep_u64_identity_before_acquisition() {
+    let (unusable, owned) = uncreatable_arena("native-u64-admission");
+    for knobs in [
+        vec![
+            "LUBM_SEED=18446744073709551615",
+            "LUBM_INDEX=18446744073709551614",
+        ],
+        vec!["LUBM_SEED=007", "LUBM_INDEX=002"],
+    ] {
+        let out = format!("LUBM_OUT={unusable}");
+        let mut args = vec!["lubm", "LUBM_UNIVERSITIES=1", out.as_str()];
+        args.extend(knobs);
+        let (code, stdout, stderr) = run_make(&args);
+        let combined = format!("{stdout}\n{stderr}");
+        assert_ne!(code, 0);
+        assert!(
+            combined.contains("LUBM_OUT="),
+            "valid native values must reach the arena refusal: {combined}"
+        );
+        assert!(
+            !combined.contains("invalid native configuration"),
+            "full-u64 seed/index must survive native admission: {combined}"
+        );
+        assert!(!combined.contains("1/7 artifacts"));
+    }
+    for knob in [
+        "LUBM_SEED=18446744073709551616",
+        "LUBM_INDEX=18446744073709551615",
+        "LUBM_SEED=not-a-seed",
+    ] {
+        let out = format!("LUBM_OUT={unusable}");
+        let (code, stdout, stderr) = run_make(&["lubm", "LUBM_UNIVERSITIES=1", &out, knob]);
+        let combined = format!("{stdout}\n{stderr}");
+        assert_ne!(code, 0);
+        assert!(
+            combined.contains("invalid native configuration"),
+            "invalid native values must fail admission: {combined}"
+        );
+        assert!(combined.contains(knob.split('=').next().unwrap()));
+        assert!(!combined.contains("1/7 artifacts"));
+    }
+    std::fs::remove_dir_all(owned).unwrap();
 }

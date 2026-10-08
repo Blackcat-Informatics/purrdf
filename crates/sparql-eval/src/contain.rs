@@ -44,7 +44,7 @@ use crate::error::EvalError;
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `Ok` of `read`'s result.
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of `read`'s result.
 pub(crate) fn declaration_contained<T>(
     kind: &str,
     iri: &str,
@@ -53,7 +53,7 @@ pub(crate) fn declaration_contained<T>(
 ) -> Result<T, EvalError> {
     match catch_unwind(AssertUnwindSafe(read)) {
         Ok(value) => Ok(value),
-        Err(_) => Err(EvalError::function(format!(
+        Err(_) => Err(EvalError::function_operational(format!(
             "{kind} <{iri}> panicked while reporting its {what}"
         ))),
     }
@@ -67,8 +67,8 @@ pub(crate) fn declaration_contained<T>(
 ///
 /// # Errors
 ///
-/// [`EvalError::Function`] on a caught panic; otherwise `call`'s own result,
-/// propagated unchanged.
+/// [`EvalError::FunctionOperational`] on a caught panic or an opaque caller-returned
+/// [`EvalError::Function`]; every more specific typed cause propagates unchanged.
 pub(crate) fn call_contained<T>(
     kind: &str,
     iri: &str,
@@ -76,8 +76,8 @@ pub(crate) fn call_contained<T>(
     call: impl FnOnce() -> Result<T, EvalError>,
 ) -> Result<T, EvalError> {
     match catch_unwind(AssertUnwindSafe(call)) {
-        Ok(result) => result,
-        Err(_) => Err(EvalError::function(format!(
+        Ok(result) => result.map_err(EvalError::preserve_function_failure),
+        Err(_) => Err(EvalError::function_operational(format!(
             "{kind} <{iri}> panicked while {what}"
         ))),
     }
@@ -111,6 +111,7 @@ mod tests {
             })
             .expect_err("a panicking read must not escape")
         });
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         let message = error.to_string();
         assert!(
             message.contains("custom aggregate <http://ex/agg> panicked while reporting its arity"),
@@ -127,12 +128,40 @@ mod tests {
     }
 
     #[test]
-    fn call_contained_propagates_an_ordinary_error() {
+    fn call_contained_promotes_an_opaque_host_failure() {
+        let expected = EvalError::function("boom");
         let error = call_contained("kind", "iri", "doing", || {
-            Err::<i32, EvalError>(EvalError::function("boom"))
+            Err::<i32, EvalError>(expected.clone())
         })
-        .expect_err("ordinary error propagates");
-        assert!(error.to_string().contains("boom"), "got {error}");
+        .expect_err("host error propagates");
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
+        assert!(matches!(error, EvalError::FunctionOperational(_)));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn call_contained_preserves_specific_typed_causes() {
+        use purrdf_core::RdfDiagnostic;
+        use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+        for expected in [
+            EvalError::source_read("source disappeared"),
+            EvalError::XPathRegex(Error::Allocation {
+                resource: Resource::MatchSlots,
+                units: 1,
+            }),
+            EvalError::internal("invalid host result"),
+            EvalError::Dataset(RdfDiagnostic::error("caller-storage-failed", "storage")),
+            EvalError::config("request configuration"),
+        ] {
+            let actual = call_contained("kind", "iri", "doing", || {
+                Err::<(), EvalError>(expected.clone())
+            })
+            .expect_err("typed cause propagates");
+            assert_eq!(actual.code(), expected.code());
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -146,6 +175,7 @@ mod tests {
             )
             .expect_err("a panicking call must not escape")
         });
+        assert_eq!(error.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
         let message = error.to_string();
         assert!(
             message.contains("custom aggregate <http://ex/agg> panicked while finishing"),

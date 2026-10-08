@@ -7,8 +7,9 @@
 //! [`crate::vm`] evaluates an [`Expression`]; the operator semantics it applies to
 //! already-evaluated operands live here. An expression over one solution evaluates to
 //! `Ok(Some(term))` (a value), `Ok(None)` (a SPARQL **error / unbound** — the
-//! third truth value), or `Err` (a hard [`EvalError::Unsupported`] for a construct
-//! the evaluator does not support). The `Ok(None)` vs `Err` split is load-bearing: a
+//! third truth value), or `Err` (a hard unsupported-construct or operational
+//! failure, including a selected native pattern's resource refusal). The
+//! `Ok(None)` vs `Err` split is load-bearing: a
 //! type error is normal three-valued logic (it makes a FILTER drop the row), while
 //! an unimplemented builtin is a hard failure (never a wrong answer).
 //!
@@ -189,7 +190,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
         let snapshot = ctx.loop_snapshot(admissible.len());
         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
-            ctx.governor_state().is_some(),
+            ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             admissible,
             || {
@@ -222,7 +223,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
         // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        let (mut rows, resume) = checkpoint.commit(ctx, rows, chunks, |_, row| Ok(row))?;
+        let (mut rows, resume) = checkpoint.commit_rows(ctx, rows, chunks)?;
         ctx.absorb_worker_witnesses(witnesses);
         // A worker stopped on what its rows spent, short of what the commit charged for
         // them: the rest of the loop runs here, in order, as the sequential loop does.
@@ -324,7 +325,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     node: &GraphPattern,
     var: &Variable,
     expr: &Expression,
-    seq: SolutionSeq<D::Id>,
+    mut seq: SolutionSeq<D::Id>,
     lift: Lift<'_>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
@@ -333,7 +334,9 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     // expression runs rather than after, and how a forked loop's admissions are
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+    let forked = ctx.may_fork_row_loop(expr)
+        && ctx.may_fork_governed_loop()
+        && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len());
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();
@@ -354,7 +357,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
         // must reach the parent's receipt.
         let snapshot = ctx.loop_snapshot(admissible.len());
         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
-            ctx.governor_state().is_some(),
+            ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             admissible,
             || {
@@ -392,9 +395,22 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
             harvests.into_iter().unzip();
         // The commit re-interns each kept row into the evaluation's own arena, in source
         // order, charging the growth at its row.
-        let (mut rows, resume) = checkpoint.commit(ctx, minted, chunks, |ctx, row| {
+        let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
-        })?;
+        };
+        let (mut rows, resume) = if ctx.governor_state().is_none() {
+            // Workers have finished reading the input. Plain BIND preserves one
+            // row per input and cannot resume, so reuse that owned typed buffer.
+            checkpoint.commit_into(
+                ctx,
+                minted,
+                chunks,
+                core::mem::take(&mut seq.rows),
+                admit_row,
+            )?
+        } else {
+            checkpoint.commit(ctx, minted, chunks, admit_row)?
+        };
         ctx.absorb_worker_witnesses(witnesses);
         // A worker stopped on what its rows minted, short of what the commit charged for
         // them: the rest of the loop runs here, in order, as the sequential loop does.
@@ -4225,7 +4241,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
     function: &Function,
     vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
-    replace_pattern: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
+    replace_pattern: Option<&crate::xpath_regex::LinkedPattern>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match function {
         // ---- type tests (total: never a type error) -----------------------
@@ -5871,28 +5887,26 @@ fn eval_str_before_after<D: DatasetView + Sync>(
 fn eval_replace<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-    linked: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
+    linked: Option<&crate::xpath_regex::LinkedPattern>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let Some((s, lang, dir)) = string_arg3(vals, 0) else {
         return Ok(None);
     };
-    let (Some(pattern), Some(replacement)) = (plain_string_arg(vals, 1), plain_string_arg(vals, 2))
+    let (Some(pattern), Some(replacement)) =
+        (plain_string_arg_ref(vals, 1), plain_string_arg_ref(vals, 2))
     else {
         return Ok(None);
     };
     let flags = match vals.get(3) {
-        None => String::new(),
+        None => "",
         Some(_) => {
-            let Some(flags) = plain_string_arg(vals, 3) else {
+            let Some(flags) = plain_string_arg_ref(vals, 3) else {
                 return Ok(None);
             };
             flags
         }
     };
-    let compiled = match linked {
-        Some(compiled) => compiled.clone(),
-        None => cached_regex(ctx, &pattern, &flags),
-    };
+    let compiled = crate::xpath_regex::resolve(ctx, pattern, flags, linked)?;
     let Some(compiled) = compiled else {
         return Ok(None);
     };
@@ -5900,10 +5914,10 @@ fn eval_replace<D: DatasetView + Sync>(
     // inside `replace_all`, so this call site cannot drop either. A malformed
     // replacement is F&O [err:FORX0004], which SPARQL 1.1 §17.4.3.15 makes a
     // type error: the expression is left unbound, never aborts the query.
-    let replaced = match compiled.replace_all(&s, &replacement) {
-        Ok(replaced) => replaced.into_owned(),
-        Err(_) => return Ok(None),
+    let Some(replaced) = compiled.replace_all(&s, replacement)? else {
+        return Ok(None);
     };
+    let replaced = replaced.into_owned();
     make_string_dir(ctx, replaced, lang, dir)
 }
 
@@ -5937,12 +5951,10 @@ pub(crate) fn cached_regex<D: DatasetView + Sync>(
 /// Build a compiled pattern from a SPARQL `REGEX`/`REPLACE` pattern plus its
 /// flag string (`i`, `s`, `m`, `x`, `q`).
 ///
-/// SPARQL 1.1 §17.4.3.14 defines `REGEX` as an invocation of XPath F&O 3.1
-/// `fn:matches`, and §17.4.3.15 defines `REPLACE` as `fn:replace`, so the
-/// governing dialect is XSD/XPath `regExp` — **not** the `regex` crate's. This
-/// delegates to [`purrdf_core::xsd_regex::compile`], the one shared translation
-/// from that dialect, so `REGEX`, `sh:pattern` and ShEx `PATTERN` carry the
-/// same accept set and the same semantics (ETHOS §O).
+/// SPARQL `REGEX` and `REPLACE` use XPath `fn:matches` and `fn:replace`.
+/// Unselected calls retain this compatibility translation through
+/// [`purrdf_core::xsd_regex::compile`]. An explicitly selected dated law uses
+/// [`purrdf_core::xsd_regex::xpath`] through the fallible expression boundary.
 ///
 /// Two behaviours change as a result, both deliberate:
 ///
@@ -10408,7 +10420,18 @@ mod tests {
                     },
                 )
                 .collect();
-            (schema, seq.rows, labels)
+            (
+                schema,
+                seq.rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| cell.map(|term| ctx.scratch.value_of(&ds, term)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                labels,
+            )
         };
 
         let (schema_par, rows_par, labels_par) = run(true);
@@ -10420,7 +10443,7 @@ mod tests {
         );
         assert_eq!(
             rows_par, rows_seq,
-            "parallel and sequential BIND paths must produce byte-identical row order"
+            "parallel and sequential BIND paths must produce identical ordered values"
         );
         assert_eq!(labels_par, labels_seq);
         assert_eq!(labels_seq, vec!["v-15", "v-25", "v-35"]);

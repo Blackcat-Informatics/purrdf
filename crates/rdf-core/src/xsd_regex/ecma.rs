@@ -74,9 +74,13 @@ pub(super) fn ecma_262_divergences(pattern: &str) -> Vec<Ecma262Divergence> {
             // Schema emitter uses its own Unicode-target translation instead.
             Ok(Token::UnicodeProperty { name, .. }) => {
                 if name.starts_with("Is") {
-                    note(Ecma262Divergence::UnicodeBlock { name });
+                    note(Ecma262Divergence::UnicodeBlock {
+                        name: name.to_owned(),
+                    });
                 } else {
-                    note(Ecma262Divergence::UnicodeCategory { name });
+                    note(Ecma262Divergence::UnicodeCategory {
+                        name: name.to_owned(),
+                    });
                 }
             }
             // XSD's `.` excludes #x0A and #x0D; ECMA-262's also excludes

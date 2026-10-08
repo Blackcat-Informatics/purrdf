@@ -242,46 +242,25 @@ pub fn entry(allocations: bool) {
     for _ in 0..3 {
         black_box(run());
     }
-    let mut counters = CounterControl::from_env();
+    #[cfg(target_os = "linux")]
+    let mut counters =
+        purrdf_testkit::bench::counter::CounterControl::from_env().expect("native counter control");
+    #[cfg(target_os = "linux")]
     if let Some(control) = &mut counters {
-        control.command(b"enable\n");
+        control
+            .command(purrdf_testkit::bench::counter::CounterCommand::Enable)
+            .expect("enable native counter");
     }
     let start = Instant::now();
     for _ in 0..iterations {
         black_box(run());
     }
     let elapsed = start.elapsed().as_nanos();
+    #[cfg(target_os = "linux")]
     if let Some(control) = &mut counters {
-        control.command(b"disable\n");
+        control
+            .command(purrdf_testkit::bench::counter::CounterCommand::Disable)
+            .expect("disable native counter");
     }
     println!("{elapsed}");
-}
-
-struct CounterControl {
-    commands: std::fs::File,
-    acknowledgements: std::fs::File,
-}
-
-impl CounterControl {
-    fn from_env() -> Option<Self> {
-        let path = std::env::var_os("PURRDF_BENCH_PERF_CONTROL")?;
-        let ack = std::env::var_os("PURRDF_BENCH_PERF_ACK").expect("counter acknowledgement pipe");
-        Some(Self {
-            commands: std::fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .expect("counter control pipe"),
-            acknowledgements: std::fs::File::open(ack).expect("counter acknowledgement pipe"),
-        })
-    }
-
-    fn command(&mut self, command: &[u8]) {
-        use std::io::{Read, Write};
-        self.commands.write_all(command).expect("counter command");
-        let mut acknowledgement = [0; 5];
-        self.acknowledgements
-            .read_exact(&mut acknowledgement)
-            .expect("counter acknowledgement");
-        assert_eq!(&acknowledgement, b"ack\n\0");
-    }
 }

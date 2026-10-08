@@ -11,7 +11,7 @@
 //! 1. **Fork.** [`crate::eval::EvalCtx::fork_for_worker`] gives each worker a
 //!    `Send` child context with its own scratch/constructed state, so workers
 //!    never contend on a lock or share mutable evaluation state.
-//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_chunk_map`]/[`par_retain`] run
+//! 2. **Join.** [`par_chunk_try_map_init`]/[`par_retain`] run
 //!    the workers via rayon's *indexed* `par_chunks`/`par_iter` (never
 //!    `par_sort`/`par_bridge`, which are not order-stable) and then reduce
 //!    strictly in source-index order: successes concatenate in chunk (hence
@@ -106,7 +106,7 @@ pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 /// the parser's chunk geometry, just in item-count terms.
 const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
 
-/// The chunk size for a [`par_chunk_map`]/[`par_chunk_map_metered`]/
+/// The chunk size for a [`par_chunk_map_metered`]/
 /// [`par_chunk_try_map_init`]/[`par_retain`] run over `len` items: aim for
 /// roughly four chunks per rayon worker thread, so work-stealing has enough
 /// slices to balance ragged per-item costs (a BGP pattern whose candidate
@@ -121,7 +121,7 @@ const PARALLEL_MIN_CHUNK_ITEMS: usize = 16;
 /// for why the within-group aggregate fold needs a chunk plan that does NOT
 /// track the live thread count. Every caller this function DOES serve is safe
 /// to scale with `rayon::current_num_threads()` because none of them folds
-/// chunk-local state back together: [`par_chunk_map`]/[`par_chunk_try_map_init`]/
+/// chunk-local state back together: [`par_chunk_try_map_init`]/
 /// [`par_retain`] each emit one independent output row per input item (a chunk
 /// boundary changes scheduling, never the result), and [`par_chunk_map_metered`]
 /// charges its governor **per item**, not per chunk (see that function's docs),
@@ -888,61 +888,6 @@ pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> 
     )
 }
 
-/// Chunk-based, infallible parallel collect: split `items` into index-ordered
-/// chunks (never `par_sort`/`par_bridge`), give each chunk worker ONE `Vec<R>`
-/// accumulator (`push` is called once per item, appending into it), and
-/// concatenate the per-chunk accumulators in chunk order. This is the
-/// allocation shape [`purrdf_rdf::native_codecs::text_parse::parse_lines_parallel_with_chunk_size`]
-/// uses for its phase 1: one allocation per CHUNK, not one per item — the
-/// per-item shape (a fresh `Vec` returned by every worker call, flattened
-/// afterwards) this replaces cost an extra small allocation for every row of
-/// an N-row BGP/join/filter loop, pure overhead the chunk shape avoids.
-///
-/// Internally gated on [`should_parallelize`]: at or below [`PARALLEL_MIN_ROWS`]
-/// this is a single sequential pass pushing into one `Vec` (bit-identical to a
-/// hand-written loop, no rayon hand-off); above it, `items.par_chunks(..)` (an
-/// *indexed*, order-preserving split) runs `push` over each chunk into its own
-/// accumulator, and the chunk accumulators are concatenated strictly in chunk
-/// (hence source) order — so the result is byte-identical to the sequential
-/// pass regardless of chunk geometry or worker scheduling.
-pub(crate) fn par_chunk_map<T, R>(
-    sequential: bool,
-    items: &[T],
-    push: impl Fn(&mut Vec<R>, &T) + Sync,
-) -> Vec<R>
-where
-    T: Sync,
-    R: Send,
-{
-    if !should_parallelize(sequential, items.len()) {
-        let mut out = Vec::new();
-        for item in items {
-            push(&mut out, item);
-        }
-        return out;
-    }
-
-    use rayon::prelude::*;
-
-    let size = chunk_size_for(items.len());
-    let chunk_outs: Vec<Vec<R>> = items
-        .par_chunks(size)
-        .map(|chunk| {
-            let mut acc = Vec::new();
-            for item in chunk {
-                push(&mut acc, item);
-            }
-            acc
-        })
-        .collect();
-
-    let mut out = Vec::with_capacity(chunk_outs.iter().map(Vec::len).sum());
-    for chunk_out in chunk_outs {
-        out.extend(chunk_out);
-    }
-    out
-}
-
 /// The output accumulator an operator's row loop pushes into, carrying the row ceiling the
 /// answer-cap pushdown put on this node.
 ///
@@ -1107,7 +1052,7 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
     (out, ledger, overflowed)
 }
 
-/// [`par_chunk_map`] with a **deterministic charge meter**: alongside its output rows,
+/// Chunk-based parallel collect with a **deterministic charge meter**: alongside its output rows,
 /// each chunk worker records what every input item spent, so a governed caller can find
 /// the exact item at which a ceiling is crossed.
 ///
@@ -1124,8 +1069,8 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
 ///
 /// `metered` is the caller's short-circuit. When it is `false` — an ungoverned execution,
 /// or one whose fuel dimension carries no ceiling — the returned ledger is empty and this
-/// function is [`par_chunk_map`] exactly: the `&mut u64` handed to `push` is a stack
-/// local, so no per-item record is written and nothing is allocated.
+/// function keeps the same indexed chunk geometry and row order: the `&mut u64`
+/// handed to `push` is a stack local, so no per-item record or ledger allocation is made.
 ///
 /// The ledger costs two `u64` per input item on the metered path, which is why it is a
 /// dedicated compact record rather than a full per-item resource vector — see
@@ -1193,7 +1138,7 @@ pub(crate) fn index_in<T>(items: &[T], item: &T) -> usize {
     offset / size_of::<T>().max(1)
 }
 
-/// The fallible, fork-per-worker sibling of [`par_chunk_map`]: each rayon
+/// Fallible, fork-per-worker chunk collection: each rayon
 /// *chunk* worker first runs `init` **once** to build its own `S` (e.g. an
 /// `EvalCtx::fork_for_worker` child), then folds `push` over every item of its
 /// chunk into one `Vec<R>` accumulator, short-circuiting the chunk on the
@@ -1300,14 +1245,31 @@ where
         })
         .collect();
 
-    let mut out = Vec::with_capacity(
-        per_chunk
-            .iter()
-            .map(|r| r.as_ref().map_or(0, |(rows, _)| rows.len()))
-            .sum(),
-    );
-    let mut harvests = purrdf_core::SmallVec::with_capacity(per_chunk.len());
-    for chunk_result in per_chunk {
+    concatenate_chunks(per_chunk)
+}
+
+/// Join successful outputs in source order. A known operational error takes precedence
+/// over allocating the joined bag; only an all-successful run reserves its checked size.
+fn concatenate_chunks<R, H>(
+    mut chunks: Vec<Result<(Vec<R>, H), EvalError>>,
+) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError> {
+    if let Some(index) = chunks.iter().position(Result::is_err) {
+        let Err(error) = chunks.swap_remove(index) else {
+            unreachable!("the first error was just selected");
+        };
+        return Err(error);
+    }
+    let mut out = reserve_concatenated_rows(
+        Vec::new(),
+        chunks.iter().map(|chunk| {
+            let Ok((rows, _)) = chunk else {
+                unreachable!("operational errors returned before output allocation");
+            };
+            rows.len()
+        }),
+    )?;
+    let mut harvests = purrdf_core::SmallVec::with_capacity(chunks.len());
+    for chunk_result in chunks {
         let (rows, harvested) = chunk_result?;
         out.extend(rows);
         harvests.push(harvested);
@@ -1315,10 +1277,32 @@ where
     Ok((out, harvests))
 }
 
-/// [`par_blocks_try_map_init`] under a governor, [`par_chunk_try_map_init`] otherwise:
-/// an ungoverned loop has no shared spend to stop on, and keeps the chunked fork.
+/// Reserve the joined output using actual chunk lengths, reusing a typed buffer
+/// when it already has enough capacity. Its old contents are cleared only after
+/// checked sizing and successful reservation. Overflow, an unrepresentable layout
+/// or an allocator refusal returns a typed failure.
+pub(crate) fn reserve_concatenated_rows<R>(
+    mut out: Vec<R>,
+    lengths: impl IntoIterator<Item = usize>,
+) -> Result<Vec<R>, EvalError> {
+    let total = lengths.into_iter().try_fold(0_usize, |total, len| {
+        total.checked_add(len).ok_or(EvalError::AllocationFailed {
+            construct: "parallel solutions",
+        })
+    })?;
+    out.try_reserve_exact(total.saturating_sub(out.len()))
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "parallel solutions",
+        })?;
+    out.clear();
+    Ok(out)
+}
+
+/// [`par_blocks_try_map_init`] under a caller's fuel or scratch ceiling,
+/// [`par_chunk_try_map_init`] otherwise. Cancellation and unlimited metering keep the
+/// chunked fork; their checkpoints and ordered ledgers still observe each item.
 pub(crate) fn par_loop_try_map_init<T, S, R, H>(
-    governed: bool,
+    bounded: bool,
     sequential: bool,
     items: &[T],
     init: impl Fn() -> S + Sync,
@@ -1330,7 +1314,7 @@ where
     R: Send,
     H: Send,
 {
-    if governed {
+    if bounded {
         par_blocks_try_map_init(sequential, items, init, push, harvest)
     } else {
         par_chunk_try_map_init(sequential, items, init, push, harvest)
@@ -1342,6 +1326,10 @@ type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
 
 /// Blocks per worker [`par_blocks_try_map_init`] cuts its items into.
 const ORDERED_BLOCKS_PER_THREAD: usize = 64;
+
+/// Enough items to amortize a block's context, program links and harvest. Workers still
+/// settle and check shared headroom at every item; this does not delay bounded stopping.
+const ORDERED_MIN_BLOCK_LEN: usize = 64;
 
 /// [`par_chunk_try_map_init`] for a governed loop whose workers stop on what they spend
 /// together (`crate::row_checkpoint`): the items are cut into small blocks, and each
@@ -1371,7 +1359,7 @@ where
     }
     use rayon::prelude::*;
     let threads = rayon::current_num_threads().max(1);
-    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(1);
+    let block = (items.len() / (threads * ORDERED_BLOCKS_PER_THREAD)).max(ORDERED_MIN_BLOCK_LEN);
     let blocks: Vec<&[T]> = items.chunks(block).collect();
     let slots: Vec<BlockSlot<R, H>> = blocks.iter().map(|_| std::sync::Mutex::new(None)).collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -1400,21 +1388,16 @@ where
                 }
             }
         });
-    let mut out = Vec::with_capacity(items.len());
-    let mut harvests = purrdf_core::SmallVec::with_capacity(slots.len());
-    for slot in slots {
-        // A block no worker reached lies after a block that failed.
-        let Some(outcome) = slot
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-        else {
-            continue;
-        };
-        let (rows, harvested) = outcome?;
-        out.extend(rows);
-        harvests.push(harvested);
-    }
-    Ok((out, harvests))
+    // A block no worker reached lies after a block that failed. Retain indexed order
+    // while selecting the first operational error before allocating the joined bag.
+    let outcomes = slots
+        .into_iter()
+        .filter_map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+        .collect();
+    concatenate_chunks(outcomes)
 }
 
 /// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
@@ -2321,60 +2304,150 @@ mod tests {
         assert!(aggregate_is_unsafe(AGG_IRI, &empty));
     }
 
-    // ---- par_chunk_map ----------------------------------------------------
-
-    #[test]
-    fn par_chunk_map_matches_sequential_one_chunk() {
-        // A chunk size far bigger than the input: everything lands in a
-        // single chunk, exercising the "one chunk" boundary.
-        let _parallel_guard = force_parallel_for_test(true);
-        let _chunk_guard = force_chunk_size_for_test(1000);
-        let items: Vec<usize> = (0..64).collect();
-        let result = par_chunk_map(false, &items, |acc, &item| {
-            if item % 7 != 0 {
-                std::thread::yield_now();
-            }
-            acc.push(item * 2);
-        });
-        let expected: Vec<usize> = (0..64).map(|i| i * 2).collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn par_chunk_map_matches_sequential_many_chunks() {
-        // A tiny chunk size over a larger input spans many chunk boundaries
-        // (100 items / chunk size 7 ⇒ 15 chunks, several ragged).
-        let _parallel_guard = force_parallel_for_test(true);
-        let _chunk_guard = force_chunk_size_for_test(7);
-        let items: Vec<usize> = (0..100).collect();
-        let result = par_chunk_map(false, &items, |acc, &item| {
-            if item % 3 == 0 {
-                std::thread::yield_now();
-            }
-            acc.push(item * 2);
-        });
-        let expected: Vec<usize> = (0..100).map(|i| i * 2).collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn par_chunk_map_forced_sequential_matches_forced_parallel() {
-        let items: Vec<usize> = (0..100).collect();
-        let push = |acc: &mut Vec<usize>, &item: &usize| acc.push(item * 2);
-
-        let sequential = {
-            let _guard = force_parallel_for_test(false);
-            par_chunk_map(false, &items, push)
-        };
-        let parallel = {
-            let _parallel_guard = force_parallel_for_test(true);
-            let _chunk_guard = force_chunk_size_for_test(9);
-            par_chunk_map(false, &items, push)
-        };
-        assert_eq!(sequential, parallel);
-    }
-
     // ---- par_chunk_try_map_init ---------------------------------------------
+
+    #[test]
+    fn parallel_concatenation_capacity_overflow_is_typed_without_allocating() {
+        // A zero-sized vector can represent these lengths without allocating host
+        // memory. Their joined row count still has to fit usize.
+        let chunks = vec![Ok((vec![(); usize::MAX], ())), Ok((vec![()], ()))];
+        assert_eq!(
+            concatenate_chunks(chunks).expect_err("joined length overflows"),
+            EvalError::AllocationFailed {
+                construct: "parallel solutions",
+            }
+        );
+        assert_eq!(
+            reserve_concatenated_rows::<Solution>(Vec::new(), [usize::MAX])
+                .expect_err("solution layout is unrepresentable"),
+            EvalError::AllocationFailed {
+                construct: "parallel solutions",
+            }
+        );
+    }
+
+    #[test]
+    fn parallel_concatenation_selects_source_error_before_capacity_overflow() {
+        let chunks = vec![
+            Ok((vec![(); usize::MAX], ())),
+            Ok((vec![()], ())),
+            Err(EvalError::internal("first source error")),
+            Err(EvalError::internal("later source error")),
+        ];
+        assert_eq!(
+            concatenate_chunks(chunks).expect_err("source error outranks allocation"),
+            EvalError::internal("first source error")
+        );
+    }
+
+    #[test]
+    fn bounded_loop_selection_preserves_unlimited_metering_and_stop_only_forks() {
+        use crate::{CancellationFlag, GovernorState, QueryGovernors};
+        let ds = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        for (governors, bounded, may_fork) in [
+            (QueryGovernors::UNBOUNDED, false, true),
+            (QueryGovernors::METERED, false, true),
+            (
+                QueryGovernors::UNBOUNDED
+                    .with_stop_signal(std::sync::Arc::new(CancellationFlag::new())),
+                false,
+                true,
+            ),
+            (QueryGovernors::UNBOUNDED.with_fuel(17), true, true),
+            (
+                QueryGovernors::METERED.with_max_scratch_bytes(17),
+                true,
+                true,
+            ),
+            (
+                QueryGovernors::METERED.with_max_intermediate_cells(17),
+                false,
+                false,
+            ),
+        ] {
+            let ctx = crate::eval::EvalCtx::new(&ds)
+                .with_governors(std::sync::Arc::new(GovernorState::new(&governors)));
+            assert_eq!(ctx.needs_bounded_loop_blocks(), bounded, "{governors:?}");
+            assert_eq!(ctx.may_fork_governed_loop(), may_fork, "{governors:?}");
+        }
+    }
+
+    /// Scheduling geometry changes only the number of worker contexts; every item and
+    /// every harvest remains in input order at the floor and worker-count neighbours.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bounded_blocks_amortize_contexts_without_reordering_items_or_harvests() {
+        for threads in [1, 4, 32] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("pool");
+            for len in [127_usize, 128, 129, 1_025, 16_384] {
+                pool.install(|| {
+                    let _guard = force_parallel_for_test(true);
+                    let calls = std::sync::atomic::AtomicUsize::new(0);
+                    let items: Vec<_> = (0..len).collect();
+                    let (out, harvests) = par_loop_try_map_init(
+                        true,
+                        false,
+                        &items,
+                        || {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            Vec::new()
+                        },
+                        |state, out, &item| {
+                            if item % 7 == 0 {
+                                std::thread::yield_now();
+                            }
+                            state.push(item);
+                            out.push(item);
+                            Ok(())
+                        },
+                        core::mem::take,
+                    )
+                    .expect("all items admitted");
+                    assert_eq!(out, items);
+                    assert_eq!(
+                        harvests.iter().flatten().copied().collect::<Vec<_>>(),
+                        items
+                    );
+                    assert_eq!(
+                        harvests.len(),
+                        calls.load(std::sync::atomic::Ordering::Relaxed)
+                    );
+                    assert!(harvests.len() <= len.div_ceil(ORDERED_MIN_BLOCK_LEN));
+                });
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bounded_blocks_return_the_first_input_error_under_later_worker_failure() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(32)
+            .build()
+            .expect("pool");
+        pool.install(|| {
+            let _guard = force_parallel_for_test(true);
+            let items: Vec<_> = (0..16_384).collect();
+            let result = par_loop_try_map_init(
+                true,
+                false,
+                &items,
+                || (),
+                |(), out, &item| {
+                    if item == 129 || item == 6_000 {
+                        return Err(EvalError::internal(format!("error at {item}")));
+                    }
+                    out.push(item);
+                    Ok(())
+                },
+                |()| (),
+            );
+            assert_eq!(result.unwrap_err(), EvalError::internal("error at 129"));
+        });
+    }
 
     #[test]
     fn par_chunk_try_map_init_flattens_in_index_order_one_chunk() {

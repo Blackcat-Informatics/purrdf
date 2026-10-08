@@ -58,6 +58,8 @@ purrdf-lex = { workspace = true }
 # hex.
 sha2 = { workspace = true }
 purrdf-hash = { workspace = true }
+# Shared test text: the SPARQL string literals the regex-law tests build.
+purrdf-testkit = { workspace = true }
 
 # The lone feature the whole workspace is permitted to declare. `cargo capi`
 # (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`

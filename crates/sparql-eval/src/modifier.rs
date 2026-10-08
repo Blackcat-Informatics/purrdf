@@ -915,6 +915,10 @@ fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bo
 /// ([`DatasetView::reifier_quads_of`] / [`DatasetView::annotations_of_with_graph`]) are
 /// per-reifier slices of these same two tables, so a table with no row in `g` at all has
 /// no row in `g` for any particular reifier either.
+// Keep the three short-circuiting first-row probes in the graph-major caller.
+// The ordinary static mode must not add a helper call/live frame per graph.
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
     let scope = GraphMatch::Named(g);
     dataset
@@ -1761,7 +1765,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         return contextual_group_rows(node, inner, variables, aggregates, out_schema, domain, ctx);
     }
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
         // schema is syntactic — the grouping variables followed by the aggregate output
         // variables — so it costs nothing to report the columns this node would have
@@ -1828,7 +1832,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         let snapshot = ctx.loop_snapshot(groups.len());
         let (minted, harvests) = crate::parallel::par_loop_try_map_init(
-            ctx.governor_state().is_some(),
+            ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             &groups,
             || {
@@ -1868,9 +1872,24 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
             harvests.into_iter().unzip();
         // The commit re-interns each kept group's row in group order, charging the growth
         // at its group.
-        let (mut rows, resume) = loop_ledger.commit(ctx, minted, chunks, |ctx, row| {
+        let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
-        })?;
+        };
+        let (mut rows, resume) = if ctx.governor_state().is_none() {
+            // Group workers have finished reading the input. A plain fold has no
+            // continuation. Reuse its input only when that capacity does not exceed
+            // the exact grouped output; otherwise release it before fresh admission.
+            let input = core::mem::take(&mut seq.rows);
+            let out = if input.capacity() <= minted.len() {
+                input
+            } else {
+                drop(input);
+                Vec::new()
+            };
+            loop_ledger.commit_into(ctx, minted, chunks, out, admit_row)?
+        } else {
+            loop_ledger.commit(ctx, minted, chunks, admit_row)?
+        };
         ctx.absorb_worker_witnesses(witnesses);
         // A worker stopped on what its groups minted, short of what the commit charged for
         // them: the rest of the groups fold here, in order, as the sequential loop does.

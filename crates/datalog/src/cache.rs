@@ -67,7 +67,7 @@ use crate::seminaive::{EvalError, EvalOptions, MAX_TERM_ARENA_BYTES, compile};
 /// Deliberately independent of the clause digest and the caller's contract hash: a change
 /// to index selection, to the sideways-information-passing order or to the cyclic
 /// certification invalidates every cached plan even though its logical input is unchanged.
-pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v1";
+pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v2";
 
 /// Domain-separation tag for [`canonical_rule_hash`].
 ///
@@ -268,18 +268,22 @@ fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
 /// * **The lexical surface convention** — how a clause constant renders, or how the default
 ///   graph is denoted, because those are the bytes clause text and stored data are compared
 ///   as.
+/// * **Budget observations** — which candidate expansions are charged, including changes
+///   to physical join order or kernels that move the reported work or refusal boundary.
 ///
 /// # What does NOT oblige a bump
 ///
 /// A purely PHYSICAL change that the crate's differential tests hold to identical
 /// observations: index selection, the sideways-information-passing order, cyclic
 /// certification, the choice between the leapfrog triejoin and the indexed binary fallback,
-/// and round scheduling. `leapfrog_and_binary_joins_agree` and
-/// `sequential_and_parallel_rounds_agree` are the standing obligations that make that
-/// exclusion safe — they assert those choices move neither the facts, the derivations nor
-/// the budget report. Such a change bumps [`PLAN_SOLVER_VERSION`] instead, which is what
-/// [`PlanIdentity`] keys a cached PLAN on.
-pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v1";
+/// and round scheduling, ONLY when facts, derivations AND budget reports stay identical.
+/// `leapfrog_and_binary_joins_agree` checks facts and derivations; it does not establish
+/// identical budget reports. `sequential_and_parallel_rounds_agree` checks all three.
+/// A physical change preserving all three bumps only [`PLAN_SOLVER_VERSION`], which is
+/// what [`PlanIdentity`] keys a cached PLAN on. Connectivity-first ordering changes
+/// candidate work, so `v2` deliberately changes the calculus identity too; the canonical
+/// authored clause encoding remains unchanged.
+pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v2";
 
 /// Domain-separation tag for [`contract_hash`].
 ///
@@ -1370,7 +1374,7 @@ mod tests {
             .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
             contract_hash_with(&transitive_step(Q), &wasm).to_hex(),
-            "562beee0c93eadac0dd410551abba8f622ce14883694ac03a7467f626f129cfd",
+            "3d385bc2c0467c392ba6b46117b8b6cd547982d41b325fbaef367536ea981574",
             "the contract hash of the fixture program under the wasm32 defaults moved"
         );
         let native = EvalOptions::default()
@@ -1378,7 +1382,7 @@ mod tests {
             .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
             contract_hash_with(&transitive_step(Q), &native).to_hex(),
-            "af18b301d88e37d456fef993c51e1cfcc9446f05f716ae47e9fb317c91e2dc96",
+            "2a0bb5e502d94881573555fdc23ff32b6a64d8116e2dd8273efb2829cac24fc7",
             "the contract hash of the fixture program under the native defaults moved"
         );
         let hash = contract_hash(&transitive_step(Q));
@@ -1427,18 +1431,18 @@ mod tests {
         );
         assert_eq!(
             contract_hash_with(&guarded_step(Q), &stated_options()).to_hex(),
-            "73a8d071a93e87e3e8511e3884c7cc6b36d22762d156f554853eb623db655213",
+            "a108e586708d4e70e9ea916c45005c041036e32b841b4a614b489ac920ab478f",
             "the guarded contract re-fold moved"
         );
         let schedule = Schedule::new(vec![crate::schedule::Layer::new(vec![vec![0]], Vec::new())]);
         assert_eq!(
             scheduled_contract_hash(&transitive_step(Q), &schedule, &stated_options()).to_hex(),
-            "22c7486553c1e727e8543fc7d9b412296c2e2e986d35edba6aeb949c72962ede",
+            "71c1eb49c92901ba68c1ad7953630033d91d8829d702d09a8c5659b026b207cb",
             "the scheduled contract hash moved"
         );
         assert_eq!(
             hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
-            "784ad1f59daf308d0ddb5b3f6e3b0187c77b61ee6810692b7804ebf9e4db18e4",
+            "bb5cee96a06449cb6d1655d96819d26a704f5d4bb375484c96f8644dd1f42a7b",
             "the plan identity moved"
         );
     }

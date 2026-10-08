@@ -1690,34 +1690,57 @@ fn hash_join<D: DatasetView + Sync>(
         }
         rows
     } else {
-        crate::parallel::par_chunk_map(ctx.sequential_operation_required(), &l.rows, |acc, lrow| {
-            match bound_key(lrow, &shared, KeySide::Left) {
-                // Probe is fully bound on shared columns: hit the matching bucket
-                // (exact key ⇒ compatible) plus any wild build rows it is compatible
-                // with (a wild row's None shared column matches anything).
-                Some(key) => {
-                    if let Some(idxs) = keyed.get(&key) {
-                        for &idx in idxs {
-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+        let (rows, _) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
+            &l.rows,
+            || (),
+            |(), acc, lrow| {
+                match bound_key(lrow, &shared, KeySide::Left) {
+                    // Probe is fully bound on shared columns: hit the matching bucket
+                    // (exact key ⇒ compatible) plus any wild build rows it is compatible
+                    // with (a wild row's None shared column matches anything).
+                    Some(key) => {
+                        if let Some(idxs) = keyed.get(&key) {
+                            for &idx in idxs {
+                                reserve_join_rows(acc, 1, usize::MAX)?;
+                                acc.push(merge(
+                                    lrow,
+                                    &r.rows[idx],
+                                    left_len,
+                                    &right_to_out,
+                                    out_len,
+                                ));
+                            }
+                        }
+                        for &idx in &wild {
+                            if compatible(lrow, &r.rows[idx], &shared) {
+                                reserve_join_rows(acc, 1, usize::MAX)?;
+                                acc.push(merge(
+                                    lrow,
+                                    &r.rows[idx],
+                                    left_len,
+                                    &right_to_out,
+                                    out_len,
+                                ));
+                            }
                         }
                     }
-                    for &idx in &wild {
-                        if compatible(lrow, &r.rows[idx], &shared) {
-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                    // Probe has an unbound shared column: it can match any build row, so
+                    // fall back to a compatibility scan over all of them.
+                    None => {
+                        for rrow in &r.rows {
+                            if compatible(lrow, rrow, &shared) {
+                                reserve_join_rows(acc, 1, usize::MAX)?;
+                                acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                            }
                         }
                     }
                 }
-                // Probe has an unbound shared column: it can match any build row, so
-                // fall back to a compatibility scan over all of them.
-                None => {
-                    for rrow in &r.rows {
-                        if compatible(lrow, rrow, &shared) {
-                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
-                        }
-                    }
-                }
-            }
-        })
+                Ok(())
+            },
+            |()| (),
+        )?;
+        rows
     };
 
     Ok(SolutionSeq {
@@ -2284,7 +2307,8 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
     let program = crate::vm::program_at(ctx, node, expr);
     let mut linked = crate::vm::Linked::link(program, expr, &out, ctx);
-    // A governed join forks its predicate loop only under a fuel ceiling alone, through
+    // A governed join forks its predicate loop only without a reachable cell ceiling or
+    // other caller ceilings beyond fuel/scratch, through
     // an ordered ledger of its left rows (`crate::row_checkpoint::ItemLedger`): the
     // fuel a predicate charges from inside its evaluation is committed in left-row
     // order, so the row a ceiling trips at is the same on every host.
@@ -2309,6 +2333,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     for &idx in idxs {
                         let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                            reserve_join_rows(acc, 1, usize::MAX)?;
                             acc.push(merged);
                         }
                     }
@@ -2320,19 +2345,21 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         }
                         let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
+                            reserve_join_rows(acc, 1, usize::MAX)?;
                             acc.push(merged);
                         }
                     }
                 }
             }
             if pad_unmatched && acc.len() == before {
+                reserve_join_rows(acc, 1, usize::MAX)?;
                 acc.push(padded_left_row(lrow, out_len));
             }
             Ok(())
         };
         let snapshot = ctx.loop_snapshot(l.rows.len());
         let (rows, harvests) = crate::parallel::par_loop_try_map_init(
-            ctx.governor_state().is_some(),
+            ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             &l.rows,
             || {
@@ -2359,7 +2386,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         )?;
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
-        let (mut rows, resume) = loop_ledger.commit(ctx, rows, chunks, |_, row| Ok(row))?;
+        let (mut rows, resume) = loop_ledger.commit_rows(ctx, rows, chunks)?;
         ctx.absorb_worker_witnesses(witnesses);
         // A worker stopped on what its left rows spent, short of what the commit charged
         // for them: the rest of the left rows join here, in order.
@@ -2499,35 +2526,59 @@ fn left_outer_join<D: DatasetView + Sync>(
         }
         rows
     } else {
-        crate::parallel::par_chunk_map(ctx.sequential_operation_required(), &l.rows, |acc, lrow| {
-            let before = acc.len();
-            match bound_key(lrow, &shared, KeySide::Left) {
-                Some(key) => {
-                    if let Some(idxs) = keyed.get(&key) {
-                        for &idx in idxs {
-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+        let (rows, _) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
+            &l.rows,
+            || (),
+            |(), acc, lrow| {
+                let before = acc.len();
+                match bound_key(lrow, &shared, KeySide::Left) {
+                    Some(key) => {
+                        if let Some(idxs) = keyed.get(&key) {
+                            for &idx in idxs {
+                                reserve_join_rows(acc, 1, usize::MAX)?;
+                                acc.push(merge(
+                                    lrow,
+                                    &r.rows[idx],
+                                    left_len,
+                                    &right_to_out,
+                                    out_len,
+                                ));
+                            }
+                        }
+                        for &idx in &wild {
+                            if compatible(lrow, &r.rows[idx], &shared) {
+                                reserve_join_rows(acc, 1, usize::MAX)?;
+                                acc.push(merge(
+                                    lrow,
+                                    &r.rows[idx],
+                                    left_len,
+                                    &right_to_out,
+                                    out_len,
+                                ));
+                            }
                         }
                     }
-                    for &idx in &wild {
-                        if compatible(lrow, &r.rows[idx], &shared) {
-                            acc.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                    None => {
+                        for rrow in &r.rows {
+                            if compatible(lrow, rrow, &shared) {
+                                reserve_join_rows(acc, 1, usize::MAX)?;
+                                acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                            }
                         }
                     }
                 }
-                None => {
-                    for rrow in &r.rows {
-                        if compatible(lrow, rrow, &shared) {
-                            acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
-                        }
-                    }
+                // No compatible right solution → keep the left solution alone (the OPTIONAL
+                // contributed nothing, its variables stay unbound).
+                if pad_unmatched && acc.len() == before {
+                    reserve_join_rows(acc, 1, usize::MAX)?;
+                    acc.push(padded_left_row(lrow, out_len));
                 }
-            }
-            // No compatible right solution → keep the left solution alone (the OPTIONAL
-            // contributed nothing, its variables stay unbound).
-            if pad_unmatched && acc.len() == before {
-                acc.push(padded_left_row(lrow, out_len));
-            }
-        })
+                Ok(())
+            },
+            |()| (),
+        )?;
+        rows
     };
 
     Ok(SolutionSeq {
@@ -3434,7 +3485,18 @@ mod tests {
                     )
                 })
                 .collect();
-            (schema, seq.rows, resolved)
+            (
+                schema,
+                seq.rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| cell.map(|term| ctx.scratch.value_of(&ds, term)))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>(),
+                resolved,
+            )
         };
 
         let (schema_par, rows_par, resolved_par) = run(true);
@@ -3446,7 +3508,7 @@ mod tests {
         );
         assert_eq!(
             rows_par, rows_seq,
-            "parallel and sequential UNION paths must produce byte-identical row order"
+            "parallel and sequential UNION paths must produce identical ordered values"
         );
         assert_eq!(
             resolved_par, resolved_seq,

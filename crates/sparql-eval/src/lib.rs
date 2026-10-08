@@ -114,6 +114,7 @@ mod nested_lateral_gate;
 #[cfg(test)]
 mod op_count;
 pub(crate) mod parallel;
+mod xpath_regex;
 pub use parallel::chunk_len_for_threads;
 #[cfg(test)]
 mod parallel_determinism_gate;

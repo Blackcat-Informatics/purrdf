@@ -171,6 +171,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **`purrdf-hash` BLAKE3 subtree primitives:** `blake3::ChainingValue`,
+  `left_subtree_len`, `subtree_chaining_value`, `merge_subtrees_non_root` and
+  `merge_subtrees_root`, the same primitives and rules as the `blake3` crate's
+  `hazmat` module, over the existing tree code. BLAKE3's hash is the root of a
+  Merkle tree over 1 KiB chunks, so a piece of an input can be proved to belong
+  to its hash by its siblings' chaining values alone: verified streaming,
+  verified range reads, and erasure shards checked against the identity of the
+  artifact they belong to. A subtree at a misaligned offset panics rather than
+  yielding a chaining value no input produces. Zero new dependencies.
+
 - **SPARQL 1.0 conformance corpus:** the W3C data-r2 suite (all 29 groups,
   482 cases, and the sort extension) is vendored byte-for-byte and graded in
   `make conformance` beside the SPARQL 1.1 and 1.2 corpora. The extension's
@@ -398,6 +408,95 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implementation that ignores the event. The frozen-dataset replay emits it for
   each named graph, and `DatasetSink` keeps the declarations it receives.
 - **rdf:** `flat_dataset_from_quads_declaring`.
+- **core: dated native XPath regular expressions:** `xsd_regex::xpath` compiles
+  and runs a pattern under an explicitly selected dated law. `Profile::Xpath20`
+  is XPath and XQuery Functions and Operators 2.0 (Second Edition, 2010-12-14)
+  and `Profile::Xpath31` is Functions and Operators 3.1 (2017-03-21).
+  `Profile::name` gives the stable names `xpath-2.0-2010-12-14` and
+  `xpath-3.1-2017-03-21`, `Profile::ALL` lists both, and `Profile::from_name`
+  accepts exactly those names, with no case folding or undated alias. Both
+  laws admit backreferences; only 3.1 admits non-capturing groups and the `q`
+  flag. `compile(profile, pattern, flags, limits)` returns a
+  `CompiledPattern` with `is_match`, `find` (ordered `Captures`) and
+  `replace_all`. `Limits::new()` holds finite production bounds for each
+  `Resource`: pattern source bytes (64 KiB), compile steps, program nodes,
+  compile slots, match steps, match states, match slots and replacement
+  output bytes. `Limits::with` replaces one bound, and zero withholds that
+  resource. `Error` keeps the syntax verdicts (`Flags`, FORX0001; `Syntax`;
+  `EmptyMatch`, FORX0003; `Replacement`, FORX0004) apart from the operational
+  `Resource` refusal and `Allocation` failure. `Error::is_operational` tells
+  them apart, and each `Resource::code` is a stable `xpath-*` diagnostic code.
+  `PatternCache` keeps one successful program under its exact law, source and
+  flags, and admits it again under the current limits on every reuse. The
+  existing `xsd_regex::compile` compatibility API is unchanged.
+- **SPARQL, SHACL and ShEx selection doors:**
+  `NativeSparqlEngine::with_xpath_regex(profile, limits)` selects a law for
+  every `REGEX` and `REPLACE` the engine evaluates, and
+  `QueryOptions::with_xpath_regex` selects one for a single request; an unset
+  request inherits the engine's selection. `PreparedShapes::with_xpath_regex`
+  returns an `XPathPreparedShapes` that applies the law to `sh:pattern`,
+  SHACL-SPARQL targets, constraints and SHACL-AF functions, including the
+  governed and change-set paths. `purrdf_shex::validate_with_xpath` and
+  `validate_shape_map_with_xpath` apply it to string-facet `PATTERN`s;
+  `validate_exact_with_xpath`, `validate_shape_map_exact_with_xpath` and
+  `XPathValidator::exact` do so over an `ExactSchema`, keeping its numeric
+  facet bounds exact, and the `shex` command and Python `shex.validate` take
+  that path under a selected law. In
+  `purrdf-validate`, `xpath_regex::parse_profile` maps a host's name to a
+  profile, `xpath_regex::sparql_engine` and `xpath_regex::query_options`
+  build the selected SPARQL engine or request, and every SHACL entry point
+  that evaluates a pattern gains a `*_with_xpath_regex` twin. A pattern the
+  law does not define is still the host's ordinary invalid-pattern outcome: a
+  SPARQL expression error, a SHACL finding or a failed ShEx facet. A resource
+  or allocation refusal is an operational failure with its `xpath-*` code. It
+  never becomes an unbound value, a `false` filter, a partial answer or a
+  conforming report, and a refused UPDATE changes nothing. Without a selection,
+  every surface keeps its compatibility regular expressions.
+- **CLI:** `--xpath-regex <PROFILE>` on `query`, `update`, `validate`, `shex`,
+  `rules` and `node-expr` selects a dated law by its exact name. Any other
+  name is a usage error (exit 2) that lists the accepted names. A resource
+  refusal fails the run (exit 1), names the resource and writes no answers,
+  dataset, report or output. `rules --check` refuses the flag, and
+  `shapes lint`, which compiles no pattern, does not offer it.
+- **Python:** `purrdf.XPATH_REGEX_PROFILES` lists the accepted names. An
+  `xpath_regex=` keyword selects a law on every SPARQL entry point (`query`,
+  `query_governed`, `query_entailment_governed`, `update`, `update_governed`
+  and `Store.prepare`, on `Store` and `MutableDataset`, and the rdflib layer's
+  `Graph.query` and `Graph.update`), on `shapes.validate`,
+  `Shapes.validate_nt`, `Shapes.validate_store`, `PreparedShapes.validate_nt`,
+  `PreparedShapes.validate_store_changes`, `shapes.entail`,
+  `shapes.apply_rules` and `shapes.eval_node_expr`, and on `shex.validate`.
+  An unknown name raises `ValueError` listing the accepted names. A resource
+  refusal raises `ValueError` carrying its `xpath-*` code.
+- **WebAssembly:** an `xpathRegex` option, typed `XPathRegexLaw`, on every
+  evaluating `QueryEngine` method and its asynchronous twin, and on the
+  Cloudflare adapter. It is a trailing argument on `Dataset.query`,
+  `queryRawConfigured`, `queryRawWithContext`, `shaclValidateToSarif`,
+  `shaclValidateChangesToSarif`, the four `shaclProductValidateToSarif…`
+  entries, `shaclEntail`, `shaclApplyRules` and `shaclEvalNodeExpr`; the
+  asynchronous SHACL twins take it in their options object. An unknown name
+  throws with the code `purrdf-wasm-options`. A resource refusal throws, or
+  rejects, with the resource's `xpath-*` code.
+- **C ABI:** fourteen `*_xpath_regex` twins take a nullable `regex_profile`
+  before their out-parameters (before `governors` on the governed ones):
+  `purrdf_query_xpath_regex`, `purrdf_query_json_xpath_regex`,
+  `purrdf_query_governed_xpath_regex`,
+  `purrdf_query_entailment_governed_xpath_regex`,
+  `purrdf_update_governed_xpath_regex`,
+  `purrdf_shacl_validate_to_sarif_xpath_regex`,
+  `purrdf_shacl_validate_changes_to_sarif_xpath_regex`,
+  `purrdf_shapes_product_admit_xpath_regex`,
+  `purrdf_shapes_product_admit_expecting_xpath_regex`,
+  `purrdf_shapes_product_rebuild_xpath_regex`,
+  `purrdf_shapes_product_rebuild_expecting_xpath_regex`,
+  `purrdf_shacl_entail_to_ntriples_xpath_regex`,
+  `purrdf_shacl_apply_rules_xpath_regex` and
+  `purrdf_shacl_eval_node_expr_xpath_regex`. NULL behaves exactly like the
+  entry point without the suffix. An unknown name is
+  `PURRDF_STATUS_INVALID_ARGUMENT`. The new status
+  `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13) reports a resource refusal, and the
+  call then writes no result, answer, report or dataset. These symbols and
+  the status belong to the same 0.10.0 C ABI; no existing prototype changes.
 - **SPARQL pre-bound declarations:** `SparqlParser::with_prebound_variables`
   declares the variables a caller binds before evaluation, which the grouping
   constraint then reads as constants, and `QueryOptions::with_declared_prebound`
@@ -596,7 +695,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   under `exact` a variance with no finite expansion is unbound with
   `FOAR0002` counted, and under `N:ROUNDING` it has `N` digits, rounded once.
   These charges reach the governor in evaluation order on every host. A
-  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter still forks: each
+  governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter can fork under
+  fuel/scratch ceilings when no other caller-set ceiling prevents it: each
   worker records every charge its rows (groups, left rows) make from inside
   their evaluation (fuel, explicit scratch, transient working sets and the
   arena's growth), and the loop's ordered commit makes them again in source
@@ -604,14 +704,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   arena as it goes. The trip, the consumption and the answer are therefore
   those of the loop run in order (which is what the wasm32 build runs), at
   every thread count, under fuel and scratch ceilings alike. As in that loop,
-  a trip inside an expression withholds the operator's output. A governed
-  forked loop runs in small blocks that its workers take in input order, so
+  a trip inside an expression withholds the operator's output. A caller's
+  fuel or scratch ceiling selects small blocks that workers take in input order, so
   they advance together from the front of the input. The workers share one
   running total of what they have spent, minted bytes included, and every
   worker stops once that total passes the headroom. The commit then trips
   where the in-order loop does, or finishes the loop in order from the first
   row a worker stopped at. What a forked loop holds past its ceiling is
-  therefore about one block in flight per worker. Measured on 4,400 rows of
+  therefore about one headroom plus each worker's unreported sharing interval
+  and row in flight. Stop-only and unlimited metering retain normal chunks
+  and exact ordered accounting. Cell accounting remains engaged on every
+  governed driver. A cell limit whose row bound cannot form an outer solution-vector
+  allocation does not force sequential evaluation; reachable cell limits retain their
+  bounded sequential path. The CLI's metered `--fuel` can therefore fork an eligible
+  `OPTIONAL` filter while recording its cells. Newly eligible join workers and ordered
+  concatenation retain typed output allocation errors. Historically measured on 4,400 rows of
   3,125-digit integers, each raised to the 32nd power and rendered (about
   1.75 MB of scratch per row; the data takes 67 MB to load, and an
   ungoverned run peaks at 2.7 GB), peak memory at 1, 2, 4, 8 and 32 threads

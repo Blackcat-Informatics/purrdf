@@ -204,6 +204,52 @@ places the shapes graph under its caller-provided name. Independently parsed
 documents must establish their separate blank scopes before shape preparation;
 retaining raw local IDs across datasets is never an identity rule.
 
+### Dated native XPath patterns
+
+Unselected validation retains its compatibility pattern behavior. Select
+`PreparedShapes::with_xpath_regex(profile, limits)` to obtain an
+`xpath::XPathPreparedShapes` using `purrdf_core::xsd_regex::xpath::Profile` and
+finite `Limits`. The available laws are XPath F&O 2.0 Second Edition
+(2010-12-14) and XPath F&O 3.1 (2017-03-21). Both support backreferences; only
+the 3.1 law admits non-capturing groups and the `q` flag.
+
+The selected preparation exposes the same data-binding routes, and each bind
+resolves its targets under that selection. Its bound validator retains the law
+and limits used for target acquisition. Pattern constraints, nested shapes,
+SPARQL targets and constraints, and SHACL-AF SPARQL functions use that same
+law. Changing the preparation's selection requires a fresh bind; an existing
+binding keeps its original selection.
+
+Ordinary validation reports a malformed pattern through the existing facet
+finding channel. `admit_declared_patterns()` instead checks every declared
+pattern before data targets are considered, including untargeted and
+deactivated shapes. It returns the actual compiler refusal. Resource and
+allocation failures return `XPathValidationError` with their typed cause and
+discard partial findings. Successful retained programs must still satisfy the
+current source and program-storage limits, and each match uses current execution
+limits. A failed admission leaves an earlier successful program reusable.
+
+`XPathPreparedShapes::validate_dataset_with_governors` and
+`validate_with_governors` put rule entailment, target acquisition and constraint
+evaluation under one shared SPARQL budget. The bound validator's
+`validate_with_governors` budgets constraint evaluation after rule entailment and
+target acquisition have already completed. A tripped
+governor returns `GovernedValidation::BudgetExhausted` without a report. Native
+Core pattern work uses its independent finite XPath limits and spends no SPARQL
+fuel. The free `xpath::validate_dataset` and
+`xpath::validate_dataset_with_governors` functions use these same preparation
+and binding paths. Selected execution preserves prepared-product bytes and
+their original provenance.
+
+The change path has a selected door too. Bind the mutation snapshot with
+`XPathPreparedShapes::bind_delta_with_shapes_graph`, then call
+`XPathPreparedValidator::validate_change(&delta)` or
+`validate_change_with_governors`. They run `engine::validate_change` and its
+governed twin inside the binding's selection. The expansion, the bounded
+re-validation and the unbounded full-validation fallback therefore all use one
+law and its limits, and the change loop still has a single implementation. A
+resource refusal returns `XPathValidationError` with no partial report.
+
 ### The change path after a data change
 
 Paths, SPARQL and custom expressions can depend on nodes well beyond the changed
@@ -318,7 +364,7 @@ allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
 `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, in
 `tests/sparql_path_alloc.rs`: **40** for a `sh:sparql` SELECT constraint, **78**
 for a custom `sh:ask` component over a two-valued path, **48** for a custom
-`sh:select` component, and **101** for a `sh:expression` function call over two
+`sh:select` component, and **85** for a `sh:expression` function call over two
 argument tuples.
 
 Two properties of that term are worth separating from its size. It is **flat in

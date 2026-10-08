@@ -692,7 +692,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                 break;
             };
             if emitted.len() != declared.total() {
-                return Err(EvalError::function(format!(
+                return Err(EvalError::function_operational(format!(
                     "property function <{}> emitted a row of {} value(s); its declared arity \
                      ({declared}) requires {}",
                     call.iri,
@@ -1096,6 +1096,8 @@ impl ReadStage {
 pub(crate) struct FilterContext {
     /// The engine's evaluation options.
     pub(crate) options: crate::eval::EvalOptions,
+    /// The same native pattern law and bounds as the materialized query lane.
+    pub(crate) xpath_regex: Option<crate::xpath_regex::Selection>,
     /// The request's choice of the language-string `=` extension
     /// ([`crate::QueryOptions::disjoint_language_strings`]).
     pub(crate) disjoint_language_strings: bool,
@@ -1117,6 +1119,7 @@ impl FilterContext {
         let mut ctx = EvalCtx::at(dataset, self.now.clone(), 0)
             .with_eval_options(self.options)
             .with_disjoint_language_strings(self.disjoint_language_strings);
+        ctx.xpath_regex = self.xpath_regex;
         if let Some(predicates) = &self.standpoint_predicates {
             ctx = ctx.with_standpoint_predicates(predicates.clone());
         }
@@ -3168,7 +3171,7 @@ impl CallCursor {
             };
             if emitted.len() != self.declared.total() {
                 self.ended = true;
-                return Err(EvalError::function(format!(
+                return Err(EvalError::function_operational(format!(
                     "property function <{}> emitted a row of {} value(s); its declared arity \
                      ({}) requires {}",
                     self.iri,
@@ -3191,7 +3194,7 @@ impl CallCursor {
                     } => {
                         let Some(filtering) = &self.filtering else {
                             self.ended = true;
-                            return Err(EvalError::function(format!(
+                            return Err(EvalError::function_operational(format!(
                                 "an on-demand read of <{}> reached a FILTER it was opened \
                                  without a context for",
                                 self.iri
@@ -3604,6 +3607,43 @@ mod tests {
             self.next += 1;
             Ok(row)
         }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_host_row_width_violation_is_operational_on_both_read_paths() {
+        let registry = registry_of(vec![(
+            PF_SPLIT,
+            Arc::new(RecordingRelation::new(1, 1, &["ff"], vec![vec![iri("a")]])),
+        )]);
+        let env = crate::extension_env::ExtensionEnv::over_relations(registry).unwrap();
+        let options = crate::engine::QueryOptions::new().with_env(&env);
+        let dataset = documents();
+        let engine = NativeSparqlEngine::new();
+        let query = format!("SELECT ?s ?o WHERE {{ ?s <{PF_SPLIT}> ?o }}");
+        let materialized = engine
+            .query_with_options_view(
+                &*dataset,
+                SparqlRequest {
+                    query: &query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                options,
+            )
+            .expect_err("the host emitted one value for a two-value declaration");
+        assert_eq!(materialized.code, EvalError::FUNCTION_OPERATIONAL_CODE);
+        assert!(materialized.message.contains("emitted a row of 1 value"));
+
+        let prepared = engine
+            .prepare_query_with_options(&query, None, options)
+            .unwrap();
+        let mut cursor = engine.open_call_cursor(&prepared, options).unwrap();
+        let on_demand = cursor
+            .next_row(&*dataset)
+            .expect_err("the cursor checks the same row");
+        assert_eq!(on_demand.code(), Some(EvalError::FUNCTION_OPERATIONAL_CODE));
+        assert!(on_demand.to_string().contains("emitted a row of 1 value"));
     }
 
     /// A relation that records the row ceiling of every invocation it is opened with.

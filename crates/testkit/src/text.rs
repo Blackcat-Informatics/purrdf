@@ -33,6 +33,33 @@ pub fn lowercase_filler(rng: &mut SplitMix64, len: usize) -> String {
     text
 }
 
+/// Space-separated English-like words, at least `bytes` long, cycling
+/// deterministically through ten words that include `node`, `graph` and
+/// `alpha`: realistic prose for a pattern that must scan all of it.
+#[must_use]
+pub fn word_prose(bytes: usize) -> String {
+    const WORDS: [&str; 10] = [
+        "gamma", "graph", "beta", "rdf", "pattern", "shape", "delta", "alpha", "node", "sparql",
+    ];
+    let mut text = String::with_capacity(bytes + 16);
+    let mut index = 0_usize;
+    while text.len() < bytes {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(WORDS[(index * 7 + index / 3) % WORDS.len()]);
+        index += 1;
+    }
+    text
+}
+
+/// `text` as a double-quoted SPARQL string literal, with each backslash
+/// doubled; `text` must hold no double quote or line break.
+#[must_use]
+pub fn sparql_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\"))
+}
+
 /// stdout of a child process's [`Output`], which must be UTF-8.
 ///
 /// # Panics

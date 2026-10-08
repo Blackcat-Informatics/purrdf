@@ -23,8 +23,8 @@ use std::ops::Range;
 use super::error::XsdRegexError;
 
 /// One lexical unit of the XSD/XPath `regExp` grammar.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Token {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Token<'a> {
     /// An ordinary character, literal in this context (`.`, `-`, `(`, `)`,
     /// `]` inside a class are [`Token::Literal`]s, not metacharacters).
     Literal(char),
@@ -47,7 +47,7 @@ pub(super) enum Token {
     /// `\w`/`\W`.
     WordEscape { negated: bool },
     /// `\p{…}`/`\P{…}` with its name scanned from between the braces.
-    UnicodeProperty { negated: bool, name: String },
+    UnicodeProperty { negated: bool, name: &'a str },
     /// An unescaped `.` outside a class.
     Dot,
     /// An unescaped `[`, consuming a following `^` when negated.
@@ -61,10 +61,10 @@ pub(super) enum Token {
     /// An unescaped `)` outside a class.
     GroupClose,
     /// A well-formed back-reference to the `n`th capturing group.
-    Backreference(u32),
+    Backreference(usize),
 }
 
-impl Token {
+impl Token<'_> {
     /// Whether this token is an ordinary member of the character class it was
     /// scanned inside. A `]` seen while the innermost open frame has recorded
     /// no member is the Rust-ism of a literal `]` at the class head (`[]a]`),
@@ -150,16 +150,22 @@ enum SubtractionState {
 #[derive(Default)]
 struct Groups {
     /// Capturing `(` seen so far, in source order.
-    opened: u32,
-    /// The numbers of the capturing groups still open at this point; a group
-    /// not on this stack has had its `)` already, and may be referred to.
-    open_stack: Vec<u32>,
+    opened: usize,
+    /// Every still-open group, with its capture number or None for a
+    /// non-capturing group. Closing a non-capturing group must not accidentally
+    /// close its enclosing capture for back-reference validity.
+    open_stack: Vec<Option<usize>>,
 }
 
 impl Groups {
-    fn open(&mut self) {
-        self.opened += 1;
-        self.open_stack.push(self.opened);
+    fn open(&mut self, capturing: bool) {
+        let number = capturing.then(|| {
+            // Each capture has a distinct source byte; the string's usize
+            // length bounds this increment even with raised finite limits.
+            self.opened += 1;
+            self.opened
+        });
+        self.open_stack.push(number);
     }
 
     fn close(&mut self) {
@@ -168,15 +174,15 @@ impl Groups {
 
     /// Whether the `n`th capturing group's `(` precedes this point — the test
     /// that decides whether one more digit joins a back-reference.
-    fn opened_before(&self, n: u32) -> bool {
+    fn opened_before(&self, n: usize) -> bool {
         n >= 1 && n <= self.opened
     }
 
     /// Whether the `n`th capturing group's `)` also precedes this point, which
     /// is what makes a reference to it well-formed rather than merely
     /// well-tokenized.
-    fn closed_before(&self, n: u32) -> bool {
-        self.opened_before(n) && !self.open_stack.contains(&n)
+    fn closed_before(&self, n: usize) -> bool {
+        self.opened_before(n) && !self.open_stack.contains(&Some(n))
     }
 }
 
@@ -263,6 +269,114 @@ impl<'a> Scanner<'a> {
             negated_wrap_close: false,
             subtraction_operand: false,
         }
+    }
+
+    /// Materialize the same cursor under native compiler admission. Reserving
+    /// every possible bracket/parenthesis frame here makes tokenization itself
+    /// allocation-free, including deeply nested subtraction and groups.
+    pub(super) fn bounded(
+        pattern: &'a str,
+        budget: &mut super::xpath::Budget,
+        x_state: bool,
+    ) -> Result<Self, super::xpath::Error> {
+        use super::xpath::{Error, Resource};
+
+        budget.limits().admit_pattern(pattern)?;
+        budget.charge(Resource::CompileSteps, pattern.len() as u64)?;
+        let count = pattern.chars().count();
+        // One materialization and one subsequent linear lexical walk. The
+        // non-linear open-group search is charged by next_bounded separately.
+        budget.charge_wide(Resource::CompileSteps, (count as u128) * 2)?;
+        let mut chars = Vec::new();
+        let mut offsets = Vec::new();
+        let mut classes = Vec::new();
+        let mut groups = Groups::default();
+        let slots = 2 * (count as u128) + 1 + u128::from(x_state) * (count as u128);
+        budget.charge_wide(Resource::CompileSlots, slots)?;
+        chars
+            .try_reserve_exact(count)
+            .map_err(|_| Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: count as u64,
+            })?;
+        offsets
+            .try_reserve_exact(count + 1)
+            .map_err(|_| Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: count as u64 + 1,
+            })?;
+        for (offset, ch) in pattern.char_indices() {
+            offsets.push(offset);
+            chars.push(ch);
+        }
+        offsets.push(pattern.len());
+        budget.charge_wide(Resource::CompileSteps, (count as u128) * 2)?;
+        let class_count = chars.iter().filter(|&&ch| ch == '[').count();
+        let group_count = chars.iter().filter(|&&ch| ch == '(').count();
+        budget.charge_wide(
+            Resource::CompileSlots,
+            class_count as u128 + group_count as u128,
+        )?;
+        classes
+            .try_reserve_exact(class_count)
+            .map_err(|_| Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: class_count as u64,
+            })?;
+        groups
+            .open_stack
+            .try_reserve_exact(group_count)
+            .map_err(|_| Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: group_count as u64,
+            })?;
+        let x_inside = if x_state {
+            let mut inside = Vec::new();
+            inside
+                .try_reserve_exact(count)
+                .map_err(|_| Error::Allocation {
+                    resource: Resource::CompileSlots,
+                    units: count as u64,
+                })?;
+            Some(inside)
+        } else {
+            None
+        };
+        Ok(Self {
+            pattern,
+            chars,
+            offsets,
+            pos: 0,
+            classes,
+            groups,
+            span: 0..0,
+            x_depth: 0,
+            x_escaped: false,
+            x_inside,
+            span_chars: 0..0,
+            negated_wrap_close: false,
+            subtraction_operand: false,
+        })
+    }
+
+    /// The non-linear part of lexical work is admitted before a token can
+    /// search the still-open capturing groups. All character scans were
+    /// admitted before constructing the bounded cursor.
+    pub(super) fn next_bounded(
+        &mut self,
+        budget: &mut super::xpath::Budget,
+    ) -> Result<Option<Result<Token<'a>, XsdRegexError>>, super::xpath::Error> {
+        use super::xpath::Resource;
+        budget.charge(Resource::CompileSteps, 1)?;
+        if self.peek(0) == Some('\\') && self.peek(1).is_some_and(|ch| matches!(ch, '1'..='9')) {
+            budget.charge(Resource::CompileSteps, self.groups.open_stack.len() as u64)?;
+        }
+        Ok(self.scan_next())
+    }
+
+    /// Source byte span, also used to retain original offsets after x removal.
+    pub(super) fn source_span(&self) -> Range<usize> {
+        self.span.clone()
     }
 
     /// The raw characters of the most recently yielded token or error, each
@@ -352,7 +466,7 @@ impl<'a> Scanner<'a> {
         self.chars.get(self.pos + ahead).copied()
     }
 
-    fn scan_next(&mut self) -> Option<Result<Token, XsdRegexError>> {
+    fn scan_next(&mut self) -> Option<Result<Token<'a>, XsdRegexError>> {
         if self.pos >= self.chars.len() {
             self.span = 0..0;
             self.span_chars = 0..0;
@@ -384,7 +498,7 @@ impl<'a> Scanner<'a> {
         Some(result)
     }
 
-    fn scan_one(&mut self) -> Result<Token, XsdRegexError> {
+    fn scan_one(&mut self) -> Result<Token<'a>, XsdRegexError> {
         self.negated_wrap_close = false;
         // A `-[…]` subtraction operand is the LAST element of its charGroup
         // (`charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`),
@@ -530,6 +644,7 @@ impl<'a> Scanner<'a> {
             '(' if self.classes.is_empty() => {
                 if self.peek(1) == Some('?') {
                     if self.peek(2) == Some(':') {
+                        self.groups.open(false);
                         self.pos += 3;
                         Ok(Token::GroupOpen { capturing: false })
                     } else {
@@ -541,7 +656,7 @@ impl<'a> Scanner<'a> {
                         Err(XsdRegexError::UnsupportedGroupConstruct { found })
                     }
                 } else {
-                    self.groups.open();
+                    self.groups.open(true);
                     self.pos += 1;
                     Ok(Token::GroupOpen { capturing: true })
                 }
@@ -558,7 +673,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn scan_escape(&mut self) -> Result<Token, XsdRegexError> {
+    fn scan_escape(&mut self) -> Result<Token<'a>, XsdRegexError> {
         let Some(esc) = self.peek(1) else {
             self.pos += 1;
             return Err(XsdRegexError::DanglingBackslash);
@@ -635,7 +750,7 @@ impl<'a> Scanner<'a> {
 
     /// Handle `\p{...}`/`\P{...}` with the cursor on the backslash and
     /// `self.peek(2) == Some('{')`.
-    fn scan_unicode_property(&mut self) -> Result<Token, XsdRegexError> {
+    fn scan_unicode_property(&mut self) -> Result<Token<'a>, XsdRegexError> {
         let esc = self.chars[self.pos + 1];
         let name_start = self.pos + 3;
         let mut j = name_start;
@@ -646,7 +761,7 @@ impl<'a> Scanner<'a> {
             self.pos = self.chars.len();
             return Err(XsdRegexError::UnterminatedBlockName { escape: esc });
         }
-        let name: String = self.chars[name_start..j].iter().collect();
+        let name = &self.pattern[self.offsets[name_start]..self.offsets[j]];
         self.pos = j + 1;
         Ok(Token::UnicodeProperty {
             negated: esc == 'P',
@@ -659,11 +774,13 @@ impl<'a> Scanner<'a> {
     /// only while the resulting number still names a capturing group whose `(`
     /// precedes this point. NOT a greedy digit run — after one group, `\12` is
     /// `\1` then a literal `2`.
-    fn scan_backreference(&mut self, first: char) -> Result<Token, XsdRegexError> {
+    fn scan_backreference(&mut self, first: char) -> Result<Token<'a>, XsdRegexError> {
         let start_digit = self.pos + 1;
-        let mut number = first.to_digit(10).expect("matched 1..=9");
+        let mut number = usize::try_from(first.to_digit(10).expect("matched 1..=9"))
+            .expect("ASCII digit fits usize");
         let mut j = start_digit + 1;
         while let Some(digit) = self.chars.get(j).and_then(|c| c.to_digit(10)) {
+            let digit = usize::try_from(digit).expect("ASCII digit fits usize");
             let Some(extended) = number.checked_mul(10).and_then(|n| n.checked_add(digit)) else {
                 break;
             };
@@ -673,9 +790,6 @@ impl<'a> Scanner<'a> {
             number = extended;
             j += 1;
         }
-        let reference: String = std::iter::once('\\')
-            .chain(self.chars[start_digit..j].iter().copied())
-            .collect();
         self.pos = j;
         if !self.groups.closed_before(number) {
             // Invalid for ANY engine, backtracking or not: the reference
@@ -684,16 +798,21 @@ impl<'a> Scanner<'a> {
             // unsupported construct, because "this implementation cannot run
             // it" would be a misleading excuse for a pattern nothing can run.
             return Err(XsdRegexError::BadBackreference {
-                reference,
-                opened_groups: self.groups.opened,
+                reference: std::iter::once('\\')
+                    .chain(self.chars[start_digit..j].iter().copied())
+                    .collect(),
+                // The existing closed public diagnostic retains its u32
+                // field. Only that summary is capped; recognition above uses
+                // the complete source-size-bounded capture number.
+                opened_groups: u32::try_from(self.groups.opened).unwrap_or(u32::MAX),
             });
         }
         Ok(Token::Backreference(number))
     }
 }
 
-impl Iterator for Scanner<'_> {
-    type Item = Result<Token, XsdRegexError>;
+impl<'a> Iterator for Scanner<'a> {
+    type Item = Result<Token<'a>, XsdRegexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.scan_next()
@@ -708,7 +827,7 @@ mod tests {
         Subtract, WordEscape,
     };
 
-    fn tokens(pattern: &str) -> Vec<Token> {
+    fn tokens(pattern: &str) -> Vec<Token<'_>> {
         Scanner::new(pattern)
             .collect::<Result<Vec<_>, _>>()
             .unwrap_or_else(|e| panic!("scan {pattern:?}: {e}"))
@@ -720,23 +839,45 @@ mod tests {
             .unwrap_or_else(|| panic!("expected an error for {pattern:?}"))
     }
 
-    fn class(negated: bool) -> Token {
+    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+    #[test]
+    fn capture_numbering_has_no_u32_ceiling() {
+        // The source-size bound fits usize; a caller may raise the finite
+        // source/storage limits beyond u32. Advance the private bookkeeping
+        // directly to exercise that boundary without a multi-gigabyte fixture.
+        let mut groups = Groups {
+            opened: usize::try_from(u32::MAX).unwrap(),
+            open_stack: Vec::new(),
+        };
+        groups.open(true);
+        assert_eq!(groups.opened.to_string(), "4294967296");
+        assert!(!groups.closed_before(groups.opened));
+        groups.close();
+        assert!(groups.closed_before(groups.opened));
+        let mut scanner = Scanner::new(r"\42949672960");
+        scanner.groups = groups;
+        assert_eq!(
+            scanner.next().unwrap().unwrap(),
+            Backreference(4_294_967_296)
+        );
+        assert_eq!(scanner.next().unwrap().unwrap(), Literal('0'));
+        assert!(scanner.next().is_none());
+    }
+
+    fn class(negated: bool) -> Token<'static> {
         Token::ClassOpen { negated }
     }
 
-    fn group(capturing: bool) -> Token {
+    fn group(capturing: bool) -> Token<'static> {
         Token::GroupOpen { capturing }
     }
 
-    fn name(negated: bool, chars: bool) -> Token {
+    fn name(negated: bool, chars: bool) -> Token<'static> {
         Token::NameEscape { negated, chars }
     }
 
-    fn unicode(negated: bool, name: &str) -> Token {
-        Token::UnicodeProperty {
-            negated,
-            name: name.to_owned(),
-        }
+    fn unicode(negated: bool, name: &str) -> Token<'_> {
+        Token::UnicodeProperty { negated, name }
     }
 
     #[test]

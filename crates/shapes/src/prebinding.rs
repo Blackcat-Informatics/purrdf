@@ -534,6 +534,7 @@ mod tests {
             left: Child::new(GraphPattern::empty_bgp()),
             right: Child::new(GraphPattern::empty_bgp()),
             policy: Box::new(ApplicationPolicy {
+                dataset_required: false,
                 row_pipeline: false,
                 reduced_adjacent: false,
                 group_domain: None,

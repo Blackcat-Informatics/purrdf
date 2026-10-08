@@ -12,6 +12,7 @@ import type {
   GovernorCeiling,
   QueryEngine,
   ServiceCatalog,
+  XPathRegexLaw,
 } from "./index.js";
 
 /** A `fetch`-shaped function: `globalThis.fetch`, or a test double. */
@@ -142,6 +143,13 @@ export interface SparqlEndpointOptions {
    * the clause's own answer and the job's evidence records the silenced `"fault"`.
    */
   readonly onInternalError?: InternalErrorReporter | null;
+  /**
+   * The dated native XPath law every query and update's `REGEX`/`REPLACE` evaluates under,
+   * as `QueryOptions.xpathRegex` takes it. Omitted, the compatibility regex. A resource
+   * refusal under the law is the operation's evaluation failure, answered as a `500` with
+   * the resource's code (`xpath-pattern-bytes`, …), never a `200` with a partial body.
+   */
+  readonly xpathRegex?: XPathRegexLaw | null;
 }
 
 /**

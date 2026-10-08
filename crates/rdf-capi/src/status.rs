@@ -56,6 +56,13 @@ pub enum PurrdfStatus {
     /// links, SHACL 1.2 Core section 6.4) and the IRIs it names
     /// (`purrdf_shapes_import_error_iri_count`, `purrdf_shapes_import_error_iri`).
     ShapesImportError = 12,
+    /// A dated native XPath regular-expression law, selected through a
+    /// `*_xpath_regex` entry point's `regex_profile`, withheld a compile, match,
+    /// storage or replacement resource, or the host refused its storage. The message
+    /// names the resource (`xpath-pattern-bytes`, `xpath-match-steps`, ...), and a
+    /// SPARQL request's presentation record carries the same code. No result, answer
+    /// or report is returned: a refusal is never an empty or non-matching result.
+    RegexResourceError = 13,
     /// A panic was caught at the FFI boundary (should never reach the caller in
     /// normal operation).
     Panic = 100,

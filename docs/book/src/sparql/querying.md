@@ -2171,6 +2171,52 @@ SPARQL UPDATE's grammar admits an aggregate only inside a nested
   entry reaches the statistical set through exactly that nested-subquery
   shape.
 
+## Dated XPath regex laws
+
+`REGEX` and `REPLACE` run on the compatibility regular expressions unless the
+caller selects a dated native XPath law by its stable name:
+
+| Name | Law |
+|---|---|
+| `xpath-2.0-2010-12-14` | XPath and XQuery Functions and Operators 2.0 (Second Edition), 14 December 2010 |
+| `xpath-3.1-2017-03-21` | XPath and XQuery Functions and Operators 3.1, 21 March 2017 |
+
+Both laws admit backreferences, which the compatibility expressions refuse.
+Only 3.1 admits non-capturing groups such as `(?:a)` and the `q` flag. Under
+either law, this query keeps every code whose first two characters are the same:
+
+```sparql
+SELECT ?code WHERE {
+  ?item <http://example.org/code> ?code
+  FILTER(REGEX(?code, "^(.)\\1"))
+}
+```
+
+Every host selects the law in its own spelling:
+
+| Host | Spelling |
+|---|---|
+| Rust | `NativeSparqlEngine::with_xpath_regex(profile, limits)` for every request the engine runs, or `QueryOptions::with_xpath_regex(profile, limits)` for one request, with `Profile` and `Limits` from `purrdf_core::xsd_regex::xpath`; `purrdf_validate::xpath_regex::{parse_profile, sparql_engine, query_options}` select by name with the production limits |
+| CLI | `--xpath-regex <NAME>` on `query` and `update` |
+| Python | `xpath_regex=` on `query`, `query_governed`, `query_entailment_governed`, `update`, `update_governed` and `Store.prepare`, and on the rdflib layer's `Graph.query` and `Graph.update`; `purrdf.XPATH_REGEX_PROFILES` lists the names |
+| WebAssembly | an `xpathRegex` option on every evaluating `QueryEngine` method and its asynchronous twin, and a trailing `xpathRegex` on `Dataset.query`, `queryRawConfigured` and `queryRawWithContext` |
+| C | `regex_profile` on `purrdf_query_xpath_regex`, `purrdf_query_json_xpath_regex`, `purrdf_query_governed_xpath_regex`, `purrdf_query_entailment_governed_xpath_regex` and `purrdf_update_governed_xpath_regex` |
+
+Names match exactly, with no case folding or undated alias, so a name such as
+`xpath-3.1` is refused with a list of the accepted names. With no selection
+(no option, no flag, or a NULL `regex_profile`), the compatibility regular
+expressions behave exactly as before. A prepared query keeps its law for every
+run, and an unset request inherits the engine's selection.
+
+A pattern or flag the selected law does not define is an ordinary expression
+error, so a `FILTER` drops the row and a `BIND` leaves its variable unbound. A
+selected law also runs under finite resource bounds, 64 KiB of pattern source
+among them. Exceeding one is an operational failure carrying the resource's
+[`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core),
+whose page lists the measured classes of work that reach each bound.
+It is never a partial answer or a `false` filter, and a refused update changes
+nothing.
+
 ## Entailment regimes
 
 SPARQL queries can be answered under an entailment regime by materializing the

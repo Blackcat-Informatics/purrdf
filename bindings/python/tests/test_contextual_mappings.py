@@ -41,7 +41,7 @@ def test_python_contextual_dispatch(compat, route):
     graph = getattr(compat, "Graph" if route == "processor" else route)()
     graph._store = BindingDoor(graph._store)
     query = f"SELECT ?this WHERE {{ BIND(<{EX}replacement> AS ?this) }}"
-    kwargs = {"initBindings": {"this": compat.URIRef(EX + "initial")}, "division": "exact"}
+    kwargs = {"initBindings": {"this": compat.URIRef(EX + "initial")}, "division": "exact", "xpath_regex": "xpath-3.1-2017-03-21"}
     if route == "processor":
         from purrdf.compat.rdflib.plugins.sparqlprocessor import SPARQLProcessor
 
@@ -51,7 +51,7 @@ def test_python_contextual_dispatch(compat, route):
     assert [row.this for row in result] == [compat.URIRef(EX + "replacement")]
     assert len(graph._store.calls) == 1
     _, forwarded = graph._store.calls[0]
-    assert forwarded["division"] == "exact"
+    assert (forwarded["division"], forwarded["xpath_regex"]) == ("exact", "xpath-3.1-2017-03-21")
     assert forwarded["named_graphs"] == (route in ("Dataset", "ConjunctiveGraph"))
 
 

@@ -202,27 +202,9 @@ HEADER_SUFFIXES = (".rs", ".py", ".pyi", ".sh", ".mjs", ".js", ".toml", ".yaml",
 #
 # The alternative -- dropping the whole rule because one file is different -- is how
 # a gate with one awkward case becomes no gate at all.
-DELIBERATE_OTHER_LICENSE: dict[str, str] = {
-    # The book is PROSE, licensed CC-BY-4.0 so it can be quoted and translated on
-    # terms that suit documentation rather than code. Its configuration declares the
-    # license of the thing it builds, which is not the license of the tree.
-    "docs/book/book.toml": "CC-BY-4.0",
-    # Generated from the Unicode Character Database, so the Unicode-3.0 terms
-    # apply to the tables beside the project's own offer (see LICENSING.md,
-    # "Unicode data compiled into published crates"). Each is a generator's
-    # output, and its generator writes this header.
-    "crates/lex/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-    "crates/iri/src/idna_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-    "crates/rdf-core/src/xsd_regex/blocks.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-    "crates/text/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-    "crates/jsonschema/src/ecma/property_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-    "crates/jsonschema/src/ecma/unicode_ranges.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
-    # Separately identified WHATWG DATA incorporated into generated source;
-    # the independently written resolver/generator keep the first-party offer.
-    # Its exact input and notice are frozen, and check-generated.sh proves this
-    # file is only the native generator's data projection, not imported code.
-    "crates/lex/src/html/entities.rs": "BSD-3-Clause",
-}
+DELIBERATE_OTHER_LICENSE: dict[str, str] = tomllib.loads(
+    (repo_root() / "license-inventory.toml").read_text(encoding="utf-8")
+)["header_offers"]
 
 
 def registration_scope_offenders() -> list[str]:

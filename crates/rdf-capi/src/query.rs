@@ -12,7 +12,7 @@ use purrdf_rs::{
 };
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, DivisionPolicy, GovernedOutcome, GovernedUpdateOutcome,
-    NativeSparqlEngine, PartialAnswers, QueryOptions,
+    PartialAnswers, QueryOptions,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -23,10 +23,15 @@ use crate::governor::{
 };
 use crate::handles::PurrdfDataset;
 use crate::handles::into_handle;
+use crate::regex_profile::{Profile, decode_regex_profile, query_error};
+// The engine every entry runs on, under the caller's dated XPath law when it named one.
+// `NOW()`/`RAND()`/`UUID()`/`STRUUID()` are live by construction — `EvalCtx::new` samples
+// the real host wall clock and OS entropy itself, so no host-side wiring is needed here.
 use crate::rowcursor::PurrdfRowCursor;
 use crate::status::PurrdfStatus;
 use crate::term::PurrdfStr;
 use crate::{cstr_to_str, opt_cstr_to_str};
+use purrdf_validate::xpath_regex::{query_options, sparql_engine};
 
 /// The result-form discriminant written to every query entry point's `out_kind`.
 #[repr(i32)]
@@ -125,13 +130,6 @@ impl PurrdfPartialCertificate {
             barrier: PurrdfStr::empty(),
         }
     }
-}
-
-/// The native SPARQL engine for the C ABI. `NOW()`/`RAND()`/`UUID()`/`STRUUID()`
-/// are live by construction — `EvalCtx::new` samples the real host wall clock and
-/// OS entropy itself, so no host-side clock/entropy wiring is needed here.
-fn engine() -> NativeSparqlEngine {
-    NativeSparqlEngine::new()
 }
 
 /// Decode `aggregate_namespace` (nullable, `opt_cstr_to_str`'s convention for every
@@ -242,6 +240,7 @@ unsafe fn run_query(
     dataset: *const PurrdfDataset,
     query: *const c_char,
     base_iri: *const c_char,
+    regex: Option<Profile>,
 ) -> Result<SparqlResult, PurrdfError> {
     unsafe {
         let query = cstr_to_str(query)?;
@@ -249,17 +248,19 @@ unsafe fn run_query(
         // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
         // no store round-trip — on the engine's ungoverned entry, exactly as its
         // `SparqlEngine::query` runs it (the plan, then its evaluation with no governor
-        // state), with the handle's division policy in force.
-        let options = QueryOptions::new().with_division(PurrdfDataset::division(dataset));
-        let engine = engine();
+        // state), with the handle's division policy and the caller's dated XPath law in
+        // force.
+        let options = query_options(
+            QueryOptions::new().with_division(PurrdfDataset::division(dataset)),
+            regex,
+        );
+        let engine = sparql_engine(regex);
         engine
             .prepare_query_with_options(query, base_iri, options)
             .and_then(|prepared| {
                 engine.query_prepared(PurrdfDataset::arc(dataset), &prepared, &[], options)
             })
-            .map_err(|diagnostic| {
-                PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
-            })
+            .map_err(|diagnostic| query_error(&diagnostic))
     }
 }
 
@@ -417,44 +418,124 @@ pub unsafe extern "C" fn purrdf_query(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if dataset.is_null() || query.is_null() || out_kind.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_query",
-                ));
-            }
-            match run_query(dataset, query, base_iri)? {
-                SparqlResult::Solutions {
-                    variables, rows, ..
-                } => {
-                    if out_rows.is_null() {
-                        return Err(PurrdfError::new(
-                            PurrdfStatus::NullPointer,
-                            "out_rows is null for a SELECT result",
-                        ));
-                    }
-                    *out_kind = KIND_SOLUTIONS;
-                    *out_rows = into_handle(PurrdfRowCursor::new(variables, rows));
-                }
-                SparqlResult::Graph(graph) => {
-                    if out_graph.is_null() {
-                        return Err(PurrdfError::new(
-                            PurrdfStatus::NullPointer,
-                            "out_graph is null for a CONSTRUCT/DESCRIBE result",
-                        ));
-                    }
-                    *out_kind = KIND_GRAPH;
-                    *out_graph = into_handle(PurrdfDataset::new(graph));
-                }
-                SparqlResult::Boolean(value) => {
-                    *out_kind = KIND_BOOLEAN;
-                    if !out_boolean.is_null() {
-                        *out_boolean = u8::from(value);
-                    }
-                }
-            }
-            Ok(PurrdfStatus::Ok)
+            query_entry(
+                "purrdf_query",
+                dataset,
+                query,
+                base_iri,
+                std::ptr::null(),
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+            )
         })
+    }
+}
+
+/// [`purrdf_query`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` (nullable, NUL-terminated UTF-8) names the dated XPath law that
+/// `REGEX`, `REPLACE` and the other pattern built-ins compile and match under:
+/// exactly `xpath-2.0-2010-12-14` (XPath F&O 2.0 Second Edition) or
+/// `xpath-3.1-2017-03-21` (XPath F&O 3.1), run under the production native limits.
+/// NULL is [`purrdf_query`]: the compatibility regular expressions, unchanged. Any
+/// other name — an undated `xpath-3.1`, another letter case, the empty string — is
+/// `PURRDF_STATUS_INVALID_ARGUMENT`, and the message lists the accepted names.
+///
+/// A pattern the selected law does not admit is a SPARQL expression error, exactly as
+/// an invalid pattern is under compatibility: a `FILTER` keeps no row for it. A
+/// pattern or input the law cannot process within its limits is not: the call fails
+/// with `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and returns no result.
+///
+/// # Safety
+/// As [`purrdf_query`]; `regex_profile` must be null or a NUL-terminated C string
+/// live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_xpath_regex(
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regex_profile: *const c_char,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_entry(
+                "purrdf_query_xpath_regex",
+                dataset,
+                query,
+                base_iri,
+                regex_profile,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_query`] and [`purrdf_query_xpath_regex`]. `regex_profile`
+/// is null for the entry point that has no such parameter.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn query_entry(
+    entry: &str,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regex_profile: *const c_char,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if dataset.is_null() || query.is_null() || out_kind.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let regex = decode_regex_profile(regex_profile)?;
+        match run_query(dataset, query, base_iri, regex)? {
+            SparqlResult::Solutions {
+                variables, rows, ..
+            } => {
+                if out_rows.is_null() {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "out_rows is null for a SELECT result",
+                    ));
+                }
+                *out_kind = KIND_SOLUTIONS;
+                *out_rows = into_handle(PurrdfRowCursor::new(variables, rows));
+            }
+            SparqlResult::Graph(graph) => {
+                if out_graph.is_null() {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "out_graph is null for a CONSTRUCT/DESCRIBE result",
+                    ));
+                }
+                *out_kind = KIND_GRAPH;
+                *out_graph = into_handle(PurrdfDataset::new(graph));
+            }
+            SparqlResult::Boolean(value) => {
+                *out_kind = KIND_BOOLEAN;
+                if !out_boolean.is_null() {
+                    *out_boolean = u8::from(value);
+                }
+            }
+        }
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -556,33 +637,100 @@ pub unsafe extern "C" fn purrdf_query_json(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if dataset.is_null() || query.is_null() || out_buffer.is_null() {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null pointer argument to purrdf_query_json",
-                ));
-            }
-            let query_text = cstr_to_str(query)?;
-            let namespace = decode_provenance_namespace(provenance_prefix, provenance_iri)?;
-            let result = run_query(dataset, query, base_iri)?;
-            // Delegate to the canonical SPARQL-Results serializer. An
-            // empty `ResultProvenance` (no namespace supplied) yields byte-identical
-            // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
-            // crate's wasm-clean rdf-core N-QUADS writer — graph slots and the RDF 1.2
-            // statement layer included — and never carries the extension (`to_json`
-            // only appends it for `Solutions`/`Boolean`; a `Graph` result serializes
-            // as `{"graph": "..."}` regardless).
-            let provenance = purrdf_validate::query::provenance(namespace.as_ref(), query_text);
-            let outcome = purrdf_sparql_results::to_json(&result, &provenance, namespace.as_ref())
-                .map_err(|e| {
-                    PurrdfError::new(
-                        PurrdfStatus::QueryError,
-                        format!("SPARQL results JSON serialization failed: {e}"),
-                    )
-                })?;
-            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
-            Ok(PurrdfStatus::Ok)
+            query_json_entry(
+                "purrdf_query_json",
+                dataset,
+                query,
+                base_iri,
+                provenance_prefix,
+                provenance_iri,
+                std::ptr::null(),
+                out_buffer,
+            )
         })
+    }
+}
+
+/// [`purrdf_query_json`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_query_xpath_regex`]'s: NULL is [`purrdf_query_json`]
+/// unchanged, `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21` selects that dated
+/// XPath law, any other name is `PURRDF_STATUS_INVALID_ARGUMENT`, and a law's
+/// resource refusal is `PURRDF_STATUS_REGEX_RESOURCE_ERROR` with no buffer written.
+///
+/// # Safety
+/// As [`purrdf_query_json`]; `regex_profile` must be null or a NUL-terminated C
+/// string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_json_xpath_regex(
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    provenance_prefix: *const c_char,
+    provenance_iri: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_json_entry(
+                "purrdf_query_json_xpath_regex",
+                dataset,
+                query,
+                base_iri,
+                provenance_prefix,
+                provenance_iri,
+                regex_profile,
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_query_json`] and [`purrdf_query_json_xpath_regex`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn query_json_entry(
+    entry: &str,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    provenance_prefix: *const c_char,
+    provenance_iri: *const c_char,
+    regex_profile: *const c_char,
+    out_buffer: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if dataset.is_null() || query.is_null() || out_buffer.is_null() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null pointer argument to {entry}"),
+            ));
+        }
+        let query_text = cstr_to_str(query)?;
+        let namespace = decode_provenance_namespace(provenance_prefix, provenance_iri)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let result = run_query(dataset, query, base_iri, regex)?;
+        // Delegate to the canonical SPARQL-Results serializer. An
+        // empty `ResultProvenance` (no namespace supplied) yields byte-identical
+        // pure W3C SRJ for SELECT/ASK; the CONSTRUCT-graph path is rendered by the
+        // crate's wasm-clean rdf-core N-QUADS writer — graph slots and the RDF 1.2
+        // statement layer included — and never carries the extension (`to_json`
+        // only appends it for `Solutions`/`Boolean`; a `Graph` result serializes
+        // as `{"graph": "..."}` regardless).
+        let provenance = purrdf_validate::query::provenance(namespace.as_ref(), query_text);
+        let outcome = purrdf_sparql_results::to_json(&result, &provenance, namespace.as_ref())
+            .map_err(|e| {
+                PurrdfError::new(
+                    PurrdfStatus::QueryError,
+                    format!("SPARQL results JSON serialization failed: {e}"),
+                )
+            })?;
+        *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -628,55 +776,151 @@ pub unsafe extern "C" fn purrdf_query_governed(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if dataset.is_null()
-                || query.is_null()
-                || governors.is_null()
-                || out_outcome.is_null()
-                || out_kind.is_null()
-                || out_evidence.is_null()
-                || out_partial.is_null()
-            {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null required pointer argument to purrdf_query_governed",
-                ));
-            }
-            clear_result_outputs(out_kind, out_rows, out_graph, out_boolean);
-            *out_partial = PurrdfPartialCertificate::none();
-
-            let query = cstr_to_str(query)?;
-            let base_iri = opt_cstr_to_str(base_iri)?;
-            let governors = decode_governors(governors)?;
-            let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
-            let outcome = engine()
-                .query_governed(
-                    PurrdfDataset::arc(dataset),
-                    SparqlRequest {
-                        query,
-                        base_iri,
-                        substitutions: &[],
-                    },
-                    QueryOptions::new()
-                        .with_env(&aggregate_env(aggregates.as_ref())?)
-                        .with_division(PurrdfDataset::division(dataset)),
-                    &governors,
-                )
-                .map_err(|diagnostic| {
-                    PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
-                })?;
-
-            let (kind, evidence) = store_governed_query_outcome(
-                outcome,
+            query_governed_entry(
+                "purrdf_query_governed",
+                dataset,
+                query,
+                base_iri,
+                aggregate_namespace,
+                std::ptr::null(),
+                governors,
+                out_outcome,
                 out_kind,
                 out_rows,
                 out_graph,
                 out_boolean,
+                out_evidence,
                 out_partial,
-            )?;
-            *out_outcome = kind as i32;
-            *out_evidence = evidence;
-            Ok(PurrdfStatus::Ok)
+            )
         })
+    }
+}
+
+/// [`purrdf_query_governed`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_query_xpath_regex`]'s: NULL is
+/// [`purrdf_query_governed`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` selects that dated XPath law, and any other name is
+/// `PURRDF_STATUS_INVALID_ARGUMENT`. The law's own limits are independent of
+/// `governors`: a governor trip is still status `OK` with its certificate, while a
+/// law's resource refusal is `PURRDF_STATUS_REGEX_RESOURCE_ERROR` and leaves the
+/// result kind `-1`.
+///
+/// # Safety
+/// As [`purrdf_query_governed`]; `regex_profile` must be null or a NUL-terminated C
+/// string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_governed_xpath_regex(
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_governed_entry(
+                "purrdf_query_governed_xpath_regex",
+                dataset,
+                query,
+                base_iri,
+                aggregate_namespace,
+                regex_profile,
+                governors,
+                out_outcome,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+                out_evidence,
+                out_partial,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_query_governed`] and [`purrdf_query_governed_xpath_regex`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn query_governed_entry(
+    entry: &str,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if dataset.is_null()
+            || query.is_null()
+            || governors.is_null()
+            || out_outcome.is_null()
+            || out_kind.is_null()
+            || out_evidence.is_null()
+            || out_partial.is_null()
+        {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null required pointer argument to {entry}"),
+            ));
+        }
+        clear_result_outputs(out_kind, out_rows, out_graph, out_boolean);
+        *out_partial = PurrdfPartialCertificate::none();
+
+        let query = cstr_to_str(query)?;
+        let base_iri = opt_cstr_to_str(base_iri)?;
+        let governors = decode_governors(governors)?;
+        let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let env = aggregate_env(aggregates.as_ref())?;
+        let outcome = sparql_engine(regex)
+            .query_governed(
+                PurrdfDataset::arc(dataset),
+                SparqlRequest {
+                    query,
+                    base_iri,
+                    substitutions: &[],
+                },
+                query_options(
+                    QueryOptions::new()
+                        .with_env(&env)
+                        .with_division(PurrdfDataset::division(dataset)),
+                    regex,
+                ),
+                &governors,
+            )
+            .map_err(|diagnostic| query_error(&diagnostic))?;
+
+        let (kind, evidence) = store_governed_query_outcome(
+            outcome,
+            out_kind,
+            out_rows,
+            out_graph,
+            out_boolean,
+            out_partial,
+        )?;
+        *out_outcome = kind as i32;
+        *out_evidence = evidence;
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -751,137 +995,271 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if dataset.is_null()
-                || query.is_null()
-                || regime.is_null()
-                || program.is_null()
-                || governors.is_null()
-                || out_outcome.is_null()
-                || out_kind.is_null()
-                || out_evidence.is_null()
-                || out_partial.is_null()
-                || out_report.is_null()
-            {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null required pointer argument to purrdf_query_entailment_governed",
-                ));
-            }
-            clear_result_outputs(out_kind, out_rows, out_graph, out_boolean);
-            *out_partial = PurrdfPartialCertificate::none();
-            *out_report = std::ptr::null_mut();
-
-            let query = cstr_to_str(query)?;
-            let base_iri = opt_cstr_to_str(base_iri)?;
-            let regime = cstr_to_str(regime)?;
-            let program = cstr_to_str(program)?;
-            let plan = QueryEntailmentPlan::parse(regime, program)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            let imports = crate::entail::import_pairs(
+            query_entailment_governed_entry(
+                "purrdf_query_entailment_governed",
+                dataset,
+                query,
+                base_iri,
+                regime,
+                program,
                 import_iris,
                 import_documents,
                 import_count,
-                "purrdf_query_entailment_governed",
-            )?;
-            let premise_iris = crate::cstr_array(
                 premise_iris,
                 premise_iri_count,
-                "premise_iris",
-                "purrdf_query_entailment_governed",
-            )?;
-            let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            let limits = purrdf_validate::MaterializeLimits {
-                // SAFETY: the caller's contract — null or readable.
-                max_stored_facts: max_stored_facts.as_ref().copied(),
-                // SAFETY: the caller's contract — null or readable.
-                max_join_steps: max_join_steps.as_ref().copied(),
-                host: purrdf_validate::RegimeHost::CAbi,
-            };
-            let governors = decode_governors(governors)?;
-            let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
-            let outcome = query_with_entailment_closure_governed(
-                &engine(),
-                PurrdfDataset::arc(dataset),
-                SparqlRequest {
-                    query,
-                    base_iri,
-                    substitutions: &[],
-                },
-                &EntailmentClosure::new(plan.entailment(), &imports)
-                    .with_limits(limits.eval_options()),
-                QueryOptions::new()
-                    .with_env(&aggregate_env(aggregates.as_ref())?)
-                    .with_division(PurrdfDataset::division(dataset)),
-                // This surface registers no relation at all, so there is none to re-derive
-                // over the closure — `NONE` is the accurate claim here, not a default.
-                &ClosureRelations::NONE,
-                &governors,
+                max_stored_facts,
+                max_join_steps,
+                aggregate_namespace,
+                std::ptr::null(),
+                governors,
+                out_outcome,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+                out_evidence,
+                out_partial,
+                out_report,
             )
-            .map_err(|error| match error {
-                purrdf_rs::ReasoningError::Query(diagnostic) => {
-                    PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
-                }
-                // Rendered by the shared boundary, so a passed evaluation limit names THIS
-                // function's parameter rather than a Rust type the caller cannot reach.
-                purrdf_rs::ReasoningError::Entailment(error) => PurrdfError::new(
-                    PurrdfStatus::QueryError,
-                    purrdf_validate::render_entail_error_in(
-                        regime,
-                        &error,
-                        purrdf_validate::RegimeHost::CAbi,
-                        purrdf_validate::RegimeService::Query,
-                    ),
-                ),
-                other => PurrdfError::new(PurrdfStatus::QueryError, other.to_string()),
-            })?;
-
-            match outcome {
-                GovernedEntailment::Answered { outcome, report } => {
-                    let (kind, query_evidence) = store_governed_query_outcome(
-                        outcome,
-                        out_kind,
-                        out_rows,
-                        out_graph,
-                        out_boolean,
-                        out_partial,
-                    )?;
-                    *out_outcome = match kind {
-                        PurrdfQueryOutcomeKind::Complete => {
-                            PurrdfEntailmentQueryOutcomeKind::Complete as i32
-                        }
-                        PurrdfQueryOutcomeKind::BudgetExhausted => {
-                            PurrdfEntailmentQueryOutcomeKind::QueryBudgetExhausted as i32
-                        }
-                    };
-                    *out_evidence = PurrdfGovernedEntailmentEvidence {
-                        query_ran: 1,
-                        reserved: [0; 7],
-                        query: query_evidence,
-                        closure_trip: PurrdfGovernorTrip::NONE,
-                    };
-                    *out_report = into_handle(PurrdfBuffer(
-                        purrdf_validate::render_reasoning_report(&report).into_bytes(),
-                    ));
-                }
-                GovernedEntailment::ClosureStopped { tripped } => {
-                    *out_outcome = PurrdfEntailmentQueryOutcomeKind::ClosureStopped as i32;
-                    *out_evidence = PurrdfGovernedEntailmentEvidence {
-                        query_ran: 0,
-                        reserved: [0; 7],
-                        query: PurrdfGovernorEvidence::EMPTY,
-                        closure_trip: encode_trip(Some(tripped)),
-                    };
-                }
-                _ => {
-                    return Err(PurrdfError::new(
-                        PurrdfStatus::QueryError,
-                        "unsupported governed entailment outcome",
-                    ));
-                }
-            }
-            Ok(PurrdfStatus::Ok)
         })
+    }
+}
+
+/// [`purrdf_query_entailment_governed`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_query_xpath_regex`]'s and governs the query phase over
+/// the closure: NULL is [`purrdf_query_entailment_governed`] unchanged,
+/// `xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21` selects that dated XPath law, and
+/// any other name is `PURRDF_STATUS_INVALID_ARGUMENT`. A law's resource refusal is
+/// `PURRDF_STATUS_REGEX_RESOURCE_ERROR`, with no result and no report.
+///
+/// # Safety
+/// As [`purrdf_query_entailment_governed`]; `regex_profile` must be null or a
+/// NUL-terminated C string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_query_entailment_governed_xpath_regex(
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regime: *const c_char,
+    program: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernedEntailmentEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_report: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            query_entailment_governed_entry(
+                "purrdf_query_entailment_governed_xpath_regex",
+                dataset,
+                query,
+                base_iri,
+                regime,
+                program,
+                import_iris,
+                import_documents,
+                import_count,
+                premise_iris,
+                premise_iri_count,
+                max_stored_facts,
+                max_join_steps,
+                aggregate_namespace,
+                regex_profile,
+                governors,
+                out_outcome,
+                out_kind,
+                out_rows,
+                out_graph,
+                out_boolean,
+                out_evidence,
+                out_partial,
+                out_report,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_query_entailment_governed`] and
+/// [`purrdf_query_entailment_governed_xpath_regex`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn query_entailment_governed_entry(
+    entry: &str,
+    dataset: *const PurrdfDataset,
+    query: *const c_char,
+    base_iri: *const c_char,
+    regime: *const c_char,
+    program: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_kind: *mut i32,
+    out_rows: *mut *mut PurrdfRowCursor,
+    out_graph: *mut *mut PurrdfDataset,
+    out_boolean: *mut u8,
+    out_evidence: *mut PurrdfGovernedEntailmentEvidence,
+    out_partial: *mut PurrdfPartialCertificate,
+    out_report: *mut *mut PurrdfBuffer,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if dataset.is_null()
+            || query.is_null()
+            || regime.is_null()
+            || program.is_null()
+            || governors.is_null()
+            || out_outcome.is_null()
+            || out_kind.is_null()
+            || out_evidence.is_null()
+            || out_partial.is_null()
+            || out_report.is_null()
+        {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null required pointer argument to {entry}"),
+            ));
+        }
+        clear_result_outputs(out_kind, out_rows, out_graph, out_boolean);
+        *out_partial = PurrdfPartialCertificate::none();
+        *out_report = std::ptr::null_mut();
+
+        let query = cstr_to_str(query)?;
+        let base_iri = opt_cstr_to_str(base_iri)?;
+        let regime = cstr_to_str(regime)?;
+        let program = cstr_to_str(program)?;
+        let plan = QueryEntailmentPlan::parse(regime, program)
+            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+        let imports = crate::entail::import_pairs(
+            import_iris,
+            import_documents,
+            import_count,
+            "purrdf_query_entailment_governed",
+        )?;
+        let premise_iris = crate::cstr_array(
+            premise_iris,
+            premise_iri_count,
+            "premise_iris",
+            "purrdf_query_entailment_governed",
+        )?;
+        let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
+            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+        let limits = purrdf_validate::MaterializeLimits {
+            // SAFETY: the caller's contract — null or readable.
+            max_stored_facts: max_stored_facts.as_ref().copied(),
+            // SAFETY: the caller's contract — null or readable.
+            max_join_steps: max_join_steps.as_ref().copied(),
+            host: purrdf_validate::RegimeHost::CAbi,
+        };
+        let governors = decode_governors(governors)?;
+        let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let env = aggregate_env(aggregates.as_ref())?;
+        let outcome = query_with_entailment_closure_governed(
+            &sparql_engine(regex),
+            PurrdfDataset::arc(dataset),
+            SparqlRequest {
+                query,
+                base_iri,
+                substitutions: &[],
+            },
+            &EntailmentClosure::new(plan.entailment(), &imports).with_limits(limits.eval_options()),
+            query_options(
+                QueryOptions::new()
+                    .with_env(&env)
+                    .with_division(PurrdfDataset::division(dataset)),
+                regex,
+            ),
+            // This surface registers no relation at all, so there is none to re-derive
+            // over the closure — `NONE` is the accurate claim here, not a default.
+            &ClosureRelations::NONE,
+            &governors,
+        )
+        .map_err(|error| match error {
+            purrdf_rs::ReasoningError::Query(diagnostic) => query_error(&diagnostic),
+            // Rendered by the shared boundary, so a passed evaluation limit names THIS
+            // function's parameter rather than a Rust type the caller cannot reach.
+            purrdf_rs::ReasoningError::Entailment(error) => PurrdfError::new(
+                PurrdfStatus::QueryError,
+                purrdf_validate::render_entail_error_in(
+                    regime,
+                    &error,
+                    purrdf_validate::RegimeHost::CAbi,
+                    purrdf_validate::RegimeService::Query,
+                ),
+            ),
+            other => PurrdfError::new(PurrdfStatus::QueryError, other.to_string()),
+        })?;
+
+        match outcome {
+            GovernedEntailment::Answered { outcome, report } => {
+                let (kind, query_evidence) = store_governed_query_outcome(
+                    outcome,
+                    out_kind,
+                    out_rows,
+                    out_graph,
+                    out_boolean,
+                    out_partial,
+                )?;
+                *out_outcome = match kind {
+                    PurrdfQueryOutcomeKind::Complete => {
+                        PurrdfEntailmentQueryOutcomeKind::Complete as i32
+                    }
+                    PurrdfQueryOutcomeKind::BudgetExhausted => {
+                        PurrdfEntailmentQueryOutcomeKind::QueryBudgetExhausted as i32
+                    }
+                };
+                *out_evidence = PurrdfGovernedEntailmentEvidence {
+                    query_ran: 1,
+                    reserved: [0; 7],
+                    query: query_evidence,
+                    closure_trip: PurrdfGovernorTrip::NONE,
+                };
+                *out_report = into_handle(PurrdfBuffer(
+                    purrdf_validate::render_reasoning_report(&report).into_bytes(),
+                ));
+            }
+            GovernedEntailment::ClosureStopped { tripped } => {
+                *out_outcome = PurrdfEntailmentQueryOutcomeKind::ClosureStopped as i32;
+                *out_evidence = PurrdfGovernedEntailmentEvidence {
+                    query_ran: 0,
+                    reserved: [0; 7],
+                    query: PurrdfGovernorEvidence::EMPTY,
+                    closure_trip: encode_trip(Some(tripped)),
+                };
+            }
+            _ => {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::QueryError,
+                    "unsupported governed entailment outcome",
+                ));
+            }
+        }
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -915,50 +1293,124 @@ pub unsafe extern "C" fn purrdf_update_governed(
 ) -> i32 {
     unsafe {
         ffi_try!(out_error, {
-            if dataset.is_null()
-                || request.is_null()
-                || governors.is_null()
-                || out_outcome.is_null()
-                || out_evidence.is_null()
-            {
-                return Err(PurrdfError::new(
-                    PurrdfStatus::NullPointer,
-                    "null required pointer argument to purrdf_update_governed",
-                ));
-            }
-            let governors = decode_update_governors(governors)?;
-            let request = cstr_to_str(request)?;
-            let base_iri = opt_cstr_to_str(base_iri)?;
-            let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
-            let division = PurrdfDataset::division(dataset);
-            let outcome = engine()
-                .update_governed(
-                    &mut (*dataset).0,
-                    SparqlRequest {
-                        query: request,
-                        base_iri,
-                        substitutions: &[],
-                    },
-                    QueryOptions::new()
-                        .with_env(&aggregate_env(aggregates.as_ref())?)
-                        .with_division(division),
-                    &governors,
-                )
-                .map_err(|diagnostic| {
-                    PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
-                })?;
-            match outcome {
-                GovernedUpdateOutcome::Applied { evidence } => {
-                    *out_outcome = PurrdfUpdateOutcomeKind::Applied as i32;
-                    *out_evidence = encode_evidence(&evidence);
-                }
-                GovernedUpdateOutcome::BudgetExhausted { evidence, .. } => {
-                    *out_outcome = PurrdfUpdateOutcomeKind::BudgetExhausted as i32;
-                    *out_evidence = encode_evidence(&evidence);
-                }
-            }
-            Ok(PurrdfStatus::Ok)
+            update_governed_entry(
+                "purrdf_update_governed",
+                dataset,
+                request,
+                base_iri,
+                aggregate_namespace,
+                std::ptr::null(),
+                governors,
+                out_outcome,
+                out_evidence,
+            )
         })
+    }
+}
+
+/// [`purrdf_update_governed`] under a caller-selected regular-expression law.
+///
+/// `regex_profile` is [`purrdf_query_xpath_regex`]'s and governs every pattern
+/// built-in the request's `WHERE` clauses and templates evaluate: NULL is
+/// [`purrdf_update_governed`] unchanged, `xpath-2.0-2010-12-14` or
+/// `xpath-3.1-2017-03-21` selects that dated XPath law, and any other name is
+/// `PURRDF_STATUS_INVALID_ARGUMENT`. A law's resource refusal is
+/// `PURRDF_STATUS_REGEX_RESOURCE_ERROR`, and the dataset handle keeps its snapshot:
+/// no mutation applies.
+///
+/// # Safety
+/// As [`purrdf_update_governed`]; `regex_profile` must be null or a NUL-terminated C
+/// string live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
+    dataset: *mut PurrdfDataset,
+    request: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_evidence: *mut PurrdfGovernorEvidence,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            update_governed_entry(
+                "purrdf_update_governed_xpath_regex",
+                dataset,
+                request,
+                base_iri,
+                aggregate_namespace,
+                regex_profile,
+                governors,
+                out_outcome,
+                out_evidence,
+            )
+        })
+    }
+}
+
+/// The one body of [`purrdf_update_governed`] and [`purrdf_update_governed_xpath_regex`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn update_governed_entry(
+    entry: &str,
+    dataset: *mut PurrdfDataset,
+    request: *const c_char,
+    base_iri: *const c_char,
+    aggregate_namespace: *const c_char,
+    regex_profile: *const c_char,
+    governors: *const PurrdfQueryGovernors,
+    out_outcome: *mut i32,
+    out_evidence: *mut PurrdfGovernorEvidence,
+) -> Result<PurrdfStatus, PurrdfError> {
+    unsafe {
+        if dataset.is_null()
+            || request.is_null()
+            || governors.is_null()
+            || out_outcome.is_null()
+            || out_evidence.is_null()
+        {
+            return Err(PurrdfError::new(
+                PurrdfStatus::NullPointer,
+                format!("null required pointer argument to {entry}"),
+            ));
+        }
+        let governors = decode_update_governors(governors)?;
+        let request = cstr_to_str(request)?;
+        let base_iri = opt_cstr_to_str(base_iri)?;
+        let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
+        let regex = decode_regex_profile(regex_profile)?;
+        let env = aggregate_env(aggregates.as_ref())?;
+        let division = PurrdfDataset::division(dataset);
+        let outcome = sparql_engine(regex)
+            .update_governed(
+                &mut (*dataset).0,
+                SparqlRequest {
+                    query: request,
+                    base_iri,
+                    substitutions: &[],
+                },
+                query_options(
+                    QueryOptions::new().with_env(&env).with_division(division),
+                    regex,
+                ),
+                &governors,
+            )
+            .map_err(|diagnostic| query_error(&diagnostic))?;
+        match outcome {
+            GovernedUpdateOutcome::Applied { evidence } => {
+                *out_outcome = PurrdfUpdateOutcomeKind::Applied as i32;
+                *out_evidence = encode_evidence(&evidence);
+            }
+            GovernedUpdateOutcome::BudgetExhausted { evidence, .. } => {
+                *out_outcome = PurrdfUpdateOutcomeKind::BudgetExhausted as i32;
+                *out_evidence = encode_evidence(&evidence);
+            }
+        }
+        Ok(PurrdfStatus::Ok)
     }
 }
 
@@ -1008,7 +1460,7 @@ mod tests {
 
     use super::*;
 
-    /// `NOW()` must report the real wall clock through the C ABI's `engine()`.
+    /// `NOW()` must report the real wall clock through the C ABI's engine.
     /// `year(NOW())` on any date after this crate existed is `>= 2025`; a
     /// frozen-epoch regression would yield `1970`.
     #[test]
@@ -1016,7 +1468,7 @@ mod tests {
         let dataset = RdfDatasetBuilder::new()
             .freeze()
             .expect("empty dataset freezes");
-        let result = engine()
+        let result = sparql_engine(None)
             .query(
                 &dataset,
                 SparqlRequest {
@@ -1821,7 +2273,7 @@ mod tests {
         assert!(error.is_null(), "no error");
         assert_eq!(outcome, PurrdfUpdateOutcomeKind::Applied as i32);
 
-        let check = engine()
+        let check = sparql_engine(None)
             .query(
                 unsafe { &(*dataset).0 },
                 SparqlRequest {
