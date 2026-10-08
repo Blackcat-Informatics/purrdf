@@ -71,6 +71,7 @@ pub struct Corpus {
 pub struct Case<'a> {
     /// The inventory record.
     pub case: &'a inventory::Case,
+    directory: &'a str,
     document: &'a ManifestDocument,
     entry: TermId,
 }
@@ -427,6 +428,7 @@ impl Corpus {
                 unclaimed.remove(&(*path, *entry));
                 let bound = Case {
                     case,
+                    directory: &suite.directory,
                     document,
                     entry: *entry,
                 };
@@ -526,8 +528,8 @@ impl Corpus {
         select(&self.catalog.profiles, profile)
     }
 
-    fn path(&self, relative: &str) -> Result<PathBuf, String> {
-        Self::file(&self.root, ".", relative)
+    fn path(&self, case: &Case<'_>, relative: &str) -> Result<PathBuf, String> {
+        Self::file(&self.root, case.directory, relative)
     }
 
     /// The data graph: the parsed manifest itself when the action names it,
@@ -536,7 +538,7 @@ impl Corpus {
         let [input] = case.case.data.as_slice() else {
             return Err("a SHACL test action names exactly one data graph".to_owned());
         };
-        let relative = self.relative(&self.path(&input.path)?)?;
+        let relative = self.relative(&self.path(case, &input.path)?)?;
         if let Some(document) = self.documents.get(&relative) {
             return Ok(Arc::clone(&document.dataset));
         }
@@ -556,7 +558,7 @@ impl Corpus {
             .shapes
             .as_deref()
             .ok_or_else(|| "the shapes graph is absent".to_owned())?;
-        let relative = self.relative(&self.path(declared)?)?;
+        let relative = self.relative(&self.path(case, declared)?)?;
         let base = Self::artifact_iri(&relative);
         let parsed = purrdf::parse_dataset_with(
             &read(&self.root.join(&relative))?,
@@ -764,7 +766,7 @@ impl Corpus {
                 .path
                 .as_deref()
                 .ok_or_else(|| malformed("inference expectation absent"))?;
-            let path = self.path(relative).map_err(malformed)?;
+            let path = self.path(case, relative).map_err(malformed)?;
             let relative = self.relative(&path).map_err(malformed)?;
             let expected = purrdf::parse_dataset(
                 &read(&path).map_err(malformed)?,

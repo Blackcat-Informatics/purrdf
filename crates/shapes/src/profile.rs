@@ -330,19 +330,20 @@ impl Request {
             {
                 return Err(error);
             }
-            outcome.map_err(|error| {
-                let failure = scope
-                    .runtime
-                    .as_ref()
-                    .and_then(|runtime| runtime.take_failure());
-                match error {
+            let failure = scope
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.take_failure());
+            match outcome {
+                Ok(value) => failure.map_or(Ok(value), |failure| Err(failure.into_public())),
+                Err(error) => Err(match error {
                     crate::report::CompleteValidationError::Execution(_)
                     | crate::report::CompleteValidationError::Shapes(
                         crate::error::ShapesError::Invalid(_),
                     ) => failure.map_or(error, crate::report::ReportFailure::into_public),
                     error => error,
-                }
-            })
+                }),
+            }
         };
         match &self.native {
             Some(configuration) => configuration

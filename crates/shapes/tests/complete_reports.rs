@@ -173,6 +173,58 @@ fn native_data_blanks_keep_scoped_identity_without_shapes_blanks() {
 }
 
 #[test]
+fn nested_source_refusal_survives_a_later_conforming_some_value() {
+    let original = shapes(
+        r#"
+        ex:S a sh:NodeShape; sh:targetNode ex:n;
+            sh:property [ sh:path ex:p; sh:someValue [
+                sh:or ( [ sh:class ex:Duck ] ex:Query )
+            ] ] .
+        ex:Query sh:sparql ex:C .
+        ex:C sh:select "SELECT $this WHERE {}" .
+    "#,
+    );
+    let data = turtle::data(
+        PREFIXES,
+        "ex:n ex:p ex:aBad, ex:zGood . ex:zGood a ex:Duck .",
+    );
+    let mut changed = (*original).clone();
+    let target = changed
+        .node_shapes
+        .iter_mut()
+        .find(|shape| shape.id.to_string() == "<http://example.org/S>")
+        .expect("the actual target shape");
+    let Constraint::SomeValue(candidate) = &mut target.property_shapes[0].constraints[0] else {
+        panic!("the actual SomeValue child")
+    };
+    let Constraint::Or(members) = &mut candidate.constraints[0] else {
+        panic!("the actual candidate alternatives")
+    };
+    let Constraint::Sparql { select, .. } = &mut members[1].constraints[0] else {
+        panic!("the actual query occurrence")
+    };
+    select.push_str(" LIMIT 1");
+    let changed = PreparedShapes::new(Arc::new(changed))
+        .bind_complete_shared_dataset(Arc::clone(&data))
+        .unwrap();
+    for _ in 0..2 {
+        let error = changed.validate().unwrap_err();
+        let CompleteValidationError::SourceConstraint(refusal) = error else {
+            panic!("the hard source refusal cannot become conformance: {error:?}")
+        };
+        assert_eq!(refusal.shape().to_string(), "<http://example.org/Query>");
+        assert!(!refusal.is_property());
+        assert_eq!(refusal.index(), 0);
+    }
+    let neighbour = PreparedShapes::new(original)
+        .bind_complete_shared_dataset(data)
+        .unwrap();
+    let report = neighbour.validate().unwrap();
+    assert!(report.legacy().conforms);
+    assert_eq!(report.results().len(), 0);
+}
+
+#[test]
 fn changed_constraint_cannot_inherit_a_source_occurrence() {
     let original = shapes(
         r#"

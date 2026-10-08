@@ -2556,19 +2556,26 @@ impl PreparedValidator {
         let capture =
             crate::report::ReportCapture::with_sources(&self.shapes, profile, Some(&sources));
         let query_scope = crate::query_law::enter(profile, Some(&sources));
-        let outcome = evaluate(&capture);
+        let mut outcome = evaluate(&capture);
         if let Some(state) = crate::sparql::current_governors()
             && let Some(error) = crate::report::CompleteValidationError::resource(&state)
         {
             return Err(error);
         }
-        if outcome.is_err()
-            && let Some(failure) = query_scope
-                .runtime
-                .as_ref()
-                .and_then(|runtime| runtime.take_failure())
+        if let Some(failure) = query_scope
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.take_failure())
         {
             capture.refuse(failure);
+        }
+        if outcome.is_ok()
+            && let Some(failure) = capture.take_policy_failure()
+        {
+            capture.take_failure();
+            outcome = Err(crate::report::CompleteValidationError::Execution(
+                capture.refuse(failure),
+            ));
         }
         let records = outcome.map_err(|error| {
             capture

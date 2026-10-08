@@ -515,6 +515,113 @@ fn canonical_focus_errors_keep_the_actual_typed_cause_across_input_orders() {
 }
 
 #[test]
+fn dated_some_value_still_suppresses_an_ordinary_semantic_candidate_failure() {
+    let text = r"
+        ex:S a sh:NodeShape; sh:targetNode ex:n;
+            sh:property [ sh:path ex:p; sh:someValue [
+                sh:or ( [ sh:class ex:Duck ] [ sh:sparql ex:C ] )
+            ] ] .
+        ex:C sh:select 'SELECT $this ?failure WHERE { BIND(true AS ?failure) }' .
+    ";
+    let options = ValidationOptions::default().with_profile(ShaclProfile::WD_20260918);
+    let prepared = PreparedShapes::new(parsed(text, &options).unwrap());
+    let failed = prepared
+        .bind_complete_shared_dataset(turtle::data(PREFIXES, "ex:n ex:p ex:aBad ."))
+        .unwrap();
+    let error = failed.validate().unwrap_err();
+    let CompleteValidationError::Semantic(failure) = error else {
+        panic!("the single candidate has an ordinary semantic failure: {error:?}")
+    };
+    assert_eq!(failure.focus().to_string(), "<http://example.org/aBad>");
+    assert_eq!(
+        failure.source_constraint().unwrap().to_string(),
+        "<http://example.org/C>"
+    );
+    let neighbour = prepared
+        .bind_complete_shared_dataset(turtle::data(
+            PREFIXES,
+            "ex:n ex:p ex:aBad, ex:zGood . ex:zGood a ex:Duck .",
+        ))
+        .unwrap();
+    for _ in 0..2 {
+        let report = neighbour.validate().unwrap();
+        assert!(report.legacy().conforms);
+        assert_eq!(report.results().len(), 0);
+    }
+}
+
+#[test]
+fn existential_conformance_does_not_discard_a_reached_function_policy_refusal() {
+    let text = r#"
+        ex:f a sh:SPARQLFunction; sh:parameter [ sh:path ex:p ];
+            sh:select 'SELECT ?result WHERE { VALUES ?p { "x" } BIND(?p AS ?result) }' .
+        ex:S a sh:NodeShape; sh:targetNode ex:n;
+            sh:property [ sh:path ex:p; sh:someValue [ sh:sparql [ sh:select '''
+                SELECT $this WHERE {
+                    FILTER(IF($this = <http://example.org/a>,
+                              <http://example.org/f>("x"), "ok") = "x")
+                }
+            ''' ] ] ] .
+    "#;
+    let profile = ShaclProfile::WD_20260918;
+    let options = ValidationOptions::default().with_profile(profile);
+    let data = turtle::data(PREFIXES, "ex:n ex:p ex:a, ex:z .");
+    let preparation = PreparedShapes::new(parsed(text, &options).unwrap());
+    let binding = preparation
+        .bind_complete_shared_dataset(Arc::clone(&data))
+        .unwrap();
+    for _ in 0..2 {
+        match binding
+            .validate()
+            .expect_err("a reached function policy refusal is authoritative")
+        {
+            CompleteValidationError::Admission(refusal) => {
+                assert_eq!(refusal.profile(), profile);
+                assert_eq!(refusal.purpose(), QueryPurpose::Function);
+                assert_eq!(refusal.reason(), AdmissionReason::Values);
+            }
+            error => panic!("the typed admission refusal must survive: {error:?}"),
+        }
+    }
+    let dormant = text.replace("$this = <http://example.org/a>", "false");
+    assert!(
+        PreparedShapes::new(parsed(&dormant, &options).unwrap())
+            .bind_complete_shared_dataset(data)
+            .unwrap()
+            .validate()
+            .unwrap()
+            .legacy()
+            .conforms,
+        "an uninvoked function creates no policy refusal"
+    );
+    let ordered = r#"
+        ex:f a sh:SPARQLFunction; sh:parameter [ sh:path ex:p ];
+            sh:select 'SELECT ?result WHERE { VALUES ?p { "x" } BIND(?p AS ?result) }' .
+        ex:S a sh:NodeShape; sh:targetNode ex:n;
+            sh:property [ sh:path ex:p; sh:someValue [ sh:sparql [ sh:select '''
+                SELECT $this ?failure WHERE {
+                    { FILTER($this = <http://example.org/a>) BIND(true AS ?failure) }
+                    UNION
+                    { FILTER($this = <http://example.org/b>)
+                      FILTER(<http://example.org/f>("x") = "x") }
+                }
+            ''' ] ] ] .
+    "#;
+    let binding = PreparedShapes::new(parsed(ordered, &options).unwrap())
+        .bind_complete_shared_dataset(turtle::data(PREFIXES, "ex:n ex:p ex:a, ex:b, ex:z ."))
+        .unwrap();
+    for _ in 0..2 {
+        let error = binding.validate().unwrap_err();
+        let CompleteValidationError::Admission(refusal) = error else {
+            panic!("a suppressed semantic candidate cannot mask policy refusal: {error:?}")
+        };
+        assert_eq!(refusal.profile(), profile);
+        assert_eq!(refusal.purpose(), QueryPurpose::Function);
+        assert_eq!(refusal.reason(), AdmissionReason::Values);
+    }
+}
+
+#[test]
 fn a_reached_udf_admission_capsule_wins_its_paired_native_query_diagnostic() {
     let text = r#"
         ex:f a sh:SPARQLFunction; sh:parameter [ sh:path ex:p ];

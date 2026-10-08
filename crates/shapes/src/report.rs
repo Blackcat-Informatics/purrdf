@@ -846,7 +846,7 @@ fn complete_record_sort_key(record: &ResultRecord) -> CompleteRecordSortKey {
 }
 
 /// Typed evidence failures retained beside the legacy evaluator's diagnostic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ReportFailure {
     SourceConstraint(SourceConstraintRefusal),
     QuerySource(QuerySourceRefusal),
@@ -861,6 +861,14 @@ struct CapturedFailure {
     failure: Option<ReportFailure>,
 }
 
+#[derive(Default)]
+struct CapturedFailures {
+    first: Option<CapturedFailure>,
+    // A semantic candidate failure may be suppressed by existential success;
+    // a source or admission refusal still makes that success inadmissible.
+    policy: Option<ReportFailure>,
+}
+
 /// One rich-report operation or serial focus traversal. Workers borrow the same
 /// immutable shapes source; root failures are merged in canonical focus order.
 pub(crate) struct ReportCapture<'a> {
@@ -869,7 +877,7 @@ pub(crate) struct ReportCapture<'a> {
     /// The occurrence context admitted for this request, which may differ from
     /// an older law already occupying the shape's compatibility cache.
     pub(crate) sources: Option<&'a Arc<crate::shapes::ConstraintSources>>,
-    failure: std::sync::Mutex<Option<CapturedFailure>>,
+    failure: std::sync::Mutex<CapturedFailures>,
 }
 
 /// Location of an emitted parser constraint in its source shape.
@@ -963,16 +971,26 @@ impl<'a> ReportCapture<'a> {
             shapes,
             profile,
             sources,
-            failure: std::sync::Mutex::new(None),
+            failure: std::sync::Mutex::new(CapturedFailures {
+                first: None,
+                policy: None,
+            }),
         }
     }
 
     pub(crate) fn take_failure(&self) -> Option<ReportFailure> {
+        let mut failures = self.failure.lock().expect("report failure lock");
+        failures.policy = None;
+        failures.first.take().and_then(|captured| captured.failure)
+    }
+
+    /// A hard policy refusal retained independently of suppressible semantics.
+    pub(crate) fn take_policy_failure(&self) -> Option<ReportFailure> {
         self.failure
             .lock()
             .expect("report failure lock")
+            .policy
             .take()
-            .and_then(|captured| captured.failure)
     }
 
     /// Preserve the same earliest focus as the ordered chunk runner, including
@@ -984,7 +1002,8 @@ impl<'a> ReportCapture<'a> {
         focus: &crate::engine::FocusNode,
         failure: Option<ReportFailure>,
     ) {
-        let mut recorded = self.failure.lock().expect("report failure lock");
+        let mut failures = self.failure.lock().expect("report failure lock");
+        let recorded = &mut failures.first;
         if recorded.as_ref().is_none_or(|recorded| {
             recorded
                 .focus
@@ -996,6 +1015,7 @@ impl<'a> ReportCapture<'a> {
                 failure,
             });
         }
+        drop(failures);
     }
 
     pub(crate) fn refuse(&self, failure: ReportFailure) -> String {
@@ -1005,13 +1025,14 @@ impl<'a> ReportCapture<'a> {
             ReportFailure::Semantic(failure) => failure.to_string(),
             ReportFailure::Admission(failure) => failure.to_string(),
         };
-        self.failure
-            .lock()
-            .expect("report failure lock")
-            .get_or_insert(CapturedFailure {
-                focus: None,
-                failure: Some(failure),
-            });
+        let mut failures = self.failure.lock().expect("report failure lock");
+        if !matches!(failure, ReportFailure::Semantic(_)) {
+            failures.policy.get_or_insert_with(|| failure.clone());
+        }
+        failures.first.get_or_insert(CapturedFailure {
+            focus: None,
+            failure: Some(failure),
+        });
         message
     }
 

@@ -89,6 +89,39 @@ fn every_applicable_dated_execution_passes_exactly() {
 }
 
 #[test]
+fn nested_suite_executes_the_same_reviewed_inputs() {
+    let scratch = purrdf_testkit::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let copy = scratch.path().join("community");
+    let nested = copy.join("nested");
+    copy_tree(&corpus_root(), &nested);
+    let catalog = std::fs::read_to_string(nested.join("catalog.json")).unwrap();
+    let catalog = catalog
+        .replace("\"directory\": \".\"", "\"directory\": \"nested\"")
+        .replace("\"manifest.ttl\"", "\"nested/manifest.ttl\"")
+        .replace(
+            "\"shacl/inventory.json\"",
+            "\"nested/shacl/inventory.json\"",
+        )
+        .replace("\"shacl/manifest.ttl\"", "\"nested/shacl/manifest.ttl\"")
+        .replace("\"reviews/index.json\"", "\"nested/reviews/index.json\"");
+    std::fs::write(copy.join("catalog.json"), catalog).unwrap();
+    let index_path = nested.join("reviews/index.json");
+    let index = std::fs::read_to_string(&index_path).unwrap();
+    let index = index
+        .replace("\"path\": \"", "\"path\": \"nested/")
+        .replace("\"derivation\": \"", "\"derivation\": \"nested/");
+    std::fs::write(index_path, index).unwrap();
+
+    let corpus = Corpus::acquire(&copy).expect("relocated reviewed bytes are admitted");
+    let (totals, executions) = corpus.run().unwrap();
+    assert_eq!(totals.cases, 64);
+    assert_eq!(totals.executions, 115);
+    assert_eq!(totals.unsupported, 0);
+    assert_eq!(totals.failed, 0, "{executions:#?}");
+    assert_eq!(totals.passed_observations, 535);
+}
+
+#[test]
 fn an_unimplemented_profile_is_reported_apart_from_failures() {
     let mut profiles = Value::object::<&str, Value>([]);
     profiles["shacl12-20991231"] = Value::object([(

@@ -1136,15 +1136,25 @@ pub(crate) fn validate_shape_with_evidence_at<'a>(
         report_run: Some(&run),
     };
     let mut sink = CollectEvidence::default();
-    let outcome = walk_shape(context, focus, &mut sink);
+    let mut outcome = walk_shape(context, focus, &mut sink);
+    // Existential conformance may suppress a candidate's semantic failure,
+    // but it cannot admit an invocation the selected query law refused.
+    if let Some(refusal) = query_scope
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.take_failure())
+    {
+        local_capture.refuse(refusal);
+    }
+    if outcome.is_ok()
+        && let Some(refusal) = local_capture.take_policy_failure()
+    {
+        // The first candidate's semantic cause was suppressed by conformance.
+        // Replace only that successful traversal's cause with its hard refusal.
+        local_capture.take_failure();
+        outcome = Err(local_capture.refuse(refusal));
+    }
     if outcome.is_err() {
-        if let Some(refusal) = query_scope
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.take_failure())
-        {
-            local_capture.refuse(refusal);
-        }
         capture.record_focus_failure(store.core_view(), focus, local_capture.take_failure());
     }
     outcome?;
