@@ -1,0 +1,21 @@
+ghprsq PR head backlink metadata
+
+parent_hashes: cdc43aaa62507258b5551a9cdb9ede34f0e8a107
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 502
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/502
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: b0839118abb659e166f82adef4854cfb55197f33
+GhpRsq-Head-Ref: paudley/260-zh-hans-glossary-gate-harden-the
+GhpRsq-Head-OID: cdc43aaa62507258b5551a9cdb9ede34f0e8a107
+GhpRsq-Result-Tree: 785dddc2d322e6dc447654e85a25f145834f4178
+GhpRsq-Result-Commit: b9463ff883d3313fae17eff6ad5dfde39ac87145
+GhpRsq-Parent-Hashes: cdc43aaa62507258b5551a9cdb9ede34f0e8a107
+GhpRsq-Squash-Notes-SHA256: fcfa5e6b3d72854bdd7fd7c2d1ea3115b7a4d7a14cb132c04a859c8c82de5853
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Tree: 78bbf80f6174e02cc74a505f7339b2d15791413c
+GhpRsq-Stage-Ref: refs/ghprsq/pr/502/stage
+GhpRsq-Stage-Files: 132
