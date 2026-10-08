@@ -353,14 +353,14 @@ make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
 make bench      # purrdf_testkit::bench benchmarks (report-only; not a gate)
 make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
-make lubm       # the LUBM comparison workload, per entailment regime (report-only; network + JRE)
+make lubm       # the LUBM comparison workload, per entailment regime (report-only; network)
 make watdiv     # the WatDiv comparison workload over a frozen dataset (report-only; network)
 make build-profile-hygiene  # prove the gate is compiled the way it claims
 ```
 
 `scale-corpus`, `lubm` and `watdiv` are the three comparison lanes. None is a
-gate and none runs in `make check`: `lubm` needs a JRE and fetches a
-GPL-2.0-or-later generator, `watdiv` fetches a 58 MB frozen dataset that expands
+gate and none runs in `make check`: `lubm` runs the original native Rust university generator and fetches the
+external ontology and query set by digest, `watdiv` fetches a 58 MB frozen dataset that expands
 past a gigabyte, and neither vendors a byte. They share one implementation of
 the laws that make their numbers evidence — `scripts/lane-common.sh` — so a
 repair to one is a repair to all three. `docs/BENCHMARKS.md` owns the

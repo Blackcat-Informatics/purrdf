@@ -1245,117 +1245,21 @@ better test.
 
 ## LUBM comparison workload
 
-The first three layers compare PurRDF against PurRDF. This one compares it
-against the workload the OWL knowledge-base literature actually publishes
-numbers for: the **Lehigh University Benchmark**, a synthetic university domain
-with a data generator, an OWL ontology, and 14 queries chosen so that most of
-them have *no answers at all* without inference.
-
-Run it with `make lubm`. It is **report-only** — like every other layer here it
-gates nothing, asserts nothing, and prints what it measured on the host it ran
-on.
+`make lubm` uses the original first-party Rust generator **`purrdf-lubm-native-v1`** under [its explicit sampling and byte profile](../crates/bench/LUBM_PROFILE.md). It implements the published university profile; it does not reproduce UBA random sequences or historical answers. No Java runtime, compiler, generator archive or Linux filename fix is used.
 
 ```sh
-make lubm                                  # LUBM(1, 0), seed 0 — ~103k triples
-make lubm LUBM_UNIVERSITIES=10             # a larger corpus
-make lubm LUBM_SEED=7 LUBM_INDEX=0         # a different draw
+make lubm
+make lubm LUBM_UNIVERSITIES=10
+make lubm LUBM_SEED=7 LUBM_INDEX=2 LUBM_OUT=target/lubm-other
 ```
 
-Cite, in anything derived from it:
+Only the external `univ-bench.owl` ontology and fourteen published queries are fetched by pinned digest into the repository-ignored cache. Neither carries a redistribution grant. Generated N-Triples, normalized queries and mechanically projected schema are build output; the original external ontology digest remains separate from the projected schema digest.
 
-> Y. Guo, Z. Pan and J. Heflin. "LUBM: A Benchmark for OWL Knowledge Base
-> Systems." *Journal of Web Semantics* 3(2).
+The lane validates every knob before acquisition or generation. Cargo builds fresh native tools and reports their actual executable paths. Each generation receipt binds profile, seed, university range, ontology, document base, sorted department names, byte lengths and BLAKE3 identities. The production verifier reads every actual payload with the RDF parser, checks exact inventory, checks every CLI-converted department against its source graph, and checks the aggregate against their complete union. It rechecks acceptance before and after query execution; failed runs revoke the graph acceptance certificate.
 
-### Licence posture: everything is run, nothing is vendored
+Q1 contains explicitly typed graduate students taking the original fixed `University0/Department0/GraduateCourse0` course. That target is never retargeted for a nonzero starting index, so correct Q1 answers can be empty. Q14 contains explicitly typed undergraduate students and must be nonempty. Both exact URI sets come from the parsed RDF graph, not generator counters or another SPARQL query. Actual JSON results use the native SPARQL result reader; malformed success is `BAD-RESULTS`, unsupported evaluation is `CANNOT-EXECUTE`, and duplicate, unbound, non-URI or incorrect oracle answers fail acceptance. Old UBA counts do not apply.
 
-No LUBM byte lives in this repository, and that is a licensing conclusion rather
-than a tidiness preference.
-
-* The **UBA data generator is GPL-2.0-or-later**. This tree is MIT OR
-  Apache-2.0, so the generator is **run, never copied in**: vendoring it would
-  place a copyleft work inside a permissively licensed distribution. Running a
-  GPL program to produce data is not distribution of that program, and the data
-  is what the benchmark consumes.
-* **`univ-bench.owl` and `queries-sparql.txt` carry no licence grant at all** —
-  no copyright line, no rights statement, and none on the project page. Absent
-  an explicit grant there is no permission to redistribute, so both are fetched
-  by digest at the moment of use and left in an ignored cache. A *mechanically
-  normalised* copy of the query file is still a copy of it, so the normalised
-  queries are build output too, never tracked files.
-
-`scripts/benchmark-acquire.py` fetches all of it into `target/bench-artifacts/`,
-verifying every byte against a pinned digest, and refuses to run at all unless
-the repository's own ignore rules already make that cache uncommittable.
-`python3 scripts/benchmark-acquire.py --list` prints each artifact's terms.
-
-### The generator writes to the wrong directory on Linux
-
-Stock UBA builds its output path as `user.dir + "\" + name` — a **Windows**
-separator. On Linux nothing splits that backslash, so the last `/` in the string
-is the one before the working directory's own name, and the files land in the
-**parent** of the working directory, named `work\University0_0.owl` with a
-literal backslash inside the filename.
-
-The file *contents* are valid RDF/XML; only the name is wrong. The lane
-therefore **renames the output after generation** instead of patching
-`Generator.java`, which keeps the GPL source unmodified and un-vendored, needs
-no Java compiler (the artifact ships prebuilt `classes/`, and a JRE is enough),
-and is checkable — the lane refuses to leave a single backslash-named stray
-behind, so a pathology that changes shape (some files misplaced, some not) fails
-rather than converting a partial corpus.
-
-A rename count of zero is **not** a failure: it is what a fixed generator, or a
-platform that splits the backslash, looks like. The lane's guard is that a corpus
-exists and has bytes, never how its files came by their names.
-
-Each run generates inside its own directory, so the misplaced files land in that
-run's own arena rather than in a shared parent. That is a statement about where
-the strays go, not about concurrent safety — the arena is derived from `LUBM_OUT`
-alone, so two runs with default knobs share it and each step begins by wiping it.
-Two runs at once want two arenas: `make lubm LUBM_OUT=target/lubm-$$`. The
-artifact cache is shared regardless of the arena.
-
-### Determinism, and the one place it was not free
-
-UBA accepts `-index` and `-seed`, and the same pair reproduces the datasets the
-LUBM papers use. Conversion needed one fix to inherit that. Every generated file
-opens with `<owl:Ontology rdf:about="">` — an **empty relative IRI**, which
-resolves against the document base. Left to default that base is the input
-file's own `file://` path, so the converted N-Quads embedded the scratch
-directory and two runs in differently named directories differed.
-
-`--base` is therefore passed explicitly, built from the file's *name* only. It
-affects exactly two triples per file — the document's own `rdf:type
-owl:Ontology` and its `owl:imports` — and none of the 14 queries touches either.
-`LUBM_DOC_BASE` defaults to an `example.org` IRI: RFC 2606's reserved
-documentation domain and this repository's fixture convention, standing in for
-the publication IRI a locally generated corpus does not have. An operator who
-publishes a corpus sets it to where that corpus actually lives.
-
-The published corpus digest has **seven** inputs, and the list took three
-corrections to complete — which is the point of stating it.
-
-Five are knobs: `LUBM_UNIVERSITIES`, `LUBM_INDEX`, `LUBM_SEED`, `LUBM_ONTO` and
-`LUBM_DOC_BASE`. `LUBM_ONTO` belongs there because the generator stamps it into
-every document it writes, so it reaches every type and property IRI of the corpus.
-
-The sixth is **collation**, and it is not a knob. The lane concatenates its
-converted files in `find | sort` order, and `sort` obeys `LC_COLLATE` — under a
-UTF-8 collation `University0_10.owl` sorts *before* `University0_1.owl`, which
-changes the concatenation order, the digest, and which file becomes the smallest
-entailment rung. The lanes pin `LC_ALL=C` themselves rather than trusting the
-caller's environment.
-
-The seventh is the **`purrdf` binary**. Those bytes are its serializer's output, so a
-digest recorded with one version says nothing about another; the version is part of
-the pin key, and a bump reports "no pin recorded for this binary" rather than
-failing as though conversion had changed. See
-[the lane laws](design/purrdf-bench-lane-laws.md).
-
-The JDK is deliberately *not* on the list: the pinned generator references
-`java.util.ArrayList` and `java.util.Random` and no hash-ordered collection, so its
-output carries no iteration-order dependence, and `java.util.Random` is specified
-rather than implementation-defined.
+Every report names the generator profile, actual generator/CLI identities, receipt, graph acceptance, original/projected ontology, converted corpus and query-set digests, and each query regime and rung. Cite Y. Guo, Z. Pan and J. Heflin, “LUBM: A Benchmark for OWL Knowledge Base Systems”, *Journal of Web Semantics* 3(2), and identify this native profile when publishing results.
 
 ### Entailment regimes are part of the query, not metadata about it
 
@@ -1404,51 +1308,40 @@ that no projection gained, lost or reordered a variable — because a
 "normalisation" that quietly became a rewrite is the failure mode that would
 make every number downstream worthless.
 
-### The dataset ladder, and the ceiling that makes it necessary
+### The dataset ladder and explicit entailment budget
 
-Materializing an entailment closure passes through a **fixed internal ceiling**
-that no command-line flag raises. On this workload it bites well below one
-university, so the lane probes each regime against progressively smaller rungs —
+Every entailment probe and query receives the same `--max-join-steps` value,
+selected by `LUBM_MAX_JOIN_STEPS` and recorded in the summary. The lane's default
+is 100,000,000 steps; the CLI's ordinary target default remains unchanged. This
+is a finite work budget, not a promise that every corpus size fits. The lane
+probes each regime against progressively smaller rungs —
 the full corpus, then one generated file, then a slice — and reports the first
 that closes, printing the observed and permitted counts verbatim for each rung
 that did not. The limit is therefore visible in the output rather than inferred
 from a missing row.
 
 Every reported row names the rung it was answered over, and the report states
-the rule plainly: **a row count on a rung below `full` is not the published LUBM
+the rule plainly: **a row count on a rung below `full` is not the complete native-profile
 answer.** It is the answer over a strict subset, so a query whose matching
 individuals fall outside that subset legitimately reports `0`. Those counts
 establish that the regime works and what it costs; only `full` rows are
-comparable against a published LUBM figure.
+comparable against another engine over the same complete native-profile bytes.
 
 ### Parameters
 
-Every knob is an overridable `make` variable, in the same style as `SCALE_*`.
+| Knob | Default | Meaning |
+|---|---|---|
+| `LUBM_UNIVERSITIES` | `1` | Positive university count, at most the shared shell-safe signed-64 maximum. |
+| `LUBM_INDEX` | `0` | Unsigned 64-bit first absolute university index; index plus count must fit. |
+| `LUBM_SEED` | `0` | Unsigned 64-bit native seed, admitted and normalized in Rust. |
+| `LUBM_ONTO` | `http://swat.cse.lehigh.edu/onto/univ-bench.owl` | Explicit schema identity; custom namespaces project the external TBox through the RDF model. |
+| `LUBM_DOC_BASE` | `http://example.org/lubm/` | Absolute document base ending in `/`, without query or fragment. |
+| `LUBM_ENTAIL_SLICE` | `3000` | Positive statement count in the smallest entailment rung, at most the shared shell-safe signed-64 maximum. |
+| `LUBM_MAX_JOIN_STEPS` | `100000000` | Positive per-invocation entailment join-step budget, at most the shared shell-safe signed-64 maximum; applies equally to probes and measured queries. |
+| `LUBM_OUT` | `target/lubm` | Output parent, absolute or relative to the repository root; it must be outside Git worktrees or covered by a tracked .gitignore. Each run reports a fresh child directory and preserves earlier artifacts. |
+| `LUBM_BIN` | *(unset)* | Prebuilt `purrdf`; otherwise Cargo builds and reports the actual executable. |
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `LUBM_UNIVERSITIES` | `1` | Universities to generate (UBA's `-univ`). One is ~103k triples. |
-| `LUBM_SEED` | `0` | UBA's `-seed`. With `-index`, fixes the corpus. |
-| `LUBM_INDEX` | `0` | UBA's `-index`, the starting university id. |
-| `LUBM_ONTO` | Lehigh's ontology IRI | The `-onto` IRI stamped into the data, and the namespace `ub:` is rebound to. |
-| `LUBM_DOC_BASE` | `http://example.org/lubm/` | Base for each document's own two header triples. |
-| `LUBM_ENTAIL_SLICE` | `3000` | Triples in the smallest rung of the entailment ladder. |
-| `LUBM_OUT` | `target/lubm` | Where the lane works. An absolute path is used verbatim; a relative one resolves against the repository root, so the default keeps everything the lane writes inside `target/` as build output. |
-| `LUBM_BIN` | *(unset)* | A prebuilt `purrdf` to use instead of building one. |
-
-### What it covers, and what it does not
-
-It covers a real, published, externally defined workload end to end: generation,
-conversion **through PurRDF's own CLI**, and query evaluation under each query's
-own regime, with per-query timings and result counts.
-
-It does **not** cover: any other engine. The lane measures PurRDF and prints the
-regime and rung each number belongs to — which is what makes a comparison
-*possible* — but running another store and putting the two side by side is the
-operator's job, and the regime rule above is the thing that makes such a
-comparison honest rather than flattering. It is also not a conformance check:
-that a query returned *n* rows under `owl-rl` is a measurement, not a claim that
-the answer is complete under that regime.
+Timing is report-only. A partial or unsupported row does not establish the complete workload. Only valid answers over the full corpus count as complete rows. This measures PurRDF, not another engine and not completeness of an entailment regime.
 
 ## WatDiv comparison workload
 

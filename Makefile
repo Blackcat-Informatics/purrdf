@@ -527,19 +527,16 @@ cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetche
 	python3 scripts/cnschema-probe.py --self-test
 	python3 scripts/cnschema-probe.py
 
-# The LUBM and WatDiv artifacts are NEVER vendored: the LUBM generator is
-# GPL-2.0-or-later, its ontology and query file publish no licence grant at all,
-# and WatDiv grants use-with-citation rather than redistribution. They are
-# fetched by digest into target/bench-artifacts/ at the moment of use. Run
-# `python3 scripts/benchmark-acquire.py --list` to read each artifact's terms.
+# External LUBM ontology/queries and WatDiv artifacts are acquired by digest into
+# an ignored cache; the university corpus generator is original first-party Rust.
+# Read each external artifact use term with benchmark-acquire.py --list.
 benchmark-acquire: ## Fetch the pinned LUBM and WatDiv comparison-workload artifacts by digest into target/ (network; nothing is vendored; not a CI gate).
 	python3 scripts/benchmark-acquire.py --self-test
 	python3 scripts/benchmark-acquire.py
 
 # The LUBM comparison lane's knobs. Overridable exactly like SCALE_* above:
-# `make lubm LUBM_UNIVERSITIES=5`. The default is ONE university (~103k triples),
-# which is small enough to run in seconds and is the size whose per-query answers
-# the LUBM literature publishes, so a first run can be checked against it.
+# `make lubm LUBM_UNIVERSITIES=5`. Native answers are verified from actual RDF
+# graph sets; historical generator counts are not this profile oracle.
 #
 # LUBM_DOC_BASE is the base each generated document's own two header triples
 # resolve against. It has a default because leaving it unset would silently embed
@@ -552,6 +549,7 @@ LUBM_INDEX ?= 0
 LUBM_ONTO ?= http://swat.cse.lehigh.edu/onto/univ-bench.owl
 LUBM_DOC_BASE ?= http://example.org/lubm/
 LUBM_ENTAIL_SLICE ?= 3000
+LUBM_MAX_JOIN_STEPS ?= 100000000
 LUBM_OUT ?= target/lubm
 LUBM_BIN ?=
 
@@ -559,7 +557,7 @@ LUBM_BIN ?=
 # backtick in `LUBM_OUT` used to run and the lane then worked in a directory
 # nobody named. None of these knobs is a command, so none of them reaches a
 # shell at all.
-$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
+$(foreach knob,LUBM_UNIVERSITIES LUBM_SEED LUBM_INDEX LUBM_ONTO LUBM_DOC_BASE LUBM_ENTAIL_SLICE LUBM_MAX_JOIN_STEPS LUBM_OUT LUBM_BIN,$(eval $(call lane-env,$(knob))))
 
 lubm: ## Run the LUBM comparison workload end to end - acquire, generate, convert through the purrdf CLI, and run the 14 queries per entailment regime (report-only, never a gate). See docs/BENCHMARKS.md.
 	@bash scripts/lubm-lane.sh

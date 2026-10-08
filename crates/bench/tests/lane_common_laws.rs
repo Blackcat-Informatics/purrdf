@@ -5,7 +5,7 @@
 //!
 //! `make_bench_lanes.rs` drives `make lubm` and `make watdiv`, which is the right
 //! way to test what a LANE does — but every one of those tests stops before step 1,
-//! because past that point a lane wants the network and a JRE. So the helpers in
+//! because past that point a lane wants the network and native generation. So the helpers in
 //! `scripts/lane-common.sh` that run INSIDE a lane's steps had no test that could
 //! reach them, and the proofs offered for them were run in a shell and discarded.
 //! A proof nobody can re-run is a claim.
@@ -1697,17 +1697,20 @@ fn an_optional_pin_reports_absence_and_dies_on_a_broken_lookup() {
 
     // Found: sets LANE_PIN_VALUE and returns 0.
     let (code, out) = in_lane_common(&format!(
-        "lane_lookup_pin '{}' lubm.1.0.seed0.rows.Q1 && printf 'found=[%s]\\n' \"${{LANE_PIN_VALUE}}\"",
+        "lane_lookup_pin '{}' lubm.queries.sha256 && printf 'found=[%s]\\n' \"${{LANE_PIN_VALUE}}\"",
         root.display()
     ));
     assert_eq!(code, 0, "output:\n{out}");
-    assert!(out.contains("found=[4]"), "output:\n{out}");
+    assert!(
+        out.contains("found=[5ad5a5c735bc86625c0f008fc78a2f7cfc30f063de25ad33a36339e2e49774a8]"),
+        "output:\n{out}"
+    );
 
     // Recorded nowhere: returns 1 WITHOUT dying, because a version-keyed pin is expected to
     // be absent the first time a new binary runs. `LANE_PIN_VALUE` must be cleared, or a
     // caller reads the previous lookup's value as this one's.
     let (code, out) = in_lane_common(&format!(
-        "lane_lookup_pin '{}' lubm.1.0.seed0.rows.Q1\n\
+        "lane_lookup_pin '{}' lubm.queries.sha256\n\
          if lane_lookup_pin '{}' no.such.pin.anywhere; then echo UNEXPECTED-SUCCESS; else \
          printf 'absent, value=[%s]\\n' \"${{LANE_PIN_VALUE}}\"; fi",
         root.display(),
