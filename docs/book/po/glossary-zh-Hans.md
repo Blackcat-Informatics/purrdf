@@ -5,7 +5,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # zh-Hans glossary — a gate input, not a page
 
-This file is read by `scripts/check-i18n-glossary.py` (part of `make check`
+This file is read by `helper-census --glossary-gate` (part of `make check`
 and CI). It settles one rendering per load-bearing term and, per term, the
 renderings that are wrong **for that term**; the gate refuses a `msgstr` that
 uses one of them **when its `msgid` carries the term**. A wrong or
@@ -70,7 +70,7 @@ How the gate reads the table:
   checked against the global rows only; the catalogue is where the table is
   fully enforced.
 * **Rejected** — entries separated by `、`; a plain entry is a substring; an
-  entry written `/…/` is a Python regular expression, used where a wrong
+  entry written `/…/` is a Python-compatible regular expression evaluated by the native bounded matcher, used where a wrong
   rendering would otherwise match across a word boundary (账本 inside
   台账本身) or inside a right one (知识图 inside 知识图谱). Code spans and
   fenced blocks in a `msgstr` are never matched (a page may write

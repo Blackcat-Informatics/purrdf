@@ -21,6 +21,13 @@ workspace = true
 name = "helper-census"
 path = "src/main.rs"
 
+[[example]]
+name = "glossary_hook_probe"
+path = "examples/glossary_hook_probe.rs"
+# This explicit qualification tool modifies a private index and temporarily
+# poisons the working catalogue; run only under the serialized build lane.
+test = false
+
 [dependencies]
 # Fingerprints are BLAKE3 digests of normalised token streams, so a body's id is
 # the same on every host and every build.
