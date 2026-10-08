@@ -2182,6 +2182,21 @@ struct JoinSnapshot<'a> {
     delta: Delta,
 }
 
+impl JoinSnapshot<'_> {
+    /// Every position before the last requires an OldOnly suffix. When the
+    /// delta covers the entire frozen store, that suffix is provably empty;
+    /// visiting its earlier prefixes can produce no solution. Partial deltas
+    /// retain every position, including positions that become productive later.
+    fn delta_positions(self, positive_count: usize) -> std::ops::Range<usize> {
+        let first = if self.delta == Delta::all(self.rel.row_count()) {
+            positive_count.saturating_sub(1)
+        } else {
+            0
+        };
+        first..positive_count
+    }
+}
+
 /// Whether the atom `operator` can match a row of `snapshot`'s delta: some partition its
 /// constant predicate and graph positions admit holds a row minted at or after the
 /// delta's first row.
@@ -2221,7 +2236,7 @@ fn join_positive_binary(
 ) -> Vec<SlotSolution> {
     let operators = plan.operators();
     let mut all: Vec<SlotSolution> = Vec::new();
-    for delta_position in 0..operators.len() {
+    for delta_position in snapshot.delta_positions(operators.len()) {
         if !delta_can_match(&operators[delta_position], snapshot) {
             continue;
         }
@@ -2261,7 +2276,7 @@ fn join_positive_leapfrog(
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
     let mut all: Vec<SlotSolution> = Vec::new();
-    for delta_position in 0..plan.positive().len() {
+    for delta_position in snapshot.delta_positions(plan.positive().len()) {
         if !delta_can_match(plan.operator_at(delta_position), snapshot) {
             continue;
         }
@@ -5632,8 +5647,9 @@ mod tests {
     /// it, and one fewer refuses it.
     #[test]
     fn the_join_step_ceiling_is_a_distinguishable_error() {
-        // The candidates the run enumerates: the n² pair joins and the atom scans around them.
-        const JOIN_STEPS_OBSERVED: u64 = 1_212_200;
+        // The productive initial variant scans n first atoms and n² pairs.
+        // The other initial variant requires an empty OldOnly suffix and is skipped.
+        const JOIN_STEPS_OBSERVED: u64 = 1_211_100;
         // sink(?c, ?c) :- src(?x, ?c), src(?y, ?c). One head fact, n^2 candidates.
         let src = "https://example.org/src";
         let sink = "https://example.org/sink";
@@ -6045,6 +6061,26 @@ mod tests {
             );
         }
         assert_eq!(Delta::all(4), Delta { lo: 0, hi: 4 });
+    }
+
+    #[test]
+    fn only_a_delta_covering_the_whole_snapshot_eliminates_old_suffixes() {
+        let rel = store_of(&[("a", P, "b"), ("b", Q, "c"), ("c", R, "d")]);
+        let positions = |delta| JoinSnapshot { rel: &rel, delta }.delta_positions(3);
+        assert_eq!(positions(Delta::all(3)), 2..3);
+        // Later rounds keep the first and middle anchors, whose OldOnly suffixes
+        // can match older facts. A prefix delta is not the whole frozen store.
+        assert_eq!(positions(Delta { lo: 1, hi: 3 }), 0..3);
+        assert_eq!(positions(Delta { lo: 0, hi: 2 }), 0..3);
+        assert_eq!(positions(Delta { lo: 2, hi: 3 }), 0..3);
+        assert_eq!(
+            JoinSnapshot {
+                rel: &rel,
+                delta: Delta::all(3)
+            }
+            .delta_positions(0),
+            0..0
+        );
     }
 
     /// The scan-mode selector is the semi-naive position decomposition.

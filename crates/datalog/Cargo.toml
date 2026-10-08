@@ -62,3 +62,9 @@ purrdf-alloc-probe = { workspace = true }
 # regime's rule table. Report-only.
 name = "seminaive"
 harness = false
+
+# The same production evaluator and proof assertions execute natively and in Node
+# through the workspace wasm runner; no libtest runtime is assumed on wasm32.
+[[test]]
+name = "rules_runtime"
+harness = false

@@ -393,6 +393,36 @@
 #      decomposition, and the D lane enumerates no candidates in this corpus, so none of
 #      their figures moved.
 #
+# CURRENT CONNECTED RULE EVALUATION TRANSITION — calculus v2.
+# The authored clause programs are unchanged. Every input, closure, witness, rule
+# tally, stored-facts and term-arena-bytes field in this 142-fixture transition is
+# byte-identical. Contract hashes and charged candidate work move deliberately.
+#
+# All five lanes' contract hashes include the shared evaluator calculus version.
+# Version v2 covers connectivity-first ordering, canonical confirmation preference,
+# empty initial OldOnly-suffix elimination and admission before owned expansion.
+# An old cached report cannot claim this
+# new evaluation contract even where this fixture's facts already agreed.
+#
+# A premise-free clause now admits its one identity substitution before expansion.
+# D therefore charges 32 dt-type1 substitutions per evaluation graph. OWL-RL charges
+# 43: those 32, nine prp-ap clauses and cls-thing/cls-nothing1. Named graph fixtures
+# evaluate two or three graphs, with the corresponding multiple of these credits.
+# The first-round-only no-positive-body scheduling remains unchanged.
+#
+# When delta covers the entire frozen store, every initial anchor before the
+# last requires an empty OldOnly suffix. Both binary and hybrid joins skip those
+# impossible variants without scanning prefixes. Partial deltas keep all anchors.
+# This removes 15 D and 1733 OWL-RL credits from the intermediate v2 transition.
+# That intermediate transition had isolated connectivity savings of 39/40
+# credits in four collection fixtures with a priority-only control. The final
+# counts below additionally include the provably empty suffix elimination.
+#
+# Across these 142 fixtures, D work moves 402 -> 5059 and OWL-RL 243810 -> 248198.
+# RDF remains 4911, RDFS 1282254 and Simple zero. These are observed candidate
+# counts, not latency, allocations or an assertion that logical work increased.
+# END CONNECTED RULE EVALUATION TRANSITION.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # NEW FIXTURE — no committed golden moved; this one did not exist.
@@ -414,7 +444,7 @@
   boundaries: (0)
   withheld-surrogates: 0
   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
-  contract-hash: 2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade
+  contract-hash: 9906ecf7650288b9a38c5d713116b634bacc15d32def6abe2d6f59f2ae6e43fa
   termination: none
   inconsistency: none
   overclaims: false
@@ -436,7 +466,7 @@
       axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 3
   budget: join-steps=33 stored-facts=8 term-arena-bytes=557
-  contract-hash: 293e637ed65ae6f23259f17b46b59e1a591ccebd291c33eff97db1adc3c6a9a3
+  contract-hash: 35c88c9050c619e5f0f7a4eba2c7191252ede481525bcdd1a8b8b73be3aa01c7
   termination: weakly-acyclic positions=10 existential-edges=4
   inconsistency: none
   overclaims: false
@@ -579,7 +609,7 @@
       axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 11
   budget: join-steps=8648 stored-facts=185 term-arena-bytes=1920
-  contract-hash: edac936406f51671f34dc305b0e90d1f0c4be08915522a445fcffc692174d0ca
+  contract-hash: 89a0cc7ea16a37bb96f2a0aeb7f076ddd9fff672bf5123e757c1e8aa13d7b739
   termination: weakly-acyclic positions=27 existential-edges=8
   inconsistency: none
   overclaims: false
@@ -702,8 +732,8 @@
   boundaries: (1)
       datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=1593 stored-facts=106 term-arena-bytes=2435
-  contract-hash: abb12b9af5fa9c022ed2dbf846e0b3e8c4184f5c2bb8c49a3c0dbac20e1f5243
+  budget: join-steps=1633 stored-facts=106 term-arena-bytes=2435
+  contract-hash: f776b19570be572c778ed1cf53805edcb9b3c38098774a4ca93d22c7d1a6e2ba
   termination: none
   inconsistency: none
   overclaims: false
@@ -753,8 +783,8 @@
   boundaries: (1)
       datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=0 stored-facts=34 term-arena-bytes=1721
-  contract-hash: 8110c4437c3d0158450816bbf6e291f33426d18cbabc641aa7b6fe60b511746c
+  budget: join-steps=32 stored-facts=34 term-arena-bytes=1721
+  contract-hash: fd2994daf619f1b51e5c71202f9b4b3fdcd0fdb10187c03fa523b0f685691106
   termination: none
   inconsistency: none
   overclaims: false
