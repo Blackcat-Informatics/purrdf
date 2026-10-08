@@ -35,6 +35,7 @@ use purrdf_shapes::{ShapesError, ShapesImports};
 
 use crate::ShapesImportList;
 use crate::shapes_tools::{RuleLimits, RulesHost};
+use crate::xpath_regex::{Limits, Profile, XPathValidationError};
 
 /// One SHACL entailment run across the host boundary: the shapes graph whose rules run,
 /// the data graph they run over, and the rule-evaluation limits bounding the run.
@@ -95,13 +96,52 @@ pub struct EntailOutcome {
 /// Everything [`entail_to_ntriples_string_with_shapes_graph`] refuses, and
 /// [`ShapesError::Invalid`] naming the host's knob for a passed rule-evaluation limit.
 pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, ShapesError> {
-    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    entail_with(request, |source, data, limits, knobs| {
+        run_rules(source, data, limits, knobs).map_err(ShapesError::from)
+    })
+}
+
+/// [`entail_to_ntriples`] under the dated XPath law `xpath_regex` selects, with the
+/// production bounds ([`Limits::new`]): every `REGEX`/`REPLACE` a rule, function or node
+/// expression evaluates, and every `sh:pattern` a rule condition decides, compiles and
+/// matches under it ([`purrdf_shapes::xpath::run_rules`]). `None` is
+/// [`entail_to_ntriples`]'s exact outcome.
+///
+/// # Errors
+///
+/// Everything [`entail_to_ntriples`] refuses, as [`XPathValidationError::Shapes`]; a
+/// native pattern refusal as [`XPathValidationError::Pattern`], and a rule query's
+/// operational diagnostic as [`XPathValidationError::Query`]. No dataset is returned.
+pub fn entail_to_ntriples_with_xpath_regex(
+    request: &EntailRequest<'_>,
+    xpath_regex: Option<Profile>,
+) -> Result<EntailOutcome, XPathValidationError> {
+    let Some(profile) = xpath_regex else {
+        return Ok(entail_to_ntriples(request)?);
+    };
+    entail_with(request, |source, data, limits, knobs| {
+        purrdf_shapes::xpath::run_rules(source, data, limits, knobs, profile, Limits::new())
+    })
+}
+
+/// The one entailment body under either law: `run` is the rules dispatch it runs.
+fn entail_with<E: From<ShapesError>>(
+    request: &EntailRequest<'_>,
+    run: impl FnOnce(
+        RuleSource<'_>,
+        &purrdf_core::RdfDataset,
+        &RuleLimits,
+        purrdf_shapes::LimitKnobs,
+    ) -> Result<purrdf_shapes::Inference, E>,
+) -> Result<EntailOutcome, E> {
+    let data = parse_ntriples_to_dataset(request.data_nt)
+        .map_err(|errors| ShapesError::from(errors.join("\n")))?;
     let shapes = engine::parse_shapes_with_graph(
         request.shapes_ttl,
         request.shapes_base,
         None,
         request.shapes_graph,
-        &ShapesImports::from_turtle(request.imports)?,
+        &ShapesImports::from_turtle(request.imports).map_err(ShapesError::from)?,
     )?;
     let limits = RuleLimits {
         max_term_generating_rounds: request.max_term_generating_rounds,
@@ -109,7 +149,7 @@ pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, 
         max_stored_facts: request.max_stored_facts,
         max_join_steps: request.max_join_steps,
     };
-    let inference = run_rules(
+    let inference = run(
         RuleSource::Shapes(&shapes),
         data.as_ref(),
         &limits,

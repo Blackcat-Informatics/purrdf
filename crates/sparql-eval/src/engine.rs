@@ -49,6 +49,7 @@ use crate::plan_cache::{BoundedCache, BoundedOrderCache};
 use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
 use crate::substitute::Prebindings;
 use crate::update::{GraphResolver, UpdateAbort, eval_update};
+use crate::xpath_regex::Selection;
 use crate::{
     BudgetExhausted, CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError,
     FallibleSparqlResult, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
@@ -168,9 +169,19 @@ impl PreparedQuery {
             &crate::DetHashSet::default(),
         )?;
         let relations = crate::property_fn_plan::registry_fingerprint(options.property_functions())
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-        let aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
-            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+            .map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+                    e.to_string(),
+                )
+            })?;
+        let aggregates =
+            crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                    e.to_string(),
+                )
+            })?;
         let source_schema = changed_source_schema(&query, planned.as_ref());
         Ok(Self::admitted(
             planned.unwrap_or(query),
@@ -530,10 +541,19 @@ impl PlanCache {
         // SAME cached `PreparedQuery` — whichever caller populated the cache first —
         // and the second caller's evaluation would then fail
         // `check_plan_matches_relations` against a plan it never actually prepared.
-        let fingerprint = crate::property_fn_plan::registry_fingerprint(relations)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
-        let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates)
-            .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+        let fingerprint =
+            crate::property_fn_plan::registry_fingerprint(relations).map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+                    e.to_string(),
+                )
+            })?;
+        let agg_fingerprint = crate::agg_fn::registry_fingerprint(aggregates).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                e.to_string(),
+            )
+        })?;
         self.prepare_keyed(
             query,
             base_iri,
@@ -830,6 +850,8 @@ pub struct NativeSparqlEngine {
     /// production settings; tests and benches override individual flags through
     /// [`Self::with_eval_options`].
     eval_options: EvalOptions,
+    /// Explicit native regex law, inherited by every query and UPDATE context.
+    xpath_regex: Option<Selection>,
 }
 
 // `dyn GraphResolver` is not `Debug`, so derive can't apply; report its presence by
@@ -849,6 +871,7 @@ impl std::fmt::Debug for NativeSparqlEngine {
             .field("standpoint_predicates", &self.standpoint_predicates)
             .field("loss_vocabulary", &self.loss_vocabulary)
             .field("eval_options", &self.eval_options)
+            .field("xpath_regex", &self.xpath_regex)
             .finish()
     }
 }
@@ -867,6 +890,7 @@ impl NativeSparqlEngine {
             standpoint_predicates: None,
             loss_vocabulary: None,
             eval_options: EvalOptions::default(),
+            xpath_regex: None,
         }
     }
 
@@ -1350,6 +1374,7 @@ impl NativeSparqlEngine {
         // here — every value the materialised lane's single context would carry.
         let filtering = crate::property_fn_eval::FilterContext {
             options: self.eval_options,
+            xpath_regex: options.xpath_regex.or(self.xpath_regex),
             disjoint_language_strings: options.disjoint_language_strings,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
@@ -1834,6 +1859,7 @@ impl NativeSparqlEngine {
         let mut m =
             MutableDataset::new_with_graph_existence(Arc::clone(dataset), options.graph_existence);
         let cfg = crate::update::UpdateEvalConfig {
+            xpath_regex: options.xpath_regex.or(self.xpath_regex),
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             governors: Some(&state),
@@ -1942,6 +1968,7 @@ impl NativeSparqlEngine {
         let mut m =
             MutableDataset::new_with_graph_existence(Arc::clone(dataset), options.graph_existence);
         let cfg = crate::update::UpdateEvalConfig {
+            xpath_regex: options.xpath_regex.or(self.xpath_regex),
             standpoint_predicates: self.standpoint_predicates.as_ref(),
             order_cache: &self.order_cache,
             // Exactly ungoverned, exactly as this seam was before governors existed —
@@ -2019,6 +2046,33 @@ impl NativeSparqlEngine {
     pub fn with_eval_options(mut self, options: EvalOptions) -> Self {
         self.eval_options = options;
         self
+    }
+
+    /// Select an explicit dated native XPath law and finite per-operation bounds.
+    ///
+    /// This configures ordinary, prepared, governed and fallible queries, worker
+    /// and function-body contexts, on-demand row filters and UPDATE `WHERE`.
+    /// No selection retains compatibility behavior. Pattern-language errors stay
+    /// expression errors; operational refusals abort the request with their code.
+    #[must_use]
+    pub const fn with_xpath_regex(
+        mut self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> Self {
+        self.xpath_regex = Some(Selection::new(profile, limits));
+        self
+    }
+
+    /// The explicitly selected native XPath law and finite bounds, if any.
+    #[must_use]
+    pub const fn xpath_regex(
+        &self,
+    ) -> Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )> {
+        Selection::parts(self.xpath_regex)
     }
 
     /// Parse and feasibility-order one request against the environment that will be
@@ -2166,6 +2220,7 @@ impl NativeSparqlEngine {
         _workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
     ) -> EvalCtx<'d, D> {
         let mut ctx = EvalCtx::new(dataset).with_eval_options(self.eval_options);
+        ctx.xpath_regex = self.xpath_regex;
         ctx.bounded_workspace = crate::eval::WorkspaceAdmission::Admitted;
         if dataset.storage_live_budget().is_some() {
             ctx.options.force_sequential = true;
@@ -2504,6 +2559,8 @@ impl NativeSparqlEngine {
             .with_aggregates(aggregates)
             .with_division_policy(options.division);
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+        // A request's dated law replaces the engine's, as for evaluation.
+        ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
         if let Some(source) = options.remote {
             ctx = ctx.with_remote(source);
         }
@@ -2518,10 +2575,16 @@ impl NativeSparqlEngine {
         // Complete IRI-sorted descriptors distinguish the declarations that priced
         // this run, independently of their registration order.
         let registered = relations.describe().map_err(|error| {
-            RdfDiagnostic::error("native-sparql-property-function", error.to_string())
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&error, "native-sparql-property-function"),
+                error.to_string(),
+            )
         })?;
         let registered_aggregates = aggregates.describe().map_err(|error| {
-            RdfDiagnostic::error("native-sparql-aggregate-function", error.to_string())
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&error, "native-sparql-aggregate-function"),
+                error.to_string(),
+            )
         })?;
         Ok(QueryExplanation::new(
             survey.orders,
@@ -3631,8 +3694,9 @@ where
 /// site's existing,
 /// unclassified generic code (`"native-sparql-query-eval"` for a query,
 /// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
-/// evaluation seam), preserved for every genuine gap: an `Internal`, `Data`,
-/// `Function`, or `Config`. An unclassified `Unsupported` carries
+/// evaluation seam), preserved for ordinary `Data`, `Function`, or `Config`
+/// failures. Invariant and resource refusals retain their distinct codes.
+/// An unclassified `Unsupported` carries
 /// [`crate::EvalError::UNSUPPORTED_CODE`], and each `SERVICE` outcome its own
 /// `native-sparql-service-*` code. The
 /// single chokepoint every `EvalError -> RdfDiagnostic` reduction in this crate
@@ -3873,6 +3937,8 @@ pub struct QueryOptions<'a> {
     /// with whatever the evaluation fans out to, and a field that made it `!Sync`
     /// would silently narrow every entry that takes one.
     pub load: Option<&'a (dyn GraphResolver + Sync)>,
+    /// The explicit dated pattern law for this request, overriding engine configuration.
+    pub(crate) xpath_regex: Option<Selection>,
     /// The precision an `xsd:integer`/`xsd:decimal` quotient is formed at, for `/`
     /// and `AVG` alike ([`purrdf_xsd::exact::DivisionPolicy`]).
     ///
@@ -3924,6 +3990,7 @@ impl std::fmt::Debug for QueryOptions<'_> {
             .field("call_depth", &self.call_depth)
             .field("remote", &self.remote.is_some())
             .field("load", &self.load.is_some())
+            .field("xpath_regex", &self.xpath_regex)
             .field("division", &self.division)
             .field("declared_prebound", &self.declared_prebound)
             .field("disjoint_language_strings", &self.disjoint_language_strings)
@@ -3970,6 +4037,7 @@ impl QueryOptions<'_> {
         call_depth: 0,
         remote: None,
         load: None,
+        xpath_regex: None,
         division: purrdf_xsd::exact::DivisionPolicy::xsd_default(),
         declared_prebound: &[],
         disjoint_language_strings: false,
@@ -3992,6 +4060,31 @@ impl Default for QueryOptions<'_> {
 }
 
 impl<'a> QueryOptions<'a> {
+    /// Select the dated native XPath law and finite limits for this request.
+    ///
+    /// This overrides the engine's selection across ordinary, prepared, governed
+    /// and UPDATE execution. Unset options retain the engine's configuration.
+    #[must_use]
+    pub const fn with_xpath_regex(
+        mut self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> Self {
+        self.xpath_regex = Some(Selection::new(profile, limits));
+        self
+    }
+
+    /// The native pattern law explicitly selected for this request, if any.
+    #[must_use]
+    pub const fn xpath_regex(
+        &self,
+    ) -> Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )> {
+        Selection::parts(self.xpath_regex)
+    }
+
     /// Select the named-graph lifetime policy used by either UPDATE entry point.
     /// Frozen graph presence and ordinary query evaluation remain unchanged.
     /// [`Self::EMPTY`] selects `GraphExistenceMode::Implicit` in 3.x; remembered
@@ -4304,16 +4397,20 @@ fn check_plan_matches_relations(
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] (`native-sparql-property-function` or
-/// `native-sparql-aggregate-function`) when either registry differs from the one this
-/// plan was admitted against, or when reading a registry's declarations to compute its
-/// fingerprint fails.
+/// An ordinary property-function or aggregate diagnostic when either registry
+/// differs from the one this plan was admitted against. A host failure while
+/// reading declarations retains its own execution diagnostic.
 fn check_prepared_registries_unchanged(
     prepared: &PreparedQuery,
     options: QueryOptions<'_>,
 ) -> Result<(), RdfDiagnostic> {
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-property-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied != prepared.relations {
         return Err(RdfDiagnostic::error(
             "native-sparql-property-function",
@@ -4323,8 +4420,13 @@ fn check_prepared_registries_unchanged(
              evaluation uses, because the registry is what decides which predicates are calls",
         ));
     }
-    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    let supplied_aggregates =
+        crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied_aggregates != prepared.aggregates {
         return Err(RdfDiagnostic::error(
             "native-sparql-aggregate-function",
@@ -4443,7 +4545,12 @@ fn check_plan_matches_registries(
         ));
     }
     let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?;
+        .map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-property-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied != prepared.relations {
         return Err(RdfDiagnostic::error(
             "native-sparql-property-function",
@@ -4453,8 +4560,13 @@ fn check_plan_matches_registries(
              evaluation uses, because the registry is what decides which predicates are calls",
         ));
     }
-    let supplied_aggregates = crate::agg_fn::registry_fingerprint(options.aggregates())
-        .map_err(|e| RdfDiagnostic::error("native-sparql-aggregate-function", e.to_string()))?;
+    let supplied_aggregates =
+        crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+            RdfDiagnostic::error(
+                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+                e.to_string(),
+            )
+        })?;
     if supplied_aggregates != prepared.aggregates {
         return Err(RdfDiagnostic::error(
             "native-sparql-aggregate-function",
@@ -4481,8 +4593,8 @@ fn check_plan_matches_registries(
 ///
 /// # Errors
 ///
-/// An [`RdfDiagnostic`] (`native-sparql-property-function`) if a registered relation's
-/// declaration methods panic.
+/// The host's execution diagnostic if a registered relation's declaration
+/// methods panic.
 fn relation_identity(
     prepared: &PreparedQuery,
     relations: &crate::property_fn::PropertyFunctionRegistry,
@@ -4492,7 +4604,12 @@ fn relation_identity(
     } else {
         relations
             .describe()
-            .map_err(|e| RdfDiagnostic::error("native-sparql-property-function", e.to_string()))?
+            .map_err(|e| {
+                RdfDiagnostic::error(
+                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+                    e.to_string(),
+                )
+            })?
             .into_iter()
             .map(|descriptor| descriptor.iri)
             .collect()
@@ -4563,6 +4680,7 @@ pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,
 ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
+    ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
     ctx = ctx
         .with_user_functions(options.functions)
         .with_property_functions(options.property_functions())

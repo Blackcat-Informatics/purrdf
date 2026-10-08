@@ -118,6 +118,27 @@ impl<T, const N: usize> WorkList<T, N> {
         }
     }
 
+    /// Push after fallibly reserving any required spill storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the allocator's refusal before changing the work list.
+    pub fn try_push(&mut self, value: T) -> Result<(), std::collections::TryReserveError> {
+        if self.held == N {
+            self.spill.try_reserve(1)?;
+        }
+        self.push(value);
+        Ok(())
+    }
+
+    /// Read entries from the bottom, without copying or allocating.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
+        self.inline[..self.held]
+            .iter()
+            .map(|slot| slot.as_ref().expect("slots below held are occupied"))
+            .chain(self.spill.iter())
+    }
+
     /// Take the top entry, or `None` when the stack is empty.
     pub fn pop(&mut self) -> Option<T> {
         if let Some(value) = self.spill.pop() {

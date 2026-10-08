@@ -89,6 +89,48 @@ pub(super) fn strip_x_flag_whitespace(pattern: &str) -> String {
     out
 }
 
+/// The same textual x rule, with admitted allocation and original byte offsets.
+pub(super) fn strip_bounded(
+    pattern: &str,
+    budget: &mut super::xpath::Budget,
+) -> Result<(String, Vec<usize>), super::xpath::Error> {
+    use super::xpath::{Error, Resource};
+    budget.charge_wide(Resource::CompileSlots, (pattern.len() as u128) * 2 + 1)?;
+    let mut out = String::new();
+    let mut offsets = Vec::new();
+    out.try_reserve_exact(pattern.len())
+        .map_err(|_| Error::Allocation {
+            resource: Resource::CompileSlots,
+            units: pattern.len() as u64,
+        })?;
+    offsets
+        .try_reserve_exact(pattern.len() + 1)
+        .map_err(|_| Error::Allocation {
+            resource: Resource::CompileSlots,
+            units: pattern.len() as u64 + 1,
+        })?;
+    let before = budget.used(Resource::CompileSlots);
+    let mut scanner = Scanner::bounded(pattern, budget, true)?;
+    let scanner_slots = budget.used(Resource::CompileSlots) - before;
+    // The cursor's lexical walk is already admitted. Its x-state feed and this
+    // consumer's UTF-8 copies/offset writes are additional linear work.
+    budget.charge_wide(Resource::CompileSteps, pattern.len() as u128 * 2)?;
+    while scanner.next_bounded(budget)?.is_some() {
+        let mut offset = scanner.source_span().start;
+        for (ch, inside) in scanner.source_chars() {
+            if inside || !purrdf_iri::terminals::is_ws_char(ch) {
+                out.push(ch);
+                offsets.extend((0..ch.len_utf8()).map(|index| offset + index));
+            }
+            offset += ch.len_utf8();
+        }
+    }
+    offsets.push(pattern.len());
+    drop(scanner);
+    budget.release_compile_slots(scanner_slots);
+    Ok((out, offsets))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

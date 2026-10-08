@@ -30,8 +30,10 @@
 
 use std::sync::Arc;
 
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_shex::{Schema, ShapeSelector, parse_shexc, validate};
+use purrdf_shex::{ValidationOptions, XPathValidator, validate_with_xpath};
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// Nodes per shared-pattern validation call.
@@ -183,5 +185,74 @@ fn bench_pattern_validate(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_pattern_validate);
+fn bench_native_pattern_validate(c: &mut Bench) {
+    let cases = [
+        ("shared_valid", shared_fixture(r"^W-[0-9]+$"), true),
+        ("shared_invalid", shared_fixture("[a"), false),
+        (
+            "distinct_patterns",
+            distinct_fixture(DISTINCT_PATTERNS),
+            true,
+        ),
+    ];
+    let options = ValidationOptions::default();
+    for profile in [Profile::Xpath20, Profile::Xpath31] {
+        let mut group = c.benchmark_group(format!("shex_native_xpath/{}", profile.name()));
+        group.sample_size(10);
+        for (label, fixture, conforms) in &cases {
+            let mut validator = XPathValidator::new(&fixture.schema);
+            let initial = validator
+                .validate(
+                    &fixture.data,
+                    &fixture.map,
+                    &options,
+                    profile,
+                    Limits::new(),
+                )
+                .unwrap();
+            assert_eq!(initial.entries.len(), fixture.map.len());
+            assert_eq!(initial.all_conformant(), *conforms);
+            group.throughput(Throughput::Elements(
+                u64::try_from(fixture.map.len()).unwrap(),
+            ));
+            group.bench_function(format!("{label}/cold"), |bencher| {
+                bencher.iter(|| {
+                    let result = validate_with_xpath(
+                        black_box(&fixture.schema),
+                        black_box(&fixture.data),
+                        black_box(&fixture.map),
+                        &options,
+                        profile,
+                        Limits::new(),
+                    )
+                    .unwrap();
+                    assert_eq!(result.all_conformant(), *conforms);
+                    black_box(result);
+                });
+            });
+            group.bench_function(format!("{label}/warm"), |bencher| {
+                bencher.iter(|| {
+                    let result = validator
+                        .validate(
+                            black_box(&fixture.data),
+                            black_box(&fixture.map),
+                            &options,
+                            profile,
+                            Limits::new(),
+                        )
+                        .unwrap();
+                    assert_eq!(result.all_conformant(), *conforms);
+                    black_box(result);
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
+bench_group!(
+    benches,
+    bench_pattern_validate,
+    bench_native_pattern_validate
+);
 bench_main!(benches);

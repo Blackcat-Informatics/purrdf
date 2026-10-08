@@ -520,6 +520,136 @@ static int check_shapes_graph_iri(void) {
     return 0;
 }
 
+/* Count the rows `purrdf_query_xpath_regex` answers for `query` over `dataset` under
+ * `profile` (NULL for the compatibility regular expressions); -1 when the call fails
+ * with `*status` and hands back an error and no rows, -2 on a broken contract. */
+static int count_regex_rows(const PurrdfDataset *dataset, const char *query,
+                            const char *profile, int32_t *status) {
+    int32_t kind = -1;
+    PurrdfRowCursor *rows = NULL;
+    PurrdfError *error = NULL;
+    *status = purrdf_query_xpath_regex(dataset, query, NULL, profile, &kind, &rows, NULL, NULL,
+                                       &error);
+    if (*status != PURRDF_STATUS_OK) {
+        if (error == NULL || rows != NULL || purrdf_error_code(error) != *status) {
+            return -2;
+        }
+        purrdf_error_free(error);
+        return -1;
+    }
+    if (kind != PURRDF_RESULT_KIND_SOLUTIONS || rows == NULL) {
+        return -2;
+    }
+    int count = 0;
+    while (purrdf_rowcursor_next(rows) == PURRDF_STATUS_OK) {
+        count++;
+    }
+    purrdf_rowcursor_free(rows);
+    return count;
+}
+
+/* Whether SHACL validation of `data` under a single `sh:pattern` conforms under
+ * `profile`: 1 conforms, 0 does not, -1 the call failed with `*status`, -2 on a broken
+ * contract. */
+static int regex_shape_conforms(const char *pattern_literal, const char *target,
+                                const char *data, const char *profile, int32_t *status) {
+    char shapes[512];
+    snprintf(shapes, sizeof shapes,
+             "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+             "@prefix ex: <http://example.org/> .\n"
+             "ex:S a sh:NodeShape ; sh:targetNode ex:%s ;\n"
+             "  sh:property [ sh:path ex:p ; sh:pattern \"%s\" ] .\n",
+             target, pattern_literal);
+    PurrdfBuffer *sarif = NULL;
+    PurrdfError *error = NULL;
+    *status = purrdf_shacl_validate_to_sarif_xpath_regex(shapes, NULL, NULL, data, NULL, 0, NULL,
+                                                         NULL, 0, false, profile, &sarif, &error);
+    if (*status != PURRDF_STATUS_OK) {
+        if (error == NULL || sarif != NULL) {
+            return -2;
+        }
+        purrdf_error_free(error);
+        return -1;
+    }
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    purrdf_buffer_data(sarif, &bytes, &len);
+    int conforms = contains_bytes(bytes, len, "\"shaclConforms\": true");
+    purrdf_buffer_free(sarif);
+    return conforms;
+}
+
+/* The dated regular-expression laws through the real header and linkage. `(?:a)b` is a
+ * non-capturing group only XPath 3.1 defines, so under XPath 2.0 the FILTER keeps no row;
+ * `^(a)\1$` is a back-reference both dated laws match against "aa" and the compatibility
+ * expressions (NULL) refuse. An inexact name is an invalid argument beside its accepted
+ * exact neighbour. */
+static int check_xpath_regex(void) {
+    const char *nt = "<http://example.org/s1> <http://example.org/p> \"ab\" .\n"
+                     "<http://example.org/s2> <http://example.org/p> \"aa\" .\n";
+    const char *media = "application/n-triples";
+    PurrdfDataset *dataset = NULL;
+    PurrdfError *error = NULL;
+    CHECK(purrdf_parse((const uint8_t *)nt, strlen(nt), media, NULL, NULL, &dataset, &error) ==
+              PURRDF_STATUS_OK,
+          "parse the regex fixture");
+    const char *non_capturing =
+        "SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, \"^(?:a)b$\")) }";
+    const char *back_reference =
+        "SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, \"^(a)\\\\1$\")) }";
+    const char *v20 = "xpath-2.0-2010-12-14";
+    const char *v31 = "xpath-3.1-2017-03-21";
+    int32_t status = 0;
+    CHECK(count_regex_rows(dataset, non_capturing, v31, &status) == 1,
+          "XPath 3.1 reads the non-capturing group");
+    CHECK(count_regex_rows(dataset, non_capturing, v20, &status) == 0 &&
+              status == PURRDF_STATUS_OK,
+          "under XPath 2.0 the non-capturing group is a pattern error: no row, no failure");
+    CHECK(count_regex_rows(dataset, back_reference, v20, &status) == 1,
+          "XPath 2.0 matches the back-reference");
+    CHECK(count_regex_rows(dataset, back_reference, v31, &status) == 1,
+          "XPath 3.1 matches the back-reference");
+    CHECK(count_regex_rows(dataset, back_reference, NULL, &status) == 0,
+          "NULL keeps the compatibility expressions, which refuse back-references");
+    const char *inexact[3] = {"xpath-3.1", "XPATH-3.1-2017-03-21", ""};
+    for (int i = 0; i < 3; i++) {
+        CHECK(count_regex_rows(dataset, non_capturing, inexact[i], &status) == -1 &&
+                  status == PURRDF_STATUS_INVALID_ARGUMENT,
+              "an inexact law name is an invalid argument");
+    }
+
+    /* A 64 KiB + 1 pattern source is withheld under the production limits: an error
+     * status, never an empty answer. */
+    size_t over = 64 * 1024 + 1;
+    const char *prefix = "SELECT ?o WHERE { ?s <http://example.org/p> ?o FILTER(REGEX(?o, \"";
+    const char *suffix = "\")) }";
+    char *huge = (char *)malloc(strlen(prefix) + over + strlen(suffix) + 1);
+    CHECK(huge != NULL, "allocate the oversized query");
+    strcpy(huge, prefix);
+    memset(huge + strlen(prefix), 'a', over);
+    strcpy(huge + strlen(prefix) + over, suffix);
+    CHECK(count_regex_rows(dataset, huge, v31, &status) == -1 &&
+              status == PURRDF_STATUS_REGEX_RESOURCE_ERROR,
+          "a withheld pattern resource is PURRDF_STATUS_REGEX_RESOURCE_ERROR");
+    free(huge);
+    purrdf_dataset_free(dataset);
+
+    CHECK(regex_shape_conforms("^(?:a)b$", "s1", nt, v31, &status) == 1,
+          "sh:pattern under XPath 3.1 reads the non-capturing group");
+    CHECK(regex_shape_conforms("^(?:a)b$", "s1", nt, v20, &status) == 0,
+          "sh:pattern under XPath 2.0 does not");
+    CHECK(regex_shape_conforms("^(a)\\\\1$", "s2", nt, v20, &status) == 1 &&
+              regex_shape_conforms("^(a)\\\\1$", "s2", nt, v31, &status) == 1,
+          "both dated laws match the back-reference in sh:pattern");
+    CHECK(regex_shape_conforms("^(a)\\\\1$", "s2", nt, NULL, &status) == 0,
+          "NULL keeps the compatibility sh:pattern");
+    CHECK(regex_shape_conforms("^a", "s1", nt, "xpath-3.1", &status) == -1 &&
+              status == PURRDF_STATUS_INVALID_ARGUMENT,
+          "an inexact law name is refused by SHACL validation too");
+    printf("xpath_regex: each dated law decides REGEX and sh:pattern; NULL is compatibility\n");
+    return 0;
+}
+
 /* The check-only SPARQL 1.2 RL entry point through the real header and linkage: a
  * self-negating rule is syntactically valid (level SYNTAX answers with its summary) but
  * not stratifiable (level STRATIFIED refuses it, naming the stage, and writes no
@@ -1695,6 +1825,7 @@ int main(int argc, char **argv) {
 
     CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
     CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
+    CHECK(check_xpath_regex() == 0, "the dated regular-expression laws");
     CHECK(check_xsd_exact_numerics(dataset) == 0, "the exact XSD value space");
     CHECK(check_division_policy(dataset) == 0, "the division policy and expression errors");
 
