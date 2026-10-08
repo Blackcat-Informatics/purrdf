@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use std::time::Instant;
 
 type IoResult<T> = std::io::Result<T>;
-fn invalid(message: impl Into<String>) -> std::io::Error {
+pub(crate) fn invalid(message: impl Into<String>) -> std::io::Error {
     std::io::Error::other(message.into())
 }
 

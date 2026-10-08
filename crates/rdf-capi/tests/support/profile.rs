@@ -3,16 +3,13 @@
 
 //! Profiling orchestration; target selection stays in Makefile and its gates.
 
-use super::phases::{self, Recorder};
+use super::phases::{self, Recorder, invalid};
 use purrdf_lex::json::record::{FromJson as _, ToJson as _};
 use purrdf_lex::json::{self, Object, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 type IoResult<T> = std::io::Result<T>;
-fn invalid(message: impl Into<String>) -> std::io::Error {
-    std::io::Error::other(message.into())
-}
 fn read(path: &Path) -> IoResult<Value> {
     json::read_with(
         &std::fs::read_to_string(path)?,
@@ -152,36 +149,67 @@ fn source(root: &Path) -> IoResult<Value> {
         .into())
 }
 
-fn resolved_configuration(root: &Path, cargo: &Path) -> IoResult<Value> {
+fn configuration_projection(bytes: &[u8]) -> IoResult<Value> {
+    // Cargo may include credential-bearing tables in the complete response.
+    // Parse privately and retain ONLY these code-generation tables. Parse errors
+    // deliberately do not echo response text or unrelated configuration.
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| invalid("Cargo configuration response is not UTF-8"))?;
+    let configuration = json::read_with(
+        text,
+        json::Limits {
+            unique_members: true,
+            ..json::Limits::DEFAULT
+        },
+    )
+    .map_err(|_| invalid("Cargo configuration response is malformed JSON"))?;
+    if configuration.as_object().is_none() {
+        return Err(invalid("Cargo configuration response must be an object"));
+    }
     let mut values = Object::new();
-    // Query only code-generation configuration: cargo config's full stderr can
-    // include credentials from unrelated environment, so it is never persisted.
     for key in ["build", "profile", "target"] {
-        let result = Command::new(cargo)
-            .args([
-                "-Z",
-                "unstable-options",
-                "config",
-                "get",
-                key,
-                "--format",
-                "json-value",
-            ])
-            .current_dir(root)
-            .output()?;
-        if !result.status.success() {
-            return Err(invalid(format!(
-                "cannot resolve Cargo configuration key {key}"
-            )));
-        }
-        let text =
-            std::str::from_utf8(&result.stdout).map_err(|error| invalid(error.to_string()))?;
-        values.insert(
-            key,
-            json::read(text).map_err(|error| invalid(error.to_string()))?,
-        );
+        let state = if let Some(value) = configuration.get(key) {
+            if value.as_object().is_none() {
+                return Err(invalid(format!(
+                    "Cargo configuration table {key} is not an object"
+                )));
+            }
+            Object::new()
+                .with("state", "present")
+                .with("value", value.clone())
+        } else {
+            Object::new().with("state", "absent")
+        };
+        values.insert(key, Value::from(state));
     }
     Ok(values.into())
+}
+
+fn query_configuration(command: &mut Command) -> IoResult<Value> {
+    // Querying an absent individual table exits101. The no-key query succeeds
+    // with an object (possibly empty), so absence is bound to successful Cargo
+    // output rather than guessed from an error or a catch-all fallback.
+    let result = command
+        .args([
+            "-Z",
+            "unstable-options",
+            "config",
+            "get",
+            "--format",
+            "json-value",
+        ])
+        .output()?;
+    if !result.status.success() {
+        return Err(invalid(format!(
+            "Cargo config get --format json-value failed ({}); require a supported nightly Cargo and valid configuration; raw stdout/stderr withheld because they may contain credentials",
+            result.status
+        )));
+    }
+    configuration_projection(&result.stdout)
+}
+
+fn resolved_configuration(root: &Path, cargo: &Path) -> IoResult<Value> {
+    query_configuration(Command::new(cargo).current_dir(root))
 }
 fn empty(path: &Path) -> IoResult<bool> {
     match std::fs::read_dir(path) {
@@ -278,24 +306,12 @@ pub(crate) fn run(input: &Path) -> IoResult<()> {
     // Set these on each child instead of mutating this process's global environment.
     let mut configuration = Command::new(&cargo);
     configuration
-        .args([
-            "-Z",
-            "unstable-options",
-            "config",
-            "get",
-            "build",
-            "--format",
-            "json-value",
-        ])
         .env("CARGO_BUILD_JOBS", request.jobs.to_string())
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_BUILD_BUILD_DIR", &build)
         .current_dir(&root);
     let config = recorder.check("effective-build-configuration", || {
-        let bytes = output(&mut configuration)?;
-        let resolved =
-            json::read(std::str::from_utf8(&bytes).map_err(|error| invalid(error.to_string()))?)
-                .map_err(|error| invalid(error.to_string()))?;
+        let resolved = query_configuration(&mut configuration)?;
         // `cargo config get` lists file values and notes environment separately.
         // These explicit environment values win over configuration defaults.
         Ok::<Value, std::io::Error>(
@@ -1063,6 +1079,106 @@ pub(crate) fn compare(input: &Path) -> IoResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cargo_configuration_absence_is_bound_and_private_values_are_excluded() {
+        let absent = configuration_projection(b"{}").unwrap();
+        for key in ["build", "profile", "target"] {
+            assert_eq!(
+                absent
+                    .pointer(&format!("/{key}/state"))
+                    .and_then(Value::as_str),
+                Some("absent")
+            );
+        }
+        let configured = configuration_projection(br#"{"build":{"jobs":4},"profile":{"dev":{"opt-level":3}},"target":{"x86_64-unknown-linux-gnu":{"rustflags":["-Ctarget-cpu=x86-64"]}},"registries":{"private":{"token":"DO_NOT_PERSIST"}}}"#).unwrap();
+        assert_eq!(
+            configured.pointer("/build/state").and_then(Value::as_str),
+            Some("present")
+        );
+        assert_eq!(
+            configured
+                .pointer("/build/value/jobs")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert!(!json::write_compact(&configured).contains("DO_NOT_PERSIST"));
+        assert!(configured.get("registries").is_none());
+        let holder = purrdf_testkit::temp_dir!().unwrap();
+        let mut before = receipt(holder.path());
+        *before
+            .pointer_mut("/context/identity/configuration")
+            .unwrap() = absent;
+        let mut after = before.clone();
+        *after
+            .pointer_mut("/context/identity/configuration")
+            .unwrap() = configured;
+        assert!(validate_pair(&before, &after, "none").is_err());
+    }
+
+    #[test]
+    fn cargo_configuration_malformed_responses_never_become_absence() {
+        for bytes in [
+            b"".as_slice(),
+            b"[]",
+            b"null",
+            b"{bad secret",
+            b"{\"build\":null}",
+            b"{\"build\":4}",
+            b"{\"build\":{},\"build\":{}}",
+            &[255],
+        ] {
+            let error = configuration_projection(bytes).unwrap_err().to_string();
+            assert!(!error.contains("secret"));
+        }
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn real_sdk_configuration_query_admits_absence_and_refuses_private_errors() {
+        // Resolve the actual SDK Cargo rather than a managed wrapper that may
+        // inject configuration. These subprocesses query only; none compiles.
+        let sysroot = Command::new("rustc")
+            .args(["--print", "sysroot"])
+            .output()
+            .unwrap();
+        assert!(sysroot.status.success());
+        let cargo = PathBuf::from(std::str::from_utf8(&sysroot.stdout).unwrap().trim())
+            .join("bin")
+            .join(format!("cargo{}", std::env::consts::EXE_SUFFIX));
+        let holder = purrdf_testkit::temp_dir!().unwrap();
+        let root = holder.path();
+        let query = || {
+            query_configuration(
+                Command::new(&cargo)
+                    .env_clear()
+                    .env("CARGO_HOME", root.join("cargo-home"))
+                    .env("PATH", cargo.parent().unwrap())
+                    .current_dir(root),
+            )
+        };
+        let absent = query().unwrap();
+        assert_eq!(
+            absent.pointer("/build/state").and_then(Value::as_str),
+            Some("absent")
+        );
+        std::fs::create_dir(root.join(".cargo")).unwrap();
+        let config = root.join(".cargo/config.toml");
+        std::fs::write(&config, "[build]\njobs=4\n[profile.dev]\nopt-level=3\n[target.x86_64-unknown-linux-gnu]\nrustflags=['-Ctarget-cpu=x86-64']\n[registries.private]\ntoken='DO_NOT_PERSIST'\n").unwrap();
+        let configured = query().unwrap();
+        assert_eq!(
+            configured
+                .pointer("/build/value/jobs")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert!(!json::write_compact(&configured).contains("DO_NOT_PERSIST"));
+        std::fs::write(config, "DO_NOT_PERSIST = [ malformed private config").unwrap();
+        let error = query().unwrap_err().to_string();
+        assert!(error.contains("Cargo config get --format json-value failed"));
+        assert!(error.contains("supported nightly Cargo and valid configuration"));
+        assert!(!error.contains("DO_NOT_PERSIST"));
+    }
 
     fn receipt(root: &Path) -> Value {
         let child = root.join("cargo-child.json");

@@ -3,15 +3,15 @@
 
 //! Hosted campaign wiring. All measured selection and validation lives in profile.
 
-use super::{phases::Recorder, profile};
+use super::{
+    phases::{Recorder, invalid},
+    profile,
+};
 use purrdf_lex::json::{self, Object, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 type IoResult<T> = std::io::Result<T>;
-fn invalid(message: impl Into<String>) -> std::io::Error {
-    std::io::Error::other(message.into())
-}
 const AFTER: [&str; 8] = [
     "lib",
     "doc",
