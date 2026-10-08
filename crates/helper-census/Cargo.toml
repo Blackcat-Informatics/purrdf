@@ -37,3 +37,5 @@ proc-macro2 = { workspace = true }
 regex = { workspace = true }
 # The baseline and the machine-readable index are JSON documents.
 purrdf-lex = { workspace = true }
+# The glossary gate uses the workspace's one bounded ECMA pattern evaluator.
+purrdf-jsonschema = { workspace = true }

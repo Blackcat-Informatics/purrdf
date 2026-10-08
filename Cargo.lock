@@ -315,6 +315,7 @@ version = "3.0.1"
 dependencies = [
  "proc-macro2",
  "purrdf-hash",
+ "purrdf-jsonschema",
  "purrdf-lex",
  "purrdf-testkit",
  "regex",
