@@ -1914,6 +1914,7 @@ mod tests {
             panic!("ASK fixture")
         };
         let policy = Box::new(ApplicationPolicy {
+            dataset_required: false,
             row_pipeline: false,
             reduced_adjacent: false,
             group_domain: None,

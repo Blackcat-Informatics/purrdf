@@ -1149,6 +1149,7 @@ mod rdf_fact_tests {
                 "ASK { FILTER EXISTS { GRAPH <https://example.org/graph> { <https://example.org/right> <https://example.org/p> <https://example.org/o> } } }",
             )),
             policy: Box::new(ApplicationPolicy {
+                dataset_required: false,
                 row_pipeline: false,
                 reduced_adjacent: false,
                 group_domain: None,

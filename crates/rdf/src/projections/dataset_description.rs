@@ -858,6 +858,7 @@ mod tests {
             left: Child::new(left),
             right: Child::new(right),
             policy: Box::new(ApplicationPolicy {
+                dataset_required: false,
                 row_pipeline: false,
                 reduced_adjacent: false,
                 group_domain: None,
