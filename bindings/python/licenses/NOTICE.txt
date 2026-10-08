@@ -502,6 +502,20 @@ Notice: third-party/w3c-sparql12/2-W3C-test-suite-license.html
 Notice: third-party/w3c-sparql12/3-W3C-test-suite-BSD.html
 Notice: third-party/w3c-sparql12/4-LicenseRef-W3C-Test-Suite.txt
 
+w3c-xml10-2e: LicenseRef-W3C-Document
+Scope: source-only generator input: the verbatim XML 1.0 Second Edition Recommendation the dated XPath name tables are generated from; original notices remain authoritative
+Source: https://www.w3.org/TR/2000/REC-xml-20001006
+Evidence: vectors/w3c-recs/PROVENANCE.md
+Evidence: LICENSING.md
+Notice: third-party/w3c-xml10-2e/0-LICENSE-W3C-document-19990405.html
+
+w3c-xmlschema2-2e: LicenseRef-W3C-Document
+Scope: source-only generator input: the verbatim XML Schema Part 2 Second Edition Recommendation the dated XPath name and block tables are generated from; original notices remain authoritative
+Source: https://www.w3.org/TR/2004/REC-xmlschema-2-20041028/
+Evidence: vectors/w3c-recs/PROVENANCE.md
+Evidence: LICENSING.md
+Notice: third-party/w3c-xmlschema2-2e/0-W3C-document-license.html
+
 wasip2-1.0.4+wasi-0.2.12: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index

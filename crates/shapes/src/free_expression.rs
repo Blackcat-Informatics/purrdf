@@ -77,6 +77,17 @@ pub struct NodeExprEvaluation {
 /// one could ever be read; anything the shapes parser refuses — an incomplete `owl:imports`
 /// closure as [`ShapesError::Imports`] — and any evaluation error.
 pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, ShapesError> {
+    let (shapes, expr) = parse(request)?;
+    evaluate_parsed(request, &shapes, &expr)
+}
+
+/// The shapes graph and the one expression [`evaluate`] evaluates, parsed and checked:
+/// everything it refuses before evaluation begins. Shared with the selected-law twin,
+/// [`crate::xpath::evaluate_free_expression`], which evaluates the same parse under a
+/// dated pattern law.
+pub(crate) fn parse(
+    request: &FreeExpression<'_>,
+) -> Result<(crate::shapes::Shapes, crate::expression::NodeExpr), ShapesError> {
     let mut names: Vec<&str> = Vec::with_capacity(request.scope.len());
     for (name, _) in request.scope {
         if name == "focusNode" {
@@ -131,8 +142,17 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, Shap
     let expr = exprs
         .pop()
         .ok_or("the shapes parser returned no expression for the one root it was given")?;
+    Ok((shapes, expr))
+}
+
+/// Evaluate `expr`, parsed from `request` with its `shapes` by [`parse`].
+pub(crate) fn evaluate_parsed(
+    request: &FreeExpression<'_>,
+    shapes: &crate::shapes::Shapes,
+    expr: &crate::expression::NodeExpr,
+) -> Result<NodeExprEvaluation, ShapesError> {
     let projected = crate::engine::project_dataset(request.data)?;
-    let data = crate::engine::build_projected_data(projected, &shapes, None)?;
+    let data = crate::engine::build_projected_data(projected, shapes, None)?;
     let _function_scope =
         crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
@@ -140,7 +160,7 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, Shap
     let outputs = eval_bound(
         &data,
         request.focus,
-        &expr,
+        expr,
         &mut guard,
         request.scope,
         Scope::EMPTY,

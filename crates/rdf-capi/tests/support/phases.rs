@@ -20,18 +20,37 @@ pub(crate) struct Artifact {
     pub(crate) message: Value,
 }
 
-pub(crate) fn cdylib(messages: &[u8], package_id: &str, filename: &str) -> IoResult<Artifact> {
+/// Parse admitted Cargo frames once. JSON-only callers set `with_harness` false;
+/// test children may additionally emit ordinary libtest/doc output.
+pub(crate) fn cargo_messages(messages: &[u8], with_harness: bool) -> IoResult<Vec<Value>> {
     let text = std::str::from_utf8(messages).map_err(|error| invalid(error.to_string()))?;
+    text.lines()
+        .filter(|line| {
+            // Cargo frames begin at column zero; libtest/doc output is separate.
+            // Malformed admitted frames remain errors, never ignored failures.
+            if with_harness {
+                line.starts_with('{')
+            } else {
+                !line.trim().is_empty()
+            }
+        })
+        .map(|line| {
+            json::read_with(
+                line,
+                json::Limits {
+                    unique_members: true,
+                    ..json::Limits::DEFAULT
+                },
+            )
+            .map_err(|error| invalid(error.to_string()))
+        })
+        .collect()
+}
+
+/// Select from an already admitted complete invocation, never across children.
+pub(crate) fn cdylib(messages: &[Value], package_id: &str, filename: &str) -> IoResult<Artifact> {
     let mut selected = None;
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let message = json::read_with(
-            line,
-            json::Limits {
-                unique_members: true,
-                ..json::Limits::DEFAULT
-            },
-        )
-        .map_err(|error| invalid(error.to_string()))?;
+    for message in messages {
         if message.get("reason").and_then(Value::as_str) != Some("compiler-artifact")
             || message.get("package_id").and_then(Value::as_str) != Some(package_id)
         {
@@ -423,7 +442,7 @@ pub(crate) fn context(root: &Path, cargo: &str, cc: &str) -> IoResult<Value> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -468,7 +487,7 @@ mod tests {
         assert_eq!(untracked_paths(b"").unwrap(), [] as [&str; 0]);
     }
 
-    fn artifact(package: &str, fresh: Value, filenames: Value) -> String {
+    pub(crate) fn artifact(package: &str, fresh: Value, filenames: Value) -> String {
         json::write_compact(
             &Object::new()
                 .with("reason", "compiler-artifact")
@@ -478,6 +497,7 @@ mod tests {
                     Value::from(
                         Object::new()
                             .with("name", "purrdf")
+                            .with("src_path", "/fixture/lib.rs")
                             .with("kind", vec!["cdylib", "rlib"]),
                     ),
                 )
@@ -499,11 +519,37 @@ mod tests {
     }
 
     #[test]
+    fn mixed_harness_frames_preserve_strict_artifact_selection() {
+        let exact = artifact("capi", false.into(), vec!["/exact/libpurrdf.so"].into());
+        let mixed = format!(
+            "{{\"reason\":\"build-started\"}}\n{exact}\n{{\"reason\":\"build-finished\",\"success\":true}}\nrunning 5 tests\ntest example ... ok\ntest result: ok. 5 passed\n"
+        );
+        assert!(cargo_messages(mixed.as_bytes(), false).is_err());
+        let messages = cargo_messages(mixed.as_bytes(), true).unwrap();
+        assert_eq!(messages.len(), 3);
+        let selected = cdylib(&messages, "capi", "libpurrdf.so").unwrap();
+        assert_eq!(selected.message, json::read(&exact).unwrap());
+        assert_eq!(selected.path, Path::new("/exact/libpurrdf.so"));
+        for suffix in ["{malformed", "{\"reason\":1,\"reason\":2}"] {
+            assert!(cargo_messages(format!("{mixed}{suffix}\n").as_bytes(), true).is_err());
+        }
+        let duplicate = cargo_messages(format!("{mixed}{exact}\n").as_bytes(), true).unwrap();
+        assert!(cdylib(&duplicate, "capi", "libpurrdf.so").is_err());
+        assert!(cdylib(&messages, "unrelated", "libpurrdf.so").is_err());
+        assert!(cdylib(&messages, "capi", "wrong.so").is_err());
+    }
+
+    #[test]
     fn selects_exact_package_and_retains_freshness_metadata() {
         let unrelated = artifact("other", true.into(), vec!["/other/libpurrdf.so"].into());
         let exact = artifact("capi", false.into(), vec!["/exact/libpurrdf.so"].into());
         let messages = format!("{unrelated}\n{exact}\n");
-        let selected = cdylib(messages.as_bytes(), "capi", "libpurrdf.so").unwrap();
+        let selected = cdylib(
+            &cargo_messages(messages.as_bytes(), false).unwrap(),
+            "capi",
+            "libpurrdf.so",
+        )
+        .unwrap();
         assert_eq!(selected.path, Path::new("/exact/libpurrdf.so"));
         assert_eq!(
             selected.message.get("fresh").and_then(Value::as_bool),
@@ -511,11 +557,15 @@ mod tests {
         );
         let warm = artifact("capi", true.into(), vec!["/exact/libpurrdf.so"].into());
         assert_eq!(
-            cdylib(warm.as_bytes(), "capi", "libpurrdf.so")
-                .unwrap()
-                .message
-                .get("fresh")
-                .and_then(Value::as_bool),
+            cdylib(
+                &cargo_messages(warm.as_bytes(), false).unwrap(),
+                "capi",
+                "libpurrdf.so",
+            )
+            .unwrap()
+            .message
+            .get("fresh")
+            .and_then(Value::as_bool),
             Some(true)
         );
     }
@@ -537,11 +587,13 @@ mod tests {
             valid.replace("\"fresh\":true", "\"fresh\":true,\"fresh\":false"),
         ] {
             assert!(
-                cdylib(input.as_bytes(), "capi", "libpurrdf.so").is_err(),
+                cargo_messages(input.as_bytes(), false)
+                    .and_then(|messages| cdylib(&messages, "capi", "libpurrdf.so"))
+                    .is_err(),
                 "accepted {input}"
             );
         }
-        assert!(cdylib(&[0xff], "capi", "libpurrdf.so").is_err());
+        assert!(cargo_messages(&[0xff], false).is_err());
     }
 
     #[test]

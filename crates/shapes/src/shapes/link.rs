@@ -399,19 +399,21 @@ pub(crate) fn register_expression_bodied_functions(
 /// The one traversal of a shapes model's positions that can carry a shape-index
 /// handle or reach a custom-function declaration.
 ///
-/// Two passes need exactly this traversal: linking, which proves every shape-index
-/// handle it reaches is the graph's one handle, and the product codec, which
-/// collects every custom-function declaration a shapes graph can call. They differ
-/// only in what they do AT a declaration and AT a handle, so those are the two
-/// hooks; the traversal itself exists once, so a model position one pass visits
-/// cannot be missed by the other.
+/// Three passes share this traversal: linking proves every shape-index handle is
+/// the graph's one handle; the product codec collects reachable custom-function
+/// declarations; native XPath admission inventories declared pattern cells. Each
+/// pass supplies hooks at handles, function declarations or patterns. The traversal
+/// itself exists once, so every pass visits the same model positions.
 ///
 /// Every `match` over the model is WILDCARD-FREE, so a new `Constraint`, `Target`
 /// or `NodeExpr` arm that could reach a handle or a declaration cannot be added
 /// without deciding whether the walk has to see it. Each shape, constraint and node
 /// expression opens one nesting level, bounded by [`MAX_DEPTH`], because the walk
 /// recurses on the native stack.
-pub(crate) trait ModelWalk {
+pub(crate) trait ModelWalk<'model, E = ShapesProductError>
+where
+    E: From<ShapesProductError>,
+{
     /// The live nesting depth the walk bounds.
     fn depth(&mut self) -> &mut u32;
 
@@ -422,23 +424,33 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// Whatever the pass refuses about the declaration.
-    fn first_declaration(&mut self, func: &Arc<CustomFunction>)
-    -> Result<bool, ShapesProductError>;
+    fn first_declaration(&mut self, func: &'model Arc<CustomFunction>) -> Result<bool, E>;
 
     /// Inspect one shape-index handle.
     ///
     /// # Errors
     ///
     /// Whatever the pass refuses about the handle.
-    fn shape_index(&mut self, found: &ShapeIndex) -> Result<(), ShapesProductError>;
+    fn shape_index(&mut self, found: &'model ShapeIndex) -> Result<(), E>;
+
+    /// Inspect one declared pattern at its existing model position.
+    ///
+    /// Linker and product passes need no work at a pattern; selected native
+    /// execution uses this hook for its bounded declaration inventory.
+    ///
+    /// # Errors
+    /// Returns the collecting pass's actual refusal.
+    fn pattern(&mut self, _declaration: &'model Constraint) -> Result<(), E> {
+        Ok(())
+    }
 
     /// Open one nesting level, refusing past [`MAX_DEPTH`].
     ///
     /// # Errors
     ///
     /// [`ProductDimension::DepthLimit`] past [`MAX_DEPTH`].
-    fn enter(&mut self) -> Result<(), ShapesProductError> {
-        crate::product::ast::open_level(self.depth(), depth_limit)
+    fn enter(&mut self) -> Result<(), E> {
+        crate::product::ast::open_level(self.depth(), depth_limit).map_err(E::from)
     }
 
     /// Close one nesting level.
@@ -451,7 +463,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn declare(&mut self, func: &Arc<CustomFunction>) -> Result<(), ShapesProductError> {
+    fn declare(&mut self, func: &'model Arc<CustomFunction>) -> Result<(), E> {
         if self.first_declaration(func)?
             && let Some(body) = func.body.get()
         {
@@ -466,7 +478,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
+    fn targets(&mut self, targets: &'model [Target]) -> Result<(), E> {
         for target in targets {
             match target {
                 Target::Class(_)
@@ -487,7 +499,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
+    fn shape(&mut self, shape: &'model Shape) -> Result<(), E> {
         self.enter()?;
         self.targets(&shape.targets)?;
         for constraint in &shape.constraints {
@@ -508,7 +520,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
+    fn rule(&mut self, rule: &'model Rule) -> Result<(), E> {
         match &rule.body {
             RuleBody::Triple {
                 subject,
@@ -535,7 +547,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
+    fn property_shape(&mut self, shape: &'model PropertyShape) -> Result<(), E> {
         self.enter()?;
         for expr in shape.values.iter().chain(&shape.default_value) {
             self.node_expr(expr)?;
@@ -559,7 +571,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn constraint(&mut self, constraint: &Constraint) -> Result<(), ShapesProductError> {
+    fn constraint(&mut self, constraint: &'model Constraint) -> Result<(), E> {
         self.enter()?;
         match constraint {
             Constraint::Class(_)
@@ -569,7 +581,6 @@ pub(crate) trait ModelWalk {
             | Constraint::MaxCount(_)
             | Constraint::In(_)
             | Constraint::HasValue(_)
-            | Constraint::Pattern { .. }
             | Constraint::MinLength(_)
             | Constraint::MaxLength(_)
             | Constraint::UniqueLang(_)
@@ -591,6 +602,7 @@ pub(crate) trait ModelWalk {
             | Constraint::SingleLine(_)
             | Constraint::RootClass(_)
             | Constraint::Component { .. } => {}
+            Constraint::Pattern { .. } => self.pattern(constraint)?,
             Constraint::UniqueValuesFor { targets, .. } => self.targets(targets)?,
             Constraint::Not(shape)
             | Constraint::Node(shape)
@@ -627,7 +639,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn shape_arg(&mut self, arg: &ShapeArg) -> Result<(), ShapesProductError> {
+    fn shape_arg(&mut self, arg: &'model ShapeArg) -> Result<(), E> {
         match arg {
             ShapeArg::Named(shape) => self.shape(shape),
             ShapeArg::Computed { expr, shapes } => {
@@ -642,7 +654,7 @@ pub(crate) trait ModelWalk {
     /// # Errors
     ///
     /// A hook's refusal, or the depth ceiling.
-    fn node_expr(&mut self, expr: &NodeExpr) -> Result<(), ShapesProductError> {
+    fn node_expr(&mut self, expr: &'model NodeExpr) -> Result<(), E> {
         self.enter()?;
         match expr {
             NodeExpr::Constant(_)
@@ -731,7 +743,7 @@ struct ShapeIndexWalk<'a> {
     seen_fns: Vec<Arc<CustomFunction>>,
 }
 
-impl ModelWalk for ShapeIndexWalk<'_> {
+impl ModelWalk<'_> for ShapeIndexWalk<'_> {
     fn depth(&mut self) -> &mut u32 {
         &mut self.depth
     }

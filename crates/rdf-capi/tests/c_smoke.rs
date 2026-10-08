@@ -107,7 +107,11 @@ fn c_abi_smoke() -> std::io::Result<()> {
     cargo_build.current_dir(root);
     let output = phases.run("cargo-cdylib-preparation", &mut cargo_build)?;
     let artifact = phases.check("cargo-artifact-validation", || {
-        phases::cdylib(&output.stdout, package_id, &lib_name)
+        phases::cdylib(
+            &phases::cargo_messages(&output.stdout, false)?,
+            package_id,
+            &lib_name,
+        )
     })?;
     phases.evidence("cargo_artifact", artifact.message)?;
     let library = phases.check("library-identity", || phases::identity(&artifact.path))?;

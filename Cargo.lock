@@ -315,6 +315,7 @@ version = "3.0.1"
 dependencies = [
  "proc-macro2",
  "purrdf-hash",
+ "purrdf-jsonschema",
  "purrdf-lex",
  "purrdf-testkit",
  "regex",
@@ -536,6 +537,7 @@ name = "purrdf-datalog"
 version = "3.0.1"
 dependencies = [
  "hashbrown",
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-lex",

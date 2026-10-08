@@ -94,6 +94,7 @@ pub mod handles;
 pub mod parse;
 pub mod projection;
 pub mod query;
+mod regex_profile;
 pub mod rowcursor;
 pub mod serialize;
 pub mod shacl;

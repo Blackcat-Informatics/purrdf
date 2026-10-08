@@ -58,6 +58,7 @@ purrdf-lex = { workspace = true }
 # hex.
 sha2 = { workspace = true }
 purrdf-hash = { workspace = true }
+# Shared test text: the SPARQL string literals the regex-law tests build.
 purrdf-testkit = { workspace = true }
 
 [[example]]

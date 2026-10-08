@@ -49,7 +49,7 @@ The Rust benches are the source of truth for engine-level layout and algorithm
 choices — the shipped design is whichever the bench numbers pick, not
 whichever sounds fast (see README, "Fast by measurement, not by assertion").
 They live under `crates/*/benches/`. The workspace registers 111 `[[bench]]`
-targets in total; this section and the inventory table below document 31 of
+targets in total; this section and the inventory table below document 34 of
 them — the ones with a story worth telling about a hot path or a design
 trade-off. The rest run under `make bench` like any other target and are
 simply not narrated here:
@@ -83,11 +83,15 @@ simply not narrated here:
   observations.
 - `crates/sparql-algebra/benches/tokenize.rs` — SPARQL/Turtle lexer hot path
   (`IRIREF`, string literals, comments).
+- `crates/shex/benches/pattern_validate.rs` — matched shared-valid,
+  shared-invalid and distinct-pattern validation fixtures under compatibility
+  and both explicit native XPath laws, including cold native calls and reused
+  validator products with current finite limits.
 - `crates/sparql-eval/benches/query_eval.rs` — end-to-end SPARQL SELECT
   evaluation over synthetic datasets.
 - `crates/sparql-eval/benches/governed_eval.rs` — governor costs and fixed-length
-  paths versus explicit triple expansion, with preparation outside timing and
-  projected answers checked before sampling.
+  paths versus explicit triple expansion over typed-endpoint chains, including
+  planning and execution with cold join-order caches.
 - `crates/sparql-eval/benches/numeric_eval.rs` — end-to-end SPARQL numeric
   evaluation: in-range integer and decimal arithmetic, `ORDER BY`, `SUM`/`AVG`
   and `FILTER`, and values past machine words, ungoverned and governed. Exact
@@ -111,11 +115,14 @@ simply not narrated here:
   pinned by operation counts in `nested_exists_gate`, not by these timings).
 - `crates/sparql-eval/benches/lateral_service.rs` — variable-endpoint
   `SERVICE ?g` evaluated as a LATERAL join vs. a fixed-IRI `SERVICE <ep>`.
-- `crates/sparql-eval/benches/graph_constant_membership.rs` — constant named-graph
-  lookup and per-row membership probes over frozen, delta, composite and pack
-  views.
+- `crates/sparql-eval/benches/graph_constant_membership.rs` — constant and
+  per-row graph membership over 10,000 named graphs on frozen, delta,
+  composite and pack carriers.
 - `crates/shapes/benches/graph_membership.rs` — per-row named-graph membership
-  probes through the SHACL data view over native and mutation snapshots.
+  through the SHACL data view on native and mutation-snapshot carriers.
+- `crates/shapes/benches/pattern_validate.rs` — matched compatibility and dated
+  native XPath pattern validation over shared preparations and data bindings,
+  with cold and warm programs, current finite limits and long-literal neighbors.
 - `crates/shapes/benches/validate.rs` — SHACL validation plus JSON Schema and
   LinkML import/lowering throughput and one-operation allocation traffic,
   including the change path's conforming-versus-violating contrast over one
@@ -152,6 +159,10 @@ simply not narrated here:
   `QueryEngine` reuse vs. fresh-engine construction.
 - `crates/iri/benches/parse.rs` — IRI parse/validate hot path over a mixed
   character-class corpus.
+- `crates/sparql-eval/benches/regex_eval.rs` — constant `REGEX`, constant
+  `REPLACE` and per-row unique patterns over the same 1,000- and 10,000-row
+  fixtures under compatibility routing and both dated native XPath laws;
+  the long-literal group measures the compatibility literal prefilter.
 - `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
   clean run and a token-sized one, and the JSON string escaper in each of its
   four spellings over clean and stop-dense text.
@@ -323,7 +334,7 @@ and allocation observations do not establish latency.
 
 ### Native benchmark inventory
 
-This table documents 31 of the 111 `[[bench]]` targets registered across the
+This table documents 34 of the 111 `[[bench]]` targets registered across the
 workspace's `Cargo.toml` files — the subset narrated in the prose list above,
 in the same order. It is not a claim of completeness: `cargo bench -p <crate>
 --bench <name>` reaches every registered target whether or not it has a row
@@ -342,6 +353,7 @@ here.
 | `crates/rdf/benches/native_codecs.rs` | Throughput of the native Turtle, TriG, N-Triples, N-Quads, RDF/XML, and JSON-LD serializers/parsers; JSON-LD context compilation and expanded/caller/derived modes are reported separately. |
 | `crates/rdf/benches/projections.rs` | Graph, tabular, dataset-description, and research-object mapping/carrier throughput plus LPG scope and materialized-package/direct-sink allocation comparisons over deterministic fixtures. |
 | `crates/sparql-algebra/benches/tokenize.rs` | Lexer throughput on long IRI bodies, escaped string literals, and comment tails. |
+| `crates/shex/benches/pattern_validate.rs` | Shared-valid, shared-invalid and distinct-pattern validation under compatibility and both dated native XPath laws, with cold calls and reused validators under current finite limits. |
 | `crates/sparql-eval/benches/query_eval.rs` | End-to-end SPARQL SELECT latency including BGP joins, filters, and aggregates. |
 | `crates/sparql-eval/benches/numeric_eval.rs` | End-to-end SPARQL numeric evaluation over 20,000 rows: in-range `xsd:integer`/`xsd:decimal` arithmetic in a `FILTER` and under `SUM`, whole-relation `ORDER BY`, `SUM`/`AVG` and constant comparisons (`numeric_eval_in_range`); a forty-digit column through `×`, `SUM`, `AVG` and `ORDER BY`, and six squarings of a hundred-digit integer ungoverned and under a fuel ceiling (`numeric_eval_exact`). |
 | `crates/sparql-eval/benches/governed_eval.rs` | Governor cost comparisons and fixed-length paths versus explicit triple expansion over 16, 64, and 256 typed-endpoint chains. The linear-path cases prepare outside timing and use a fresh engine per sample, measuring planning plus execution with cold join-order caches; projected answers and their order must agree before sampling. |
@@ -350,6 +362,7 @@ here.
 | `crates/sparql-eval/benches/lateral_service.rs` | `SERVICE ?g` LATERAL substitute-and-forward cost as the number of distinct endpoint bindings grows. |
 | `crates/sparql-eval/benches/graph_constant_membership.rs` | Addressing named graphs by constant over 10,000 graphs: a graph that exists (`GRAPH <g> { ?s ?p ?o }`, one row), a phantom IRI that names no graph (no row), and one membership probe per row of `?s ?p ?o LATERAL { GRAPH ?o { ... } }`, on the frozen dataset, a delta snapshot, a composite view and a pack. |
 | `crates/shapes/benches/graph_membership.rs` | The `LATERAL { GRAPH ?o { ... } }` membership-probe shape over 10,000 named graphs read through the SHACL data view, on a native source and a mutation snapshot. |
+| `crates/shapes/benches/pattern_validate.rs` | Compatibility and both dated native XPath laws over matched shapes and literals, cold and warm native programs under current finite limits, plus long-literal pattern neighbors. |
 | `crates/shapes/benches/validate.rs` | SHACL Core validation latency plus JSON Schema/LinkML → SHACL import/lowering throughput and allocation traffic on deterministic fixtures. |
 | `crates/shapes/benches/schema_surface.rs` | RDFC-keyed shaped-only compilation and sparse/dense/restricted/shared-restriction ontology-complete class/property relation, class-expression manifest, and JSON Schema/OpenAPI emission, up to a 4,000-deep subclass chain and a 50,000-class tree. |
 | `crates/shapes/benches/srl_closure.rs` | SPARQL 1.2 RL transitive closure: parse-and-check of the closure program, then `srl::infer` over chains of 16, 64, and 128 `:link` edges, asserting the `n(n + 1)/2` inferred triples. |
@@ -360,6 +373,7 @@ here.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+| `crates/sparql-eval/benches/regex_eval.rs` | Constant REGEX/REPLACE and per-row unique patterns over matched 1,000- and 10,000-row fixtures under compatibility and both dated native laws; compatibility literal-prefilter costs on long inputs. |
 | `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
 | `crates/xsd/benches/exact.rs` | `purrdf_xsd::exact`: 1,024 integer and decimal `+`, `×`, `÷`, parse-and-render and `to_f64` operations inside `i128` through the tower and through the bounded `XsdValue` operators (`xsd_exact_small`); one `+`, `×`, `div_rem`, scale-18 decimal division, parse-and-render and `to_f64` at 40, 400, 4,000 and 40,000 digits (`xsd_exact_growth`); schoolbook against Karatsuba products from 16 to 2,048 limbs (`xsd_exact_karatsuba`); 1,024 products of two bounded decimals whose scales sum to eighteen and to twenty (`xsd_exact_fine_products`). |
 

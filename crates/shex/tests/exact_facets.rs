@@ -11,10 +11,12 @@
 //! imports. Every refusal here runs beside a neighbour that is accepted.
 
 use purrdf_core::TermValue;
+use purrdf_core::xsd_regex::xpath::{Limits, Profile};
 use purrdf_rdf::parse_dataset;
 use purrdf_shex::{
-    ConformanceStatus, ExactSchema, ShapeSelector, ShexError, ValidationOptions, to_shexj,
-    validate, validate_exact, validate_shape_map_exact,
+    ConformanceStatus, ExactSchema, ShapeSelector, ShexError, ValidationOptions, XPathValidator,
+    to_shexj, validate, validate_exact, validate_exact_with_xpath, validate_shape_map_exact,
+    validate_shape_map_exact_with_xpath, validate_with_xpath,
 };
 
 use ConformanceStatus::{Conformant, Nonconformant};
@@ -608,4 +610,120 @@ fn a_double_bound_past_the_double_range_is_infinite() {
     let reread = ExactSchema::parse_shexj(&exported, None).expect("the export parses");
     assert_eq!(verdict(&reread, inf), Conformant);
     assert_eq!(verdict(&reread, large), Conformant);
+}
+
+/// The data `ex:x ex:n <value>`.
+fn data_of(value: &str) -> std::sync::Arc<purrdf_core::RdfDataset> {
+    parse_dataset(
+        format!("<{EX}x> <{EX}n> {value} .").as_bytes(),
+        "text/turtle",
+        None,
+    )
+    .expect("data parses")
+}
+
+/// A bound past `i64` and a pattern only XPath 3.1 defines (a non-capturing group), on
+/// one node constraint: the exact entries keep the bound's digits AND match the pattern
+/// under the selected dated law.
+#[test]
+fn exact_bounds_hold_under_a_selected_xpath_law() {
+    let schema = shexc("MININCLUSIVE 100000000000000000001 /^(?:1)/");
+    let map = vec![(
+        TermValue::Iri(format!("{EX}x")),
+        ShapeSelector::Label(format!("{EX}S")),
+    )];
+    let options = ValidationOptions::default();
+    let under = |value: &str, profile: Profile| {
+        validate_exact_with_xpath(
+            &schema,
+            &data_of(value),
+            &map,
+            &options,
+            profile,
+            Limits::new(),
+        )
+        .expect("no operational refusal")
+        .entries[0]
+            .status
+    };
+    // The valid neighbour: the bound itself, matching the 3.1 pattern.
+    assert_eq!(under("100000000000000000001", Profile::Xpath31), Conformant);
+    // One below the bound fails it exactly, though its double is the bound's.
+    assert_eq!(
+        under("100000000000000000000", Profile::Xpath31),
+        Nonconformant
+    );
+    // The AST path loses those digits and accepts it: the exact path is what refuses.
+    let lossy = validate_with_xpath(
+        schema.schema(),
+        &data_of("100000000000000000000"),
+        &map,
+        &options,
+        Profile::Xpath31,
+        Limits::new(),
+    )
+    .expect("no operational refusal");
+    assert_eq!(lossy.entries[0].status, Conformant);
+    // The law is really selected: XPath 2.0 defines no non-capturing group.
+    assert_eq!(
+        under("100000000000000000001", Profile::Xpath20),
+        Nonconformant
+    );
+
+    // A reused validator keeps the exact bounds across laws.
+    let mut validator = XPathValidator::exact(&schema);
+    for (value, profile, expected) in [
+        ("100000000000000000001", Profile::Xpath31, Conformant),
+        ("100000000000000000000", Profile::Xpath31, Nonconformant),
+        ("100000000000000000001", Profile::Xpath20, Nonconformant),
+        ("100000000000000000001", Profile::Xpath31, Conformant),
+    ] {
+        let result = validator
+            .validate(&data_of(value), &map, &options, profile, Limits::new())
+            .expect("no operational refusal");
+        assert_eq!(
+            result.entries[0].status, expected,
+            "{value} under {profile:?}"
+        );
+    }
+}
+
+/// The shape-map form agrees with the fixed-map form, and still refuses a shape the
+/// schema does not declare beside a declared one that is answered.
+#[test]
+fn exact_shape_maps_hold_under_a_selected_xpath_law() {
+    let schema = shexc("MININCLUSIVE 100000000000000000001 /^(?:1)/");
+    let options = ValidationOptions::default();
+    let map = format!("<{EX}x>@<{EX}S>");
+    let status = |value: &str| {
+        validate_shape_map_exact_with_xpath(
+            &schema,
+            &data_of(value),
+            &map,
+            None,
+            &options,
+            Profile::Xpath31,
+            Limits::new(),
+        )
+        .expect("the map validates")
+        .entries[0]
+            .status
+    };
+    assert_eq!(status("100000000000000000001"), Conformant);
+    assert_eq!(status("100000000000000000000"), Nonconformant);
+    let undeclared = validate_shape_map_exact_with_xpath(
+        &schema,
+        &data_of("100000000000000000001"),
+        &format!("<{EX}x>@<{EX}Missing>"),
+        None,
+        &options,
+        Profile::Xpath31,
+        Limits::new(),
+    );
+    assert!(matches!(
+        undeclared,
+        Err(purrdf_shex::XPathValidationError::ShapeMap(
+            ShexError::UnknownShape(_)
+        ))
+    ));
 }

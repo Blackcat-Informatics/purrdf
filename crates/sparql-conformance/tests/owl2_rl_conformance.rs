@@ -841,7 +841,8 @@ fn mechanism_golden_path() -> std::path::PathBuf {
 /// three budget coordinates, the contract hash, and both `none` lines.
 ///
 /// It is byte-stable by construction: every number in it is a count rather than a clock
-/// reading, and the contract hash is a digest of the CALCULUS rather than of a run. A diff
+/// reading, and the contract hash binds the versioned calculus and effective limits,
+/// rather than a run. A diff
 /// here therefore means one of three things — the rendering moved, the calculus moved, or
 /// this case's chase does different work than it did — and all three are things to be told
 /// about rather than to absorb. Regenerate with `regenerate_mechanism_golden`.

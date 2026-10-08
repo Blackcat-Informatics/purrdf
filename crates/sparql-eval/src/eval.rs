@@ -41,6 +41,7 @@ use crate::governor::soundness::CapPushdown;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
 use crate::witness::RelationWitness;
+use crate::xpath_regex::Selection;
 use crate::{DetHashMap, DetHashSet};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
@@ -558,6 +559,10 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
         String,
         DetHashMap<String, Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
     >,
+    /// Explicit native law and current finite bounds; absent means compatibility.
+    pub(crate) xpath_regex: Option<Selection>,
+    /// Successful native programs only, with bounded retained payload and entries.
+    pub(crate) xpath_regex_cache: crate::xpath_regex::Cache,
     /// Lazily-resolved solution terms for the `xsd:boolean` literals `"false"` /
     /// `"true"` (indexed by `usize::from(bool)`), so per-row boolean expression
     /// results skip the value-hash intern probe. Interning is deterministic per
@@ -1038,6 +1043,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_prepared_cache: DetHashMap::default(),
             exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
+            xpath_regex: None,
+            xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: DetHashMap::default(),
             remote: None,
@@ -2278,6 +2285,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
+    /// Select a dated native XPath law for `REGEX` and `REPLACE` in this context.
+    /// Syntax, flag and replacement errors remain expression errors; resource
+    /// and allocation refusals propagate as [`EvalError::XPathRegex`].
+    #[must_use]
+    pub const fn with_xpath_regex(
+        mut self,
+        profile: purrdf_core::xsd_regex::xpath::Profile,
+        limits: purrdf_core::xsd_regex::xpath::Limits,
+    ) -> Self {
+        self.xpath_regex = Some(Selection::new(profile, limits));
+        self
+    }
+
+    /// The explicitly selected native law and bounds, or compatibility routing.
+    #[must_use]
+    pub const fn xpath_regex(
+        &self,
+    ) -> Option<(
+        purrdf_core::xsd_regex::xpath::Profile,
+        purrdf_core::xsd_regex::xpath::Limits,
+    )> {
+        Selection::parts(self.xpath_regex)
+    }
+
     /// Answer `=` with `false`, rather than a type error, for a language-tagged
     /// string against a literal of an unrecognized datatype or an ill-typed one (see
     /// [`QueryOptions::disjoint_language_strings`](crate::QueryOptions::disjoint_language_strings)).
@@ -2410,6 +2441,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_prepared_cache: self.exists_prepared_cache.clone(),
             exists_definition_memo: self.exists_definition_memo.clone(),
             regex_cache: DetHashMap::default(),
+            xpath_regex: self.xpath_regex,
+            xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: DetHashMap::default(),
             remote: self.remote,
@@ -2666,7 +2699,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// # Errors
     ///
-    /// [`EvalError::Function`] if an **ungoverned** call would exceed
+    /// [`EvalError::FunctionOperational`] if an **ungoverned** call would exceed
     /// [`MAX_UDF_DEPTH`] — mutually-recursive functions still fail closed rather than
     /// overflow the stack when there is no governed outcome channel.
     pub(crate) fn child_for_user_fn(&self) -> Result<Option<Self>, EvalError> {
@@ -2694,7 +2727,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             return Ok(None);
         }
         if next_depth > MAX_UDF_DEPTH {
-            return Err(EvalError::function(format!(
+            return Err(EvalError::function_operational(format!(
                 "SHACL-AF function recursion exceeded the depth bound of {MAX_UDF_DEPTH}"
             )));
         }
@@ -2728,6 +2761,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_prepared_cache: DetHashMap::default(),
             exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
+            xpath_regex: self.xpath_regex,
+            xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
             xsd_parse_cache: DetHashMap::default(),
             remote: self.remote,

@@ -14,6 +14,7 @@
 "vectors/JSONTestSuite" = "scripts/conformance-frozen/vectors-JSONTestSuite.sha256"
 "vectors/xmlconf" = "scripts/conformance-frozen/vectors-xmlconf.sha256"
 "vectors/yaml-test-suite" = "scripts/conformance-frozen/vectors-yaml-test-suite.sha256"
+"vectors/w3c-recs" = "scripts/conformance-frozen/vectors-w3c-recs.sha256"
 "crates/shapes/corpus" = "scripts/conformance-frozen/shapes-corpus.sha256"
 "crates/shapes/spec" = "scripts/conformance-frozen/shapes-spec.sha256"
 "crates/sparql-conformance/corpus/construct" = "scripts/conformance-frozen/sparql-conformance-corpus-construct.sha256"
