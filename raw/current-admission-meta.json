@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "5384882d65750ee22bddfeeac473095ab9c3db03",
+  "headRefName": "paudley/402-shacl-profiles-reports",
+  "headRefOid": "dc8040ba6d2f0945c88f360a54db835aac798824",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 462,
+  "state": "OPEN",
+  "title": "SHACL dated profile selection and complete validation reports",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/462"
+}

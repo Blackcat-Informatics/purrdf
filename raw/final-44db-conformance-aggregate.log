@@ -1,0 +1,299 @@
+﻿2026-10-08T13:00:14.2049608Z Current runner version: '2.337.0'
+2026-10-08T13:00:14.2067598Z ##[group]Runner Image Provisioner
+2026-10-08T13:00:14.2068214Z Hosted Compute Agent
+2026-10-08T13:00:14.2068568Z Version: 20261002.596
+2026-10-08T13:00:14.2069019Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-08T13:00:14.2069483Z Build Date: 2026-10-02T22:28:27Z
+2026-10-08T13:00:14.2069921Z Worker ID: {2b76d435-d782-4124-ada6-63caf51cf885}
+2026-10-08T13:00:14.2070400Z Region: westus3
+2026-10-08T13:00:14.2070734Z Cloud: Azure
+2026-10-08T13:00:14.2071096Z ##[endgroup]
+2026-10-08T13:00:14.2071880Z ##[group]Operating System
+2026-10-08T13:00:14.2072266Z Ubuntu
+2026-10-08T13:00:14.2072617Z 24.04.5
+2026-10-08T13:00:14.2072925Z LTS
+2026-10-08T13:00:14.2073275Z ##[endgroup]
+2026-10-08T13:00:14.2073608Z ##[group]Runner Image
+2026-10-08T13:00:14.2073986Z Image: ubuntu-24.04
+2026-10-08T13:00:14.2074355Z Version: 20261004.327.1
+2026-10-08T13:00:14.2075108Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-08T13:00:14.2076043Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-08T13:00:14.2076613Z ##[endgroup]
+2026-10-08T13:00:14.2077483Z ##[group]GITHUB_TOKEN Permissions
+2026-10-08T13:00:14.2078670Z Contents: read
+2026-10-08T13:00:14.2079064Z Metadata: read
+2026-10-08T13:00:14.2079426Z ##[endgroup]
+2026-10-08T13:00:14.2080878Z Secret source: Actions
+2026-10-08T13:00:14.2081512Z Cache mode: write
+2026-10-08T13:00:14.2081912Z Prepare workflow directory
+2026-10-08T13:00:14.2322457Z Prepare all required actions
+2026-10-08T13:00:14.2356211Z Getting action download info
+2026-10-08T13:00:14.5494170Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-08T13:00:14.7604856Z Download action repository 'actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e' (SHA:95815c38cf2ff2164869cbab79da8d1f422bc89e)
+2026-10-08T13:00:15.8284363Z Complete job name: conformance
+2026-10-08T13:00:15.8916261Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-08T13:00:15.8918164Z with:
+2026-10-08T13:00:15.8918956Z   persist-credentials: false
+2026-10-08T13:00:15.8919844Z   repository: Blackcat-Informatics/purrdf
+2026-10-08T13:00:15.8928185Z   token: ***
+2026-10-08T13:00:15.8928970Z   ssh-strict: true
+2026-10-08T13:00:15.8929708Z   ssh-user: git
+2026-10-08T13:00:15.8930467Z   clean: true
+2026-10-08T13:00:15.8931223Z   sparse-checkout-cone-mode: true
+2026-10-08T13:00:15.8932128Z   fetch-depth: 1
+2026-10-08T13:00:15.8932865Z   fetch-tags: false
+2026-10-08T13:00:15.8933598Z   show-progress: true
+2026-10-08T13:00:15.8934338Z   lfs: false
+2026-10-08T13:00:15.8934893Z   submodules: false
+2026-10-08T13:00:15.8935430Z   set-safe-directory: true
+2026-10-08T13:00:15.8936030Z   allow-unsafe-pr-checkout: false
+2026-10-08T13:00:15.8936896Z ##[endgroup]
+2026-10-08T13:00:15.9615534Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-08T13:00:15.9617515Z ##[group]Getting Git version info
+2026-10-08T13:00:15.9618284Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-08T13:00:15.9619441Z [command]/usr/bin/git version
+2026-10-08T13:00:15.9673229Z git version 2.55.0
+2026-10-08T13:00:15.9685347Z ##[endgroup]
+2026-10-08T13:00:15.9692284Z Temporarily overriding HOME='/home/runner/work/_temp/fd82d6cb-1647-47c4-837f-f2167cb9609c' before making global git config changes
+2026-10-08T13:00:15.9693988Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-08T13:00:15.9695630Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-08T13:00:16.0023010Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-08T13:00:16.0024636Z ##[group]Determining repository object format
+2026-10-08T13:00:16.0025916Z ##[endgroup]
+2026-10-08T13:00:16.0026744Z ##[group]Initializing the repository
+2026-10-08T13:00:16.0028814Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-08T13:00:16.0216503Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-08T13:00:16.0218576Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-08T13:00:16.0219978Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-08T13:00:16.0221291Z hint: call:
+2026-10-08T13:00:16.0221950Z hint:
+2026-10-08T13:00:16.0222802Z hint: 	git config --global init.defaultBranch <name>
+2026-10-08T13:00:16.0223837Z hint:
+2026-10-08T13:00:16.0224824Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-08T13:00:16.0226450Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-08T13:00:16.0227874Z hint:
+2026-10-08T13:00:16.0228561Z hint: 	git branch -m <name>
+2026-10-08T13:00:16.0229355Z hint:
+2026-10-08T13:00:16.0230408Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-08T13:00:16.0232156Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-08T13:00:16.0234881Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-08T13:00:16.0411027Z ##[endgroup]
+2026-10-08T13:00:16.0412293Z ##[group]Disabling automatic garbage collection
+2026-10-08T13:00:16.0413471Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-08T13:00:16.0609033Z ##[endgroup]
+2026-10-08T13:00:16.0610566Z ##[group]Setting up auth
+2026-10-08T13:00:16.0611455Z Removing SSH command configuration
+2026-10-08T13:00:16.0613345Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-08T13:00:16.0638906Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-08T13:00:16.0969187Z Removing HTTP extra header
+2026-10-08T13:00:16.0973285Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-08T13:00:16.1006536Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-08T13:00:16.1176602Z Removing includeIf entries pointing to credentials config files
+2026-10-08T13:00:16.1178358Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-08T13:00:16.1200573Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-08T13:00:16.1368889Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-08T13:00:16.1809176Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:16.2415351Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:16.3219834Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:16.3830618Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:16.4709577Z ##[endgroup]
+2026-10-08T13:00:16.4710463Z ##[group]Fetching the repository
+2026-10-08T13:00:16.4712101Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +fbe76dc4823f1c9b412f60b7a7da597869321f77:refs/remotes/pull/462/merge
+2026-10-08T13:00:22.2425961Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-08T13:00:22.2427029Z  * [new ref]           fbe76dc4823f1c9b412f60b7a7da597869321f77 -> pull/462/merge
+2026-10-08T13:00:22.2431886Z ##[endgroup]
+2026-10-08T13:00:22.2432282Z ##[group]Determining the checkout info
+2026-10-08T13:00:22.2432583Z ##[endgroup]
+2026-10-08T13:00:22.2434410Z [command]/usr/bin/git sparse-checkout disable
+2026-10-08T13:00:22.2479737Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-08T13:00:22.2504152Z ##[group]Checking out the ref
+2026-10-08T13:00:22.2506807Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/462/merge
+2026-10-08T13:00:23.2005222Z Note: switching to 'refs/remotes/pull/462/merge'.
+2026-10-08T13:00:23.2005625Z 
+2026-10-08T13:00:23.2005838Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-08T13:00:23.2006282Z changes and commit them, and you can discard any commits you make in this
+2026-10-08T13:00:23.2006736Z state without impacting any branches by switching back to a branch.
+2026-10-08T13:00:23.2008331Z 
+2026-10-08T13:00:23.2008653Z If you want to create a new branch to retain commits you create, you may
+2026-10-08T13:00:23.2009097Z do so (now or later) by using -c with the switch command. Example:
+2026-10-08T13:00:23.2009323Z 
+2026-10-08T13:00:23.2009437Z   git switch -c <new-branch-name>
+2026-10-08T13:00:23.2009593Z 
+2026-10-08T13:00:23.2009712Z Or undo this operation with:
+2026-10-08T13:00:23.2009863Z 
+2026-10-08T13:00:23.2009958Z   git switch -
+2026-10-08T13:00:23.2010105Z 
+2026-10-08T13:00:23.2010300Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-08T13:00:23.2011911Z 
+2026-10-08T13:00:23.2012214Z HEAD is now at fbe76dc4 Merge 44dbf5ceaba7908aee0f840e4227bf42b040f697 into 2eb04d61f3d65f34ec77b396b5d03c05c23fd5ee
+2026-10-08T13:00:23.2036251Z ##[endgroup]
+2026-10-08T13:00:23.2075880Z [command]/usr/bin/git log -1 --format=%H
+2026-10-08T13:00:23.2098833Z fbe76dc4823f1c9b412f60b7a7da597869321f77
+2026-10-08T13:00:23.2107621Z ##[group]Removing auth
+2026-10-08T13:00:23.2108087Z Removing SSH command configuration
+2026-10-08T13:00:23.2110520Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-08T13:00:23.2135813Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-08T13:00:23.2314661Z Removing HTTP extra header
+2026-10-08T13:00:23.2316651Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-08T13:00:23.2344036Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-08T13:00:23.2519639Z Removing includeIf entries pointing to credentials config files
+2026-10-08T13:00:23.2521814Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-08T13:00:23.2544844Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-08T13:00:23.2545297Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-08T13:00:23.2545681Z includeif.gitdir:/github/workspace/.git.path
+2026-10-08T13:00:23.2545994Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-08T13:00:23.2552261Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-08T13:00:23.2570175Z /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2583368Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2609756Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-08T13:00:23.2626000Z /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2631916Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2753468Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-08T13:00:23.2773835Z /github/runner_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2780394Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2810474Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-08T13:00:23.2829255Z /github/runner_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2837851Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config
+2026-10-08T13:00:23.2863419Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-08T13:00:23.3039864Z Removing credentials config '/home/runner/work/_temp/git-credentials-004aa56c-b99a-4aad-8d88-f3f6f52fe0e4.config'
+2026-10-08T13:00:23.3056175Z ##[endgroup]
+2026-10-08T13:00:23.3250653Z ##[group]Run actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+2026-10-08T13:00:23.3250895Z with:
+2026-10-08T13:00:23.3251023Z   pattern: conformance-results-*
+2026-10-08T13:00:23.3251166Z   merge-multiple: true
+2026-10-08T13:00:23.3251299Z   path: target/conformance-results
+2026-10-08T13:00:23.3251456Z   repository: Blackcat-Informatics/purrdf
+2026-10-08T13:00:23.3251619Z   run-id: 37779745574
+2026-10-08T13:00:23.3251738Z ##[endgroup]
+2026-10-08T13:00:23.4288094Z (node:2178) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-08T13:00:23.4288651Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-08T13:00:23.6803419Z Found 11 artifact(s)
+2026-10-08T13:00:23.6803888Z Filtering artifacts by pattern 'conformance-results-*'
+2026-10-08T13:00:23.6815789Z Preparing to download the following artifacts:
+2026-10-08T13:00:23.6816510Z - conformance-results-shapes (ID: 11552200071, Size: 5576, Expected Digest: sha256:ebbe126447bb2d711d1f7be22c62719a8fd2041dd2734b94a7eac60ff54d9255)
+2026-10-08T13:00:23.6817346Z - conformance-results-core (ID: 11551891867, Size: 32447, Expected Digest: sha256:2d25e2956629ecee3a6bd61570449edc514708fed02f1df2a605d8b42f61ac7e)
+2026-10-08T13:00:23.6818017Z - conformance-results-python (ID: 11551857359, Size: 2712, Expected Digest: sha256:bd6e94da836a7a00817f729e2fa28b24cd164963bc1f10004782550fae1bfce6)
+2026-10-08T13:00:23.6818618Z - conformance-results-sparql (ID: 11551069863, Size: 5886, Expected Digest: sha256:36a527e5ccf80762b7ee46b33c9df6ee88023ce65a350f7a4364bec565be71cd)
+2026-10-08T13:00:23.9135489Z Redirecting to blob download url: https://productionresultssa9.blob.core.windows.net/actions-results/5ea8c968-b26d-83be-9b64-909097e56727/workflow-job-run-180911d9-da30-5801-bcc5-6cfc3a0b8921/artifacts/7cdf549367e6ef01486d0306615e7384828c9ece3e299ca73c73b46f6e8f2143.zip
+2026-10-08T13:00:23.9136741Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+2026-10-08T13:00:24.0207854Z Redirecting to blob download url: https://productionresultssa9.blob.core.windows.net/actions-results/5ea8c968-b26d-83be-9b64-909097e56727/workflow-job-run-24f043fb-46f2-53e1-94f6-0b43ade370d5/artifacts/225b99b0e3ebf6d03bf0b1703340438d6f581047951eaadf3542ae81a818bc7a.zip
+2026-10-08T13:00:24.0209018Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+2026-10-08T13:00:24.0375145Z Redirecting to blob download url: https://productionresultssa9.blob.core.windows.net/actions-results/5ea8c968-b26d-83be-9b64-909097e56727/workflow-job-run-65c5b94b-9ebf-5db9-b789-f76519e2af69/artifacts/e4f24d88316730769a97e45eec997ea0cc3fe5363ef92d62db14cb0777d55a39.zip
+2026-10-08T13:00:24.0376842Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+2026-10-08T13:00:24.0530776Z Redirecting to blob download url: https://productionresultssa9.blob.core.windows.net/actions-results/5ea8c968-b26d-83be-9b64-909097e56727/workflow-job-run-8a6444e6-0aa6-5ce3-9551-0140cabb8174/artifacts/ee95c9b8c2c66a09eb75035dddca2b6de40ed3b8cb2242fbbdc579e161a4d55a.zip
+2026-10-08T13:00:24.0532034Z Starting download of artifact to: /home/runner/work/purrdf/purrdf/target/conformance-results
+2026-10-08T13:00:24.1252280Z (node:2178) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2026-10-08T13:00:24.1271624Z SHA256 digest of downloaded artifact is ebbe126447bb2d711d1f7be22c62719a8fd2041dd2734b94a7eac60ff54d9255
+2026-10-08T13:00:24.1272098Z Artifact download completed successfully.
+2026-10-08T13:00:24.2388983Z SHA256 digest of downloaded artifact is bd6e94da836a7a00817f729e2fa28b24cd164963bc1f10004782550fae1bfce6
+2026-10-08T13:00:24.2389420Z Artifact download completed successfully.
+2026-10-08T13:00:24.2607613Z SHA256 digest of downloaded artifact is 36a527e5ccf80762b7ee46b33c9df6ee88023ce65a350f7a4364bec565be71cd
+2026-10-08T13:00:24.2607926Z Artifact download completed successfully.
+2026-10-08T13:00:24.3384243Z SHA256 digest of downloaded artifact is 2d25e2956629ecee3a6bd61570449edc514708fed02f1df2a605d8b42f61ac7e
+2026-10-08T13:00:24.3384593Z Artifact download completed successfully.
+2026-10-08T13:00:24.3384776Z Total of 4 artifact(s) downloaded
+2026-10-08T13:00:24.3389066Z Download artifact has finished successfully
+2026-10-08T13:00:24.3505884Z ##[group]Run make conformance CONFORMANCE_ARGS="--from-results target/conformance-results"
+2026-10-08T13:00:24.3506338Z [36;1mmake conformance CONFORMANCE_ARGS="--from-results target/conformance-results"[0m
+2026-10-08T13:00:24.3784732Z shell: /usr/bin/bash -e {0}
+2026-10-08T13:00:24.3784960Z ##[endgroup]
+2026-10-08T13:00:35.4314919Z python3 scripts/conformance-matrix.py --from-results target/conformance-results
+2026-10-08T13:00:35.4715963Z 
+2026-10-08T13:00:35.4716110Z PurRDF conformance matrix
+2026-10-08T13:00:35.4716439Z =================================================================================================================================================================
+2026-10-08T13:00:35.4716950Z   SUITE                                                         SOURCE                                                       PASS  XF/SKIP  BUDGET   FAIL  STATUS
+2026-10-08T13:00:35.4717668Z -----------------------------------------------------------------------------------------------------------------------------------------------------------------
+2026-10-08T13:00:35.4718099Z   IRI (RFC 3987 / RFC 3986 resolution)                          W3C IRI + RFC vectors                                          19        0       0      0  GREEN
+2026-10-08T13:00:35.4718489Z   RDFC-1.0 canonicalization                                     W3C rdf-canon                                                   6        0       0      0  GREEN
+2026-10-08T13:00:35.4718896Z   RDF 1.2 canonicalization profile                              purrdf-rdfc12 v2 (first-party)                                 12        0       0      0  GREEN
+2026-10-08T13:00:35.4719317Z   Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML)                     W3C rdf-tests                                                 264        0       0      0  GREEN
+2026-10-08T13:00:35.4719766Z   SPARQL 1.0/1.1/1.2 evaluation (full corpus)                   W3C sparql10 + sparql11 + sparql12 + first-party             1393        0       0      0  GREEN
+2026-10-08T13:00:35.4720333Z   SPARQL 1.0 unlisted vendored files                            W3C data-r2 files no upstream manifest lists                    1        0       0      0  GREEN
+2026-10-08T13:00:35.4720974Z   SPARQL 1.0 cases superseded by RDF 1.2                        W3C data-r2 extended evaluation root                            1        0       0      0  GREEN
+2026-10-08T13:00:35.4721413Z   SPARQL CONSTRUCT (first-party corpus)                         purrdf-construct (first-party)                                 29        0       0      0  GREEN
+2026-10-08T13:00:35.4721847Z   SPARQL DESCRIBE (first-party corpus)                          purrdf-describe (first-party)                                  16        0       0      0  GREEN
+2026-10-08T13:00:35.4722272Z   SPARQL CDT (SEP-0009, vendored corpus)                        awslabs/SPARQL-CDTs                                           658        0       0      0  GREEN
+2026-10-08T13:00:35.4722706Z   SPARQL execution governors                                    purrdf-sparql-governors (first-party)                          50        0       0      0  GREEN
+2026-10-08T13:00:35.4723147Z   SPARQL embedding kNN (first-party)                            purrdf-embedding-knn (first-party)                             15        0       0      0  GREEN
+2026-10-08T13:00:35.4723571Z   HNSW approximate kNN (first-party)                            purrdf-hnsw (first-party)                                      87        0       0      0  GREEN
+2026-10-08T13:00:35.4723999Z   GeoSPARQL 1.1 determinism corpus                              purrdf-geo (first-party; OGC 22-047r1)                         20        0       0      0  GREEN
+2026-10-08T13:00:35.4724435Z   Entailment (OWL 2 DL consistency)                             W3C OWL 2 test suite                                          258        4       4      0  GREEN
+2026-10-08T13:00:35.4725004Z   Entailment (OWL 2 RL, W3C entailment tests)                   W3C OWL 2 entailment tests                                     50        0       0      0  GREEN
+2026-10-08T13:00:35.4725396Z   SHACL Core + SHACL-SPARQL                                     W3C data-shapes                                               129        0       0      0  GREEN
+2026-10-08T13:00:35.4725816Z   SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)  W3C shacl12-test-suite                                        538        6       6      0  GREEN
+2026-10-08T13:00:35.4726275Z   SHACL 1.2 unlisted vendored files                             W3C shacl12-test-suite files no manifest includes               3        0       0      0  GREEN
+2026-10-08T13:00:35.4726715Z   SHACL (first-party corpus)                                    first-party frozen reports                                     73        0       0      0  GREEN
+2026-10-08T13:00:35.4727356Z   Community SHACL dated profiles (REC 2017 / WD 2026)           community-proposed corpus, agent-reviewed                     115        0       0      0  GREEN
+2026-10-08T13:00:35.4728109Z   SHACL prepared-product equivalence                            W3C data-shapes + shacl12-test-suite + first-party corpus     364        0       0      0  GREEN
+2026-10-08T13:00:35.4728578Z   XSD/XPath regExp (first-party corpus)                         first-party, XSD G + F&O 5.6                                  292        0       0      0  GREEN
+2026-10-08T13:00:35.4728972Z   SHACL Rules                                                   DASH + first-party                                             20        0       0      0  GREEN
+2026-10-08T13:00:35.4729342Z   ShEx 2.1 validation                                           shexTest v2.1.0                                              1105        0       0      0  GREEN
+2026-10-08T13:00:35.4729725Z   ShEx syntax + ShExC/ShExJ round-trip                          shexTest v2.1.0                                                10        0       0      0  GREEN
+2026-10-08T13:00:35.4730161Z   JSON Schema draft 2020-12 (official suite)                    JSON-Schema-Test-Suite 5b0ee16                               2342        0       0      0  GREEN
+2026-10-08T13:00:35.4730709Z   JSON Schema draft 2019-09 (official suite)                    JSON-Schema-Test-Suite 5b0ee16                               2298        0       0      0  GREEN
+2026-10-08T13:00:35.4731152Z   JSON Schema draft-07 (official suite)                         JSON-Schema-Test-Suite 5b0ee16                               1841        0       0      0  GREEN
+2026-10-08T13:00:35.4731615Z   GTS transport (frozen vectors)                                gmeow-gts frozen corpus, vectors/                              38        1       1      0  GREEN
+2026-10-08T13:00:35.4732029Z   rdflib LSP drop-in gate                                       rdflib 7.6 own tests                                           81        5       5      0  GREEN
+2026-10-08T13:00:35.4732441Z   Python binding suite                                          first-party (incl. compat differential vs rdflib)            4164        4       4      0  GREEN
+2026-10-08T13:00:35.4732862Z -----------------------------------------------------------------------------------------------------------------------------------------------------------------
+2026-10-08T13:00:35.4733220Z   TOTAL                                                                                                                     16292       20      20      0
+2026-10-08T13:00:35.4733394Z 
+2026-10-08T13:00:35.4733446Z Notes:
+2026-10-08T13:00:35.4733630Z   - IRI (RFC 3987 / RFC 3986 resolution): parse/validate/normalize/resolve vectors
+2026-10-08T13:00:35.4733913Z   - RDFC-1.0 canonicalization: 65 vectors (64 eval + 1 negative), sharded
+2026-10-08T13:00:35.4734215Z   - RDF 1.2 canonicalization profile: 19 goldens + 7 refusals, frozen and content-addressed
+2026-10-08T13:00:35.4734557Z   - Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML): 264/264 vectors round-trip; 0 allowlisted gaps
+2026-10-08T13:00:35.4735165Z   - SPARQL 1.0/1.1/1.2 evaluation (full corpus): 1393 pass · 0 xfail (ledgered)
+2026-10-08T13:00:35.4736074Z   - SPARQL 1.0 unlisted vendored files: 20 vendored files no upstream manifest lists: 1 described entry the group leaves out, graded against the SPARQL 1.1 reading that replaced it · 8 files of the orphan sameTerm manifest, whose anonymous untyped entries cannot load · 11 payloads no manifest names
+2026-10-08T13:00:35.4736980Z   - SPARQL 1.0 cases superseded by RDF 1.2: 1/1 graded against the SPARQL 1.2 order (§15.1, RDF 1.2 simple literal = xsd:string): the frozen terms exactly, the frozen order not
+2026-10-08T13:00:35.4738500Z   - SPARQL CONSTRUCT (first-party corpus): 29/29 cases: triple-producing §16.2 + CONSTRUCT GRAPH quads, paired case for case, incl. the RDF 1.2 statement layer and its per-graph keying and BOTH terms a subject position refuses (a literal and a triple term) at BOTH depths it applies (an asserted subject and the subject of a triple term nested in an object, the depth at which an unenforced term model emits a document the engine's own readers refuse); the quad-template grammar bounded from both sides by 1 positive and 7 negative syntax verdicts
+2026-10-08T13:00:35.4739749Z   - SPARQL DESCRIBE (first-party corpus): 16/16 cases pinning the symmetric CBD, incl. the RDF 1.2 statement layer on both sides of its subject-or-object disjunction and its per-graph scope over TriG
+2026-10-08T13:00:35.4741560Z   - SPARQL CDT (SEP-0009, vendored corpus): 658/658 vendored upstream cases (awslabs/SPARQL-CDTs, commit e0a7465) across six groups: the list and map function libraries, the FOLD aggregate and the UNFOLD graph pattern, ORDER BY over composite values, and blank-node identity inside composite lexical forms. PurRDF reads TWO forms outside the published lexical space — an RDF 1.2 triple term and a directional language-tagged literal as list elements or map values — which a conformant SEP-0009 reader calls ill-formed; `crates/sparql-conformance/tests/cdt_lexical_divergence.rs` grades every composite literal in every corpus this workspace ships and proves not one of them needs either
+2026-10-08T13:00:35.4742937Z   - SPARQL execution governors: 50/50 pinned cases; 42 zero/boundary/over-bound bands, frozen and content-addressed
+2026-10-08T13:00:35.4744637Z   - SPARQL embedding kNN (first-party): the PURREMB kNN property-function seam end to end — rank order, join-back, the LIMIT prefix law, cross-artifact byte identity, and the `property-function-work` governor charge point the governor corpus deliberately does not band (its relations report zero work). The `knn_wasm_determinism` case pins five neighbours and their exact `xsd:double` distance lexicals as a literal, so a reassociated sum or a fused multiply-add that swaps two near-tied neighbours fails here; these numeric expectations run natively; `make wasm-test` separately selects actual WASM dispatch and SIMD kernels
+2026-10-08T13:00:35.4748356Z   - HNSW approximate kNN (first-party): the approximate half of the retrieval pair, graded against the exact path as its oracle: every offered row compared to the exact scan's own `(distance, row)` order, the graph invariants that make an offer possible at all (every row reachable from the entry point, degree bounds, sorted adjacency, the fixed level formula), the approximation contract (an offer is never a proof of absence), the PURREMB guard round-trip through the real INDEX_GUARDS and INDEX_PAYLOAD sections, the SPARQL property-function seam from query text, and the decoder-hostility cases. It also grades the CORPUS the recall figures are taken over, because on this crate the distribution decides the recall, so a generator that drifted toward uniform would quietly turn every recall number into a statement about the fixture: effective dimension against a uniform control, and the achieved within-cluster cosine -- measured against the centroid each row was drawn around, pinned across a ladder of intended values, pinned again for the default shape every figure in this crate uses, and held flat across a sixty-fourfold range of widths, which is the property that separates an intended cosine from a fixed noise amplitude whose tightness collapses as the width grows. This complete corpus runs natively; focused WASM tests exercise actual dispatch, SIMD kernels and path admission
+2026-10-08T13:00:35.4752428Z   - GeoSPARQL 1.1 determinism corpus: 20 geometries folded byte-wise into one u64 digest, compared with the pinned `GOLDEN_DIGEST` in crates/geo/tests/determinism.rs (`9667c2ee2cd3ad4b`): agrees. Counts CORPUS GEOMETRIES, not test functions. NO OGC conformance suite is vendored and none is claimed — the crate's SHACL shapes are first-party `example.org` mirrors of the shipped OGC 22-047r1 validator, because PurRDF mints no vocabulary IRIs, so the evaluator-seam and shape cases grade the implementation against its own reading of the specification and are gated by `make check` rather than counted here. This complete corpus runs natively; `make wasm` separately builds the release crate.
+2026-10-08T13:00:35.4754229Z   - Entailment (OWL 2 DL consistency): 258/262 DL consistency verdicts · 4 ledgered · corpus is a subset: 220 more consistency-shaped cases upstream are NOT vendored (172 the tableau decided when probed, 0 non-terminating, 25 withheld, 23 with no RDF/XML premise)
+2026-10-08T13:00:35.4754956Z   - Entailment (OWL 2 RL, W3C entailment tests): 50/50 agreeing · 0 ledgered · 0 actionable · corpus: 27 positive + 23 negative
+2026-10-08T13:00:35.4755344Z   - SHACL Core + SHACL-SPARQL: 129 pass as approved · 0 ledgered
+2026-10-08T13:00:35.4755847Z   - SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL): 538 pass as approved · 6 non-canonical expected decimals (graded by the XSD 1.1 canonical spelling) · 0 ledgered
+2026-10-08T13:00:35.4756587Z   - SHACL 1.2 unlisted vendored files: 3 entries of vendored files no upstream manifest includes, graded apart from the approved suite: 2 exactly as written · 1 with a proven delta
+2026-10-08T13:00:35.4757034Z   - SHACL (first-party corpus): 73/73 byte-frozen expected reports
+2026-10-08T13:00:35.4757447Z   - Community SHACL dated profiles (REC 2017 / WD 2026): 115/115 applicable dated executions
+2026-10-08T13:00:35.4758015Z   - SHACL prepared-product equivalence: 364/376 shapes graphs agree across parse/admit/rebuild; 0 refused by the product writer; 12 whose shapes graph the conformance harnesses require the loader to refuse (a declared sht:Failure)
+2026-10-08T13:00:35.4758677Z   - XSD/XPath regExp (first-party corpus): 292/292 hand-derived XSD/XPath regExp cases
+2026-10-08T13:00:35.4758939Z   - SHACL Rules: 20/20 inferred-graph fixtures
+2026-10-08T13:00:35.4759184Z   - ShEx 2.1 validation: 1105/1105 attempted · 0 trait-skips
+2026-10-08T13:00:35.4759440Z   - ShEx syntax + ShExC/ShExJ round-trip: schemas parse + negative syntax/structure
+2026-10-08T13:00:35.4760259Z   - JSON Schema draft 2020-12 (official suite): every draft 2020-12 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,463 validation cases, all 874 format cases and all 4 output-format cases pass, plus the suite-inventory case. optional/cross-draft.json evaluates a $ref into a draft 2019-09 document under 2019-09 rules
+2026-10-08T13:00:35.4761673Z   - JSON Schema draft 2019-09 (official suite): every draft 2019-09 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,419 validation cases, all 874 format cases and all 4 output-format cases pass, plus the suite-inventory case. $recursiveRef, array-form items, and optional/cross-draft.json's $refs into 2020-12 and draft-07 documents, each evaluated under its own draft
+2026-10-08T13:00:35.4762932Z   - JSON Schema draft-07 (official suite): every draft-07 test file, optional/ included and optional/format/ run with format assertion on, one case per suite test: all 1,047 validation cases and all 793 format cases pass, plus the suite-inventory case; draft-07 has no output-format tests
+2026-10-08T13:00:35.4763924Z   - GTS transport (frozen vectors): 38/39 frozen vectors fold byte-exactly into their committed `.expected.json`; 1 ledgered divergence from an upstream expectation this reader contradicts. The corpus is governed upstream and is never regenerated here
+2026-10-08T13:00:35.4764510Z   - rdflib LSP drop-in gate: 81 pass · 5 strict-xfail (ledgered)
+2026-10-08T13:00:35.4764781Z   - Python binding suite: 4164 pass · 4 strict-xfail (ledgered)
+2026-10-08T13:00:35.4764922Z 
+2026-10-08T13:00:35.4765044Z VERDICT: GREEN — all conformance suites pass or are ledgered
+2026-10-08T13:00:35.4765183Z 
+2026-10-08T13:00:35.4985798Z ##[group]Run test "$SHARDS_RESULT" = success
+2026-10-08T13:00:35.4986044Z [36;1mtest "$SHARDS_RESULT" = success[0m
+2026-10-08T13:00:35.5036089Z shell: /usr/bin/bash -e {0}
+2026-10-08T13:00:35.5036242Z env:
+2026-10-08T13:00:35.5036364Z   SHARDS_RESULT: success
+2026-10-08T13:00:35.5036506Z ##[endgroup]
+2026-10-08T13:00:35.5192912Z Post job cleanup.
+2026-10-08T13:00:35.5732409Z [command]/usr/bin/git version
+2026-10-08T13:00:35.5760665Z git version 2.55.0
+2026-10-08T13:00:35.5782271Z Temporarily overriding HOME='/home/runner/work/_temp/cac12194-8da4-42a0-b8d6-230f68291a54' before making global git config changes
+2026-10-08T13:00:35.5783016Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-08T13:00:35.5785536Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-08T13:00:35.5882927Z Removing SSH command configuration
+2026-10-08T13:00:35.5887040Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-08T13:00:35.5913356Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-08T13:00:35.6090868Z Removing HTTP extra header
+2026-10-08T13:00:35.6094908Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-08T13:00:35.6121328Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-08T13:00:35.6294015Z Removing includeIf entries pointing to credentials config files
+2026-10-08T13:00:35.6299352Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-08T13:00:35.6323399Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-08T13:00:35.6622379Z Cleaning up orphan processes
+2026-10-08T13:00:35.6817523Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

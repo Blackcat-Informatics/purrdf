@@ -1,0 +1,3 @@
+Fixed in 44dbf5cea. Each bound Case retains its suite directory, and data, shapes and inference-expectation execution all use that directory through the same contained path resolver as admission.
+
+The new nested-suite integration test passed: unchanged reviewed payload bytes and digests were relocated, admitted and executed through the real Corpus routes, with all 64 cases, 115 applicable executions and 535 observations passing. The original corpus is untouched. Strict affected checks and normal commit hooks passed; fresh CI and final acceptance remain pending.

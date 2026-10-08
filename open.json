@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 402,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/402-shacl-profiles-reports",
+  "branch": "paudley/402-shacl-profiles-reports",
+  "slug": "shacl-profiles-reports",
+  "slug_drift": true,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/402-shacl-profiles-reports/.stage/shacl-profiles-reports",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "b9463ff883d3313fae17eff6ad5dfde39ac87145",
+  "reused": true,
+  "adr_repo": false,
+  "created": [
+    "stage:/home/paudley/Active/purrdf/.worktrees/402-shacl-profiles-reports/.stage/shacl-profiles-reports",
+    "issue:/home/paudley/Active/purrdf/.worktrees/402-shacl-profiles-reports/.stage/shacl-profiles-reports/issue.md"
+  ],
+  "warnings": [
+    "issue title changed since the branch was created (slug would now be 'shacl-dated-profile-selection-and'); keeping existing 'shacl-profiles-reports'"
+  ],
+  "timestamp": "2026-10-08T02:22:38-0600"
+}

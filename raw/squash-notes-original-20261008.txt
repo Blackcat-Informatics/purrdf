@@ -1,0 +1,52 @@
+feat(shapes): SHACL dated profile selection and complete validation reports
+
+Closes #402
+
+## What changed
+
+- **Dated SHACL profiles.** `purrdf_shapes::ShaclProfile` offers `LEGACY`
+  (the default, unchanged), `REC_20170720` and `WD_20260918`. Any other
+  identifier is refused as `UnsupportedProfile`. Pre-binding admission
+  (VALUES, MINUS, SERVICE, AS, hidden subquery projection) follows the
+  selected law and refuses with a typed `AdmissionRefusal`. Dated admission
+  reads the query as written, keeping the algebra as parsed when the
+  pre-binding rewrite changes it.
+- **Complete validation reports.** `CompleteValidationReport` and
+  `CompleteReportGraph` sit beside the unchanged legacy report types. They
+  carry `sh:sourceConstraint`, recursive `sh:detail` with its own evidence,
+  the dated message order, and blank-node correspondence back to the data or
+  shapes acquisition. `purrdf_validate` adds `validate_complete_*`,
+  `complete_report_payload/_to_json/_to_sarif_string` and
+  `complete_validation_status`.
+- **Community SHACL corpus** (`corpora/community/`, 64 cases) and the
+  unpublished `conformance-kit` crate. Every complete report is graded by
+  graph isomorphism in source context. The runner covers the fresh,
+  prepared and restored-product routes.
+
+## Evidence
+
+- Community corpus: the SHACL 2017-07-20 profile passes 57 of 57 and the
+  SHACL 1.2 2026-09-18 profile passes 58 of 58. In total that is 115
+  executions and 535 observations, all passing.
+- The existing SHACL conformance lanes are unchanged. Hosted CI is green
+  on the exact head, and `.deficiencies` is empty.
+
+## Conflicts
+
+Main was merged several times, most recently with the exact numeric tower
+(a 28-file conflict). Every hunk keeps both features:
+- `QueryOptions` and the CLI, C ABI (one bump, to 0.10.0, with a regenerated
+  header and ABI snapshot), wasm and Python surfaces carry both the dated
+  XPath regex law and the caller-chosen division policy;
+- ShEx keeps main's exact numeric facets under the dated regex law;
+- in the merge with the pre-bound-variable work, main's load-time checks run
+  under the compatibility law.
+
+The zh-Hans catalogue is main's, filled from this branch: 0 lost, main's
+text wins, 0 fuzzy, and `make check-i18n` passes. A script confirmed that
+every line each parent added is in the merge, or is one of the deliberate
+combinations above.
+
+---
+
+Defect-Class: none

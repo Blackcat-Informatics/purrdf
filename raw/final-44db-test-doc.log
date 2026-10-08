@@ -1,0 +1,1428 @@
+﻿2026-10-08T12:50:21.4013044Z Current runner version: '2.337.0'
+2026-10-08T12:50:21.4032424Z ##[group]Runner Image Provisioner
+2026-10-08T12:50:21.4033118Z Hosted Compute Agent
+2026-10-08T12:50:21.4033509Z Version: 20261002.596
+2026-10-08T12:50:21.4033937Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-08T12:50:21.4034390Z Build Date: 2026-10-02T22:28:27Z
+2026-10-08T12:50:21.4034806Z Worker ID: {4983d007-4f41-42ce-b6df-beacc8e08d0b}
+2026-10-08T12:50:21.4035331Z Region: centralus
+2026-10-08T12:50:21.4035674Z Cloud: Azure
+2026-10-08T12:50:21.4036044Z ##[endgroup]
+2026-10-08T12:50:21.4036836Z ##[group]Operating System
+2026-10-08T12:50:21.4037209Z Ubuntu
+2026-10-08T12:50:21.4037612Z 24.04.5
+2026-10-08T12:50:21.4037952Z LTS
+2026-10-08T12:50:21.4038266Z ##[endgroup]
+2026-10-08T12:50:21.4038650Z ##[group]Runner Image
+2026-10-08T12:50:21.4039038Z Image: ubuntu-24.04
+2026-10-08T12:50:21.4039481Z Version: 20261004.327.1
+2026-10-08T12:50:21.4040241Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-08T12:50:21.4041288Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-08T12:50:21.4041862Z ##[endgroup]
+2026-10-08T12:50:21.4042623Z ##[group]GITHUB_TOKEN Permissions
+2026-10-08T12:50:21.4043837Z Contents: read
+2026-10-08T12:50:21.4044244Z Metadata: read
+2026-10-08T12:50:21.4044589Z ##[endgroup]
+2026-10-08T12:50:21.4045931Z Secret source: Actions
+2026-10-08T12:50:21.4046535Z Cache mode: write
+2026-10-08T12:50:21.4046979Z Prepare workflow directory
+2026-10-08T12:50:21.4264668Z Prepare all required actions
+2026-10-08T12:50:21.4297344Z Getting action download info
+2026-10-08T12:50:21.6470447Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-08T12:50:21.7237441Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-08T12:50:21.9099058Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-08T12:50:22.5821395Z Download action repository 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e' (SHA:48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e)
+2026-10-08T12:50:22.8477562Z Complete job name: test (doc)
+2026-10-08T12:50:22.9034254Z ##[group]Run echo "before:"
+2026-10-08T12:50:22.9035004Z [36;1mecho "before:"[0m
+2026-10-08T12:50:22.9035589Z [36;1mdf -h /[0m
+2026-10-08T12:50:22.9036434Z [36;1msudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift[0m
+2026-10-08T12:50:22.9037393Z [36;1mecho "after:"[0m
+2026-10-08T12:50:22.9037951Z [36;1mdf -h /[0m
+2026-10-08T12:50:22.9333007Z shell: /usr/bin/bash -e {0}
+2026-10-08T12:50:22.9333937Z ##[endgroup]
+2026-10-08T12:50:22.9462196Z before:
+2026-10-08T12:50:22.9471588Z Filesystem      Size  Used Avail Use% Mounted on
+2026-10-08T12:50:22.9472453Z /dev/root       145G   59G   86G  41% /
+2026-10-08T12:51:26.3997179Z after:
+2026-10-08T12:51:26.4007822Z Filesystem      Size  Used Avail Use% Mounted on
+2026-10-08T12:51:26.4008172Z /dev/root       145G   39G  107G  27% /
+2026-10-08T12:51:26.4285181Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-08T12:51:26.4285432Z with:
+2026-10-08T12:51:26.4285560Z   persist-credentials: false
+2026-10-08T12:51:26.4285720Z   repository: Blackcat-Informatics/purrdf
+2026-10-08T12:51:26.4287060Z   token: ***
+2026-10-08T12:51:26.4287179Z   ssh-strict: true
+2026-10-08T12:51:26.4287301Z   ssh-user: git
+2026-10-08T12:51:26.4287417Z   clean: true
+2026-10-08T12:51:26.4287544Z   sparse-checkout-cone-mode: true
+2026-10-08T12:51:26.4287689Z   fetch-depth: 1
+2026-10-08T12:51:26.4287806Z   fetch-tags: false
+2026-10-08T12:51:26.4287925Z   show-progress: true
+2026-10-08T12:51:26.4288054Z   lfs: false
+2026-10-08T12:51:26.4288179Z   submodules: false
+2026-10-08T12:51:26.4288333Z   set-safe-directory: true
+2026-10-08T12:51:26.4288477Z   allow-unsafe-pr-checkout: false
+2026-10-08T12:51:26.4288837Z ##[endgroup]
+2026-10-08T12:51:26.4918528Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-08T12:51:26.4919463Z ##[group]Getting Git version info
+2026-10-08T12:51:26.4919683Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-08T12:51:26.4919990Z [command]/usr/bin/git version
+2026-10-08T12:51:26.4979058Z git version 2.55.0
+2026-10-08T12:51:26.4990910Z ##[endgroup]
+2026-10-08T12:51:26.4998882Z Temporarily overriding HOME='/home/runner/work/_temp/bbbd55df-acff-4cd9-925a-95ccad9a7115' before making global git config changes
+2026-10-08T12:51:26.4999604Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-08T12:51:26.5002964Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-08T12:51:26.5042991Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-08T12:51:26.5045110Z ##[group]Determining repository object format
+2026-10-08T12:51:26.5046275Z ##[endgroup]
+2026-10-08T12:51:26.5046515Z ##[group]Initializing the repository
+2026-10-08T12:51:26.5048794Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-08T12:51:26.5328239Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-08T12:51:26.5328749Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-08T12:51:26.5329477Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-08T12:51:26.5329806Z hint: call:
+2026-10-08T12:51:26.5329988Z hint:
+2026-10-08T12:51:26.5330253Z hint: 	git config --global init.defaultBranch <name>
+2026-10-08T12:51:26.5330531Z hint:
+2026-10-08T12:51:26.5330978Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-08T12:51:26.5331459Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-08T12:51:26.5331790Z hint:
+2026-10-08T12:51:26.5331975Z hint: 	git branch -m <name>
+2026-10-08T12:51:26.5332171Z hint:
+2026-10-08T12:51:26.5332484Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-08T12:51:26.5333050Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-08T12:51:26.5338176Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-08T12:51:26.5385358Z ##[endgroup]
+2026-10-08T12:51:26.5385638Z ##[group]Disabling automatic garbage collection
+2026-10-08T12:51:26.5388009Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-08T12:51:26.5414494Z ##[endgroup]
+2026-10-08T12:51:26.5414855Z ##[group]Setting up auth
+2026-10-08T12:51:26.5415135Z Removing SSH command configuration
+2026-10-08T12:51:26.5419220Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-08T12:51:26.5444191Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-08T12:51:26.5749455Z Removing HTTP extra header
+2026-10-08T12:51:26.5754497Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-08T12:51:26.5779828Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-08T12:51:26.5947276Z Removing includeIf entries pointing to credentials config files
+2026-10-08T12:51:26.5951816Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-08T12:51:26.5977319Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-08T12:51:26.6152815Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-08T12:51:26.6181599Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:26.6213259Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:26.6240544Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:26.6263771Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:26.6284721Z ##[endgroup]
+2026-10-08T12:51:26.6289539Z ##[group]Fetching the repository
+2026-10-08T12:51:26.6290323Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +fbe76dc4823f1c9b412f60b7a7da597869321f77:refs/remotes/pull/462/merge
+2026-10-08T12:51:28.6202172Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-08T12:51:28.6202601Z  * [new ref]           fbe76dc4823f1c9b412f60b7a7da597869321f77 -> pull/462/merge
+2026-10-08T12:51:28.6205981Z ##[endgroup]
+2026-10-08T12:51:28.6206472Z ##[group]Determining the checkout info
+2026-10-08T12:51:28.6208803Z ##[endgroup]
+2026-10-08T12:51:28.6210596Z [command]/usr/bin/git sparse-checkout disable
+2026-10-08T12:51:28.6253587Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-08T12:51:28.6277914Z ##[group]Checking out the ref
+2026-10-08T12:51:28.6280556Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/462/merge
+2026-10-08T12:51:29.6400517Z Note: switching to 'refs/remotes/pull/462/merge'.
+2026-10-08T12:51:29.6400924Z 
+2026-10-08T12:51:29.6401112Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-08T12:51:29.6401517Z changes and commit them, and you can discard any commits you make in this
+2026-10-08T12:51:29.6401949Z state without impacting any branches by switching back to a branch.
+2026-10-08T12:51:29.6402198Z 
+2026-10-08T12:51:29.6402400Z If you want to create a new branch to retain commits you create, you may
+2026-10-08T12:51:29.6402787Z do so (now or later) by using -c with the switch command. Example:
+2026-10-08T12:51:29.6403017Z 
+2026-10-08T12:51:29.6403118Z   git switch -c <new-branch-name>
+2026-10-08T12:51:29.6403272Z 
+2026-10-08T12:51:29.6403367Z Or undo this operation with:
+2026-10-08T12:51:29.6403507Z 
+2026-10-08T12:51:29.6403586Z   git switch -
+2026-10-08T12:51:29.6403739Z 
+2026-10-08T12:51:29.6403914Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-08T12:51:29.6404157Z 
+2026-10-08T12:51:29.6404451Z HEAD is now at fbe76dc4 Merge 44dbf5ceaba7908aee0f840e4227bf42b040f697 into 2eb04d61f3d65f34ec77b396b5d03c05c23fd5ee
+2026-10-08T12:51:29.6429622Z ##[endgroup]
+2026-10-08T12:51:29.6474858Z [command]/usr/bin/git log -1 --format=%H
+2026-10-08T12:51:29.6497386Z fbe76dc4823f1c9b412f60b7a7da597869321f77
+2026-10-08T12:51:29.6508480Z ##[group]Removing auth
+2026-10-08T12:51:29.6508994Z Removing SSH command configuration
+2026-10-08T12:51:29.6511034Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-08T12:51:29.6535256Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-08T12:51:29.6719223Z Removing HTTP extra header
+2026-10-08T12:51:29.6721586Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-08T12:51:29.6746398Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-08T12:51:29.6934061Z Removing includeIf entries pointing to credentials config files
+2026-10-08T12:51:29.6937001Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-08T12:51:29.6959271Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-08T12:51:29.6959549Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-08T12:51:29.6959822Z includeif.gitdir:/github/workspace/.git.path
+2026-10-08T12:51:29.6960135Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-08T12:51:29.6966813Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-08T12:51:29.6984031Z /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.6996080Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7021423Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-08T12:51:29.7037545Z /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7043251Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7066753Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-08T12:51:29.7082857Z /github/runner_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7088093Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7115280Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-08T12:51:29.7132176Z /github/runner_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7139321Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config
+2026-10-08T12:51:29.7164261Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-08T12:51:29.7341047Z Removing credentials config '/home/runner/work/_temp/git-credentials-b55ca355-8235-42b7-8813-ae5b2e07f86d.config'
+2026-10-08T12:51:29.7349428Z ##[endgroup]
+2026-10-08T12:51:29.7524564Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-08T12:51:29.7524810Z with:
+2026-10-08T12:51:29.7524925Z   toolchain: nightly
+2026-10-08T12:51:29.7525050Z ##[endgroup]
+2026-10-08T12:51:29.7585898Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-08T12:51:29.7606709Z ##[group]Run : parse toolchain version
+2026-10-08T12:51:29.7606930Z [36;1m: parse toolchain version[0m
+2026-10-08T12:51:29.7607085Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-08T12:51:29.7607371Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-08T12:51:29.7607663Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-08T12:51:29.7607825Z [36;1m  exit 1[0m
+2026-10-08T12:51:29.7608014Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-08T12:51:29.7608275Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-08T12:51:29.7608564Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7608837Z [36;1m  else[0m
+2026-10-08T12:51:29.7609059Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7609421Z [36;1m  fi[0m
+2026-10-08T12:51:29.7609587Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-08T12:51:29.7609877Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7610124Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-08T12:51:29.7610408Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7610673Z [36;1melse[0m
+2026-10-08T12:51:29.7610934Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7611125Z [36;1mfi[0m
+2026-10-08T12:51:29.7665553Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:29.7665747Z env:
+2026-10-08T12:51:29.7665861Z   toolchain: nightly
+2026-10-08T12:51:29.7665983Z ##[endgroup]
+2026-10-08T12:51:29.7754732Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=16]
+2026-10-08T12:51:29.7769130Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-08T12:51:29.7784116Z ##[group]Run : construct rustup command line
+2026-10-08T12:51:29.7784311Z [36;1m: construct rustup command line[0m
+2026-10-08T12:51:29.7784565Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7784916Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7785190Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:29.7831359Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:29.7831542Z env:
+2026-10-08T12:51:29.7831650Z   targets: 
+2026-10-08T12:51:29.7831767Z   components: 
+2026-10-08T12:51:29.7831880Z ##[endgroup]
+2026-10-08T12:51:29.7904844Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=13]
+2026-10-08T12:51:29.7907173Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-08T12:51:29.7943827Z ##[group]Run : set $CARGO_HOME
+2026-10-08T12:51:29.7943993Z [36;1m: set $CARGO_HOME[0m
+2026-10-08T12:51:29.7944177Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-08T12:51:29.7989665Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:29.7989856Z ##[endgroup]
+2026-10-08T12:51:29.8058320Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=15]
+2026-10-08T12:51:29.8059978Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-08T12:51:29.8078234Z ##[group]Run : install rustup if needed
+2026-10-08T12:51:29.8078421Z [36;1m: install rustup if needed[0m
+2026-10-08T12:51:29.8078595Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-08T12:51:29.8079018Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-08T12:51:29.8079414Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-08T12:51:29.8079575Z [36;1mfi[0m
+2026-10-08T12:51:29.8124472Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:29.8124657Z env:
+2026-10-08T12:51:29.8124773Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:29.8124918Z ##[endgroup]
+2026-10-08T12:51:29.8191076Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=13]
+2026-10-08T12:51:29.8193944Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-08T12:51:29.8198204Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-08T12:51:29.8199982Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-08T12:51:29.8214545Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+2026-10-08T12:51:29.8214981Z [36;1mrustup toolchain install nightly --profile minimal --no-self-update[0m
+2026-10-08T12:51:29.8260381Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:29.8260565Z env:
+2026-10-08T12:51:29.8260895Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:29.8261088Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-08T12:51:29.8261228Z ##[endgroup]
+2026-10-08T12:51:29.8744329Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-08T12:51:30.1711849Z info: latest update on 2026-10-08 for version 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-08T12:51:30.1712158Z info: downloading 3 components
+2026-10-08T12:51:36.5671294Z 
+2026-10-08T12:51:36.5729379Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-08T12:51:36.5729780Z 
+2026-10-08T12:51:36.5779345Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=6757]
+2026-10-08T12:51:36.5784219Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-08T12:51:36.5799501Z ##[group]Run rustup default nightly
+2026-10-08T12:51:36.5799693Z [36;1mrustup default nightly[0m
+2026-10-08T12:51:36.5852167Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.5852355Z env:
+2026-10-08T12:51:36.5852475Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.5852618Z ##[endgroup]
+2026-10-08T12:51:36.5948511Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-08T12:51:36.5954203Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-08T12:51:36.5954375Z 
+2026-10-08T12:51:36.6007552Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-08T12:51:36.6007865Z 
+2026-10-08T12:51:36.6008417Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-08T12:51:36.6023001Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=23]
+2026-10-08T12:51:36.6026868Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-08T12:51:36.6042040Z ##[group]Run : create cachekey
+2026-10-08T12:51:36.6042226Z [36;1m: create cachekey[0m
+2026-10-08T12:51:36.6042508Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-08T12:51:36.6042997Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-08T12:51:36.6043271Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-08T12:51:36.6093645Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.6093824Z env:
+2026-10-08T12:51:36.6093940Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.6094083Z ##[endgroup]
+2026-10-08T12:51:36.6360651Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=33]
+2026-10-08T12:51:36.6362907Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-08T12:51:36.6378747Z ##[group]Run : disable incremental compilation
+2026-10-08T12:51:36.6378961Z [36;1m: disable incremental compilation[0m
+2026-10-08T12:51:36.6379144Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-08T12:51:36.6379329Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-08T12:51:36.6379482Z [36;1mfi[0m
+2026-10-08T12:51:36.6430608Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.6430926Z env:
+2026-10-08T12:51:36.6431047Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.6431193Z ##[endgroup]
+2026-10-08T12:51:36.6499705Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=13]
+2026-10-08T12:51:36.6501367Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-08T12:51:36.6515402Z ##[group]Run : enable colors in Cargo output
+2026-10-08T12:51:36.6515590Z [36;1m: enable colors in Cargo output[0m
+2026-10-08T12:51:36.6515764Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-08T12:51:36.6515955Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-08T12:51:36.6516120Z [36;1mfi[0m
+2026-10-08T12:51:36.6562680Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.6562861Z env:
+2026-10-08T12:51:36.6562977Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.6563130Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:36.6563255Z ##[endgroup]
+2026-10-08T12:51:36.6623681Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=12]
+2026-10-08T12:51:36.6626819Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-08T12:51:36.6640309Z ##[group]Run : enable Cargo sparse registry
+2026-10-08T12:51:36.6640507Z [36;1m: enable Cargo sparse registry[0m
+2026-10-08T12:51:36.6640890Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-08T12:51:36.6641301Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-08T12:51:36.6641693Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-08T12:51:36.6642004Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-08T12:51:36.6642299Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-08T12:51:36.6642576Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-08T12:51:36.6642881Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-08T12:51:36.6643156Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-08T12:51:36.6643352Z [36;1m  fi[0m
+2026-10-08T12:51:36.6643460Z [36;1mfi[0m
+2026-10-08T12:51:36.6714608Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.6714793Z env:
+2026-10-08T12:51:36.6714910Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.6715053Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:36.6715182Z   CARGO_TERM_COLOR: always
+2026-10-08T12:51:36.6715312Z ##[endgroup]
+2026-10-08T12:51:36.6991634Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=36]
+2026-10-08T12:51:36.6996037Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-08T12:51:36.7031397Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-08T12:51:36.7031669Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-08T12:51:36.7031984Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-08T12:51:36.7032330Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-08T12:51:36.7032589Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-08T12:51:36.7032761Z [36;1mfi[0m
+2026-10-08T12:51:36.7083287Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.7083466Z env:
+2026-10-08T12:51:36.7083588Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.7083731Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:36.7083857Z   CARGO_TERM_COLOR: always
+2026-10-08T12:51:36.7083985Z ##[endgroup]
+2026-10-08T12:51:36.7247142Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=25]
+2026-10-08T12:51:36.7250678Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-08T12:51:36.7266216Z ##[group]Run rustc +nightly --version --verbose
+2026-10-08T12:51:36.7266435Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-08T12:51:36.7318378Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-08T12:51:36.7318563Z env:
+2026-10-08T12:51:36.7318684Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.7318832Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:36.7318961Z   CARGO_TERM_COLOR: always
+2026-10-08T12:51:36.7319091Z ##[endgroup]
+2026-10-08T12:51:36.7472070Z rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-08T12:51:36.7472368Z binary: rustc
+2026-10-08T12:51:36.7472601Z commit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+2026-10-08T12:51:36.7472879Z commit-date: 2026-10-07
+2026-10-08T12:51:36.7473105Z host: x86_64-unknown-linux-gnu
+2026-10-08T12:51:36.7473315Z release: 1.101.0-nightly
+2026-10-08T12:51:36.7473663Z LLVM version: 23.1.3
+2026-10-08T12:51:36.7485858Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=23]
+2026-10-08T12:51:36.7556814Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-08T12:51:36.7557029Z with:
+2026-10-08T12:51:36.7557162Z   shared-key: workspace-test
+2026-10-08T12:51:36.7557294Z   save-if: false
+2026-10-08T12:51:36.7557409Z   prefix-key: v0-rust
+2026-10-08T12:51:36.7557530Z   add-job-id-key: true
+2026-10-08T12:51:36.7557664Z   add-rust-environment-hash-key: true
+2026-10-08T12:51:36.7557813Z   cache-targets: true
+2026-10-08T12:51:36.7557935Z   cache-all-crates: false
+2026-10-08T12:51:36.7558070Z   cache-workspace-crates: false
+2026-10-08T12:51:36.7558209Z   cache-provider: github
+2026-10-08T12:51:36.7558335Z   cache-bin: true
+2026-10-08T12:51:36.7558446Z   lookup-only: false
+2026-10-08T12:51:36.7558562Z   cmd-format: {0}
+2026-10-08T12:51:36.7558673Z env:
+2026-10-08T12:51:36.7558785Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:36.7558923Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:36.7559044Z   CARGO_TERM_COLOR: always
+2026-10-08T12:51:36.7559173Z ##[endgroup]
+2026-10-08T12:51:36.9402503Z (node:2282) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-08T12:51:36.9402925Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-08T12:51:41.7101331Z ##[group]Cache Configuration
+2026-10-08T12:51:41.7101631Z Cache Provider:
+2026-10-08T12:51:41.7102062Z     github
+2026-10-08T12:51:41.7102646Z Workspaces:
+2026-10-08T12:51:41.7102884Z     /home/runner/work/purrdf/purrdf
+2026-10-08T12:51:41.7103130Z Cache Paths:
+2026-10-08T12:51:41.7103307Z     /home/runner/.cargo/bin
+2026-10-08T12:51:41.7103526Z     /home/runner/.cargo/.crates.toml
+2026-10-08T12:51:41.7103760Z     /home/runner/.cargo/.crates2.json
+2026-10-08T12:51:41.7103991Z     /home/runner/.cargo/registry
+2026-10-08T12:51:41.7104209Z     /home/runner/.cargo/git
+2026-10-08T12:51:41.7104432Z     /home/runner/work/purrdf/purrdf/target
+2026-10-08T12:51:41.7104670Z Restore Key:
+2026-10-08T12:51:41.7104912Z     v0-rust-workspace-test-Linux-x64-ef9e25b4
+2026-10-08T12:51:41.7105167Z Cache Key:
+2026-10-08T12:51:41.7105393Z     v0-rust-workspace-test-Linux-x64-ef9e25b4-9efe9e1c
+2026-10-08T12:51:41.7105692Z .. Prefix:
+2026-10-08T12:51:41.7105888Z   - v0-rust-workspace-test-Linux-x64
+2026-10-08T12:51:41.7106136Z .. Environment considered:
+2026-10-08T12:51:41.7106341Z   - Rust Versions:
+2026-10-08T12:51:41.7106644Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+2026-10-08T12:51:41.7107104Z     - 1.99.0 x86_64-unknown-linux-gnu b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+2026-10-08T12:51:41.7107547Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+2026-10-08T12:51:41.7107894Z   - CARGO_HOME
+2026-10-08T12:51:41.7108074Z   - CARGO_INCREMENTAL
+2026-10-08T12:51:41.7108264Z   - CARGO_TERM_COLOR
+2026-10-08T12:51:41.7108462Z .. Lockfiles considered:
+2026-10-08T12:51:41.7108727Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+2026-10-08T12:51:41.7109126Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+2026-10-08T12:51:41.7109473Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+2026-10-08T12:51:41.7110218Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+2026-10-08T12:51:41.7110568Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+2026-10-08T12:51:41.7111084Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+2026-10-08T12:51:41.7111402Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+2026-10-08T12:51:41.7111733Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+2026-10-08T12:51:41.7112107Z   - /home/runner/work/purrdf/purrdf/crates/conformance-kit/Cargo.toml
+2026-10-08T12:51:41.7112466Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+2026-10-08T12:51:41.7112792Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+2026-10-08T12:51:41.7113136Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+2026-10-08T12:51:41.7113799Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+2026-10-08T12:51:41.7114163Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+2026-10-08T12:51:41.7114517Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+2026-10-08T12:51:41.7114846Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+2026-10-08T12:51:41.7115188Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+2026-10-08T12:51:41.7115560Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+2026-10-08T12:51:41.7115912Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+2026-10-08T12:51:41.7116274Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+2026-10-08T12:51:41.7116604Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+2026-10-08T12:51:41.7116949Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+2026-10-08T12:51:41.7117275Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+2026-10-08T12:51:41.7117595Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+2026-10-08T12:51:41.7117932Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+2026-10-08T12:51:41.7118313Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+2026-10-08T12:51:41.7118660Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+2026-10-08T12:51:41.7119008Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+2026-10-08T12:51:41.7119377Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+2026-10-08T12:51:41.7119714Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+2026-10-08T12:51:41.7120022Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+2026-10-08T12:51:41.7120350Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+2026-10-08T12:51:41.7120823Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+2026-10-08T12:51:41.7121158Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+2026-10-08T12:51:41.7121493Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+2026-10-08T12:51:41.7121865Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+2026-10-08T12:51:41.7122274Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+2026-10-08T12:51:41.7122670Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+2026-10-08T12:51:41.7123049Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+2026-10-08T12:51:41.7123443Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+2026-10-08T12:51:41.7123776Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+2026-10-08T12:51:41.7124088Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+2026-10-08T12:51:41.7124411Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+2026-10-08T12:51:41.7124732Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+2026-10-08T12:51:41.7125051Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+2026-10-08T12:51:41.7125343Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+2026-10-08T12:51:41.7126023Z ##[endgroup]
+2026-10-08T12:51:41.7126117Z 
+2026-10-08T12:51:41.7126190Z ... Restoring cache ...
+2026-10-08T12:51:41.8503748Z Cache hit for: v0-rust-workspace-test-Linux-x64-ef9e25b4-9efe9e1c
+2026-10-08T12:51:43.0079310Z Received 32335506 of 36529810 (88.5%), 30.8 MBs/sec
+2026-10-08T12:51:43.0581763Z Received 36529810 of 36529810 (100.0%), 33.2 MBs/sec
+2026-10-08T12:51:43.0582017Z Cache Size: ~35 MB (36529810 B)
+2026-10-08T12:51:43.0599068Z [command]/usr/bin/tar -xf /home/runner/work/_temp/b57f7667-69db-4064-81ad-43288d50679b/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+2026-10-08T12:51:43.2163388Z Cache restored successfully
+2026-10-08T12:51:43.2182250Z Restored from cache key "v0-rust-workspace-test-Linux-x64-ef9e25b4-9efe9e1c" full match: true.
+2026-10-08T12:51:43.2339079Z ##[group]Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+2026-10-08T12:51:43.2339297Z with:
+2026-10-08T12:51:43.2339413Z   node-version: 24
+2026-10-08T12:51:43.2339536Z   check-latest: false
+2026-10-08T12:51:43.2340919Z   token: ***
+2026-10-08T12:51:43.2341040Z   package-manager-cache: true
+2026-10-08T12:51:43.2341196Z env:
+2026-10-08T12:51:43.2341310Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:43.2341451Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:43.2341575Z   CARGO_TERM_COLOR: always
+2026-10-08T12:51:43.2341706Z   CACHE_ON_FAILURE: false
+2026-10-08T12:51:43.2341835Z ##[endgroup]
+2026-10-08T12:51:43.3439531Z Found in cache @ /opt/hostedtoolcache/node/24.21.0/x64
+2026-10-08T12:51:43.3440149Z ##[group]Environment details
+2026-10-08T12:51:43.6443807Z node: v24.21.0
+2026-10-08T12:51:43.6444085Z npm: 11.19.0
+2026-10-08T12:51:43.6444261Z yarn: 1.22.22
+2026-10-08T12:51:43.6444737Z ##[endgroup]
+2026-10-08T12:51:43.6570106Z ##[group]Run make test-shard SHARD=doc
+2026-10-08T12:51:43.6570299Z [36;1mmake test-shard SHARD=doc[0m
+2026-10-08T12:51:43.6628817Z shell: /usr/bin/bash -e {0}
+2026-10-08T12:51:43.6628975Z env:
+2026-10-08T12:51:43.6629096Z   CARGO_HOME: /home/runner/.cargo
+2026-10-08T12:51:43.6629243Z   CARGO_INCREMENTAL: 0
+2026-10-08T12:51:43.6629371Z   CARGO_TERM_COLOR: always
+2026-10-08T12:51:43.6629506Z   CACHE_ON_FAILURE: false
+2026-10-08T12:51:43.6629748Z   PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:sse2,blake3:sse2,deflate:sse2,csv:sse2
+2026-10-08T12:51:43.6629991Z ##[endgroup]
+2026-10-08T12:51:43.7164882Z + cargo test --workspace --locked --doc
+2026-10-08T12:51:43.7601365Z [1m[92m    Updating[0m crates.io index
+2026-10-08T12:51:44.1067149Z [1m[92m   Compiling[0m hybrid-array v0.4.15
+2026-10-08T12:51:44.1067727Z [1m[92m   Compiling[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+2026-10-08T12:51:44.1068034Z [1m[92m   Compiling[0m cfg-if v1.0.4
+2026-10-08T12:51:44.1068521Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-08T12:51:44.1273875Z [1m[92m   Compiling[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+2026-10-08T12:51:44.1951496Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-08T12:51:44.2712635Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+2026-10-08T12:51:44.5192575Z [1m[92m   Compiling[0m crypto-common v0.2.2
+2026-10-08T12:51:44.5302180Z [1m[92m   Compiling[0m block-buffer v0.12.1
+2026-10-08T12:51:45.0742488Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-08T12:51:45.1578375Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-08T12:51:45.2641900Z [1m[92m   Compiling[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+2026-10-08T12:51:45.3772561Z [1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+2026-10-08T12:51:45.5582492Z [1m[92m   Compiling[0m crossbeam-deque v0.8.6
+2026-10-08T12:51:45.6702834Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-10-08T12:51:45.6763533Z [1m[92m   Compiling[0m getrandom v0.3.4
+2026-10-08T12:51:45.7789548Z [1m[92m   Compiling[0m inout v0.2.2
+2026-10-08T12:51:45.8397290Z [1m[92m   Compiling[0m universal-hash v0.6.1
+2026-10-08T12:51:45.8817393Z [1m[92m   Compiling[0m cipher v0.5.2
+2026-10-08T12:51:46.0511637Z [1m[92m   Compiling[0m twox-hash v2.1.2
+2026-10-08T12:51:46.1182490Z [1m[92m   Compiling[0m rayon v1.12.0
+2026-10-08T12:51:46.4362897Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-08T12:51:47.0063361Z [1m[92m   Compiling[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+2026-10-08T12:51:48.2565018Z [1m[92m   Compiling[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+2026-10-08T12:51:48.5812016Z [1m[92m   Compiling[0m structured-zstd v0.0.49
+2026-10-08T12:51:50.9622700Z [1m[92m   Compiling[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+2026-10-08T12:51:53.9252639Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-08T12:51:55.6955971Z [1m[92m   Compiling[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+2026-10-08T12:51:58.9666571Z [1m[92m   Compiling[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+2026-10-08T12:52:00.8922669Z [1m[92m   Compiling[0m polyval v0.7.3
+2026-10-08T12:52:01.0422347Z [1m[92m   Compiling[0m ghash v0.6.0
+2026-10-08T12:52:01.0841574Z [1m[92m   Compiling[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+2026-10-08T12:52:01.7213412Z [1m[92m   Compiling[0m aes v0.9.3
+2026-10-08T12:52:02.1112248Z [1m[92m   Compiling[0m ctr v0.10.1
+2026-10-08T12:52:02.2234149Z [1m[92m   Compiling[0m aead v0.6.1
+2026-10-08T12:52:02.3030377Z [1m[92m   Compiling[0m aes-gcm v0.11.1
+2026-10-08T12:52:02.3692239Z [1m[92m   Compiling[0m visual-hashing v1.0.0
+2026-10-08T12:52:02.7104180Z [1m[92m   Compiling[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+2026-10-08T12:52:14.5003254Z [1m[92m   Compiling[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+2026-10-08T12:52:18.6372620Z [1m[92m   Compiling[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+2026-10-08T12:52:19.4582977Z [1m[92m   Compiling[0m unicode-ident v1.0.24
+2026-10-08T12:52:19.5072750Z [1m[92m   Compiling[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+2026-10-08T12:52:43.7413104Z [1m[92m   Compiling[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+2026-10-08T12:52:46.1322617Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-10-08T12:52:46.4522846Z [1m[92m   Compiling[0m purrdf-alloc-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/alloc-probe)
+2026-10-08T12:52:48.1612765Z [1m[92m   Compiling[0m quote v1.0.46
+2026-10-08T12:52:48.6332383Z [1m[92m   Compiling[0m syn v2.0.118
+2026-10-08T12:53:10.2292576Z [1m[92m   Compiling[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+2026-10-08T12:53:12.0623064Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-08T12:53:22.7035506Z [1m[92m   Compiling[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+2026-10-08T12:53:38.5545080Z [1m[92m   Compiling[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+2026-10-08T12:53:51.9948955Z [1m[92m   Compiling[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+2026-10-08T12:54:05.9355064Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-08T12:54:16.3572667Z [1m[92m   Compiling[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+2026-10-08T12:54:18.4591138Z [1m[92m   Compiling[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+2026-10-08T12:54:23.2412706Z [1m[92m   Compiling[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+2026-10-08T12:54:24.3352983Z [1m[92m   Compiling[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+2026-10-08T12:54:25.6332854Z [1m[92m   Compiling[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+2026-10-08T12:54:26.2712663Z [1m[92m   Compiling[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+2026-10-08T12:54:29.6033040Z [1m[92m   Compiling[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+2026-10-08T12:54:32.3642413Z [1m[92m   Compiling[0m target-lexicon v0.13.5
+2026-10-08T12:54:33.2582512Z [1m[92m   Compiling[0m pyo3-build-config v0.29.0
+2026-10-08T12:54:35.8518223Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-10-08T12:54:35.9672292Z [1m[92m   Compiling[0m wasm-bindgen-shared v0.2.125
+2026-10-08T12:54:36.0933672Z [1m[92m   Compiling[0m pyo3-ffi v0.29.0
+2026-10-08T12:54:36.4180310Z [1m[92m   Compiling[0m wasm-bindgen-macro-support v0.2.125
+2026-10-08T12:54:36.6772453Z [1m[92m   Compiling[0m wasm-bindgen v0.2.125
+2026-10-08T12:54:38.7672362Z [1m[92m   Compiling[0m pyo3 v0.29.0
+2026-10-08T12:54:38.8852791Z [1m[92m   Compiling[0m pyo3-macros-backend v0.29.0
+2026-10-08T12:54:45.1053385Z [1m[92m   Compiling[0m clap_derive v4.6.1
+2026-10-08T12:54:55.0475266Z [1m[92m   Compiling[0m purrdf-conformance-kit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/conformance-kit)
+2026-10-08T12:54:58.9972447Z [1m[92m   Compiling[0m pyo3-macros v0.29.0
+2026-10-08T12:55:00.6661732Z [1m[92m   Compiling[0m wasm-bindgen-macro v0.2.125
+2026-10-08T12:55:01.9005220Z [1m[92m   Compiling[0m purrdf-jsonschema v3.0.1 (/home/runner/work/purrdf/purrdf/crates/jsonschema)
+2026-10-08T12:55:04.9852639Z [1m[92m   Compiling[0m wasm-encoder v0.259.0
+2026-10-08T12:55:06.6630220Z [1m[92m   Compiling[0m clap v4.6.1
+2026-10-08T12:55:09.3852682Z [1m[92m   Compiling[0m purrdf-cli v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cli)
+2026-10-08T12:55:12.1122680Z [1m[92m   Compiling[0m wasm-link v3.0.1 (/home/runner/work/purrdf/purrdf/crates/wasm-link)
+2026-10-08T12:55:14.6192860Z [1m[92m   Compiling[0m purrdf-sparql-conformance v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-conformance)
+2026-10-08T12:55:25.8014079Z [1m[92m   Compiling[0m purrdf-envelope-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/envelope-probe)
+2026-10-08T12:55:34.6718399Z [1m[92m   Compiling[0m purrdf-bench v3.0.1 (/home/runner/work/purrdf/purrdf/crates/bench)
+2026-10-08T12:55:38.9162775Z [1m[92m   Compiling[0m purrdf-hash-conformance v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash-conformance)
+2026-10-08T12:55:55.6383457Z [1m[92m   Compiling[0m purrdf-python v3.0.1 (/home/runner/work/purrdf/purrdf/bindings/python)
+2026-10-08T12:56:07.3842753Z [1m[92m   Compiling[0m purrdf-wasm v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-wasm)
+2026-10-08T12:56:09.3692644Z [1m[92m   Compiling[0m purrdf-capi v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-capi)
+2026-10-08T12:56:40.4907754Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 4m 56s
+2026-10-08T12:56:40.4965510Z [1m[92m   Doc-tests[0m purrdf
+2026-10-08T12:56:40.8873845Z 
+2026-10-08T12:56:40.8874399Z running 5 tests
+2026-10-08T12:56:40.8888528Z test crates/purrdf/src/profile.rs - profile (line 27) ... ok
+2026-10-08T12:56:40.8889626Z test crates/purrdf/src/lib.rs - sparql (line 187) ... ok
+2026-10-08T12:56:40.8890230Z test crates/purrdf/src/lib.rs - (line 102) ... ok
+2026-10-08T12:56:40.8890572Z test crates/purrdf/src/lib.rs - (line 47) ... ok
+2026-10-08T12:56:40.8899060Z test crates/purrdf/src/reasoning.rs - reasoning::ReasonerSession (line 44) ... ok
+2026-10-08T12:56:40.8899372Z 
+2026-10-08T12:56:40.8899648Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:40.8899845Z 
+2026-10-08T12:56:40.8924142Z all doctests ran in 0.36s; merged doctests compilation took 0.36s
+2026-10-08T12:56:40.8934358Z [1m[92m   Doc-tests[0m purrdf_alloc_probe
+2026-10-08T12:56:40.9074494Z 
+2026-10-08T12:56:40.9074686Z running 2 tests
+2026-10-08T12:56:40.9075225Z test crates/alloc-probe/src/lib.rs - (line 21) ... ignored
+2026-10-08T12:56:40.9075741Z test crates/alloc-probe/src/lib.rs - CountingAllocator (line 374) ... ignored
+2026-10-08T12:56:40.9076012Z 
+2026-10-08T12:56:40.9076324Z test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:40.9077059Z 
+2026-10-08T12:56:40.9083925Z [1m[92m   Doc-tests[0m purrdf_bench
+2026-10-08T12:56:40.9340305Z 
+2026-10-08T12:56:40.9340639Z running 0 tests
+2026-10-08T12:56:40.9340939Z 
+2026-10-08T12:56:40.9341182Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:40.9341388Z 
+2026-10-08T12:56:40.9352873Z [1m[92m   Doc-tests[0m purrdf
+2026-10-08T12:56:40.9814126Z 
+2026-10-08T12:56:40.9814616Z running 0 tests
+2026-10-08T12:56:40.9814773Z 
+2026-10-08T12:56:40.9815050Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:40.9815249Z 
+2026-10-08T12:56:40.9825726Z [1m[92m   Doc-tests[0m purrdf_cdt
+2026-10-08T12:56:41.2464646Z 
+2026-10-08T12:56:41.2465203Z running 55 tests
+2026-10-08T12:56:41.2476860Z test crates/cdt/src/datatype.rs - datatype::CdtDatatype::from_iri (line 65) ... ok
+2026-10-08T12:56:41.2477485Z test crates/cdt/src/conformance.rs - conformance::CdtValue::uses_extension (line 198) ... ok
+2026-10-08T12:56:41.2478132Z test crates/cdt/src/conformance.rs - conformance::term_lexical_space (line 91) ... ok
+2026-10-08T12:56:41.2478681Z test crates/cdt/src/conformance.rs - conformance::lexical_space (line 152) ... ok
+2026-10-08T12:56:41.2486619Z test crates/cdt/src/functions.rs - functions::CdtFn::iri (line 271) ... ok
+2026-10-08T12:56:41.2491455Z test crates/cdt/src/functions.rs - functions::CdtArity::admits (line 135) ... ok
+2026-10-08T12:56:41.2496680Z test crates/cdt/src/error.rs - error::CdtTypeError::is_ill_typed (line 261) ... ok
+2026-10-08T12:56:41.2497253Z test crates/cdt/src/functions.rs - functions::CdtFn::from_iri (line 233) ... ok
+2026-10-08T12:56:41.2499805Z test crates/cdt/src/functions.rs - functions::concat (line 1498) ... ok
+2026-10-08T12:56:41.2500328Z test crates/cdt/src/functions.rs - functions::CdtOutcome<T>::map (line 431) ... ok
+2026-10-08T12:56:41.2501020Z test crates/cdt/src/functions.rs - functions::CdtFn::local_name (line 305) ... ok
+2026-10-08T12:56:41.2501525Z test crates/cdt/src/functions.rs - functions::get (line 1422) ... ok
+2026-10-08T12:56:41.2511905Z test crates/cdt/src/functions.rs - functions::integer_argument (line 478) ... ok
+2026-10-08T12:56:41.2519530Z test crates/cdt/src/functions.rs - functions::list_constructor (line 535) ... ok
+2026-10-08T12:56:41.2520274Z test crates/cdt/src/functions.rs - functions::list_contains (line 972) ... ok
+2026-10-08T12:56:41.2521254Z test crates/cdt/src/functions.rs - functions::list_concat (line 903) ... ok
+2026-10-08T12:56:41.2523541Z test crates/cdt/src/functions.rs - functions::list_get (line 672) ... ok
+2026-10-08T12:56:41.2524398Z test crates/cdt/src/functions.rs - functions::list_head (line 716) ... ok
+2026-10-08T12:56:41.2528471Z test crates/cdt/src/functions.rs - functions::list_reverse (line 777) ... ok
+2026-10-08T12:56:41.2529024Z test crates/cdt/src/functions.rs - functions::list_subseq (line 823) ... ok
+2026-10-08T12:56:41.2530358Z test crates/cdt/src/functions.rs - functions::list_size (line 629) ... ok
+2026-10-08T12:56:41.2537767Z test crates/cdt/src/functions.rs - functions::list_tail (line 747) ... ok
+2026-10-08T12:56:41.2538453Z test crates/cdt/src/functions.rs - functions::map_constructor (line 577) ... ok
+2026-10-08T12:56:41.2539291Z test crates/cdt/src/functions.rs - functions::map_contains_key (line 1103) ... ok
+2026-10-08T12:56:41.2542004Z test crates/cdt/src/functions.rs - functions::map_get (line 1053) ... ok
+2026-10-08T12:56:41.2547861Z test crates/cdt/src/functions.rs - functions::map_merge (line 1348) ... ok
+2026-10-08T12:56:41.2556840Z test crates/cdt/src/functions.rs - functions::map_keys (line 1147) ... ok
+2026-10-08T12:56:41.2557499Z test crates/cdt/src/functions.rs - functions::map_remove (line 1295) ... ok
+2026-10-08T12:56:41.2559352Z test crates/cdt/src/functions.rs - functions::map_put (line 1202) ... ok
+2026-10-08T12:56:41.2560286Z test crates/cdt/src/functions.rs - functions::map_size (line 1012) ... ok
+2026-10-08T12:56:41.2567455Z test crates/cdt/src/lib.rs - (line 109) ... ok
+2026-10-08T12:56:41.2568296Z test crates/cdt/src/ops.rs - ops::list_equal (line 786) ... ok
+2026-10-08T12:56:41.2568870Z test crates/cdt/src/functions.rs - functions::size (line 1399) ... ok
+2026-10-08T12:56:41.2576233Z test crates/cdt/src/literal.rs - literal::parse_literal (line 80) ... ok
+2026-10-08T12:56:41.2582313Z test crates/cdt/src/ops.rs - ops::total_key_cmp (line 137) ... ok
+2026-10-08T12:56:41.2582872Z test crates/cdt/src/ops.rs - ops::term_equal (line 693) ... ok
+2026-10-08T12:56:41.2583515Z test crates/cdt/src/ops.rs - ops::list_less_than (line 1117) ... ok
+2026-10-08T12:56:41.2585460Z test crates/cdt/src/parse.rs - parse::parse_cdt (line 140) ... ok
+2026-10-08T12:56:41.2588023Z test crates/cdt/src/parse.rs - parse::parse_cdt_by_iri (line 196) ... ok
+2026-10-08T12:56:41.2590199Z test crates/cdt/src/ops.rs - ops::total_term_cmp (line 173) ... ok
+2026-10-08T12:56:41.2595626Z test crates/cdt/src/parse.rs - parse::parse_map (line 121) ... ok
+2026-10-08T12:56:41.2602216Z test crates/cdt/src/render.rs - render::canonical_lexical_len (line 171) ... ok
+2026-10-08T12:56:41.2602759Z test crates/cdt/src/render.rs - render::canonical_lexical (line 136) ... ok
+2026-10-08T12:56:41.2603234Z test crates/cdt/src/parse.rs - parse::parse_list (line 87) ... ok
+2026-10-08T12:56:41.2603937Z test crates/cdt/src/term.rs - term::CdtKey::from_term (line 287) ... ok
+2026-10-08T12:56:41.2614289Z test crates/cdt/src/term.rs - term::CdtTerm::composite (line 177) ... ok
+2026-10-08T12:56:41.2621332Z test crates/cdt/src/value.rs - value::CdtValue::as_list (line 288) ... ok
+2026-10-08T12:56:41.2624374Z test crates/cdt/src/value.rs - value::CdtValue::canonical_lexical (line 493) ... ok
+2026-10-08T12:56:41.2625682Z test crates/cdt/src/value.rs - value::CdtValue::contents (line 265) ... ok
+2026-10-08T12:56:41.2626359Z test crates/cdt/src/term.rs - term::CdtTerm::triple (line 205) ... ok
+2026-10-08T12:56:41.2627114Z test crates/cdt/src/value.rs - value::CdtValue::depth (line 399) ... ok
+2026-10-08T12:56:41.2631042Z test crates/cdt/src/value.rs - value::CdtValue::into_list (line 316) ... ok
+2026-10-08T12:56:41.2631866Z test crates/cdt/src/value.rs - value::CdtValue::into_parts (line 348) ... ok
+2026-10-08T12:56:41.2633127Z test crates/cdt/src/value.rs - value::CdtValue::map (line 176) ... ok
+2026-10-08T12:56:41.2665187Z test crates/cdt/src/value.rs - value::CdtValue::list (line 129) ... ok
+2026-10-08T12:56:41.2665447Z 
+2026-10-08T12:56:41.2665750Z test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:41.2665942Z 
+2026-10-08T12:56:41.2679889Z all doctests ran in 0.25s; merged doctests compilation took 0.23s
+2026-10-08T12:56:41.2690367Z [1m[92m   Doc-tests[0m purrdf_cli
+2026-10-08T12:56:41.3816437Z 
+2026-10-08T12:56:41.3816960Z running 0 tests
+2026-10-08T12:56:41.3817150Z 
+2026-10-08T12:56:41.3817524Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:41.3817820Z 
+2026-10-08T12:56:41.3828440Z [1m[92m   Doc-tests[0m purrdf_columnar
+2026-10-08T12:56:41.4135073Z 
+2026-10-08T12:56:41.4135581Z running 0 tests
+2026-10-08T12:56:41.4135779Z 
+2026-10-08T12:56:41.4136146Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:41.4136448Z 
+2026-10-08T12:56:41.4145000Z [1m[92m   Doc-tests[0m purrdf_conformance_kit
+2026-10-08T12:56:41.4403357Z 
+2026-10-08T12:56:41.4403827Z running 0 tests
+2026-10-08T12:56:41.4404015Z 
+2026-10-08T12:56:41.4404407Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:41.4404708Z 
+2026-10-08T12:56:41.4414910Z [1m[92m   Doc-tests[0m purrdf_core
+2026-10-08T12:56:42.2514856Z 
+2026-10-08T12:56:42.2515574Z running 26 tests
+2026-10-08T12:56:42.2528498Z test crates/rdf-core/src/bytes.rs - bytes::read_u64_le (line 51) ... ok
+2026-10-08T12:56:42.2529177Z test crates/rdf-core/src/bytes.rs - bytes::read_u32_le (line 31) ... ok
+2026-10-08T12:56:42.2529822Z test crates/rdf-core/src/bytes.rs - bytes::put_u64_le (line 89) ... ok
+2026-10-08T12:56:42.2531071Z test crates/rdf-core/src/bytes.rs - bytes::put_u32_le (line 71) ... ok
+2026-10-08T12:56:42.2539779Z test crates/rdf-core/src/collections.rs - collections::convertible_list_cells (line 589) ... ok
+2026-10-08T12:56:42.2542074Z test crates/rdf-core/src/csv/mod.rs - csv::Dialect (line 192) ... ok
+2026-10-08T12:56:42.2551433Z test crates/rdf-core/src/collections.rs - collections::build_rdf_list (line 479) ... ok
+2026-10-08T12:56:42.2556874Z test crates/rdf-core/src/csv/mod.rs - csv::Encoding::from_label (line 99) ... ok
+2026-10-08T12:56:42.2557538Z test crates/rdf-core/src/csv/read.rs - csv::read::read_table (line 204) ... ok
+2026-10-08T12:56:42.2561647Z test crates/rdf-core/src/csv/write.rs - csv::write::FieldWriter (line 227) ... ok
+2026-10-08T12:56:42.2571568Z test crates/rdf-core/src/graph.rs - graph::scc_component_index (line 105) ... ok
+2026-10-08T12:56:42.2579432Z test crates/rdf-core/src/distance/mod.rs - distance::Resolved (line 761) ... ok
+2026-10-08T12:56:42.2580003Z test crates/rdf-core/src/csv/write.rs - csv::write::Writer (line 333) ... ok
+2026-10-08T12:56:42.2590190Z test crates/rdf-core/src/graph_roles.rs - graph_roles::GraphRoleIndex (line 154) ... ok
+2026-10-08T12:56:42.2591106Z test crates/rdf-core/src/graph.rs - graph::tarjan_scc (line 65) ... ok
+2026-10-08T12:56:42.2591783Z test crates/rdf-core/src/imports.rs - imports::ImportMap::try_insert (line 275) ... ok
+2026-10-08T12:56:42.2592467Z test crates/rdf-core/src/imports.rs - imports::ImportMap (line 231) ... ok
+2026-10-08T12:56:42.2593546Z test crates/rdf-core/src/imports.rs - imports::ImportMap::unresolved_imports (line 526) ... ok
+2026-10-08T12:56:42.2594313Z test crates/rdf-core/src/imports.rs - imports::ImportMap::unanchored_imports (line 405) ... ok
+2026-10-08T12:56:42.2596250Z test crates/rdf-core/src/imports.rs - imports::imported_iris (line 935) ... ok
+2026-10-08T12:56:42.2601930Z test crates/rdf-core/src/imports.rs - imports::declared_import_targets (line 798) ... ok
+2026-10-08T12:56:42.2602572Z test crates/rdf-core/src/imports.rs - imports::unanchored_import_triples (line 996) ... ok
+2026-10-08T12:56:42.2603136Z test crates/rdf-core/src/small.rs - small::SmallVec (line 95) ... ok
+2026-10-08T12:56:42.2612094Z test crates/rdf-core/src/small.rs - small::smallvec (line 1315) ... ok
+2026-10-08T12:56:42.2612843Z test crates/rdf-core/src/term_writer.rs - term_writer::write_term_value (line 33) ... ok
+2026-10-08T12:56:42.2617125Z test crates/rdf-core/src/xsd_regex/mod.rs - xsd_regex::CompiledPattern::is_match (line 285) ... ok
+2026-10-08T12:56:42.2617439Z 
+2026-10-08T12:56:42.2617745Z test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-10-08T12:56:42.2617941Z 
+2026-10-08T12:56:42.2635865Z 
+2026-10-08T12:56:42.2636013Z running 5 tests
+2026-10-08T12:56:42.2868522Z test crates/rdf-core/src/diagnostic.rs - diagnostic::RdfDiagnostic (line 214) - compile fail ... ok
+2026-10-08T12:56:42.2893692Z test crates/rdf-core/src/ir/embedding/verify.rs - ir::embedding::verify::ResidentEmbeddingCertificate (line 102) - compile fail ... ok
+2026-10-08T12:56:42.2932868Z test crates/rdf-core/src/distance/mod.rs - distance::Resolved (line 749) - compile fail ... ok
+2026-10-08T12:56:42.2938493Z test crates/rdf-core/src/distance/mod.rs - distance::Resolved (line 741) - compile fail ... ok
+2026-10-08T12:56:42.3036574Z test crates/rdf-core/src/ir/embedding/verify.rs - ir::embedding::verify::ResidentEmbeddingCertificate (line 88) - compile fail ... ok
+2026-10-08T12:56:42.3037031Z 
+2026-10-08T12:56:42.3037378Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+2026-10-08T12:56:42.3037671Z 
+2026-10-08T12:56:42.3039669Z all doctests ran in 0.39s; merged doctests compilation took 0.34s
+2026-10-08T12:56:42.3055781Z [1m[92m   Doc-tests[0m purrdf_datalog
+2026-10-08T12:56:42.4995616Z 
+2026-10-08T12:56:42.4996211Z running 1 test
+2026-10-08T12:56:42.5004524Z test crates/datalog/src/resolve_fol.rs - resolve_fol::derivation_id (line 1579) ... ok
+2026-10-08T12:56:42.5005194Z 
+2026-10-08T12:56:42.5005504Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:42.5005792Z 
+2026-10-08T12:56:42.5017867Z all doctests ran in 0.13s; merged doctests compilation took 0.12s
+2026-10-08T12:56:42.5028934Z [1m[92m   Doc-tests[0m purrdf_deflate
+2026-10-08T12:56:42.5286694Z 
+2026-10-08T12:56:42.5287127Z running 0 tests
+2026-10-08T12:56:42.5287307Z 
+2026-10-08T12:56:42.5287703Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:42.5287998Z 
+2026-10-08T12:56:42.5296001Z [1m[92m   Doc-tests[0m purrdf_ed25519
+2026-10-08T12:56:42.6408721Z 
+2026-10-08T12:56:42.6409205Z running 1 test
+2026-10-08T12:56:42.6419839Z test crates/ed25519/src/lib.rs - (line 13) ... ok
+2026-10-08T12:56:42.6420066Z 
+2026-10-08T12:56:42.6420329Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:42.6420554Z 
+2026-10-08T12:56:42.6431481Z all doctests ran in 0.10s; merged doctests compilation took 0.09s
+2026-10-08T12:56:42.6442335Z [1m[92m   Doc-tests[0m purrdf_entail
+2026-10-08T12:56:43.2481459Z 
+2026-10-08T12:56:43.2482036Z running 24 tests
+2026-10-08T12:56:43.2512392Z test crates/entail/src/entails/imports.rs - entails::imports::rif_resolver (line 116) ... ok
+2026-10-08T12:56:43.2529720Z test crates/entail/src/calculus/mod.rs - calculus::calculus_program (line 478) ... ok
+2026-10-08T12:56:43.2543594Z test crates/entail/src/entails/mod.rs - entails::entails (line 1047) ... ok
+2026-10-08T12:56:43.2544209Z test crates/entail/src/entails/mod.rs - entails::certain_answers (line 622) ... ok
+2026-10-08T12:56:43.2553938Z test crates/entail/src/explain.rs - explain::justify (line 799) ... ok
+2026-10-08T12:56:43.2554709Z test crates/entail/src/explain.rs - explain::explain_conclusion (line 531) ... ok
+2026-10-08T12:56:43.2561518Z test crates/entail/src/lib.rs - Materialization (line 279) ... ok
+2026-10-08T12:56:43.2571648Z test crates/entail/src/entails/warrant.rs - entails::warrant::verify (line 731) ... ok
+2026-10-08T12:56:43.2585233Z test crates/entail/src/reasoner/mod.rs - reasoner::Reasoner (line 133) ... ok
+2026-10-08T12:56:43.2587234Z test crates/entail/src/reasoner/module.rs - reasoner::module::extract_module (line 230) ... ok
+2026-10-08T12:56:43.2588143Z test crates/entail/src/reasoner/mod.rs - reasoner::Reasoner::proof_context (line 360) ... ok
+2026-10-08T12:56:43.2598047Z test crates/entail/src/report.rs - report::Completeness::for_regime (line 202) ... ok
+2026-10-08T12:56:43.2598883Z test crates/entail/src/reasoner/profile.rs - reasoner::profile::profile (line 213) ... ok
+2026-10-08T12:56:43.2599739Z test crates/entail/src/reasoner/module.rs - reasoner::module::extract_module_with_proofs (line 274) ... ok
+2026-10-08T12:56:43.2600551Z test crates/entail/src/report.rs - report::Completeness::for_run (line 242) ... ok
+2026-10-08T12:56:43.2601771Z test crates/entail/src/report.rs - report::ReasoningReport::new (line 1190) ... ok
+2026-10-08T12:56:43.2619183Z test crates/entail/src/report.rs - report::ReasoningReport::with_boundary (line 1437) ... ok
+2026-10-08T12:56:43.2621571Z test crates/entail/src/rules.rs - rules::RuleId::is_extension (line 122) ... ok
+2026-10-08T12:56:43.2634387Z test crates/entail/src/rules.rs - rules::extensions (line 888) ... ok
+2026-10-08T12:56:43.2646447Z test crates/entail/src/rules.rs - rules::implemented (line 830) ... ok
+2026-10-08T12:56:43.2647960Z test crates/entail/src/lib.rs - materialize (line 775) ... ok
+2026-10-08T12:56:43.2654504Z test crates/entail/src/rules.rs - rules::rules (line 787) ... ok
+2026-10-08T12:56:43.2715869Z test crates/entail/src/report.rs - report::TerminationCertificate (line 94) ... ok
+2026-10-08T12:56:43.2722874Z test crates/entail/src/report.rs - report::ReasoningReport::extensions (line 1527) ... ok
+2026-10-08T12:56:43.2723190Z 
+2026-10-08T12:56:43.2723393Z test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:43.2723840Z 
+2026-10-08T12:56:43.2744462Z all doctests ran in 0.46s; merged doctests compilation took 0.44s
+2026-10-08T12:56:43.2756330Z [1m[92m   Doc-tests[0m purrdf_envelope_probe
+2026-10-08T12:56:43.2956317Z 
+2026-10-08T12:56:43.2956645Z running 0 tests
+2026-10-08T12:56:43.2956777Z 
+2026-10-08T12:56:43.2957009Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:43.2957205Z 
+2026-10-08T12:56:43.2965212Z [1m[92m   Doc-tests[0m purrdf_events
+2026-10-08T12:56:43.4271502Z 
+2026-10-08T12:56:43.4272471Z running 8 tests
+2026-10-08T12:56:43.4283200Z test crates/rdf-events/src/lib.rs - (line 71) ... ok
+2026-10-08T12:56:43.4283673Z test crates/rdf-events/src/lib.rs - EventQuad (line 336) ... ok
+2026-10-08T12:56:43.4284296Z test crates/rdf-events/src/lib.rs - EventError::message (line 456) ... ok
+2026-10-08T12:56:43.4285017Z test crates/rdf-events/src/lib.rs - EventTerm (line 282) ... ok
+2026-10-08T12:56:43.4293491Z test crates/rdf-events/src/lib.rs - RdfEventSink (line 522) ... ok
+2026-10-08T12:56:43.4294152Z test crates/rdf-events/src/lib.rs - SourceSpan::new (line 388) ... ok
+2026-10-08T12:56:43.4294808Z test crates/rdf-events/src/lib.rs - RdfEventSource (line 731) ... ok
+2026-10-08T12:56:43.4298960Z test crates/rdf-events/src/lib.rs - TextDirection::from_str_token (line 244) ... ok
+2026-10-08T12:56:43.4299267Z 
+2026-10-08T12:56:43.4299492Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:43.4299683Z 
+2026-10-08T12:56:43.4311633Z all doctests ran in 0.12s; merged doctests compilation took 0.11s
+2026-10-08T12:56:43.4320972Z [1m[92m   Doc-tests[0m purrdf_geo
+2026-10-08T12:56:43.6261545Z 
+2026-10-08T12:56:43.6262028Z running 2 tests
+2026-10-08T12:56:43.6271317Z test crates/geo/src/wkt.rs - wkt::write (line 244) ... ok
+2026-10-08T12:56:43.6271780Z test crates/geo/src/wkt.rs - wkt::parse (line 170) ... ok
+2026-10-08T12:56:43.6271993Z 
+2026-10-08T12:56:43.6272288Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:43.6272620Z 
+2026-10-08T12:56:43.6284242Z all doctests ran in 0.14s; merged doctests compilation took 0.14s
+2026-10-08T12:56:43.6295393Z [1m[92m   Doc-tests[0m purrdf_gts
+2026-10-08T12:56:43.9036290Z 
+2026-10-08T12:56:43.9036907Z running 10 tests
+2026-10-08T12:56:43.9039241Z test crates/gts/src/compact.rs - compact::CompositePackaging<P>::new (line 1223) - compile ... ok
+2026-10-08T12:56:43.9055185Z test crates/gts/src/lib.rs - (line 22) ... ok
+2026-10-08T12:56:43.9067789Z test crates/gts/src/mldsa65/mod.rs - mldsa65 (line 13) ... ok
+2026-10-08T12:56:43.9072001Z test crates/gts/src/model.rs - model::Term::map_term_ids (line 251) ... ok
+2026-10-08T12:56:43.9072610Z test crates/gts/src/mmr.rs - mmr::MmrPeaks (line 109) ... ok
+2026-10-08T12:56:43.9081705Z test crates/gts/src/model.rs - model::language_tag_refusal (line 66) ... ok
+2026-10-08T12:56:43.9082343Z test crates/gts/src/cose.rs - cose::composite (line 42) ... ok
+2026-10-08T12:56:43.9084716Z test crates/gts/src/reader.rs - reader::read (line 1686) ... ok
+2026-10-08T12:56:43.9085387Z test crates/gts/src/writer.rs - writer::Writer (line 582) ... ok
+2026-10-08T12:56:43.9086905Z test crates/gts/src/writer.rs - writer::digest_string (line 1953) ... ok
+2026-10-08T12:56:43.9087162Z 
+2026-10-08T12:56:43.9087355Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-10-08T12:56:43.9087540Z 
+2026-10-08T12:56:43.9102952Z 
+2026-10-08T12:56:43.9103065Z running 2 tests
+2026-10-08T12:56:43.9293489Z test crates/gts/src/compact.rs - compact::CompositePackaging<P>::new (line 1237) - compile fail ... ok
+2026-10-08T12:56:43.9339644Z test crates/gts/src/writer.rs - writer::Writer<M>::with_composite_signer (line 1054) - compile fail ... ok
+2026-10-08T12:56:43.9340012Z 
+2026-10-08T12:56:43.9340315Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:43.9340601Z 
+2026-10-08T12:56:43.9342288Z all doctests ran in 0.22s; merged doctests compilation took 0.18s
+2026-10-08T12:56:43.9353805Z [1m[92m   Doc-tests[0m purrdf_hash
+2026-10-08T12:56:44.2213661Z 
+2026-10-08T12:56:44.2214213Z running 28 tests
+2026-10-08T12:56:44.2226456Z test crates/hash/src/digest.rs - digest::Digest (line 16) ... ok
+2026-10-08T12:56:44.2227227Z test crates/hash/src/dispatch.rs - dispatch::vector_backend (line 102) ... ok
+2026-10-08T12:56:44.2227886Z test crates/hash/src/domain.rs - domain::Domain (line 41) ... ok
+2026-10-08T12:56:44.2228441Z test crates/hash/src/crc32.rs - crc32 (line 8) ... ok
+2026-10-08T12:56:44.2235756Z test crates/hash/src/frame.rs - frame::frame_be_labelled (line 75) ... ok
+2026-10-08T12:56:44.2243254Z test crates/hash/src/frame.rs - frame::frame_le (line 54) ... ok
+2026-10-08T12:56:44.2243669Z test crates/hash/src/fixed.rs - fixed (line 9) ... ok
+2026-10-08T12:56:44.2247690Z test crates/hash/src/frame.rs - frame::frame_le_into (line 97) ... ok
+2026-10-08T12:56:44.2257186Z test crates/hash/src/hex.rs - hex (line 20) ... ok
+2026-10-08T12:56:44.2258367Z test crates/hash/src/hex.rs - hex::Digest32 (line 673) ... ok
+2026-10-08T12:56:44.2261488Z test crates/hash/src/hex.rs - hex::decode (line 582) ... ok
+2026-10-08T12:56:44.2261988Z test crates/hash/src/hex.rs - hex::decode_32 (line 639) ... ok
+2026-10-08T12:56:44.2262505Z test crates/hash/src/hex.rs - hex::decode_32_canonical (line 653) ... ok
+2026-10-08T12:56:44.2263087Z test crates/hash/src/hex.rs - hex::decode_canonical (line 603) ... ok
+2026-10-08T12:56:44.2264016Z test crates/hash/src/hex.rs - hex::encode (line 306) ... ok
+2026-10-08T12:56:44.2264549Z test crates/hash/src/hex.rs - hex::encode_to_slice (line 360) ... ok
+2026-10-08T12:56:44.2265064Z test crates/hash/src/hex.rs - hex::encode_into (line 333) ... ok
+2026-10-08T12:56:44.2274316Z test crates/hash/src/hex.rs - hex::nibble_canonical (line 493) ... ok
+2026-10-08T12:56:44.2274834Z test crates/hash/src/hex.rs - hex::nibble (line 443) ... ok
+2026-10-08T12:56:44.2280410Z test crates/hash/src/hex.rs - hex::encode_upper (line 317) ... ok
+2026-10-08T12:56:44.2281627Z test crates/hash/src/hex.rs - hex::encode_upper_to_slice (line 375) ... ok
+2026-10-08T12:56:44.2282149Z test crates/hash/src/hex.rs - hex::parse_u32 (line 468) ... ok
+2026-10-08T12:56:44.2282739Z test crates/hash/src/impls.rs - impls::debug_non_exhaustive (line 22) ... ok
+2026-10-08T12:56:44.2292295Z test crates/hash/src/impls.rs - impls::default_from_new (line 64) ... ok
+2026-10-08T12:56:44.2292740Z test crates/hash/src/sha1.rs - sha1 (line 6) ... ok
+2026-10-08T12:56:44.2293101Z test crates/hash/src/md5.rs - md5 (line 6) ... ok
+2026-10-08T12:56:44.2295365Z test crates/hash/src/sha3.rs - sha3 (line 19) ... ok
+2026-10-08T12:56:44.2299057Z test crates/hash/src/sha3.rs - sha3 (line 7) ... ok
+2026-10-08T12:56:44.2299186Z 
+2026-10-08T12:56:44.2299383Z test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+2026-10-08T12:56:44.2299573Z 
+2026-10-08T12:56:44.2313074Z 
+2026-10-08T12:56:44.2313246Z running 1 test
+2026-10-08T12:56:44.2499663Z test crates/hash/src/sha3.rs - sha3 (line 37) - compile fail ... ok
+2026-10-08T12:56:44.2499982Z 
+2026-10-08T12:56:44.2500537Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:44.2500944Z 
+2026-10-08T12:56:44.2501285Z all doctests ran in 0.20s; merged doctests compilation took 0.17s
+2026-10-08T12:56:44.2512002Z [1m[92m   Doc-tests[0m purrdf_hash_conformance
+2026-10-08T12:56:44.2626050Z 
+2026-10-08T12:56:44.2626231Z running 0 tests
+2026-10-08T12:56:44.2626334Z 
+2026-10-08T12:56:44.2626576Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:44.2626768Z 
+2026-10-08T12:56:44.2634085Z [1m[92m   Doc-tests[0m purrdf_hnsw
+2026-10-08T12:56:44.4449942Z 
+2026-10-08T12:56:44.4450590Z running 1 test
+2026-10-08T12:56:44.4461966Z test crates/hnsw/src/lib.rs - (line 74) ... ok
+2026-10-08T12:56:44.4462127Z 
+2026-10-08T12:56:44.4462362Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:44.4462926Z 
+2026-10-08T12:56:44.4474988Z all doctests ran in 0.15s; merged doctests compilation took 0.15s
+2026-10-08T12:56:44.4486313Z [1m[92m   Doc-tests[0m purrdf_iri
+2026-10-08T12:56:44.8419722Z 
+2026-10-08T12:56:44.8420163Z running 80 tests
+2026-10-08T12:56:44.8434201Z test crates/iri/src/base.rs - base::BaseIri (line 96) ... ok
+2026-10-08T12:56:44.8444743Z test crates/iri/src/base.rs - base::BaseIri::rebind (line 165) ... ok
+2026-10-08T12:56:44.8445219Z test crates/iri/src/base.rs - base (line 66) ... ok
+2026-10-08T12:56:44.8445651Z test crates/iri/src/base.rs - base::BaseIri::relativize (line 215) ... ok
+2026-10-08T12:56:44.8446119Z test crates/iri/src/base.rs - base::BaseScope::resolve (line 605) ... ok
+2026-10-08T12:56:44.8446636Z test crates/iri/src/base.rs - base::BaseScope::resolve_absolute_only (line 688) ... ok
+2026-10-08T12:56:44.8447167Z test crates/iri/src/curie.rs - curie::PrefixMap (line 24) ... ok
+2026-10-08T12:56:44.8451208Z test crates/iri/src/base.rs - base::BaseScope (line 518) ... ok
+2026-10-08T12:56:44.8465763Z test crates/iri/src/curie.rs - curie::contract (line 171) ... ok
+2026-10-08T12:56:44.8467211Z test crates/iri/src/curie.rs - curie::curie_prefix (line 91) ... ok
+2026-10-08T12:56:44.8467847Z test crates/iri/src/curie.rs - curie::contract_where (line 210) ... ok
+2026-10-08T12:56:44.8468398Z test crates/iri/src/curie.rs - curie::expand_curie (line 120) ... ok
+2026-10-08T12:56:44.8468919Z test crates/iri/src/curie.rs - curie::local_name (line 297) ... ok
+2026-10-08T12:56:44.8469686Z test crates/iri/src/curie.rs - curie::resolve (line 147) ... ok
+2026-10-08T12:56:44.8471170Z test crates/iri/src/error.rs - error::IriError::diagnostic_code (line 131) ... ok
+2026-10-08T12:56:44.8478301Z test crates/iri/src/host.rs - host::is_smtp_address_literal (line 115) ... ok
+2026-10-08T12:56:44.8480114Z test crates/iri/src/curie.rs - curie::split_local_name (line 272) ... ok
+2026-10-08T12:56:44.8482541Z test crates/iri/src/host.rs - host (line 25) ... ok
+2026-10-08T12:56:44.8490140Z test crates/iri/src/idna.rs - idna (line 48) ... ok
+2026-10-08T12:56:44.8490607Z test crates/iri/src/idna.rs - idna::is_hostname (line 99) ... ok
+2026-10-08T12:56:44.8501336Z test crates/iri/src/idna.rs - idna::is_idn_hostname (line 202) ... ok
+2026-10-08T12:56:44.8504122Z test crates/iri/src/idna.rs - idna::map (line 146) ... ok
+2026-10-08T12:56:44.8504557Z test crates/iri/src/idna.rs - idna::punycode_decode (line 233) ... ok
+2026-10-08T12:56:44.8505021Z test crates/iri/src/idna.rs - idna::to_ascii (line 126) ... ok
+2026-10-08T12:56:44.8505455Z test crates/iri/src/idna.rs - idna::punycode_encode (line 218) ... ok
+2026-10-08T12:56:44.8505910Z test crates/iri/src/idna.rs - idna::to_ascii_mapped (line 184) ... ok
+2026-10-08T12:56:44.8513982Z test crates/iri/src/langtag.rs - langtag (line 7) ... ok
+2026-10-08T12:56:44.8514668Z test crates/iri/src/langtag.rs - langtag::Extension (line 1312) ... ok
+2026-10-08T12:56:44.8516193Z test crates/iri/src/langtag.rs - langtag::Extension<'a>::as_str (line 1358) ... ok
+2026-10-08T12:56:44.8516890Z test crates/iri/src/langtag.rs - langtag::Extension<'a>::singleton (line 1337) ... ok
+2026-10-08T12:56:44.8524877Z test crates/iri/src/langtag.rs - langtag::LanguageTag (line 780) ... ok
+2026-10-08T12:56:44.8532643Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::canonical_case (line 1169) ... ok
+2026-10-08T12:56:44.8536310Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::as_str (line 837) ... ok
+2026-10-08T12:56:44.8536920Z test crates/iri/src/langtag.rs - langtag::Extension<'a>::subtags (line 1380) ... ok
+2026-10-08T12:56:44.8537594Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::extended_language (line 892) ... ok
+2026-10-08T12:56:44.8538190Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::extension (line 1069) ... ok
+2026-10-08T12:56:44.8538767Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::canonical_case (line 1187) ... ok
+2026-10-08T12:56:44.8547795Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::extensions (line 990) ... ok
+2026-10-08T12:56:44.8549123Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::form (line 853) ... ok
+2026-10-08T12:56:44.8550940Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::extensions_by_singleton (line 1025) ... ok
+2026-10-08T12:56:44.8552068Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::is_canonical_case (line 1222) ... ok
+2026-10-08T12:56:44.8560490Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::primary_language (line 871) ... ok
+2026-10-08T12:56:44.8562821Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::private_use (line 1100) ... ok
+2026-10-08T12:56:44.8563583Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::private_use_subtags (line 1128) ... ok
+2026-10-08T12:56:44.8566722Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::region (line 937) ... ok
+2026-10-08T12:56:44.8577454Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::script (line 914) ... ok
+2026-10-08T12:56:44.8588056Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::variants (line 959) ... ok
+2026-10-08T12:56:44.8588736Z test crates/iri/src/langtag.rs - langtag::LanguageTagBuf (line 1427) ... ok
+2026-10-08T12:56:44.8589386Z test crates/iri/src/langtag.rs - langtag::LanguageTag<'a>::to_owned_tag (line 1246) ... ok
+2026-10-08T12:56:44.8590084Z test crates/iri/src/langtag.rs - langtag::LanguageTagBuf::as_language_tag (line 1525) ... ok
+2026-10-08T12:56:44.8591836Z test crates/iri/src/langtag.rs - langtag::LanguageTagBuf::into_canonical_case (line 1650) ... ok
+2026-10-08T12:56:44.8592570Z test crates/iri/src/langtag.rs - langtag::LanguageTagBuf::into_string (line 1555) ... ok
+2026-10-08T12:56:44.8593243Z test crates/iri/src/langtag.rs - langtag::LanguageTagBuf::parse_with (line 1494) ... ok
+2026-10-08T12:56:44.8593936Z test crates/iri/src/langtag.rs - langtag::LanguageTagBuf::parse (line 1465) ... ok
+2026-10-08T12:56:44.8598583Z test crates/iri/src/langtag.rs - langtag::LanguageTagError (line 546) ... ok
+2026-10-08T12:56:44.8599361Z test crates/iri/src/langtag.rs - langtag::LanguageTagError::diagnostic_code (line 612) ... ok
+2026-10-08T12:56:44.8600062Z test crates/iri/src/langtag.rs - langtag::LanguageTagError::message (line 654) ... ok
+2026-10-08T12:56:44.8603919Z test crates/iri/src/langtag.rs - langtag::Profile (line 208) ... ok
+2026-10-08T12:56:44.8610458Z test crates/iri/src/langtag.rs - langtag::Profile::ConcreteSyntaxLangtag (line 467) ... ok
+2026-10-08T12:56:44.8612533Z test crates/iri/src/langtag.rs - langtag::Profile::ConcreteSyntaxLangtagBounded (line 379) ... ok
+2026-10-08T12:56:44.8619841Z test crates/iri/src/langtag.rs - langtag::Profile::Rfc5646PrivateUseRelaxed (line 306) ... ok
+2026-10-08T12:56:44.8620502Z test crates/iri/src/langtag.rs - langtag::Profile::Rfc5646 (line 257) ... ok
+2026-10-08T12:56:44.8621161Z test crates/iri/src/langtag.rs - langtag::TagForm (line 503) ... ok
+2026-10-08T12:56:44.8627308Z test crates/iri/src/langtag.rs - langtag::canonical_case (line 1900) ... ok
+2026-10-08T12:56:44.8632240Z test crates/iri/src/langtag.rs - langtag::identity_fold (line 1819) ... ok
+2026-10-08T12:56:44.8640024Z test crates/iri/src/langtag.rs - langtag::canonical_case_with (line 1942) ... ok
+2026-10-08T12:56:44.8640590Z test crates/iri/src/langtag.rs - langtag::is_well_formed (line 1777) ... ok
+2026-10-08T12:56:44.8645552Z test crates/iri/src/langtag.rs - langtag::is_well_formed_with (line 1844) ... ok
+2026-10-08T12:56:44.8648286Z test crates/iri/src/langtag.rs - langtag::parse (line 2001) ... ok
+2026-10-08T12:56:44.8649061Z test crates/iri/src/langtag.rs - langtag::parse_with (line 2039) ... ok
+2026-10-08T12:56:44.8649787Z test crates/iri/src/lib.rs - (line 108) ... ok
+2026-10-08T12:56:44.8664664Z test crates/iri/src/parse.rs - parse::Iri (line 31) ... ok
+2026-10-08T12:56:44.8669763Z test crates/iri/src/normalize.rs - normalize::Iri::normalize (line 29) ... ok
+2026-10-08T12:56:44.8670402Z test crates/iri/src/parse.rs - parse::Iri::to_uri (line 109) ... ok
+2026-10-08T12:56:44.8671721Z test crates/iri/src/lib.rs - (line 128) ... ok
+2026-10-08T12:56:44.8675267Z test crates/iri/src/parse.rs - parse::is_absolute (line 266) ... ok
+2026-10-08T12:56:44.8675917Z test crates/iri/src/resolve.rs - resolve::Iri::resolve (line 83) ... ok
+2026-10-08T12:56:44.8676396Z test crates/iri/src/parse.rs - parse::parse_uri (line 234) ... ok
+2026-10-08T12:56:44.8679791Z test crates/iri/src/parse.rs - parse::parse (line 216) ... ok
+2026-10-08T12:56:44.8683747Z test crates/iri/src/vocab.rs - vocab (line 25) ... ok
+2026-10-08T12:56:44.8683951Z 
+2026-10-08T12:56:44.8684265Z test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-10-08T12:56:44.8684554Z 
+2026-10-08T12:56:44.8701281Z all doctests ran in 0.36s; merged doctests compilation took 0.33s
+2026-10-08T12:56:44.8712051Z [1m[92m   Doc-tests[0m purrdf_json
+2026-10-08T12:56:45.0143920Z 
+2026-10-08T12:56:45.0144487Z running 1 test
+2026-10-08T12:56:45.0153812Z test crates/json/src/lib.rs - (line 23) ... ok
+2026-10-08T12:56:45.0154062Z 
+2026-10-08T12:56:45.0154384Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:45.0154686Z 
+2026-10-08T12:56:45.0166762Z all doctests ran in 0.13s; merged doctests compilation took 0.12s
+2026-10-08T12:56:45.0176232Z [1m[92m   Doc-tests[0m purrdf_jsonschema
+2026-10-08T12:56:45.2398234Z 
+2026-10-08T12:56:45.2398759Z running 3 tests
+2026-10-08T12:56:45.2412134Z test crates/jsonschema/src/dialect.rs - dialect::Dialect::uri (line 34) ... ok
+2026-10-08T12:56:45.2413812Z test crates/jsonschema/src/meta_set.rs - meta_set::Metaschemas (line 34) ... ok
+2026-10-08T12:56:45.2424348Z test crates/jsonschema/src/lib.rs - (line 43) ... ok
+2026-10-08T12:56:45.2424495Z 
+2026-10-08T12:56:45.2424700Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:45.2424890Z 
+2026-10-08T12:56:45.2441524Z all doctests ran in 0.17s; merged doctests compilation took 0.16s
+2026-10-08T12:56:45.2450864Z [1m[92m   Doc-tests[0m purrdf_lex
+2026-10-08T12:56:45.6804002Z 
+2026-10-08T12:56:45.6804585Z running 88 tests
+2026-10-08T12:56:45.6815988Z test crates/lex/src/assoc.rs - assoc (line 14) ... ok
+2026-10-08T12:56:45.6816689Z test crates/lex/src/cbor/head.rs - cbor::head::read_argument (line 126) ... ok
+2026-10-08T12:56:45.6822100Z test crates/lex/src/cbor/head.rs - cbor::head::push_head (line 74) ... ok
+2026-10-08T12:56:45.6822661Z test crates/lex/src/cbor.rs - cbor (line 45) ... ok
+2026-10-08T12:56:45.6830492Z test crates/lex/src/constructors.rs - constructors::variant_from (line 165) ... ok
+2026-10-08T12:56:45.6831379Z test crates/lex/src/constructors.rs - constructors::constructors (line 41) ... ok
+2026-10-08T12:56:45.6832811Z test crates/lex/src/crockford.rs - crockford::decode_digit (line 111) ... ok
+2026-10-08T12:56:45.6839684Z test crates/lex/src/crockford.rs - crockford::parse_u128 (line 148) ... ok
+2026-10-08T12:56:45.6843733Z test crates/lex/src/crockford.rs - crockford::encode_u128 (line 72) ... ok
+2026-10-08T12:56:45.6844346Z test crates/lex/src/iri_escape.rs - iri_escape::escape (line 250) ... ok
+2026-10-08T12:56:45.6844902Z test crates/lex/src/crockford.rs - crockford::write_u128 (line 95) ... ok
+2026-10-08T12:56:45.6849290Z test crates/lex/src/iri_escape.rs - iri_escape::find_first_candidate (line 152) ... ok
+2026-10-08T12:56:45.6857452Z test crates/lex/src/iri_escape.rs - iri_escape::is_candidate (line 176) ... ok
+2026-10-08T12:56:45.6859967Z test crates/lex/src/iri_escape.rs - iri_escape::push_escaped (line 232) ... ok
+2026-10-08T12:56:45.6860279Z test crates/lex/src/json.rs - json (line 66) ... ok
+2026-10-08T12:56:45.6860838Z test crates/lex/src/iri_escape.rs - iri_escape::is_iriref_escape_required (line 82) ... ok
+2026-10-08T12:56:45.6870638Z test crates/lex/src/json/number.rs - json::number::Decimal (line 179) ... ok
+2026-10-08T12:56:45.6871776Z test crates/lex/src/json/number.rs - json::number::Number::from_lexeme (line 278) ... ok
+2026-10-08T12:56:45.6878881Z test crates/lex/src/json/number.rs - json::number::Number::decimal (line 302) ... ok
+2026-10-08T12:56:45.6879912Z test crates/lex/src/json/number.rs - json::number::Number::from_f64 (line 433) ... ok
+2026-10-08T12:56:45.6880621Z test crates/lex/src/json/read.rs - json::read::occurrences (line 995) ... ok
+2026-10-08T12:56:45.6881470Z test crates/lex/src/json/read.rs - json::read::Reader<'a>::peek_kind (line 588) ... ok
+2026-10-08T12:56:45.6889692Z test crates/lex/src/json/record.rs - json::record (line 45) ... ok
+2026-10-08T12:56:45.6890264Z test crates/lex/src/json/read.rs - json::read::read (line 928) ... ok
+2026-10-08T12:56:45.6891065Z test crates/lex/src/json/record.rs - json::record::json_record (line 635) ... ok
+2026-10-08T12:56:45.6891836Z test crates/lex/src/json/record.rs - json::record::json_string_enum (line 543) ... ok
+2026-10-08T12:56:45.6899505Z test crates/lex/src/json/value.rs - json::value::Value::pointer (line 405) ... ok
+2026-10-08T12:56:45.6900237Z test crates/lex/src/json/value.rs - json::value::Object::with (line 147) ... ok
+2026-10-08T12:56:45.6908914Z test crates/lex/src/json/value.rs - json::value::Value (line 35) ... ok
+2026-10-08T12:56:45.6909458Z test crates/lex/src/json/value.rs - json::value::Value::same_text (line 737) ... ok
+2026-10-08T12:56:45.6910963Z test crates/lex/src/json_escape.rs - json_escape::code_unit (line 291) ... ok
+2026-10-08T12:56:45.6918310Z test crates/lex/src/json_escape.rs - json_escape::decode_escape (line 374) ... ok
+2026-10-08T12:56:45.6918991Z test crates/lex/src/json_escape.rs - json_escape::escape_body (line 144) ... ok
+2026-10-08T12:56:45.6921217Z test crates/lex/src/json_escape.rs - json_escape::push_body (line 197) ... ok
+2026-10-08T12:56:45.6924639Z test crates/lex/src/json_escape.rs - json_escape::decode_u_escape (line 323) ... ok
+2026-10-08T12:56:45.6932160Z test crates/lex/src/json_escape.rs - json_escape::unescape (line 419) ... ok
+2026-10-08T12:56:45.6936552Z test crates/lex/src/json_escape.rs - json_escape::push_string (line 212) ... ok
+2026-10-08T12:56:45.6937445Z test crates/lex/src/json_pointer.rs - json_pointer (line 13) ... ok
+2026-10-08T12:56:45.6938215Z test crates/lex/src/json_pointer.rs - json_pointer::array_index (line 139) ... ok
+2026-10-08T12:56:45.6943217Z test crates/lex/src/json_pointer.rs - json_pointer::escape_token (line 28) ... ok
+2026-10-08T12:56:45.6946121Z test crates/lex/src/json_pointer.rs - json_pointer::tokens (line 114) ... ok
+2026-10-08T12:56:45.6946963Z test crates/lex/src/json_pointer.rs - json_pointer::push_token (line 47) ... ok
+2026-10-08T12:56:45.6950553Z test crates/lex/src/lib.rs - (line 118) ... ok
+2026-10-08T12:56:45.6951274Z test crates/lex/src/json_pointer.rs - json_pointer::unescape_token (line 77) ... ok
+2026-10-08T12:56:45.6960353Z test crates/lex/src/literal_escape.rs - literal_escape::escape (line 309) ... ok
+2026-10-08T12:56:45.6961317Z test crates/lex/src/literal_escape.rs - literal_escape::find_first_literal_escape (line 129) ... ok
+2026-10-08T12:56:45.6962667Z test crates/lex/src/literal_escape.rs - literal_escape::find_first_turtle_long_escape (line 167) ... ok
+2026-10-08T12:56:45.6963462Z test crates/lex/src/literal_escape.rs - literal_escape::find_first_xml_carrier_escape (line 149) ... ok
+2026-10-08T12:56:45.6973354Z test crates/lex/src/message_error.rs - message_error::message_error (line 17) ... ok
+2026-10-08T12:56:45.6984141Z test crates/lex/src/literal_escape.rs - literal_escape::write (line 285) ... ok
+2026-10-08T12:56:45.6985660Z test crates/lex/src/percent.rs - percent (line 27) ... ok
+2026-10-08T12:56:45.6986329Z test crates/lex/src/percent.rs - percent::decode (line 320) ... ok
+2026-10-08T12:56:45.6986942Z test crates/lex/src/percent.rs - percent::decode_form (line 339) ... ok
+2026-10-08T12:56:45.6987544Z test crates/lex/src/percent.rs - percent::encode (line 182) ... ok
+2026-10-08T12:56:45.6988129Z test crates/lex/src/percent.rs - percent::push_triplet (line 167) ... ok
+2026-10-08T12:56:45.6988816Z test crates/lex/src/percent.rs - percent::normalize (line 354) ... ok
+2026-10-08T12:56:45.6992188Z test crates/lex/src/scan.rs - scan::ByteClass (line 254) ... ok
+2026-10-08T12:56:45.6993167Z test crates/lex/src/scan.rs - scan::byte_run_count (line 186) ... ok
+2026-10-08T12:56:45.6995728Z test crates/lex/src/scan.rs - scan::find_byte (line 512) ... ok
+2026-10-08T12:56:45.7002086Z test crates/lex/src/scan.rs - scan::find_first_iri_body_special (line 849) ... ok
+2026-10-08T12:56:45.7002730Z test crates/lex/src/scan.rs - scan::find_byte2 (line 528) ... ok
+2026-10-08T12:56:45.7003382Z test crates/lex/src/scan.rs - scan::find_byte_pair (line 565) ... ok
+2026-10-08T12:56:45.7012699Z test crates/lex/src/scan.rs - scan::find_first_json_string_special (line 881) ... ok
+2026-10-08T12:56:45.7013394Z test crates/lex/src/scan.rs - scan::find_first_trivia (line 812) ... ok
+2026-10-08T12:56:45.7014132Z test crates/lex/src/scan.rs - scan::needle_table (line 207) ... ok
+2026-10-08T12:56:45.7014651Z test crates/lex/src/scan.rs - scan::find_first_xml_special (line 1063) ... ok
+2026-10-08T12:56:45.7024706Z test crates/lex/src/scan.rs - scan::find_range_pair (line 599) ... ok
+2026-10-08T12:56:45.7025437Z test crates/lex/src/term_syntax.rs - term_syntax::write_blank (line 120) ... ok
+2026-10-08T12:56:45.7026216Z test crates/lex/src/term_syntax.rs - term_syntax::write_literal (line 73) ... ok
+2026-10-08T12:56:45.7026754Z test crates/lex/src/term_syntax.rs - term_syntax::write_iri (line 49) ... ok
+2026-10-08T12:56:45.7028156Z test crates/lex/src/terminals.rs - terminals::decode_char_ref (line 1493) ... ok
+2026-10-08T12:56:45.7036483Z test crates/lex/src/terminals.rs - terminals::decode_uchar (line 1389) ... ok
+2026-10-08T12:56:45.7037787Z test crates/lex/src/terminals.rs - terminals::decode_uchar_at (line 1413) ... ok
+2026-10-08T12:56:45.7045491Z test crates/lex/src/terminals.rs - terminals::echar_value (line 1331) ... ok
+2026-10-08T12:56:45.7046551Z test crates/lex/src/terminals.rs - terminals::in_ranges (line 188) ... ok
+2026-10-08T12:56:45.7047245Z test crates/lex/src/terminals.rs - terminals::expand_uchars (line 1447) ... ok
+2026-10-08T12:56:45.7053900Z test crates/lex/src/terminals.rs - terminals::is_ncname_char (line 1244) ... ok
+2026-10-08T12:56:45.7054629Z test crates/lex/src/terminals.rs - terminals::is_ncname_start (line 1229) ... ok
+2026-10-08T12:56:45.7055389Z test crates/lex/src/terminals.rs - terminals::is_ncname (line 1260) ... ok
+2026-10-08T12:56:45.7056425Z test crates/lex/src/terminals.rs - terminals::skip_ws (line 1284) ... ok
+2026-10-08T12:56:45.7067686Z test crates/lex/src/text_out.rs - text_out::TextOut (line 34) ... ok
+2026-10-08T12:56:45.7068645Z test crates/lex/src/terminals.rs - terminals::trim_ws (line 1305) ... ok
+2026-10-08T12:56:45.7069757Z test crates/lex/src/unicode.rs - unicode::ccc (line 102) ... ok
+2026-10-08T12:56:45.7071630Z test crates/lex/src/unicode.rs - unicode (line 44) ... ok
+2026-10-08T12:56:45.7079184Z test crates/lex/src/yaml/read.rs - yaml::read::read (line 2265) ... ok
+2026-10-08T12:56:45.7080616Z test crates/lex/src/walk.rs - walk (line 29) ... ok
+2026-10-08T12:56:45.7081864Z test crates/lex/src/yaml/write.rs - yaml::write::write (line 655) ... ok
+2026-10-08T12:56:45.7082350Z test crates/lex/src/xml.rs - xml (line 74) ... ok
+2026-10-08T12:56:45.7082539Z 
+2026-10-08T12:56:45.7082841Z test result: ok. 88 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-10-08T12:56:45.7083131Z 
+2026-10-08T12:56:45.7097199Z all doctests ran in 0.35s; merged doctests compilation took 0.32s
+2026-10-08T12:56:45.7108983Z [1m[92m   Doc-tests[0m purrdf_markdown
+2026-10-08T12:56:45.7385081Z 
+2026-10-08T12:56:45.7385532Z running 0 tests
+2026-10-08T12:56:45.7385710Z 
+2026-10-08T12:56:45.7385948Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:45.7386149Z 
+2026-10-08T12:56:45.7397248Z [1m[92m   Doc-tests[0m purrdf_native
+2026-10-08T12:56:46.0407768Z 
+2026-10-08T12:56:46.0408340Z running 0 tests
+2026-10-08T12:56:46.0408534Z 
+2026-10-08T12:56:46.0408906Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:46.0409552Z 
+2026-10-08T12:56:46.0422546Z [1m[92m   Doc-tests[0m purrdf_rdf
+2026-10-08T12:56:46.5565361Z 
+2026-10-08T12:56:46.5565949Z running 1 test
+2026-10-08T12:56:46.5566571Z test crates/rdf/src/gts_certify.rs - gts_certify::compact_and_certify (line 886) - compile ... ok
+2026-10-08T12:56:46.5566887Z 
+2026-10-08T12:56:46.5567116Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:46.5567301Z 
+2026-10-08T12:56:46.5579565Z all doctests ran in 0.11s; merged doctests compilation took 0.11s
+2026-10-08T12:56:46.5593003Z [1m[92m   Doc-tests[0m purrdf_retrieval
+2026-10-08T12:56:46.7549379Z 
+2026-10-08T12:56:46.7549900Z running 3 tests
+2026-10-08T12:56:46.7560501Z test crates/retrieval/src/fusion_stream.rs - fusion_stream::ProducerStatus (line 208) ... ok
+2026-10-08T12:56:46.7561321Z test crates/retrieval/src/document.rs - document::Plan::to_json (line 726) ... ok
+2026-10-08T12:56:46.7561878Z test crates/retrieval/src/ranked_stream.rs - ranked_stream::StreamContract::new (line 295) ... ok
+2026-10-08T12:56:46.7562115Z 
+2026-10-08T12:56:46.7562306Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:46.7562489Z 
+2026-10-08T12:56:46.7573469Z 
+2026-10-08T12:56:46.7573646Z running 1 test
+2026-10-08T12:56:46.7766198Z test crates/retrieval/src/ranked_stream.rs - ranked_stream::StreamContract::new (line 284) - compile fail ... ok
+2026-10-08T12:56:46.7766572Z 
+2026-10-08T12:56:46.7767084Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:46.7767402Z 
+2026-10-08T12:56:46.7767625Z all doctests ran in 0.15s; merged doctests compilation took 0.12s
+2026-10-08T12:56:46.7778579Z [1m[92m   Doc-tests[0m purrdf_shapes
+2026-10-08T12:56:47.5820999Z 
+2026-10-08T12:56:47.5821592Z running 7 tests
+2026-10-08T12:56:47.5846584Z test crates/shapes/src/imports.rs - imports::ShapesImports::link_data_graph (line 289) ... ok
+2026-10-08T12:56:47.5847431Z test crates/shapes/src/imports.rs - imports::ShapesImports (line 144) ... ok
+2026-10-08T12:56:47.5851596Z test crates/shapes/src/report.rs - report::ValidationReport::to_dataset (line 1785) - compile ... ok
+2026-10-08T12:56:47.5852346Z test crates/shapes/src/engine.rs - engine::PreparedValidator (line 2338) ... ok
+2026-10-08T12:56:47.5853297Z test crates/shapes/src/engine.rs - engine::PreparedShapes::bind_complete_shared_dataset (line 1824) ... ok
+2026-10-08T12:56:47.5857824Z test crates/shapes/src/typescript.rs - typescript::emit_typescript (line 189) ... ok
+2026-10-08T12:56:47.5858840Z test crates/shapes/src/json_schema.rs - json_schema::Namespaces (line 233) ... ok
+2026-10-08T12:56:47.5859112Z 
+2026-10-08T12:56:47.5859402Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:47.5859684Z 
+2026-10-08T12:56:47.5897094Z all doctests ran in 0.35s; merged doctests compilation took 0.34s
+2026-10-08T12:56:47.5910926Z [1m[92m   Doc-tests[0m purrdf_shex
+2026-10-08T12:56:47.8516765Z 
+2026-10-08T12:56:47.8517691Z running 10 tests
+2026-10-08T12:56:47.8532426Z test crates/shex/src/error.rs - error::ShexError::iri (line 104) ... ok
+2026-10-08T12:56:47.8532994Z test crates/shex/src/lib.rs - (line 66) ... ok
+2026-10-08T12:56:47.8544283Z test crates/shex/src/exact.rs - exact::ExactSchema::to_shexj (line 431) ... ok
+2026-10-08T12:56:47.8545751Z test crates/shex/src/exact.rs - exact::ExactSchema (line 251) ... ok
+2026-10-08T12:56:47.8546346Z test crates/shex/src/shapemap.rs - shapemap::parse_shape_map (line 162) ... ok
+2026-10-08T12:56:47.8546933Z test crates/shex/src/shexj.rs - shexj::parse_shexj (line 102) ... ok
+2026-10-08T12:56:47.8547394Z test crates/shex/src/shexj.rs - shexj::to_shexj (line 151) ... ok
+2026-10-08T12:56:47.8547848Z test crates/shex/src/parser.rs - parser::parse_shexc (line 59) ... ok
+2026-10-08T12:56:47.8557341Z test crates/shex/src/structure.rs - structure::check_structure (line 99) ... ok
+2026-10-08T12:56:47.8557868Z test crates/shex/src/validate.rs - validate::validate (line 254) ... ok
+2026-10-08T12:56:47.8558505Z 
+2026-10-08T12:56:47.8558810Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:47.8559078Z 
+2026-10-08T12:56:47.8577869Z all doctests ran in 0.22s; merged doctests compilation took 0.21s
+2026-10-08T12:56:47.8588642Z [1m[92m   Doc-tests[0m purrdf_slice
+2026-10-08T12:56:48.0617830Z 
+2026-10-08T12:56:48.0618311Z running 2 tests
+2026-10-08T12:56:48.0627189Z test crates/slice/src/vocab.rs - vocab (line 16) ... ok
+2026-10-08T12:56:48.0627530Z test crates/slice/src/vocab.rs - vocab (line 45) ... ok
+2026-10-08T12:56:48.0627684Z 
+2026-10-08T12:56:48.0627885Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:48.0628073Z 
+2026-10-08T12:56:48.0640299Z all doctests ran in 0.17s; merged doctests compilation took 0.16s
+2026-10-08T12:56:48.0650258Z [1m[92m   Doc-tests[0m purrdf_sparql_algebra
+2026-10-08T12:56:48.2707116Z 
+2026-10-08T12:56:48.2707915Z running 7 tests
+2026-10-08T12:56:48.2720170Z test crates/sparql-algebra/src/parser.rs - parser::SparqlParser::parse_update (line 464) ... ok
+2026-10-08T12:56:48.2720942Z test crates/sparql-algebra/src/lib.rs - (line 49) ... ok
+2026-10-08T12:56:48.2729436Z test crates/sparql-algebra/src/parser.rs - parser::SparqlParser::with_base_iri (line 321) ... ok
+2026-10-08T12:56:48.2730922Z test crates/sparql-algebra/src/parser.rs - parser::SparqlParser::parse_query (line 383) ... ok
+2026-10-08T12:56:48.2731951Z test crates/sparql-algebra/src/serialize.rs - serialize::pattern_to_select_query (line 118) ... ok
+2026-10-08T12:56:48.2732602Z test crates/sparql-algebra/src/substitute.rs - substitute::Query::assigned_prebound (line 61) ... ok
+2026-10-08T12:56:48.2733266Z test crates/sparql-algebra/src/parser.rs - parser::SparqlParser::with_prebound_variables (line 354) ... ok
+2026-10-08T12:56:48.2733597Z 
+2026-10-08T12:56:48.2733888Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:48.2734097Z 
+2026-10-08T12:56:48.2743970Z 
+2026-10-08T12:56:48.2744053Z running 1 test
+2026-10-08T12:56:48.2910955Z test crates/sparql-algebra/src/algebra.rs - algebra::AggregateExpression (line 1787) - compile fail ... ok
+2026-10-08T12:56:48.2911347Z 
+2026-10-08T12:56:48.2911653Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:48.2911955Z 
+2026-10-08T12:56:48.2912180Z all doctests ran in 0.16s; merged doctests compilation took 0.14s
+2026-10-08T12:56:48.2922204Z [1m[92m   Doc-tests[0m purrdf_sparql_conformance
+2026-10-08T12:56:48.3341216Z 
+2026-10-08T12:56:48.3341555Z running 0 tests
+2026-10-08T12:56:48.3341698Z 
+2026-10-08T12:56:48.3341934Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:48.3342127Z 
+2026-10-08T12:56:48.3352168Z [1m[92m   Doc-tests[0m purrdf_sparql_eval
+2026-10-08T12:56:50.6940355Z 
+2026-10-08T12:56:50.6941065Z running 10 tests
+2026-10-08T12:56:50.6950486Z test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::query_prepared_view (line 1091) - compile ... ok
+2026-10-08T12:56:50.6960981Z test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::prepare_execution (line 2930) ... ok
+2026-10-08T12:56:50.6961629Z test crates/sparql-eval/src/engine.rs - engine::QueryOptions (line 3968) ... ok
+2026-10-08T12:56:50.6962946Z test crates/sparql-eval/src/agg_fn.rs - agg_fn::AggregateRegistry::register (line 808) ... ok
+2026-10-08T12:56:50.6977926Z test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::execute (line 3054) ... ok
+2026-10-08T12:56:50.6979072Z test crates/sparql-eval/src/execution.rs - execution::PreparedExecution::slot (line 527) ... ok
+2026-10-08T12:56:50.6982316Z test crates/sparql-eval/src/execution.rs - execution::PreparedExecution::check_parameters_mentioned (line 468) ... ok
+2026-10-08T12:56:50.6985126Z test crates/sparql-eval/src/path_relation.rs - path_relation (line 142) ... ok
+2026-10-08T12:56:50.6988072Z test crates/sparql-eval/src/property_fn.rs - property_fn::RankFidelity (line 860) ... ok
+2026-10-08T12:56:50.6988656Z test crates/sparql-eval/src/property_fn.rs - property_fn::MemoryRelation (line 2812) ... ok
+2026-10-08T12:56:50.6988956Z 
+2026-10-08T12:56:50.6989285Z test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:50.6989570Z 
+2026-10-08T12:56:50.7031259Z 
+2026-10-08T12:56:50.7031356Z running 4 tests
+2026-10-08T12:56:50.7326457Z test crates/sparql-eval/src/property_fn.rs - property_fn::RankFidelity (line 881) - compile fail ... ok
+2026-10-08T12:56:50.7328069Z test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::execute (line 3032) - compile fail ... ok
+2026-10-08T12:56:50.7334695Z test crates/sparql-eval/src/property_fn.rs - property_fn::RankFidelity (line 837) - compile fail ... ok
+2026-10-08T12:56:50.7337424Z test crates/sparql-eval/src/engine.rs - engine::NativeSparqlEngine::query_prepared_view (line 1083) - compile fail ... ok
+2026-10-08T12:56:50.7337720Z 
+2026-10-08T12:56:50.7337912Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-10-08T12:56:50.7338096Z 
+2026-10-08T12:56:50.7341605Z all doctests ran in 2.04s; merged doctests compilation took 1.99s
+2026-10-08T12:56:50.7355348Z [1m[92m   Doc-tests[0m purrdf_sparql_results
+2026-10-08T12:56:50.9030322Z 
+2026-10-08T12:56:50.9031035Z running 6 tests
+2026-10-08T12:56:50.9041963Z test crates/sparql-results/src/json.rs - json::to_json (line 79) ... ok
+2026-10-08T12:56:50.9042938Z test crates/sparql-results/src/csv.rs - csv::to_csv (line 37) ... ok
+2026-10-08T12:56:50.9043846Z test crates/sparql-results/src/json_read.rs - json_read::from_json (line 101) ... ok
+2026-10-08T12:56:50.9044509Z test crates/sparql-results/src/json_read.rs - json_read::from_json_boolean (line 217) ... ok
+2026-10-08T12:56:50.9049825Z test crates/sparql-results/src/lib.rs - (line 33) ... ok
+2026-10-08T12:56:50.9051663Z test crates/sparql-results/src/lib.rs - serialize (line 187) ... ok
+2026-10-08T12:56:50.9051846Z 
+2026-10-08T12:56:50.9052042Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:50.9052231Z 
+2026-10-08T12:56:50.9064833Z all doctests ran in 0.14s; merged doctests compilation took 0.14s
+2026-10-08T12:56:50.9074308Z [1m[92m   Doc-tests[0m purrdf_stack
+2026-10-08T12:56:50.9243266Z 
+2026-10-08T12:56:50.9243606Z running 2 tests
+2026-10-08T12:56:50.9415965Z test crates/stack/src/lib.rs - Reserve (line 416) - compile fail ... ok
+2026-10-08T12:56:50.9416332Z test crates/stack/src/lib.rs - Reserve (line 411) - compile fail ... ok
+2026-10-08T12:56:50.9416488Z 
+2026-10-08T12:56:50.9416684Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:50.9416872Z 
+2026-10-08T12:56:50.9428449Z [1m[92m   Doc-tests[0m purrdf_testkit
+2026-10-08T12:56:51.1591554Z 
+2026-10-08T12:56:51.1592160Z running 6 tests
+2026-10-08T12:56:51.1594313Z test crates/testkit/src/harness.rs - harness (line 10) - compile ... ok
+2026-10-08T12:56:51.1594868Z test crates/testkit/src/bench/mod.rs - bench (line 7) - compile ... ok
+2026-10-08T12:56:51.1595406Z test crates/testkit/src/lib.rs - harness_main (line 101) - compile ... ok
+2026-10-08T12:56:51.1602927Z test crates/testkit/src/prop/mod.rs - prop (line 11) ... ok
+2026-10-08T12:56:51.1604877Z test crates/testkit/src/vectors.rs - vectors::answer_digest (line 568) ... ok
+2026-10-08T12:56:51.1606238Z test crates/testkit/src/prop/state_machine.rs - prop::state_machine (line 19) ... ok
+2026-10-08T12:56:51.1606532Z 
+2026-10-08T12:56:51.1606835Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:51.1607157Z 
+2026-10-08T12:56:51.1619806Z all doctests ran in 0.17s; merged doctests compilation took 0.17s
+2026-10-08T12:56:51.1629719Z [1m[92m   Doc-tests[0m purrdf_text
+2026-10-08T12:56:51.2549775Z 
+2026-10-08T12:56:51.2550486Z running 0 tests
+2026-10-08T12:56:51.2551139Z 
+2026-10-08T12:56:51.2551380Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:51.2551576Z 
+2026-10-08T12:56:51.2561124Z [1m[92m   Doc-tests[0m purrdf_validate
+2026-10-08T12:56:51.6180007Z 
+2026-10-08T12:56:51.6180836Z running 18 tests
+2026-10-08T12:56:51.6212380Z test crates/validate/src/build.rs - build::SarifReport (line 368) ... ok
+2026-10-08T12:56:51.6215073Z test crates/validate/src/regime.rs - regime::ReasonerSession (line 2122) ... ok
+2026-10-08T12:56:51.6215800Z test crates/validate/src/entail.rs - entail::entail_to_ntriples_string (line 208) ... ok
+2026-10-08T12:56:51.6222639Z test crates/validate/src/regime.rs - regime::consistency_to_string (line 2577) ... ok
+2026-10-08T12:56:51.6231697Z test crates/validate/src/regime.rs - regime::extension_rules_string (line 732) ... ok
+2026-10-08T12:56:51.6232252Z test crates/validate/src/regime.rs - regime::entails_to_string (line 2714) ... ok
+2026-10-08T12:56:51.6247322Z test crates/validate/src/regime.rs - regime::implemented_rules_string (line 702) ... ok
+2026-10-08T12:56:51.6271392Z test crates/validate/src/regime.rs - regime::justify_to_string (line 2932) ... ok
+2026-10-08T12:56:51.6286484Z test crates/validate/src/regime.rs - regime::parse_regime (line 190) ... ok
+2026-10-08T12:56:51.6287552Z test crates/validate/src/regime.rs - regime::graph_entails_to_string (line 3913) ... ok
+2026-10-08T12:56:51.6288280Z test crates/validate/src/regime.rs - regime::profile_to_string (line 2777) ... ok
+2026-10-08T12:56:51.6304752Z test crates/validate/src/regime.rs - regime::prove_to_string (line 4238) ... ok
+2026-10-08T12:56:51.6307213Z test crates/validate/src/regime.rs - regime::rules_string (line 677) ... ok
+2026-10-08T12:56:51.6326520Z test crates/validate/src/shacl.rs - shacl::validate_changes_to_sarif_string (line 176) ... ok
+2026-10-08T12:56:51.6341835Z test crates/validate/src/regime.rs - regime::certain_answers_to_string (line 3784) ... ok
+2026-10-08T12:56:51.6351083Z test crates/validate/src/regime.rs - regime::materialize_to_nquads_string (line 298) ... ok
+2026-10-08T12:56:51.6361651Z test crates/validate/src/shacl.rs - shacl::validate_to_sarif_string (line 64) ... ok
+2026-10-08T12:56:51.6389157Z test crates/validate/src/regime.rs - regime::verify_entailment_to_string (line 4020) ... ok
+2026-10-08T12:56:51.6389372Z 
+2026-10-08T12:56:51.6389570Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:51.6389757Z 
+2026-10-08T12:56:51.6428997Z all doctests ran in 0.33s; merged doctests compilation took 0.30s
+2026-10-08T12:56:51.6441610Z [1m[92m   Doc-tests[0m purrdf_wasm
+2026-10-08T12:56:51.9500212Z 
+2026-10-08T12:56:51.9500948Z running 0 tests
+2026-10-08T12:56:51.9501142Z 
+2026-10-08T12:56:51.9501479Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:51.9501687Z 
+2026-10-08T12:56:51.9514898Z [1m[92m   Doc-tests[0m purrdf_xsd
+2026-10-08T12:56:52.2465263Z 
+2026-10-08T12:56:52.2465881Z running 53 tests
+2026-10-08T12:56:52.2481749Z test crates/xsd/src/datatype.rs - datatype::XsdDatatype::from_iri (line 216) ... ok
+2026-10-08T12:56:52.2482503Z test crates/xsd/src/exact/mod.rs - exact (line 19) ... ok
+2026-10-08T12:56:52.2483188Z test crates/xsd/src/datatype.rs - datatype::XsdDatatype::admits_integer (line 385) ... ok
+2026-10-08T12:56:52.2487097Z test crates/xsd/src/exact/cost.rs - exact::cost::Shape (line 258) ... ok
+2026-10-08T12:56:52.2495916Z test crates/xsd/src/ieee/mod.rs - ieee (line 107) ... ok
+2026-10-08T12:56:52.2496410Z test crates/xsd/src/exact/rounding.rs - exact::rounding::DivisionPolicy::from_str (line 186) ... ok
+2026-10-08T12:56:52.2496938Z test crates/xsd/src/json_number.rs - json_number::JsonNumber (line 108) ... ok
+2026-10-08T12:56:52.2497454Z test crates/xsd/src/numeric.rs - numeric::Decimal::from_integer (line 164) ... ok
+2026-10-08T12:56:52.2497816Z test crates/xsd/src/lib.rs - (line 173) ... ok
+2026-10-08T12:56:52.2498266Z test crates/xsd/src/numeric.rs - numeric::Decimal::from_f64_closest (line 189) ... ok
+2026-10-08T12:56:52.2507114Z test crates/xsd/src/numeric.rs - numeric::numeric_add (line 1114) ... ok
+2026-10-08T12:56:52.2507738Z test crates/xsd/src/numeric.rs - numeric::numeric_div_with_policy (line 1385) ... ok
+2026-10-08T12:56:52.2518421Z test crates/xsd/src/numeric.rs - numeric::numeric_div (line 1348) ... ok
+2026-10-08T12:56:52.2519021Z test crates/xsd/src/numeric.rs - numeric::numeric_total_cmp (line 782) ... ok
+2026-10-08T12:56:52.2519592Z test crates/xsd/src/ops.rs - ops::effective_boolean_value (line 240) ... ok
+2026-10-08T12:56:52.2521116Z test crates/xsd/src/ops.rs - ops::value_add (line 420) ... ok
+2026-10-08T12:56:52.2521696Z test crates/xsd/src/ops.rs - ops::value_div (line 570) ... ok
+2026-10-08T12:56:52.2529725Z test crates/xsd/src/ops.rs - ops::value_cmp (line 30) ... ok
+2026-10-08T12:56:52.2530318Z test crates/xsd/src/ops.rs - ops::value_eq (line 216) ... ok
+2026-10-08T12:56:52.2531042Z test crates/xsd/src/ops.rs - ops::value_equal (line 186) ... ok
+2026-10-08T12:56:52.2531747Z test crates/xsd/src/ops.rs - ops::value_mul (line 515) ... ok
+2026-10-08T12:56:52.2532288Z test crates/xsd/src/ops.rs - ops::value_sub (line 465) ... ok
+2026-10-08T12:56:52.2538753Z test crates/xsd/src/ops.rs - ops::value_unary_minus (line 635) ... ok
+2026-10-08T12:56:52.2539415Z test crates/xsd/src/range.rs - range::cardinality (line 279) ... ok
+2026-10-08T12:56:52.2540127Z test crates/xsd/src/ops.rs - ops::value_total_cmp (line 135) ... ok
+2026-10-08T12:56:52.2540895Z test crates/xsd/src/range.rs - range (line 87) ... ok
+2026-10-08T12:56:52.2552495Z test crates/xsd/src/range.rs - range::counterexample (line 386) ... ok
+2026-10-08T12:56:52.2558017Z test crates/xsd/src/range.rs - range::containment (line 357) ... ok
+2026-10-08T12:56:52.2558535Z test crates/xsd/src/range.rs - range::is_exactly_decided (line 313) ... ok
+2026-10-08T12:56:52.2558992Z test crates/xsd/src/range.rs - range::contains (line 251) ... ok
+2026-10-08T12:56:52.2560111Z test crates/xsd/src/range.rs - range::satisfiability (line 224) ... ok
+2026-10-08T12:56:52.2560613Z test crates/xsd/src/temporal.rs - temporal::Duration::new (line 169) ... ok
+2026-10-08T12:56:52.2561190Z test crates/xsd/src/range.rs - range::same_value (line 421) ... ok
+2026-10-08T12:56:52.2568827Z test crates/xsd/src/temporal.rs - temporal::add_duration_to_date (line 2743) ... ok
+2026-10-08T12:56:52.2571952Z test crates/xsd/src/temporal.rs - temporal::add_duration_to_time (line 2795) ... ok
+2026-10-08T12:56:52.2576164Z test crates/xsd/src/temporal.rs - temporal::add_durations (line 3212) ... ok
+2026-10-08T12:56:52.2576884Z test crates/xsd/src/temporal.rs - temporal::add_duration_to_datetime (line 2676) ... ok
+2026-10-08T12:56:52.2585912Z test crates/xsd/src/temporal.rs - temporal::add_duration_to_gregorian (line 2855) ... ok
+2026-10-08T12:56:52.2587197Z test crates/xsd/src/temporal.rs - temporal::divide_durations (line 3343) ... ok
+2026-10-08T12:56:52.2589199Z test crates/xsd/src/temporal.rs - temporal::negate_duration (line 2647) ... ok
+2026-10-08T12:56:52.2589801Z test crates/xsd/src/temporal.rs - temporal::duration_equal (line 1420) ... ok
+2026-10-08T12:56:52.2590520Z test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_date (line 2774) ... ok
+2026-10-08T12:56:52.2598648Z test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_datetime (line 2721) ... ok
+2026-10-08T12:56:52.2599633Z test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_gregorian (line 2898) ... ok
+2026-10-08T12:56:52.2608606Z test crates/xsd/src/value.rs - value::XsdError::code (line 495) ... ok
+2026-10-08T12:56:52.2609313Z test crates/xsd/src/temporal.rs - temporal::subtract_duration_from_time (line 2826) ... ok
+2026-10-08T12:56:52.2610508Z test crates/xsd/src/temporal.rs - temporal::subtract_durations (line 3239) ... ok
+2026-10-08T12:56:52.2611378Z test crates/xsd/src/value.rs - value::XsdValue::datatype (line 102) ... ok
+2026-10-08T12:56:52.2611902Z test crates/xsd/src/value.rs - value::XsdError::presentation (line 648) ... ok
+2026-10-08T12:56:52.2612671Z test crates/xsd/src/value.rs - value::XsdValue::canonical_lexical (line 206) ... ok
+2026-10-08T12:56:52.2613268Z test crates/xsd/src/value.rs - value::parse (line 250) ... ok
+2026-10-08T12:56:52.2618445Z test crates/xsd/src/value.rs - value::parse_xsd10 (line 351) ... ok
+2026-10-08T12:56:52.2618791Z test crates/xsd/src/value.rs - value::parse_by_iri (line 378) ... ok
+2026-10-08T12:56:52.2618942Z 
+2026-10-08T12:56:52.2619148Z test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+2026-10-08T12:56:52.2619341Z 
+2026-10-08T12:56:52.2632640Z all doctests ran in 0.24s; merged doctests compilation took 0.22s
+2026-10-08T12:56:52.2644399Z [1m[92m   Doc-tests[0m wasm_link
+2026-10-08T12:56:52.2856898Z 
+2026-10-08T12:56:52.2857259Z running 0 tests
+2026-10-08T12:56:52.2857383Z 
+2026-10-08T12:56:52.2857614Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:56:52.2857840Z 
+2026-10-08T12:56:52.2915370Z + cargo build --workspace --locked --examples --profile test
+2026-10-08T12:56:52.3619806Z [1m[92m   Compiling[0m purrdf-cli v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cli)
+2026-10-08T12:56:52.3620858Z [1m[92m   Compiling[0m purrdf-envelope-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/envelope-probe)
+2026-10-08T12:56:52.3622088Z [1m[92m   Compiling[0m purrdf-bench v3.0.1 (/home/runner/work/purrdf/purrdf/crates/bench)
+2026-10-08T12:56:52.6182888Z [1m[92m   Compiling[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+2026-10-08T12:56:52.7592732Z [1m[92m   Compiling[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+2026-10-08T12:56:52.7657202Z [1m[92m   Compiling[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+2026-10-08T12:56:52.7973382Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-08T12:56:54.4172516Z [1m[92m   Compiling[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+2026-10-08T12:56:55.7113843Z [1m[92m   Compiling[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+2026-10-08T12:56:57.8143247Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-08T12:57:02.3922881Z [1m[92m   Compiling[0m helper-census v3.0.1 (/home/runner/work/purrdf/purrdf/crates/helper-census)
+2026-10-08T12:57:18.0832637Z [1m[92m   Compiling[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+2026-10-08T12:57:18.5459872Z [1m[92m   Compiling[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+2026-10-08T12:57:19.0752466Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-08T12:57:19.1985145Z [1m[92m   Compiling[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+2026-10-08T12:57:19.6292556Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-08T12:57:22.1832628Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-08T12:57:35.3406805Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 43.03s
+2026-10-08T12:57:35.3707655Z + cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance
+2026-10-08T12:57:35.4292462Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-08T12:57:35.4293330Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-08T12:57:36.6226872Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 1.23s
+2026-10-08T12:57:36.6289676Z [1m[92m     Running[0m unittests examples/text_relevance.rs (target/debug/build/purrdf-retrieval/037e2b1b25696028/out/text_relevance-037e2b1b25696028)
+2026-10-08T12:57:36.6298029Z 
+2026-10-08T12:57:36.6298462Z running 6 tests
+2026-10-08T12:57:36.6301523Z test tests::arguments_admit_only_complete_modes ... ok
+2026-10-08T12:57:36.6303249Z test tests::bounded_grades_preserve_the_metric_law ... ok
+2026-10-08T12:57:36.6303674Z test tests::every_reference_resolves_before_scoring ... ok
+2026-10-08T12:57:36.6304151Z test tests::duplicate_identities_and_contradictory_judgments_are_refused ... ok
+2026-10-08T12:57:36.6304639Z test tests::externally_supplied_grades_cannot_overflow_gain ... ok
+2026-10-08T12:57:36.6305113Z test tests::malformed_corpora_and_aggregate_name_collision_are_refused ... ok
+2026-10-08T12:57:36.6305362Z 
+2026-10-08T12:57:36.6305654Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:57:36.6305947Z 
+2026-10-08T12:57:36.6315003Z 
+2026-10-08T12:57:36.6315241Z running 4 tests
+2026-10-08T12:57:36.6316432Z [1m[92m     Running[0m unittests examples/graphql_oracle_fixture.rs (target/debug/build/purrdf-shapes/413878bca24726cb/out/graphql_oracle_fixture-413878bca24726cb)
+2026-10-08T12:57:36.6317726Z test json_model::tests::insert_sorted_places_a_new_member_and_replaces_an_existing_one ... ok
+2026-10-08T12:57:36.6318276Z test json_model::tests::interpolated_values_convert_by_reference ... ok
+2026-10-08T12:57:36.6318845Z test json_model::tests::object_literals_come_out_in_name_order_with_the_last_repeat ... ok
+2026-10-08T12:57:36.6329352Z test tests::validates_with_its_metaschema_and_names_it_when_absent ... ok
+2026-10-08T12:57:36.6329616Z 
+2026-10-08T12:57:36.6330130Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:57:36.6330319Z 
+2026-10-08T12:57:36.6332093Z [1m[92m     Running[0m unittests examples/typescript_oracle_fixture.rs (target/debug/build/purrdf-shapes/fe542593a11acaec/out/typescript_oracle_fixture-fe542593a11acaec)
+2026-10-08T12:57:36.6341316Z 
+2026-10-08T12:57:36.6341404Z running 4 tests
+2026-10-08T12:57:36.6343714Z test json_model::tests::insert_sorted_places_a_new_member_and_replaces_an_existing_one ... ok
+2026-10-08T12:57:36.6344381Z test json_model::tests::interpolated_values_convert_by_reference ... ok
+2026-10-08T12:57:36.6344891Z test json_model::tests::object_literals_come_out_in_name_order_with_the_last_repeat ... ok
+2026-10-08T12:57:36.6355729Z test tests::validates_with_its_metaschema_and_names_it_when_absent ... ok
+2026-10-08T12:57:36.6355981Z 
+2026-10-08T12:57:36.6356281Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-10-08T12:57:36.6356565Z 
+2026-10-08T12:57:36.6471390Z Post job cleanup.
+2026-10-08T12:57:36.7294379Z Post job cleanup.
+2026-10-08T12:57:36.9495244Z (node:7777) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-08T12:57:36.9495730Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-08T12:57:36.9645929Z Post job cleanup.
+2026-10-08T12:57:37.0178636Z [command]/usr/bin/git version
+2026-10-08T12:57:37.0207670Z git version 2.55.0
+2026-10-08T12:57:37.0228409Z Temporarily overriding HOME='/home/runner/work/_temp/d2acbffa-93e5-4b16-ba16-b17ec4da8b35' before making global git config changes
+2026-10-08T12:57:37.0229457Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-08T12:57:37.0231848Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-08T12:57:37.0255991Z Removing SSH command configuration
+2026-10-08T12:57:37.0259749Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-08T12:57:37.0312124Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-08T12:57:37.0494705Z Removing HTTP extra header
+2026-10-08T12:57:37.0497850Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-08T12:57:37.0521144Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-08T12:57:37.0693371Z Removing includeIf entries pointing to credentials config files
+2026-10-08T12:57:37.0697803Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-08T12:57:37.0720162Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-08T12:57:37.1016176Z Cleaning up orphan processes

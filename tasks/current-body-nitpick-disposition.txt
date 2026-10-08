@@ -1,0 +1,7 @@
+Disposition of the three optional suggestions in the earlier formal review:
+
+- A second cross-law occurrence cache would add retained state and synchronization. The current cache admits only an exact law/source/provenance match and otherwise reconstructs the source model; mixed-law correctness and same-law prepared reuse are verified. We decline the additional cache without evidence that its retention and synchronization cost improves this workload.
+- The dated infer_complete convenience door constructs an owned transient preparation for admission; the default Legacy door directly executes. We retain the current preparation ownership and admission boundary. This cold convenience-path optimization is not necessary for the complete report contract or its measured prepared-report costs.
+- The potential and declared lists serve dated admission and existing grouping respectively. They currently enumerate the same names in source order; potential is dated-only and precedes argument evaluation, while declared is constructed after successful argument evaluation. We retain the qualified allocation and admission order rather than apply the suggested unconditional hoist. No declaration mismatch is accepted.
+
+These are declined optional optimizations/refactoring suggestions, not deferred defects. Both actionable correctness findings are repaired and resolved, and the completed exact-head review reports no new actionable comments.

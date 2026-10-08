@@ -1,0 +1,22 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/402-shacl-profiles-reports/crates/shapes)
+    Finished `bench` profile [optimized] target(s) in 1m 41s
+     Running benches/shared_views.rs (/opt/.cargo/slots/c902e014beabc781/0/build/release/build/purrdf-shapes/30e069dcbf566063/out/shared_views-30e069dcbf566063)
+SHACL rows=100 shared=[ShaclViewStats { mapped_terms: 0, auxiliary_bytes: 0, materializations: 0 }, ShaclViewStats { mapped_terms: 0, auxiliary_bytes: 0, materializations: 0 }] delta=[ShaclViewStats { mapped_terms: 105, auxiliary_bytes: 5040, materializations: 0 }, ShaclViewStats { mapped_terms: 105, auxiliary_bytes: 5040, materializations: 0 }] snapshot=ViewStats { retained_sources: 2, retained_terms: 108, retained_rows: 201, retained_payload_bytes: 8718, auxiliary_bytes: 352, work: ViewWork { copied_terms: 4, copied_rows: 1, copied_text_bytes: 94, copied_index_bytes: 56, freezes: 1, materializations: 0 } }
+SHACL rows=10000 shared=[ShaclViewStats { mapped_terms: 0, auxiliary_bytes: 0, materializations: 0 }, ShaclViewStats { mapped_terms: 0, auxiliary_bytes: 0, materializations: 0 }] delta=[ShaclViewStats { mapped_terms: 10005, auxiliary_bytes: 480240, materializations: 0 }, ShaclViewStats { mapped_terms: 10005, auxiliary_bytes: 480240, materializations: 0 }] snapshot=ViewStats { retained_sources: 2, retained_terms: 10008, retained_rows: 20001, retained_payload_bytes: 849318, auxiliary_bytes: 352, work: ViewWork { copied_terms: 4, copied_rows: 1, copied_text_bytes: 94, copied_index_bytes: 56, freezes: 1, materializations: 0 } }
+shacl_complete_reports/legacy/cold_bind/core time:   [1.123 µs 1.128 µs 1.135 µs]  mad: 22.93 ns  (100 samples × 38313 iterations)
+                         outliers: 23 of 100 (6 low severe, 4 low mild, 0 high mild, 13 high severe)
+shacl_complete_reports/complete/cold_bind/core time:   [12.26 µs 12.33 µs 12.38 µs]  mad: 171.9 ns  (100 samples × 3394 iterations)
+shacl_complete_reports/legacy/warm_report/core time:   [100.8 µs 101.4 µs 101.6 µs]  mad: 1.130 µs  (100 samples × 493 iterations)
+                         outliers: 1 of 100 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+shacl_complete_reports/complete/warm_report/core time:   [107.9 µs 108.0 µs 108.2 µs]  mad: 447.2 ns  (100 samples × 467 iterations)
+                         outliers: 15 of 100 (5 low severe, 10 low mild, 0 high mild, 0 high severe)
+shacl_complete_reports/legacy/cold_bind/select time:   [1.007 µs 1.036 µs 1.089 µs]  mad: 97.00 ns  (100 samples × 40848 iterations)
+                         outliers: 3 of 100 (0 low severe, 0 low mild, 2 high mild, 1 high severe)
+shacl_complete_reports/complete/cold_bind/select time:   [25.96 µs 26.29 µs 26.69 µs]  mad: 579.8 ns  (100 samples × 1087 iterations)
+                         outliers: 8 of 100 (0 low severe, 0 low mild, 1 high mild, 7 high severe)
+shacl_complete_reports/legacy/warm_report/select time:   [485.0 µs 487.2 µs 489.5 µs]  mad: 6.251 µs  (100 samples × 104 iterations)
+                         outliers: 13 of 100 (0 low severe, 3 low mild, 3 high mild, 7 high severe)
+shacl_complete_reports/complete/warm_report/select time:   [660.4 µs 663.1 µs 665.1 µs]  mad: 6.597 µs  (100 samples × 77 iterations)
+                         outliers: 2 of 100 (1 low severe, 1 low mild, 0 high mild, 0 high severe)
+
+8 benchmarks measured; 0 failed
