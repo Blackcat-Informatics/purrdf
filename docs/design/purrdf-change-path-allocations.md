@@ -63,7 +63,7 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 | `sh:sparql` constraint | 40 |
 | custom `sh:ask` component | 78 |
 | custom `sh:select` component | 48 |
-| `sh:expression` function call | 101 |
+| `sh:expression` function call | 85 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -77,7 +77,15 @@ delta-backed view whose pattern probe is type-erased:
 | `sh:sparql` constraint, governed | 58 |
 | custom `sh:ask` component, governed | 98 |
 | custom `sh:select` component, governed | 66 |
-| `sh:expression` function call, governed | 126 |
+| `sh:expression` function call, governed | 110 |
+
+Short BIND loops stay on the sequential evaluator path rather than constructing
+a worker context and converting its output. On the expression fixture this
+reduces the ungoverned term from 101 to 85 allocations per focus node, and the
+governed term from 126 to 110. The exact allocation pins retain their zero
+tolerance at every population. The ungoverned runs request 5,737,974 bytes at
+1,280 focus nodes and 11,496,054 at 2,560; governed runs request 12,312,682,
+24,646,010 and 49,312,650 bytes at 1,280, 2,560 and 5,120 nodes respectively.
 
 Until that second table existed the governed lane's per-focus-node term was
 measured by nothing at all, so a regression in it was invisible to every pin in

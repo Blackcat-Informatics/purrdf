@@ -231,6 +231,70 @@ fn subjects(result: &SparqlResult) -> Vec<String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity() {
+    use purrdf_core::{SparqlEngine, TermValue};
+
+    const ROWS: usize = 2_048;
+    let dataset = support::governor_workloads::loop_dataset(ROWS);
+    let query = "SELECT ?v ?x WHERE {
+        ?s <https://example.org/v> ?v
+        BIND(IF(?v = 0, ?missing, ?v * 2 + 1) AS ?x)
+    }";
+    let expected: Vec<_> = (0..ROWS)
+        .map(|index| {
+            let value = u32::try_from(index % 100).expect("fixture values fit u32");
+            vec![
+                Some(TermValue::integer(value)),
+                (value != 0).then(|| TermValue::integer(value * 2 + 1)),
+            ]
+        })
+        .collect();
+    let mut baseline = None;
+    for workers in [1, 4, 32] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .expect("BIND pool");
+        let (plain, governed, consumed, errors) = pool.install(|| {
+            let engine = NativeSparqlEngine::new();
+            let (_, plain) =
+                support::solutions(engine.query(&dataset, request(query)).expect("plain BIND"));
+            let outcome = engine
+                .query_governed(
+                    &dataset,
+                    request(query),
+                    QueryOptions::EMPTY,
+                    &QueryGovernors::METERED,
+                )
+                .expect("metered BIND");
+            let evidence = outcome.evidence();
+            let consumed = ResourceDimension::ALL.map(|dimension| evidence.consumed_in(dimension));
+            let errors = evidence.expression_errors().to_vec();
+            let GovernedOutcome::Complete { result, .. } = outcome else {
+                panic!("the BIND fixture must complete");
+            };
+            let (_, governed) = support::solutions(result);
+            (plain, governed, consumed, errors)
+        });
+        assert_eq!(
+            plain, expected,
+            "every projected bound/unbound row, including duplicates"
+        );
+        assert_eq!(
+            governed, expected,
+            "governed conversion preserves the same bag"
+        );
+        if let Some((prior_consumed, prior_errors)) = &baseline {
+            assert_eq!(&consumed, prior_consumed, "all governor dimensions agree");
+            assert_eq!(&errors, prior_errors, "expression errors agree");
+        } else {
+            baseline = Some((consumed, errors));
+        }
+    }
+}
+
 /// The frozen graph a graph-producing query returned.
 fn graph_of(result: &SparqlResult) -> &Arc<RdfDataset> {
     match result {
@@ -1353,6 +1417,49 @@ fn answer_cap_stops_the_scan_rather_than_materializing_everything() {
 // ---------------------------------------------------------------------------
 // Admission: the refusal that happens before the first charge
 // ---------------------------------------------------------------------------
+
+#[test]
+fn bookkeeping_cell_limit_retains_saturated_forecast_refusal() {
+    let mut query = String::from("SELECT * WHERE { ");
+    for index in 0..22 {
+        use std::fmt::Write;
+        write!(query, "?s{index} <http://example.org/p> ?o{index} . ").expect("write query");
+    }
+    query.push('}');
+    // The disjoint product estimate saturates. Fuel zero also ensures that an
+    // accidentally missing admission check could never materialize this product.
+    let outcome = NativeSparqlEngine::new()
+        .query_governed(
+            &fixture(),
+            request(&query),
+            QueryOptions::EMPTY,
+            &QueryGovernors::METERED.with_fuel(0),
+        )
+        .expect("a forecast refusal is an outcome");
+    assert_eq!(
+        outcome.tripped(),
+        Some(TrippedGovernor::Refused {
+            dimension: ResourceDimension::IntermediateCells,
+            limit: u64::MAX - 1,
+            estimate: u64::MAX,
+        })
+    );
+    for dimension in ResourceDimension::ALL {
+        assert_eq!(outcome.evidence().consumed_in(dimension), 0);
+    }
+    assert_eq!(
+        row_count(
+            outcome
+                .exhausted()
+                .expect("refused")
+                .partial
+                .result()
+                .expect("empty certain answer")
+                .result()
+        ),
+        0
+    );
+}
 
 #[test]
 fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {

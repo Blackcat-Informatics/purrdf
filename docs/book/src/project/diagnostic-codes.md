@@ -219,28 +219,31 @@ publishes no answer, an update changes nothing, and a validation writes no repor
 the refusal never becomes an unbound value, a `false` filter or a conforming
 graph. The C ABI reports it as `PURRDF_STATUS_REGEX_RESOURCE_ERROR` (13).
 
-The bounds refuse only measured classes of work. A pattern without a
-backreference matches in time linear in its input. Measured per input byte at
-the production bounds, most searches cost 1 to 3.2 matcher steps:
+The bounds apply to every pattern. For a fixed pattern without a backreference,
+matching is linear in input length, but its cost can depend on repetition counts.
+The following measured searches cost 1 to 3.2 matcher steps per input byte at
+the production bounds:
 - literal and single-character runs;
 - counted repetitions such as `(ab){1,1000}c` or `(\w+\s){3,5}zzz`;
 - whole-input group matches such as `^([a-z]+ ?)+$`;
 - searches with several unbounded runs, such as `node.*graph.*zzz`.
 
-A step costs about 3.5 to 11 ns, so such a search is refused only past about
-74 to 83 MiB of input. A few patterns cost a larger constant per byte when
-the match itself is located (SPARQL `REPLACE`, for example), while a yes-or-no
-test of the same pattern still costs about one step per byte:
+A step cost about 3.5 to 11 ns on the measured host. The low-cost measured
+searches reached about 74 to 83 MiB before step refusal; this is not a universal
+input threshold or timing guarantee. Large finite or nested repetitions can
+reach step or storage bounds on much shorter input, including yes-or-no tests.
+Locating the match itself (SPARQL `REPLACE`, for example) also costs more in
+these measured examples:
 - `(a|aa){1,100000}b` costs about 98 steps per byte, so it is refused past
   about 2.5 MiB of match;
 - `(|a){18446744073709551616}b`, an empty-preferring body below a minimum
   beyond 64 bits, costs about 250, so it is refused past about 1 MiB.
 
 A counted repetition nested in another, both with bodies that can repeat
-empty, keeps one entry per count value. With both counts near the storage
-bound, as in `((a?){100000}){100000}`, it is refused by the storage bound,
-and a search for the match of `((a?){1000}){1000}b` over 100 KB by the step
-bound. A backreference keeps the backtracking matcher, whose exponential
+empty, keeps one entry per count value. Storage depends on the combination of
+counts: `((a?){100000}){100000}` is one measured storage refusal, not a minimum
+count threshold. Searching for the match of `((a?){1000}){1000}b` over 100 KB
+reaches the step bound. A backreference keeps the backtracking matcher, whose exponential
 exploration (`^(a|aa)*c\1$` over forty `a`) the step bound refuses after
 about 3 s of work.
 
@@ -250,9 +253,9 @@ about 3 s of work.
 | `xpath-compile-steps` | `Resource::CompileSteps`: compiling the pattern needs more compiler operations, scanned characters and set operations included, than the bound (4,000,000). | Simplify the pattern, for example its character-class arithmetic. |
 | `xpath-program-nodes` | `Resource::ProgramNodes`: the compiled program needs more nodes than the bound (262,144). | Simplify the pattern or reduce its counted repetitions. |
 | `xpath-compile-slots` | `Resource::CompileSlots`: building the program needs more construction cells than the bound (2,097,152). | Simplify the pattern or reduce its counted repetitions. |
-| `xpath-match-steps` | `Resource::MatchSteps`: matching needs more matcher operations, search advances and compared code points included, than the bound (250,000,000). It stops a backreference program whose backtracking grows exponentially, input beyond about 74 to 83 MiB, and the costlier match searches described above. | Remove the backreference, or the ambiguous repetition around the group it repeats, or match shorter input. |
+| `xpath-match-steps` | `Resource::MatchSteps`: matching needs more matcher operations, search advances and compared code points included, than the bound (250,000,000). Refusal depends on the pattern and input, including backtracking, large finite repetitions and the measured searches described above. | Remove the backreference, simplify repetition, or match shorter input. |
 | `xpath-match-states` | `Resource::MatchStates`: matching needs more simultaneously pending alternative states than the bound (65,536). | Reduce the pattern's alternation and repetition. |
-| `xpath-match-slots` | `Resource::MatchSlots`: the live states, captures and continuations need more cells than the bound (1,048,576). Ordinary patterns hold a few hundred cells whatever the input length; nested counted repetitions with empty-capable bodies and counts near the bound reach it. | Reduce the pattern's captures and repetition, or match shorter input. |
+| `xpath-match-slots` | `Resource::MatchSlots`: the live states, captures and continuations need more cells than the bound (1,048,576). The measured low-cost patterns hold a few hundred cells independently of input length; nested empty-capable repetitions can reach the bound depending on their combination of counts. | Reduce the pattern's captures and repetition, or match shorter input. |
 | `xpath-output-bytes` | `Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB). | Replace over shorter input or with shorter replacement text. |
 
 ## `reasoning-*` — SPARQL under an entailment regime (`purrdf`)

@@ -9,6 +9,9 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod boundary_joins;
+#[cfg(target_os = "linux")]
+pub mod governor_counts;
+pub mod governor_workloads;
 pub mod segmented;
 
 use std::collections::BTreeMap;

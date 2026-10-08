@@ -40,53 +40,10 @@ mod support;
 
 use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
-use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
-};
+use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
+use support::governor_workloads::{GROUPED, grouped_answer, numeric_dataset};
 use support::squaring_chain;
-
-/// Row count.
-const ROWS: usize = 20_000;
-
-/// Group count of the `group` lanes.
-const GROUPS: usize = 5_000;
-
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const EX: &str = "https://example.org/";
-
-/// Per row `n`: `ex:i` an integer below a million, `ex:d` a decimal with up to
-/// four fractional digits, `ex:b` a forty-digit integer, and `ex:g` one of
-/// [`GROUPS`] groups.
-fn numeric_dataset() -> Arc<RdfDataset> {
-    let mut b = RdfDatasetBuilder::new();
-    let p_i = b.intern_iri(&format!("{EX}i"));
-    let p_d = b.intern_iri(&format!("{EX}d"));
-    let p_b = b.intern_iri(&format!("{EX}b"));
-    let p_g = b.intern_iri(&format!("{EX}g"));
-    let groups: Vec<_> = (0..GROUPS)
-        .map(|g| b.intern_iri(&format!("{EX}group{g}")))
-        .collect();
-    for n in 0..ROWS {
-        let s = b.intern_iri(&format!("{EX}row{n}"));
-        let i = (n * 7919) % 1_000_000;
-        let int = b.intern_literal(RdfLiteral::typed(i.to_string(), XSD_INTEGER));
-        b.push_quad(s, p_i, int, None);
-        let dec = b.intern_literal(RdfLiteral::typed(
-            format!("{}.{:04}", i % 1000, (n * 31) % 10_000),
-            XSD_DECIMAL,
-        ));
-        b.push_quad(s, p_d, dec, None);
-        let big = b.intern_literal(RdfLiteral::typed(
-            format!("{}{:020}", 10_000_000_000_000_000_000_u128 + n as u128, i),
-            XSD_INTEGER,
-        ));
-        b.push_quad(s, p_b, big, None);
-        b.push_quad(s, p_g, groups[n % GROUPS], None);
-    }
-    b.freeze().expect("freeze numeric dataset")
-}
 
 const IN_RANGE: &[(&str, &str)] = &[
     (
@@ -216,13 +173,10 @@ fn bench_exact(c: &mut Bench) {
     group.finish();
 }
 
-const GROUPED: &str = "PREFIX ex: <https://example.org/> SELECT ?g (SUM(?b * ?b) AS ?t) \
-                       WHERE { ?s ex:b ?b ; ex:g ?g } GROUP BY ?g";
-
 fn bench_group_by(c: &mut Bench) {
     let ds = numeric_dataset();
     let engine = NativeSparqlEngine::new();
-    assert_eq!(run(&engine, &ds, GROUPED), GROUPS, "one row per group");
+    let expected = grouped_answer(&engine, &ds, None);
     let lanes = [
         ("fuel", QueryGovernors::UNBOUNDED.with_fuel(1_000_000_000)),
         (
@@ -232,9 +186,10 @@ fn bench_group_by(c: &mut Bench) {
         ("metered", QueryGovernors::METERED),
     ];
     for (label, governors) in &lanes {
-        assert!(
-            governed(&engine, &ds, GROUPED, governors),
-            "the grouped fold completes {label}"
+        assert_eq!(
+            grouped_answer(&engine, &ds, Some(governors)),
+            expected,
+            "all group SUM values agree {label}"
         );
     }
     let mut group = c.benchmark_group("numeric_eval_group");

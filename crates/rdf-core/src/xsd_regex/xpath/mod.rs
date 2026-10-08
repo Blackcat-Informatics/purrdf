@@ -162,8 +162,8 @@ impl Limits {
     ///   `(ab){2,50}c`, `(ab|cd){1,20}e`, `((a|b){3}){5,9}c`,
     ///   `((a|b){2}){2,5}c`, `(a|b){1,30}c`, `(a|b){3,9}c`,
     ///   `(\w+\s){3,5}zzz` over 128 KiB to 4 MiB) and searches with several
-    ///   unbounded runs, whatever the number of live counts, since each
-    ///   position's state was seen before; a position whose state is new
+    ///   unbounded runs in these measured fixtures, where each position's
+    ///   state was seen before; a position whose state is new
     ///   costs its closure, about 95 steps for `(a|b){100000}c`;
     /// * a search for the match itself adds one reverse step per byte from the
     ///   end of the input, and one more for every stretch the walk reaches;
@@ -182,20 +182,22 @@ impl Limits {
     /// iterations a position needs, costs about 98 steps per byte, and an
     /// empty-preferring body below a minimum beyond `u64`,
     /// `(|a){18446744073709551616}b`, about 250 per byte of its match. The
-    /// machines keep a few states and a few hundred cells for ordinary
-    /// patterns independent of the input length, beside a reverse state every
-    /// 16 KiB, so the state and storage bounds admit any ordinary input. A
+    /// measured patterns keep a few states and a few hundred cells independent
+    /// of the input length, beside a reverse state every 16 KiB. These figures
+    /// do not establish admission for every finite repetition: large or nested
+    /// counts can reach the step or storage bounds on much shorter input. A
     /// count of a counted repetition nested in another that both can repeat
-    /// empty iterations is kept one entry per value, so two such counts of
-    /// about the storage bound or more, `((a?){100000}){100000}`, are refused
-    /// by the storage bound.
+    /// empty iterations is kept one entry per value. Its storage depends on
+    /// the combination of counts; `((a?){100000}){100000}` is one measured
+    /// storage refusal, not a minimum count threshold.
     ///
     /// A step costs 3.5 to 11 ns: 6.8 ns in the set machine at a cached
     /// position (one hash probe) and 3.5 ns at a new one, 3.7 to 10.5 ns in the
     /// reverse scan and walk of a search for a match, and 6.8 to 10.9 ns in the
-    /// backtracking machine. The step bound therefore admits the linear-time
-    /// machines' searches over more than 64 MiB of input in under three
-    /// seconds, and refuses the exponential exploration that only a
+    /// backtracking machine on the measured host. The measured low-cost
+    /// searches admitted more than 64 MiB of input in under three seconds;
+    /// this is neither a universal input threshold nor a timing guarantee.
+    /// The step bound also refuses the exponential exploration that only a
     /// backreference can still reach, `^(a|aa)*c\1$` over forty `a`, after
     /// 2.7 s of work.
     #[must_use]

@@ -18,7 +18,7 @@
 
 mod support;
 
-use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{ResourceDimension, SparqlRequest, SparqlResult, TermValue, TrippedGovernor};
 use purrdf_sparql_eval::{
     AggregateRegistry, ExtensionEnv, GovernedOutcome, NativeSparqlEngine, QueryGovernors,
@@ -150,7 +150,10 @@ fn a_products_growing_scale_is_charged_for_memory_before_it_allocates() {
     );
     // Thirty-two squarings would render 0.1^(2^32): four billion digits.
     let ceiling = QueryGovernors::UNBOUNDED.with_max_scratch_bytes(8 << 20);
-    let window = WholeProcessWindow::open();
+    // Empty WHERE supplies one row through every BIND and the projection. The
+    // production parallel gate rejects these singleton bags and exact XSD math is
+    // synchronous, so count this caller's allocations without sibling-test traffic.
+    let window = CurrentThreadWindow::open();
     let outcome = governed(&squaring("0.1", 32), QueryOptions::EMPTY, &ceiling);
     let measured = window.close();
     assert!(

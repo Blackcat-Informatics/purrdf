@@ -772,9 +772,13 @@ impl ScratchInterner {
     /// forked loop's worker takes one per block of the loop's items, so a block's worker
     /// costs no copy of the evaluation's arena however large that has grown.
     pub(crate) fn over(shared: &std::sync::Arc<Self>) -> Self {
+        let shared_len = shared.computed_count();
         Self {
-            shared: Some(std::sync::Arc::clone(shared)),
-            shared_len: shared.computed_count(),
+            // No id can reach an ancestor with zero terms. Retain its byte/blank-label
+            // state below, but avoid that empty lookup layer. Keep the local tables
+            // fresh even if the snapshot has a large index retained after clear().
+            shared: (shared_len > 0).then(|| std::sync::Arc::clone(shared)),
+            shared_len,
             blank_labels: shared.blank_labels.clone(),
             track_blank_labels: shared.track_blank_labels,
             minted_bytes: shared.minted_bytes,
@@ -948,6 +952,86 @@ mod tests {
         let o = b.intern_iri("https://example.org/o");
         b.push_quad(s, p, o, None);
         b.freeze().expect("freeze")
+    }
+
+    #[test]
+    fn empty_shared_arena_flattens_without_copying_retained_index_or_losing_mint_state() {
+        use std::sync::Arc;
+        let ds = dataset_with_one_iri();
+        let mut parent = ScratchInterner::default();
+        // Workspace reuse keeps the grown index while removing all stored terms.
+        for index in 0..512 {
+            parent.intern(&ds, TermValue::integer(index));
+        }
+        parent.clear();
+        assert_eq!(parent.computed_count(), 0);
+        assert!(parent.index.capacity() >= 512);
+        parent.reserve_blank_identity("input", purrdf_core::BlankScope::DEFAULT);
+        let ghost = TermValue::Blank {
+            label: "ghost".to_owned(),
+            scope: purrdf_core::BlankScope::DEFAULT,
+        };
+        parent.count_worker_mint(purrdf_hash::fixed::hash_one(&ghost), ghost.clone());
+        assert!(parent.ghosts.iter().any(Option::is_some));
+        let inherited = parent.minted_bytes();
+        assert_eq!(parent.claim_uncharged_growth(), inherited);
+        let mut copy = parent.clone();
+        let snapshot = Arc::new(parent.clone());
+        assert!(snapshot.index.capacity() >= 512);
+        let mut worker = ScratchInterner::over(&snapshot);
+        assert!(worker.shared.is_none());
+        assert_eq!(
+            worker.index.capacity(),
+            0,
+            "no retained bucket copy per worker"
+        );
+        assert_eq!(worker.minted_bytes(), inherited);
+        assert!(worker.blank_label_is_reserved("input"));
+        assert!(worker.blank_label_is_reserved("ghost"));
+        assert!(worker.ghosts.is_empty() && copy.ghosts.is_empty());
+        assert_eq!(
+            worker.claim_uncharged_growth(),
+            copy.claim_uncharged_growth()
+        );
+        for value in [ghost.clone(), TermValue::integer(9_000), ghost.clone()] {
+            let expected = copy.intern(&ds, value.clone());
+            let actual = worker.intern(&ds, value);
+            assert_eq!(actual, expected);
+            assert_eq!(worker.value_of(&ds, actual), copy.value_of(&ds, expected));
+            assert_eq!(worker.minted_bytes(), copy.minted_bytes());
+            assert_eq!(
+                worker.claim_uncharged_growth(),
+                copy.claim_uncharged_growth()
+            );
+        }
+        let mints = worker.take_values_from(0);
+        assert_eq!(
+            mints,
+            copy.take_values_from(0),
+            "same ordered harvest and hashes"
+        );
+        for (hash, value) in mints {
+            parent.count_worker_mint(hash, value);
+        }
+        let before = parent.minted_bytes();
+        parent.intern(&ds, ghost.clone());
+        assert_eq!(
+            parent.minted_bytes(),
+            before,
+            "parent ghost counted only once"
+        );
+        let nonempty = Arc::new(parent);
+        let mut child = ScratchInterner::over(&nonempty);
+        assert!(Arc::ptr_eq(
+            child.shared.as_ref().expect("inherited term"),
+            &nonempty
+        ));
+        assert_eq!(
+            child.intern(&ds, ghost),
+            SolutionTerm::Computed(ScratchId::from_index(0))
+        );
+        assert_eq!(child.computed_count(), 1);
+        assert_eq!(child.take_values_from(1), []);
     }
 
     #[test]

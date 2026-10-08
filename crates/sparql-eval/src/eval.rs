@@ -1383,9 +1383,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// `None` is the zero-cost lane: the dimension is not engaged, the schema is empty
     /// (zero cells however many unit rows it carries), or the ceiling cannot be reached by
-    /// a `usize`-addressable allocation on this target. Callers branch on this once before
-    /// entering their row loop, so an ungoverned execution keeps its existing allocation
-    /// and parallel path byte-for-byte.
+    /// a representable outer `Vec<Solution<D::Id>>` allocation on this target. Callers
+    /// branch on this once before
+    /// entering their row loop, so ungoverned execution has no per-row cell-bound
+    /// checks and keeps the normal parallel geometry.
     ///
     /// This only computes the inclusive bound; it does not record a trip. A producer must
     /// continue until it encounters the first qualifying row past this count, call
@@ -1403,7 +1404,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
         let columns = u64::try_from(columns).unwrap_or(u64::MAX);
         let rows = state.limits().get(dimension) / columns;
-        usize::try_from(rows).ok()
+        let rows = usize::try_from(rows).ok()?;
+        // Every consumer materializes an outer solution vector. A row bound whose
+        // allocation layout is impossible cannot be reached by a valid bag. This only
+        // removes the allocation cut: engaged observations and forecast admission still
+        // compare against the actual cell limit, including bookkeeping ceilings.
+        std::alloc::Layout::array::<crate::solution::Solution<D::Id>>(rows)
+            .is_ok()
+            .then_some(rows)
     }
 
     /// Enter `pattern` as the node being evaluated, returning the cursors to restore.
@@ -1971,6 +1979,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         point: Option<crate::governor::ChargePoint>,
         units: u64,
     ) -> Result<(), TrippedGovernor> {
+        self.poll_deferred_work(units)?;
+        deferral.charge_fuel(point, units, self.deferral_mark(deferral))
+    }
+
+    /// Report deferred work to the stop signal before admitting its fuel.
+    fn poll_deferred_work(&self, units: u64) -> Result<(), TrippedGovernor> {
         if let Some(state) = self.governors.as_ref()
             && let Some(cause) = state.poll_stop_after(units)
         {
@@ -1978,7 +1992,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                 .tripped()
                 .unwrap_or(TrippedGovernor::Stopped { cause }));
         }
-        deferral.charge_fuel(point, units, self.deferral_mark(deferral))
+        Ok(())
     }
 
     /// The size of the worker's own arena now, recorded with a deferred charge so that a
@@ -2017,6 +2031,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if self.exact_deferral.is_none() {
             self.expression_barrier.record(tripped);
         }
+    }
+
+    /// Whether the loop needs ordered small blocks and shared speculative-spend limits.
+    /// Bookkeeping ceilings still record ordered charges, but do not require workers to
+    /// advance together towards a caller's fuel or scratch bound.
+    pub(crate) fn needs_bounded_loop_blocks(&self) -> bool {
+        self.governors.as_ref().is_some_and(|state| {
+            state
+                .caller_ceiling(purrdf_core::ResourceDimension::Fuel)
+                .is_some()
+                || state
+                    .caller_ceiling(purrdf_core::ResourceDimension::ScratchBytes)
+                    .is_some()
+        })
     }
 
     /// Whether a governed loop whose items charge from inside their own evaluation may
@@ -2596,6 +2624,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         // A worker of a forked row loop defers the charge to the loop's ordered commit:
         // charged here, it would land in the shared counters in schedule order.
         if let Some(deferral) = &self.exact_deferral {
+            if deferral.owns_arena() {
+                self.poll_deferred_work(cost.work())?;
+                return deferral.charge_numeric(
+                    crate::governor::ChargePoint::RowExpressionEvaluation,
+                    cost.work(),
+                    self.scratch.computed_count(),
+                    cost.bytes(),
+                );
+            }
             self.charge_deferred(
                 deferral,
                 Some(crate::governor::ChargePoint::RowExpressionEvaluation),
@@ -4238,6 +4275,42 @@ mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::{Child, NamedNode};
+
+    #[test]
+    fn cell_row_ceiling_checks_inclusive_layout_without_disengaging_observations() {
+        use crate::{QueryGovernors, Solution};
+
+        let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+        let largest =
+            usize::try_from(isize::MAX).expect("addressable layout bound") / size_of::<Solution>();
+        assert!(std::alloc::Layout::array::<Solution>(largest).is_ok());
+        assert!(std::alloc::Layout::array::<Solution>(largest + 1).is_err());
+        let largest_limit = u64::try_from(largest).expect("layout bound fits the governor");
+        for (limit, columns, expected) in [
+            (0, 1, Some(0)),
+            (10, 3, Some(3)),
+            (10, 0, None),
+            (largest_limit, 1, Some(largest)),
+            (largest_limit + 1, 1, None),
+        ] {
+            let governors = QueryGovernors::UNBOUNDED.with_max_intermediate_cells(limit);
+            let ctx =
+                EvalCtx::new(&dataset).with_governors(Arc::new(GovernorState::new(&governors)));
+            assert_eq!(ctx.cell_row_ceiling(columns), expected);
+        }
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let ctx = EvalCtx::new(&dataset).with_governors(Arc::clone(&state));
+        assert!(state.is_engaged_in(dimension));
+        assert_eq!(ctx.cell_row_ceiling(1), None);
+        assert_eq!(ctx.cell_row_ceiling(3), None);
+        ctx.observe_cells(7, 3).expect("bookkeeping observation");
+        assert_eq!(state.evidence().consumed_in(dimension), 21);
+        ctx.observe_cells(4, 3).expect("smaller bag observation");
+        assert_eq!(state.evidence().consumed_in(dimension), 21, "peak, not sum");
+        let ctx = EvalCtx::new(&dataset);
+        assert_eq!(ctx.cell_row_ceiling(1), None);
+    }
 
     #[test]
     fn temporary_positive_numbering_is_once_per_correlated_copy() {
