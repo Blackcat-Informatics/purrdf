@@ -1411,14 +1411,64 @@ fn lanes(receipts: &[Value]) -> IoResult<Vec<String>> {
     Ok(lanes)
 }
 
-fn coverage(receipts: &[Value]) -> IoResult<Vec<String>> {
-    let mut targets = Vec::new();
+#[derive(Debug, PartialEq, Eq)]
+struct Coverage {
+    targets: Vec<String>,
+    dependencies: Vec<String>,
+}
+
+fn coverage(receipts: &[Value]) -> IoResult<Coverage> {
+    let mut result = Coverage {
+        targets: Vec::new(),
+        dependencies: Vec::new(),
+    };
     for receipt in receipts {
+        let members = receipt
+            .pointer("/context/identity/target_inventory/workspace_members")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("admitted workspace member identities missing"))?
+            .iter()
+            .map(|member| {
+                member
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| invalid("invalid admitted workspace member identity"))
+            })
+            .collect::<IoResult<Vec<_>>>()?;
+        if members.is_empty() {
+            return Err(invalid("admitted workspace member inventory is empty"));
+        }
         for artifact in receipt
             .pointer("/context/cargo/compiler_artifacts")
             .and_then(Value::as_array)
             .ok_or_else(|| invalid("compiled target coverage missing"))?
         {
+            let package = artifact
+                .get("package_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| invalid("compiled package identity missing"))?;
+            let targets = if members.contains(&package) {
+                &mut result.targets
+            } else if let Some((source, version)) = package.split_once('#') {
+                if version.is_empty() {
+                    return Err(invalid("compiled package version identity missing"));
+                }
+                if source.starts_with("registry+https://") || source.starts_with("git+https://") {
+                    &mut result.dependencies
+                } else if source.starts_with("path+file://$SOURCE/") {
+                    // The separate preserve-order consumer is not a workspace
+                    // member. Keep its first-party targets just as strict.
+                    &mut result.targets
+                } else {
+                    return Err(invalid(format!(
+                        "unknown compiled package identity: {package}"
+                    )));
+                }
+            } else {
+                return Err(invalid(format!(
+                    "unknown compiled package identity: {package}"
+                )));
+            };
             let mut target = Object::new();
             for key in ["package_id", "target", "features"] {
                 target.insert(
@@ -1432,9 +1482,45 @@ fn coverage(receipts: &[Value]) -> IoResult<Vec<String>> {
             targets.push(json::write_compact(&target.into()));
         }
     }
-    targets.sort();
-    targets.dedup();
-    Ok(targets)
+    for targets in [&mut result.targets, &mut result.dependencies] {
+        targets.sort();
+        targets.dedup();
+    }
+    Ok(result)
+}
+
+fn extra_dependencies(before: &Coverage, after: &Coverage, change: &str) -> IoResult<Vec<Value>> {
+    if before.targets != after.targets {
+        return Err(invalid(
+            "actual compiled workspace/path target/features coverage differs",
+        ));
+    }
+    if change != "native-partition" {
+        if before.dependencies != after.dependencies {
+            return Err(invalid(
+                "actual compiled dependency target/features coverage differs",
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    if before
+        .dependencies
+        .iter()
+        .any(|target| after.dependencies.binary_search(target).is_err())
+    {
+        return Err(invalid(
+            "partition is missing a baseline compiled dependency variant",
+        ));
+    }
+    // Separate package selections can compile an additional external feature
+    // variant. Its full time remains measured; it cannot replace any baseline
+    // variant or excuse a missing workspace/consumer target.
+    after
+        .dependencies
+        .iter()
+        .filter(|target| before.dependencies.binary_search(target).is_err())
+        .map(|target| json::read(target).map_err(|error| invalid(error.to_string())))
+        .collect()
 }
 
 pub(crate) fn compare(input: &Path) -> IoResult<()> {
@@ -1483,11 +1569,8 @@ pub(crate) fn compare(input: &Path) -> IoResult<()> {
             validate_pair(a, b, &policy.change)?;
         }
     }
-    if coverage(&before)? != coverage(&after)? {
-        return Err(invalid(
-            "actual combined compiled target/features coverage differs",
-        ));
-    }
+    let additional_dependencies =
+        extra_dependencies(&coverage(&before)?, &coverage(&after)?, &policy.change)?;
     let before_ns = before.iter().try_fold(0_u128, |sum, receipt| {
         sum.checked_add(valid_receipt(receipt)?)
             .ok_or_else(|| invalid("aggregate duration overflow"))
@@ -1502,6 +1585,7 @@ pub(crate) fn compare(input: &Path) -> IoResult<()> {
         .with("change", policy.change).with("before", policy.before).with("after", policy.after)
         .with("before_aggregate_command_ns", before_ns.to_string()).with("after_aggregate_command_ns", after_ns.to_string())
         .with("aggregate_reduction_observed", after_ns < before_ns)
+        .with("additional_after_dependency_variants", additional_dependencies)
         .with("critical_path", "NOT MEASURED: aggregate durations do not establish hosted six-runner wall time")
         .with("rust_cost", "combined preparation/code generation/linking and test execution; see Cargo timing reports, never subtraction-derived pure link time").into();
     std::fs::write(policy.output, json::write_pretty(&summary))
@@ -2034,7 +2118,10 @@ pub(crate) mod tests {
                 "effective_build_configuration",
                 "jobs8 target=$ARM/target build=$ARM/build",
             )
-            .with("target_inventory", vec!["all workspace target inventory"])
+            .with(
+                "target_inventory",
+                Value::from(Object::new().with("workspace_members", vec!["purrdf"])),
+            )
             .into();
         let request: Value = Object::new()
             .with("warmth", "cold")
@@ -2100,6 +2187,99 @@ pub(crate) mod tests {
         *b.pointer_mut("/phases/0/name").unwrap() = "cancelled-before-completion".into();
         assert!(valid_receipt(&b).is_err());
         assert!(valid_receipt(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn partition_coverage_keeps_workspace_and_every_baseline_dependency_variant() {
+        let holder = purrdf_testkit::temp_dir!().unwrap();
+        let mut before = receipt(holder.path());
+        let mut dependency = before
+            .pointer("/context/cargo/compiler_artifacts/0")
+            .unwrap()
+            .clone();
+        *dependency.get_mut("package_id").unwrap() =
+            "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4".into();
+        *dependency.get_mut("features").unwrap() = vec!["alloc", "default", "race", "std"].into();
+        before
+            .pointer_mut("/context/cargo/compiler_artifacts")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(dependency.clone());
+        let mut consumer = dependency.clone();
+        *consumer.get_mut("package_id").unwrap() = "path+file://$SOURCE/crates/jsonschema/tests/preserve_order_consumer#purrdf-jsonschema-preserve-order-consumer@0.0.0".into();
+        before
+            .pointer_mut("/context/cargo/compiler_artifacts")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(consumer);
+        let baseline = coverage(&[before.clone()]).unwrap();
+        let mut after = before.clone();
+        *dependency.get_mut("features").unwrap() = Vec::<Value>::new().into();
+        after
+            .pointer_mut("/context/cargo/compiler_artifacts")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(dependency.clone());
+        let partition = coverage(&[after.clone()]).unwrap();
+        assert_eq!(
+            extra_dependencies(&baseline, &partition, "native-partition").unwrap(),
+            vec![Value::from(
+                Object::new()
+                    .with("package_id", dependency.get("package_id").unwrap().clone())
+                    .with("target", dependency.get("target").unwrap().clone())
+                    .with("features", dependency.get("features").unwrap().clone())
+            )]
+        );
+        for change in ["none", "nested-profile"] {
+            assert!(extra_dependencies(&baseline, &partition, change).is_err());
+        }
+        for removed in [0, 1, 2] {
+            let mut missing = after.clone();
+            missing
+                .pointer_mut("/context/cargo/compiler_artifacts")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+                .remove(removed);
+            assert!(
+                extra_dependencies(
+                    &baseline,
+                    &coverage(&[missing]).unwrap(),
+                    "native-partition"
+                )
+                .is_err()
+            );
+        }
+        let mut changed_consumer = after.clone();
+        *changed_consumer
+            .pointer_mut("/context/cargo/compiler_artifacts/2/features")
+            .unwrap() = vec!["changed-consumer-feature"].into();
+        assert!(
+            extra_dependencies(
+                &baseline,
+                &coverage(&[changed_consumer]).unwrap(),
+                "native-partition"
+            )
+            .is_err()
+        );
+        *after
+            .pointer_mut("/context/cargo/compiler_artifacts/0/features")
+            .unwrap() = vec!["changed-workspace-feature"].into();
+        assert!(
+            extra_dependencies(&baseline, &coverage(&[after]).unwrap(), "native-partition")
+                .is_err()
+        );
+        *before
+            .pointer_mut("/context/cargo/compiler_artifacts/0/package_id")
+            .unwrap() = "unknown-package".into();
+        assert!(coverage(&[before.clone()]).is_err());
+        *before
+            .pointer_mut("/context/identity/target_inventory/workspace_members")
+            .unwrap() = Value::Null;
+        assert!(coverage(&[before]).is_err());
     }
 
     #[test]
