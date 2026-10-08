@@ -62,9 +62,13 @@ fn balanced(bytes: &[u8], at: usize, open: u8, close: u8) -> Option<usize> {
             continue;
         }
         if open == b'(' && matches!(ch, b'\'' | b'"') {
+            // CommonMark 0.31.2 §6.3 separates destination/title by spaces,
+            // tabs and up to one line ending, not Unicode whitespace or FF.
+            // https://spec.commonmark.org/0.31.2/#links
             if quote == Some(ch) {
                 quote = None;
-            } else if quote.is_none() && depth == 1 && bytes[pos - 1].is_ascii_whitespace() {
+            } else if quote.is_none() && depth == 1 && purrdf_lex::terminals::is_ws(bytes[pos - 1])
+            {
                 quote = Some(ch);
             }
         }
@@ -110,9 +114,14 @@ pub(super) fn project(text: &str) -> Surface {
         let delimiter = matches!(marker, Some(b'`' | b'~')) && width >= 3;
         if let Some((ch, min)) = fence {
             mask(&mut prose, offset, offset + bytes.len());
+            // CommonMark 0.31.2 §4.5 permits only spaces/tabs after the
+            // closing fence. CR/LF here terminate this physical line.
+            // https://spec.commonmark.org/0.31.2/#fenced-code-blocks
             if marker == Some(ch)
                 && width >= min
-                && trimmed[width..].iter().all(u8::is_ascii_whitespace)
+                && trimmed[width..]
+                    .iter()
+                    .all(|&byte| purrdf_lex::terminals::is_ws(byte))
             {
                 fence = None;
                 mask(&mut visible, offset, offset + bytes.len());
@@ -241,6 +250,21 @@ mod tests {
         assert!(result.visible.contains("RDF"));
         assert_eq!(result.prose.len(), text.len());
         assert_eq!(result.prose.lines().count(), text.lines().count());
+    }
+
+    #[test]
+    fn form_feed_is_neither_title_separator_nor_fence_closing_space() {
+        // Markdown's space/tab and physical CR/LF do not include form feed.
+        assert_eq!(
+            balanced(b"(url\x0c\"title)tail\")", 0, b'(', b')'),
+            Some(12)
+        );
+        assert_eq!(balanced(b"(url \"title)tail\")", 0, b'(', b')'), Some(18));
+        let text = "```\n资料类型\n```\x0c\n具名图\n```\nvisible\n";
+        let result = project(text);
+        assert!(!result.prose.contains("资料类型"));
+        assert!(!result.prose.contains("具名图"));
+        assert!(result.prose.contains("visible"));
     }
 
     #[test]

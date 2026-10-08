@@ -11,12 +11,6 @@ const GATE: &str = "cargo run -q --locked -p helper-census -- --glossary-gate";
 const PO: &str = "docs/book/po/zh-Hans.po";
 const GLOSSARY: &str = "docs/book/po/glossary-zh-Hans.md";
 
-fn write(root: &Path, relative: &str, text: &str) {
-    let path = root.join(relative);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
-}
-
 fn git(root: &Path, args: &[&str]) {
     let mut command = Command::new("git");
     for name in [
@@ -74,11 +68,12 @@ fn external_inputs_and_content_selected_renamed_markdown() {
     let root = fixture.path().join("repository");
     std::fs::create_dir(&root).unwrap();
     git(&root, &["init", "-q"]);
-    write(
-        &root,
-        PO,
-        &std::fs::read_to_string(source.join(PO)).unwrap(),
-    );
+    std::fs::create_dir_all(root.join("docs/book/po")).unwrap();
+    std::fs::write(
+        root.join(PO),
+        std::fs::read_to_string(source.join(PO)).unwrap(),
+    )
+    .unwrap();
     let external_po = fixture.path().join("external.po");
     let external_glossary = fixture.path().join("external-glossary.md");
     std::fs::copy(source.join(GLOSSARY), &external_glossary).unwrap();
@@ -87,11 +82,11 @@ fn external_inputs_and_content_selected_renamed_markdown() {
         "msgid \"RDF toolkit\"\nmsgstr \"RDF 工具包。\"\n",
     )
     .unwrap();
-    write(
-        &root,
-        "not-language-named.md",
+    std::fs::write(
+        root.join("not-language-named.md"),
         "普通中文。\n```text\n资料类型\n具名图\n```\n普通中文。\n",
-    );
+    )
+    .unwrap();
     git(&root, &["add", "."]);
     assert_verdict(
         &scan(&root, &external_po, &external_glossary),
@@ -105,13 +100,13 @@ fn external_inputs_and_content_selected_renamed_markdown() {
         true,
         "1 tracked translated Markdown",
     );
-    write(&root, "renamed.md", "普通中文。资料类型。\n");
+    std::fs::write(root.join("renamed.md"), "普通中文。资料类型。\n").unwrap();
     assert_verdict(
         &scan(&root, &external_po, &external_glossary),
         false,
         "renamed.md:1:",
     );
-    write(&root, "renamed.md", "普通中文。\n");
+    std::fs::write(root.join("renamed.md"), "普通中文。\n").unwrap();
     std::fs::write(&external_po, "msgid \"RDF toolkit\"\nmsgstr \"工具包。\"\n").unwrap();
     assert_verdict(
         &scan(&root, &external_po, &external_glossary),
@@ -138,14 +133,15 @@ fn production_parity_refuses_missing_native_glossary_callers() {
         root.join("scripts/check-gate-parity.py"),
     )
     .unwrap();
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
     for entry in std::fs::read_dir(source.join(".github/workflows")).unwrap() {
         let entry = entry.unwrap();
         let relative = format!(".github/workflows/{}", entry.file_name().to_str().unwrap());
-        write(
-            root,
-            &relative,
-            &std::fs::read_to_string(entry.path()).unwrap(),
-        );
+        std::fs::write(
+            root.join(relative),
+            std::fs::read_to_string(entry.path()).unwrap(),
+        )
+        .unwrap();
     }
     let parity = || {
         Command::new("python3")
@@ -153,20 +149,24 @@ fn production_parity_refuses_missing_native_glossary_callers() {
             .output()
             .unwrap()
     };
-    write(root, "Makefile", &makefile);
+    std::fs::write(root.join("Makefile"), &makefile).unwrap();
     assert_verdict(&parity(), true, "hygiene gates");
-    write(root, "Makefile", &makefile.replace(GATE, "true"));
+    std::fs::write(root.join("Makefile"), makefile.replace(GATE, "true")).unwrap();
     assert_verdict(&parity(), false, "helper-census --glossary-gate");
     // The docs job reaches check-i18n transitively; omit only that occurrence,
     // preserving make check's native gate to exercise the reverse direction.
     let split = makefile.find("check-i18n:").unwrap();
     let (before, after) = makefile.split_at(split);
-    write(
-        root,
-        "Makefile",
-        &format!("{before}{}", after.replacen(GATE, "true", 1)),
-    );
+    std::fs::write(
+        root.join("Makefile"),
+        format!("{before}{}", after.replacen(GATE, "true", 1)),
+    )
+    .unwrap();
     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yaml")).unwrap();
-    write(root, ".github/workflows/ci.yaml", &ci.replace(GATE, "true"));
+    std::fs::write(
+        root.join(".github/workflows/ci.yaml"),
+        ci.replace(GATE, "true"),
+    )
+    .unwrap();
     assert_verdict(&parity(), false, "helper-census --glossary-gate");
 }
