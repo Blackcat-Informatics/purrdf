@@ -100,8 +100,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetMut, GraphExistenceMode, GraphMatchValue, MutableDataset, QuadValues, RdfDataset,
-    RdfDiagnostic, ResourceDimension, TermValue, TrippedGovernor,
+    BlankScope, DatasetMut, GraphExistenceMode, GraphMatchValue, MutableDataset, QuadValues,
+    RdfDataset, RdfDiagnostic, RecordValues, ResourceDimension, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_algebra::{
     GraphTarget, GraphUpdateOperation, NamedNodePattern, QuadPattern, Update, UsingClause,
@@ -496,7 +496,8 @@ fn apply_operation(
             destination,
             m,
             resolver,
-            cfg.governors,
+            cfg,
+            bnode_counter,
         ),
         GraphUpdateOperation::Clear { silent, target } => {
             clear_or_drop(target, m, *silent, false, cfg.governors)
@@ -938,8 +939,10 @@ fn load(
     destination: &GraphTarget,
     m: &mut MutableDataset,
     resolver: Option<&dyn GraphResolver>,
-    governors: Option<&Arc<GovernorState>>,
+    cfg: &UpdateEvalConfig<'_>,
+    counter: &mut u64,
 ) -> Result<(), UpdateAbort> {
+    let governors = cfg.governors;
     let Some(resolver) = resolver else {
         let message = format!("LOAD <{source}> needs a GraphResolver host seam, none was provided");
         return silence_or_fail(
@@ -986,19 +989,20 @@ fn load(
         }
     };
 
-    // Re-key each loaded quad's graph to the destination (Default → None,
-    // Named(g) → Some(g)). Enumerate the loaded dataset in value space.
     let dest = graph_target_value(destination)?;
-    let view = MutableDataset::new(loaded);
-    let quads = view.quads_for_pattern(None, None, None, GraphMatchValue::Any);
+    let records = purrdf_core::ir::import::record_values(loaded.as_ref())?;
     // The document's size is the host's to choose, not the request's, so this is the one
     // mutation whose magnitude the caller could not have read off the request text. It is
     // charged before a single quad of it lands.
-    charge_mutations(governors, quads.len())?;
-    for q in quads {
-        m.insert(rekey_graph(q, dest.as_ref()))
-            .map_err(|e| iri_abort(&e))?;
+    charge_mutations(governors, records.len())?;
+    let prefix = mutable_mint_prefix(m, cfg.options.bnode_mint_prefix)
+        .or_else(|| cfg.options.bnode_mint_prefix.map(str::to_owned));
+    let records = fresh_load_records(records, dest.as_ref(), counter, prefix.as_deref())?;
+    check_stop(governors)?;
+    for record in records {
+        m.insert_record(&record)?;
     }
+    check_stop(governors)?;
     remember_destination(dest.as_ref(), m)?;
     Ok(())
 }
@@ -1141,12 +1145,12 @@ fn graph_op_add(
     if !admit_graph(source, m, silent)? || source == destination {
         return Ok(());
     }
-    let src = quads_of_target(source, m);
+    let src = records_of_target(source, m)?;
     let dest = graph_target_value(destination)?;
     charge_mutations(governors, src.len())?;
-    for q in src {
-        m.insert(rekey_graph(q, dest.as_ref()))
-            .map_err(|e| iri_abort(&e))?;
+    for mut record in src {
+        record.quad.g.clone_from(&dest);
+        m.insert_record(&record)?;
     }
     remember_destination(dest.as_ref(), m)?;
     Ok(())
@@ -1168,13 +1172,13 @@ fn graph_op_copy(
         return Ok(());
     }
     let dest = graph_target_value(destination)?;
-    let src = quads_of_target(source, m);
+    let src = records_of_target(source, m)?;
     // The destination clear charges its own removals; this charges the copy.
     clear_target(destination, m, governors)?;
     charge_mutations(governors, src.len())?;
-    for q in src {
-        m.insert(rekey_graph(q, dest.as_ref()))
-            .map_err(|e| iri_abort(&e))?;
+    for mut record in src {
+        record.quad.g.clone_from(&dest);
+        m.insert_record(&record)?;
     }
     remember_destination(dest.as_ref(), m)?;
     Ok(())
@@ -1200,18 +1204,19 @@ fn graph_op_move(
         return Ok(());
     }
     let dest = graph_target_value(destination)?;
-    let src = quads_of_target(source, m);
+    let src = records_of_target(source, m)?;
     // The destination clear charges its own removals; a MOVE then touches every source
     // quad twice — once to write it at the destination, once to remove it from the source
     // — and is charged for both, because both are mutations the store performs.
     clear_target(destination, m, governors)?;
     charge_mutations(governors, src.len().saturating_mul(2))?;
-    for q in &src {
-        m.insert(rekey_graph(q.clone(), dest.as_ref()))
-            .map_err(|e| iri_abort(&e))?;
+    for record in &src {
+        let mut copied = record.clone();
+        copied.quad.g.clone_from(&dest);
+        m.insert_record(&copied)?;
     }
-    for q in &src {
-        m.remove(q);
+    for record in &src {
+        m.remove_record(record);
     }
     remember_destination(dest.as_ref(), m)?;
     withdraw_declarations(source, m, governors)?;
@@ -1226,7 +1231,7 @@ fn mutable_mint_prefix(destination: &MutableDataset, requested: Option<&str>) ->
     destination_mint_prefix(requested, |prefix| {
         destination
             .visit_blank_identities(|label, scope| {
-                if scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix) {
+                if scope == BlankScope::DEFAULT && label.starts_with(prefix) {
                     ControlFlow::Break(())
                 } else {
                     ControlFlow::Continue(())
@@ -1355,14 +1360,145 @@ fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
     Ok(Some(QuadValues { s, p, o, g }))
 }
 
-/// Re-key a quad's graph slot to `dest` (`None` = default graph).
-fn rekey_graph(q: QuadValues, dest: Option<&TermValue>) -> QuadValues {
-    QuadValues {
-        s: q.s,
-        p: q.p,
-        o: q.o,
-        g: dest.cloned(),
+/// Snapshot exact physical source records before any destination mutation.
+fn records_of_target(
+    target: &GraphTarget,
+    m: &MutableDataset,
+) -> Result<Vec<RecordValues>, RdfDiagnostic> {
+    match target {
+        GraphTarget::Default => m.records_for_pattern(None, None, None, GraphMatchValue::Default),
+        GraphTarget::Named(n) => m.records_for_pattern(
+            None,
+            None,
+            None,
+            GraphMatchValue::Named(&named_node_to_value(n)),
+        ),
+        GraphTarget::NamedGraphs => Ok(m
+            .records_for_pattern(None, None, None, GraphMatchValue::Any)?
+            .into_iter()
+            .filter(|record| record.quad.g.is_some())
+            .collect()),
+        GraphTarget::All => m.records_for_pattern(None, None, None, GraphMatchValue::Any),
     }
+}
+
+/// Translate one resolved document, sharing its fresh identities across every carrier.
+/// Source graph names are discarded: only identities referenced by S/P/O are minted.
+fn fresh_load_records(
+    records: Vec<RecordValues>,
+    destination: Option<&TermValue>,
+    counter: &mut u64,
+    prefix: Option<&str>,
+) -> Result<Vec<RecordValues>, RdfDiagnostic> {
+    let mut blanks: DetHashMap<(String, BlankScope), String> = DetHashMap::default();
+    let mut pairs = Vec::new();
+    for record in &records {
+        for term in [&record.quad.s, &record.quad.p, &record.quad.o] {
+            let _: ControlFlow<()> = term.visit_blank_identities(|label, scope| {
+                let pair = (label.to_owned(), scope);
+                if !blanks.contains_key(&pair) {
+                    blanks.insert(pair.clone(), String::new());
+                    pairs.push(pair);
+                }
+                ControlFlow::Continue(())
+            });
+        }
+    }
+    let exhausted = || {
+        RdfDiagnostic::error(
+            "native-sparql-load-blank-capacity",
+            "LOAD document exceeds the remaining request blank-node counter capacity",
+        )
+    };
+    let count = u64::try_from(pairs.len()).map_err(|_| exhausted())?;
+    let end = counter.checked_add(count).ok_or_else(exhausted)?;
+    for pair in pairs {
+        *counter += 1; // The complete batch was admitted above.
+        blanks.insert(pair, crate::eval::minted_label(prefix, "c", *counter));
+    }
+    debug_assert_eq!(*counter, end);
+    records
+        .into_iter()
+        .map(|mut record| {
+            record.quad.s = fresh_load_term(record.quad.s, &blanks)?;
+            record.quad.p = fresh_load_term(record.quad.p, &blanks)?;
+            record.quad.o = fresh_load_term(record.quad.o, &blanks)?;
+            record.quad.g = destination.cloned();
+            Ok(record)
+        })
+        .collect()
+}
+
+/// Fold nested terms through the existing owner; only genuine blank carriers change.
+fn fresh_load_term(
+    term: TermValue,
+    blanks: &DetHashMap<(String, BlankScope), String>,
+) -> Result<TermValue, RdfDiagnostic> {
+    use purrdf_core::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
+    let missing = || {
+        RdfDiagnostic::error(
+            "native-sparql-load-blank-map",
+            "LOAD blank identity was not admitted into its document map",
+        )
+    };
+    term.try_fold_owned(
+        |leaf| match leaf {
+            TermValue::Blank { label, scope } => Ok(TermValue::Blank {
+                label: blanks.get(&(label, scope)).ok_or_else(missing)?.clone(),
+                scope: BlankScope::DEFAULT,
+            }),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                let mut failure = None;
+                let rewritten = purrdf_core::cdt_blank::rewrite_cdt_blank_terms(
+                    &lexical_form,
+                    &datatype,
+                    &mut |token| {
+                        let (label, scope) =
+                            decode_blank_label(token, LabelAlphabet::BlankNodeLabel);
+                        if let Some(fresh) = blanks.get(&(label.into_owned(), scope)) {
+                            Some(format!(
+                                "_:{}",
+                                encode_blank_label(
+                                    fresh,
+                                    BlankScope::DEFAULT,
+                                    LabelAlphabet::BlankNodeLabel
+                                )
+                            ))
+                        } else {
+                            failure = Some(missing());
+                            None
+                        }
+                    },
+                );
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                let lexical = match rewritten {
+                    std::borrow::Cow::Borrowed(_) => lexical_form,
+                    std::borrow::Cow::Owned(rewritten) => rewritten,
+                };
+                Ok(TermValue::Literal {
+                    lexical_form: lexical,
+                    datatype,
+                    language,
+                    direction,
+                })
+            }
+            other => Ok(other),
+        },
+        |s, p, o| {
+            Ok(TermValue::Triple {
+                s: s.into(),
+                p: p.into(),
+                o: o.into(),
+            })
+        },
+    )
 }
 
 /// The destination graph VALUE of a graph target (`Default` → `None`, `Named` → the
@@ -1407,6 +1543,84 @@ mod tests {
     use super::*;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::SparqlParser;
+
+    #[test]
+    fn load_counter_admits_complete_batches_or_refuses_before_minting() {
+        let make = |with_blank| RecordValues {
+            kind: purrdf_core::RecordKind::Ordinary,
+            quad: QuadValues {
+                s: if with_blank {
+                    TermValue::blank("b")
+                } else {
+                    TermValue::iri("https://example.org/s")
+                },
+                p: TermValue::iri("https://example.org/p"),
+                o: TermValue::simple_literal("opaque _:b"),
+                g: Some(TermValue::blank("discarded")),
+            },
+        };
+        let mut full = u64::MAX;
+        let records = fresh_load_records(vec![make(false)], None, &mut full, None).unwrap();
+        assert_eq!(full, u64::MAX);
+        assert_eq!(records[0].quad.g, None);
+        assert_eq!(records[0].quad.o, TermValue::simple_literal("opaque _:b"));
+        let error = fresh_load_records(vec![make(true)], None, &mut full, None).unwrap_err();
+        assert_eq!(error.code, "native-sparql-load-blank-capacity");
+        assert_eq!(full, u64::MAX);
+        let mut available = u64::MAX - 1;
+        let records = fresh_load_records(
+            vec![make(true), make(true)],
+            None,
+            &mut available,
+            Some("prefix_"),
+        )
+        .unwrap();
+        assert_eq!(available, u64::MAX);
+        assert_eq!(
+            records[0].quad.s, records[1].quad.s,
+            "one original pair consumes one identity"
+        );
+        assert_eq!(
+            records[0].quad.s,
+            TermValue::blank(format!("prefix_c{}", u64::MAX))
+        );
+        let mut insufficient = u64::MAX - 1;
+        let mut different = make(true);
+        different.quad.s = TermValue::Blank {
+            label: "b".to_owned(),
+            scope: BlankScope(1),
+        };
+        assert_eq!(
+            fresh_load_records(vec![make(true), different], None, &mut insufficient, None)
+                .unwrap_err()
+                .code,
+            "native-sparql-load-blank-capacity"
+        );
+        assert_eq!(insufficient, u64::MAX - 1);
+    }
+
+    #[test]
+    fn load_map_invariant_refuses_bare_and_composite_missing_identities() {
+        let blanks = DetHashMap::default();
+        for term in [
+            TermValue::blank("missing"),
+            TermValue::Literal {
+                lexical_form: "[_:missing]".to_owned(),
+                datatype: "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List".to_owned(),
+                language: None,
+                direction: None,
+            },
+        ] {
+            assert_eq!(
+                fresh_load_term(term, &blanks).unwrap_err().code,
+                "native-sparql-load-blank-map"
+            );
+        }
+        assert_eq!(
+            fresh_load_term(TermValue::simple_literal("_:missing"), &blanks).unwrap(),
+            TermValue::simple_literal("_:missing")
+        );
+    }
 
     const EX: &str = "http://example.org/";
 

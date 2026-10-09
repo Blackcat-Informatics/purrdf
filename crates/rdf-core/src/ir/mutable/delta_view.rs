@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use super::RecordKind;
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
 use crate::hash::{FastMap, FastSet};
@@ -57,13 +58,16 @@ impl ViewTermId for DeltaViewId {
 pub struct DeltaDatasetView {
     base: Arc<RdfDataset>,
     delta: Arc<RdfDataset>,
-    suppressed: Arc<FastSet<QuadIds>>,
+    suppressed: Arc<FastSet<(RecordKind, QuadIds)>>,
+    /// Generated base-origin records replay through their original indexed segment.
+    /// This is owner-produced provenance, not a reader-side classification rule.
+    converted: Arc<FastSet<(RecordKind, QuadIds)>>,
+    has_converted_ordinary: bool,
+    has_converted_annotations: bool,
     delta_ids: Arc<[DeltaViewId]>,
     base_to_delta: Arc<FastMap<TermId, TermId>>,
     duplicate_reifiers: Arc<FastSet<QuadIds>>,
     duplicate_annotations: Arc<FastSet<QuadIds>>,
-    has_added_reifiers: bool,
-    has_suppressed_reifiers: bool,
     /// Base named graphs the mutation emptied that hold no row of this snapshot.
     /// Probed by membership only; never iterated for order.
     withdrawn_graphs: Arc<FastSet<TermId>>,
@@ -81,7 +85,8 @@ impl DeltaDatasetView {
     pub(super) fn new(
         base: Arc<RdfDataset>,
         delta: Arc<RdfDataset>,
-        suppressed: FastSet<QuadIds>,
+        suppressed: FastSet<(RecordKind, QuadIds)>,
+        converted: FastSet<(RecordKind, QuadIds)>,
         withdrawn_graphs: Arc<FastSet<TermId>>,
         limits: crate::ViewLimits,
     ) -> Result<Self, crate::RdfDiagnostic> {
@@ -95,8 +100,9 @@ impl DeltaDatasetView {
             .saturating_add(
                 suppressed
                     .len()
+                    .saturating_add(converted.len())
                     .saturating_add(delta.rdf_row_count())
-                    .saturating_mul(4 * size_of::<QuadIds>()),
+                    .saturating_mul(4 * size_of::<(RecordKind, QuadIds)>()),
             );
         limits.check(&stats)?;
         let mut lookup = FastMap::default();
@@ -115,16 +121,22 @@ impl DeltaDatasetView {
                 }
             })
             .collect();
-        let has_added_reifiers = delta.reifier_quads().next().is_some();
-        let has_suppressed_reifiers = suppressed
-            .iter()
-            .any(|q| base.reifier_quads_of(q.s).any(|row| row == *q));
+        let mut has_converted_ordinary = false;
+        let mut has_converted_annotations = false;
+        for (kind, _) in &converted {
+            match kind {
+                RecordKind::Ordinary => has_converted_ordinary = true,
+                RecordKind::Annotation => has_converted_annotations = true,
+                RecordKind::Reifier => unreachable!("classification does not create declarations"),
+            }
+        }
         let mut view = Self {
-            has_added_reifiers,
-            has_suppressed_reifiers,
             base,
             delta,
             suppressed: Arc::new(suppressed),
+            converted: Arc::new(converted),
+            has_converted_ordinary,
+            has_converted_annotations,
             delta_ids,
             base_to_delta: Arc::new(base_to_delta),
             duplicate_reifiers: Arc::default(),
@@ -141,7 +153,8 @@ impl DeltaDatasetView {
             copied_text_bytes: view.delta.rdf_text_bytes(),
             copied_index_bytes: view.delta_ids.len() * size_of::<DeltaViewId>()
                 + view.base_to_delta.len() * size_of::<(TermId, TermId)>()
-                + view.suppressed.len() * size_of::<QuadIds>(),
+                + (view.suppressed.len() + view.converted.len())
+                    * size_of::<(RecordKind, QuadIds)>(),
         });
         // Defend the set-union seam against overlapping statement records by
         // probing native subject indexes, without collecting base-sized tables.
@@ -150,9 +163,9 @@ impl DeltaDatasetView {
                 .reifier_quads()
                 .filter(|q| {
                     view.base_quad(view.map_delta(*q)).is_some_and(|base_q| {
-                        view.base
-                            .reifier_quads_of(base_q.s)
-                            .any(|row| row == base_q)
+                        view.base.reifier_quads_of(base_q.s).any(|row| {
+                            row == base_q && !view.suppressed.contains(&(RecordKind::Reifier, row))
+                        })
                     })
                 })
                 .collect(),
@@ -164,14 +177,17 @@ impl DeltaDatasetView {
                     view.base_quad(view.map_delta(*q)).is_some_and(|base_q| {
                         view.base
                             .annotations_of_with_graph(base_q.s)
-                            .any(|(p, o, g)| (p, o, g) == (base_q.p, base_q.o, base_q.g))
+                            .any(|(p, o, g)| {
+                                (p, o, g) == (base_q.p, base_q.o, base_q.g)
+                                    && !view.suppressed.contains(&(RecordKind::Annotation, base_q))
+                            })
                     })
                 })
                 .collect(),
         );
         view.work.add(crate::ViewWork {
             copied_index_bytes: (view.duplicate_reifiers.len() + view.duplicate_annotations.len())
-                * size_of::<QuadIds>(),
+                * size_of::<(RecordKind, QuadIds)>(),
             ..Default::default()
         });
         Ok(view)
@@ -247,57 +263,12 @@ impl DeltaDatasetView {
             .chain(self.delta.named_graphs().map(|id| self.delta_id(id)))
     }
 
-    fn has_reifier(&self, subject: DeltaViewId, graph: Option<DeltaViewId>) -> bool {
-        self.reifier_quads_of(subject).any(|q| q.g == graph)
-    }
-
     pub(super) fn base_quad_is_ordinary(&self, q: QuadIds) -> bool {
-        super::classify_statement(
-            super::StatementKind::Ordinary,
-            !self.suppressed.contains(&q),
-            false,
-            self.has_added_reifiers
-                && self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
-        ) == Some(super::StatementKind::Ordinary)
+        !self.suppressed.contains(&(RecordKind::Ordinary, q))
     }
 
-    fn base_annotation_is_ordinary(&self, q: QuadIds) -> bool {
-        self.has_suppressed_reifiers
-            && super::classify_statement(
-                super::StatementKind::Annotation,
-                !self.suppressed.contains(&q),
-                self.base.reifier_quads_of(q.s).any(|row| row.g == q.g),
-                self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
-            ) == Some(super::StatementKind::Ordinary)
-    }
-    fn demoted_annotation_is_unique(&self, q: QuadIds) -> bool {
-        self.base_annotation_is_ordinary(q)
-            && self
-                .base
-                .quads_for_pattern(
-                    Some(q.s),
-                    Some(q.p),
-                    Some(q.o),
-                    q.g.map_or(GraphMatch::Default, GraphMatch::Named),
-                )
-                .next()
-                .is_none()
-    }
     fn base_annotation_is_retained(&self, q: QuadIds) -> bool {
-        !self.suppressed.contains(&q) && !self.base_annotation_is_ordinary(q)
-    }
-    fn base_quad_is_annotation(&self, q: QuadIds) -> bool {
-        self.has_added_reifiers
-            && super::classify_statement(
-                super::StatementKind::Ordinary,
-                !self.suppressed.contains(&q),
-                false,
-                self.has_reifier(DeltaViewId::Base(q.s), q.g.map(DeltaViewId::Base)),
-            ) == Some(super::StatementKind::Annotation)
-            && !self
-                .base
-                .annotations_of_with_graph(q.s)
-                .any(|(p, o, g)| (p, o, g) == (q.p, q.o, q.g))
+        !self.suppressed.contains(&(RecordKind::Annotation, q))
     }
 
     /// Original immutable base, including its locations and non-RDF sidecars.
@@ -368,7 +339,11 @@ impl DeltaDatasetView {
             .chain(self.delta.reifier_quads())
             .chain(self.delta.annotation_quads())
             .map(|q| self.map_delta(q))
-            .chain(self.suppressed.iter().map(|q| q.map_ids(DeltaViewId::Base)))
+            .chain(
+                self.suppressed
+                    .iter()
+                    .map(|(_, q)| q.map_ids(DeltaViewId::Base)),
+            )
     }
 
     pub(crate) fn lookup_iri(&self, iri: &str) -> Option<DeltaViewId> {
@@ -478,35 +453,62 @@ impl DeltaDatasetView {
                 .as_ref()
                 .quads_for_pattern_with_plan(&plan, q.s, q.p, q.o, q.g)
         }))
+        .filter(|q| !self.delta_is_converted(RecordKind::Ordinary, *q))
         .map(|q| self.map_delta(q));
+        base.chain(self.converted_ordinary(s, p, o, g)).chain(delta)
+    }
+
+    fn delta_is_converted(&self, kind: RecordKind, q: QuadIds) -> bool {
+        self.base_quad(self.map_delta(q))
+            .is_some_and(|base| self.converted.contains(&(kind, base)))
+    }
+
+    fn converted_ordinary(
+        &self,
+        s: Option<DeltaViewId>,
+        p: Option<DeltaViewId>,
+        o: Option<DeltaViewId>,
+        g: GraphMatch<DeltaViewId>,
+    ) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ {
         type Unused = std::iter::Empty<QuadIds>;
-        let ds = self.base.as_ref();
-        let demoted =
-            match (self.has_suppressed_reifiers, s) {
-                (false, _) => Cursor::<_, _, Unused, Unused>::Empty,
-                (true, None) => Cursor::Second(ds.annotation_quads()),
-                (true, Some(id)) => match self.local_id(id, Layer::Base) {
-                    Some(subject) => Cursor::First(ds.annotations_of_with_graph(subject).map(
-                        move |(p, o, g)| QuadIds {
-                            s: subject,
-                            p,
-                            o,
-                            g,
-                        },
-                    )),
-                    None => Cursor::Empty,
-                },
-            };
-        let demoted = demoted
-            .filter(|q| self.demoted_annotation_is_unique(*q))
+        let rows = match (self.has_converted_ordinary, s) {
+            (false, _) => Cursor::<_, _, Unused, Unused>::Empty,
+            (true, None) => Cursor::Second(self.base.annotation_quads()),
+            (true, Some(id)) => match self.local_id(id, Layer::Base) {
+                Some(subject) => Cursor::First(self.base.annotations_of_with_graph(subject).map(
+                    move |(p, o, g)| QuadIds {
+                        s: subject,
+                        p,
+                        o,
+                        g,
+                    },
+                )),
+                None => Cursor::Empty,
+            },
+        };
+        rows.filter(|q| self.converted.contains(&(RecordKind::Ordinary, *q)))
             .map(|q| q.map_ids(DeltaViewId::Base))
             .filter(move |q| {
                 s.is_none_or(|v| q.s == v)
                     && p.is_none_or(|v| q.p == v)
                     && o.is_none_or(|v| q.o == v)
                     && g.matches(q.g)
-            });
-        base.chain(demoted).chain(delta)
+            })
+    }
+
+    fn converted_annotations(
+        &self,
+        s: Option<DeltaViewId>,
+        g: GraphMatch<DeltaViewId>,
+    ) -> impl Iterator<Item = QuadIds<DeltaViewId>> + '_ {
+        optional(
+            self.has_converted_annotations
+                .then(|| self.local_pattern(s, None, None, g, Layer::Base))
+                .flatten()
+                .map(|q| self.base.as_ref().quads_for_pattern(q.s, q.p, q.o, q.g)),
+        )
+        .filter(|q| self.converted.contains(&(RecordKind::Annotation, *q)))
+        .map(|q| q.map_ids(DeltaViewId::Base))
     }
 
     fn local_id(&self, id: DeltaViewId, layer: Layer) -> Option<TermId> {
@@ -602,15 +604,14 @@ impl DatasetView for DeltaDatasetView {
         self.base
             .quads()
             .filter(|q| self.base_quad_is_ordinary(*q))
-            .chain(
-                self.has_suppressed_reifiers
-                    .then_some(self.base.as_ref())
-                    .into_iter()
-                    .flat_map(RdfDataset::annotation_quads)
-                    .filter(|q| self.demoted_annotation_is_unique(*q)),
-            )
             .map(|q| q.map_ids(DeltaViewId::Base))
-            .chain(self.delta.quads().map(|q| self.map_delta(q)))
+            .chain(self.converted_ordinary(None, None, None, GraphMatch::Any))
+            .chain(
+                self.delta
+                    .quads()
+                    .filter(|q| !self.delta_is_converted(RecordKind::Ordinary, *q))
+                    .map(|q| self.map_delta(q)),
+            )
     }
 
     fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
@@ -729,7 +730,7 @@ impl DatasetView for DeltaDatasetView {
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.base
             .reifier_quads()
-            .filter(|q| !self.suppressed.contains(q))
+            .filter(|q| !self.suppressed.contains(&(RecordKind::Reifier, *q)))
             .map(|q| q.map_ids(DeltaViewId::Base))
             .chain(
                 self.delta
@@ -744,7 +745,7 @@ impl DatasetView for DeltaDatasetView {
             self.local_id(reifier, Layer::Base)
                 .map(|id| self.base.reifier_quads_of(id)),
         )
-        .filter(|q| !self.suppressed.contains(q))
+        .filter(|q| !self.suppressed.contains(&(RecordKind::Reifier, *q)))
         .map(|q| q.map_ids(DeltaViewId::Base))
         .chain(
             optional(
@@ -778,7 +779,7 @@ impl DatasetView for DeltaDatasetView {
             self.local_graph(g, Layer::Base)
                 .map(|graph| self.base.reifier_quads_in_graph(graph)),
         )
-        .filter(|q| !self.suppressed.contains(q))
+        .filter(|q| !self.suppressed.contains(&(RecordKind::Reifier, *q)))
         .map(|q| q.map_ids(DeltaViewId::Base))
         .chain(
             optional(
@@ -794,18 +795,15 @@ impl DatasetView for DeltaDatasetView {
         self.base
             .annotation_quads()
             .filter(|q| self.base_annotation_is_retained(*q))
-            .chain(
-                self.has_added_reifiers
-                    .then_some(self.base.as_ref())
-                    .into_iter()
-                    .flat_map(RdfDataset::quads)
-                    .filter(|q| self.base_quad_is_annotation(*q)),
-            )
             .map(|q| q.map_ids(DeltaViewId::Base))
+            .chain(self.converted_annotations(None, GraphMatch::Any))
             .chain(
                 self.delta
                     .annotation_quads()
-                    .filter(|q| !self.duplicate_annotations.contains(q))
+                    .filter(|q| {
+                        !self.duplicate_annotations.contains(q)
+                            && !self.delta_is_converted(RecordKind::Annotation, *q)
+                    })
                     .map(|q| self.map_delta(q)),
             )
     }
@@ -827,23 +825,18 @@ impl DatasetView for DeltaDatasetView {
             self.base
                 .annotation_quads_in_graph(graph)
                 .filter(|q| self.base_annotation_is_retained(*q))
-                .chain(
-                    optional(
-                        self.has_added_reifiers
-                            .then_some(self.base.as_ref())
-                            .map(RdfDataset::quads),
-                    )
-                    .filter(move |q| graph.matches(q.g))
-                    .filter(|q| self.base_quad_is_annotation(*q)),
-                )
         }))
         .map(|q| q.map_ids(DeltaViewId::Base))
+        .chain(self.converted_annotations(None, g))
         .chain(
             optional(
                 self.local_graph(g, Layer::Delta)
                     .map(|graph| self.delta.annotation_quads_in_graph(graph)),
             )
-            .filter(|q| !self.duplicate_annotations.contains(q))
+            .filter(|q| {
+                !self.duplicate_annotations.contains(q)
+                    && !self.delta_is_converted(RecordKind::Annotation, *q)
+            })
             .map(|q| self.map_delta(q)),
         )
     }
@@ -862,11 +855,6 @@ impl DatasetView for DeltaDatasetView {
                     g,
                 })
                 .filter(|q| self.base_annotation_is_retained(*q))
-                .chain(
-                    self.base
-                        .quads_for_pattern(Some(subject), None, None, GraphMatch::Any)
-                        .filter(|q| self.base_quad_is_annotation(*q)),
-                )
         }))
         .map(|q| q.map_ids(DeltaViewId::Base));
         let delta = optional(self.local_id(reifier, Layer::Delta).map(|subject| {
@@ -879,9 +867,14 @@ impl DatasetView for DeltaDatasetView {
                     g,
                 })
         }))
-        .filter(|q| !self.duplicate_annotations.contains(q))
+        .filter(|q| {
+            !self.duplicate_annotations.contains(q)
+                && !self.delta_is_converted(RecordKind::Annotation, *q)
+        })
         .map(|q| self.map_delta(q));
-        base.chain(delta).map(|q| (q.p, q.o, q.g))
+        base.chain(self.converted_annotations(Some(reifier), GraphMatch::Any))
+            .chain(delta)
+            .map(|q| (q.p, q.o, q.g))
     }
 
     fn named_graphs(&self) -> impl Iterator<Item = Self::Id> + '_ {
