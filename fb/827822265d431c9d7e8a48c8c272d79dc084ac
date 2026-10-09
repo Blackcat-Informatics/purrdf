@@ -1,0 +1,21 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 17b22bfdb78c97400d6efbb05b8c46902a090e13
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 505
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/505
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 341ad5ae2cecc5de026047f86dcd1194aff25f10
+GhpRsq-Head-Ref: paudley/308-reduce-native-ci-test-compilation-and-c
+GhpRsq-Head-OID: 17b22bfdb78c97400d6efbb05b8c46902a090e13
+GhpRsq-Result-Tree: 178eee36057e19592841a0aa5a97b6f27daf9581
+GhpRsq-Result-Commit: fb827822265d431c9d7e8a48c8c272d79dc084ac
+GhpRsq-Parent-Hashes: 17b22bfdb78c97400d6efbb05b8c46902a090e13
+GhpRsq-Squash-Notes-SHA256: 8a798adc59b3f3f599fe7476f900b2af25a40de24ede355bb728a3370b3ab22b
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Tree: c92178839964864c00ddb7b0f11c40afc1511a4f
+GhpRsq-Stage-Ref: refs/ghprsq/pr/505/stage
+GhpRsq-Stage-Files: 1580
