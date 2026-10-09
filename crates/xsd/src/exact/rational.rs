@@ -313,7 +313,7 @@ impl Rational {
 
     // ----- resource governance ---------------------------------------------
 
-    /// The larger component's size in base-`1e9` limbs.
+    /// The larger component's size in binary `u64` limbs.
     #[must_use]
     pub fn limb_len(&self) -> u64 {
         self.numerator.limb_len().max(self.denominator.limb_len())

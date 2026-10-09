@@ -72,41 +72,6 @@ const MAX_DECIMAL_EXPONENT: i64 = 100_000;
 /// Sign bit of an `f64` bit pattern.
 const F64_SIGN_BIT: u64 = 1 << 63;
 
-/// `log2(10)` scaled by 10<sup>6</sup> and rounded **down**, so
-/// `k * LOG2_10_E6_FLOOR / 10^6 <= k * log2(10)` for every `k`.
-const LOG2_10_E6_FLOOR: u64 = 3_321_928;
-
-/// `2^bits` as a [`BigInt`].
-fn pow2(bits: u32) -> BigInt {
-    BigInt::one().mul_pow2(bits)
-}
-
-/// Bit length of a non-zero, non-negative [`BigInt`].
-///
-/// The tower's limbs are decimal (base 10<sup>9</sup>), so the bit length is
-/// read off the decimal digit count `d`: the value is at least
-/// 10<sup>d-1</sup>, which is at least 2<sup>k</sup> for the under-estimate
-/// `k = floor((d - 1) * log2(10))`, and below 10<sup>d</sup> < 2<sup>k+5</sup>.
-/// So the answer is one of the few values just above `k`, settled by exact
-/// comparison against successive powers of two.
-fn big_bit_len(magnitude: &BigInt) -> u64 {
-    debug_assert!(
-        !magnitude.is_zero() && !magnitude.is_negative(),
-        "a positive magnitude"
-    );
-    let floor_log2 = (magnitude.decimal_digits() - 1) * LOG2_10_E6_FLOOR / 1_000_000;
-    let mut bits = floor_log2;
-    let mut bound = pow2(u32::try_from(bits).expect("a magnitude below 2^(2^32)"));
-    debug_assert!(&bound <= magnitude, "the estimate never overshoots");
-    loop {
-        bits += 1;
-        bound = bound.mul_small(2);
-        if magnitude < &bound {
-            return bits;
-        }
-    }
-}
-
 /// Builds the magnitude of a non-empty run of ASCII digits split across up to
 /// two slices (the integer and fraction digits of a decimal lexeme).
 ///
@@ -278,7 +243,7 @@ impl Int {
     pub fn bit_len(&self) -> u64 {
         match self.value.as_i128() {
             Some(small) => u64::from(small.unsigned_abs().bit_width()),
-            None => big_bit_len(&self.value.to_bigint().abs()),
+            None => self.value.to_bigint().bit_len(),
         }
     }
 
@@ -311,12 +276,7 @@ impl Int {
                 .map_or_else(|_| Integer::from(magnitude), Integer::from_i128);
             return Self::of(if small < 0 { -shifted } else { shifted });
         }
-        let (quotient, _) = self
-            .value
-            .to_bigint()
-            .div_rem(&pow2(bits))
-            .expect("a power of two is non-zero");
-        Self::of(Integer::from_bigint(quotient))
+        Self::of(Integer::from_bigint(self.value.to_bigint().shr(bits)))
     }
 
     /// Returns the exact integer floor square root, or `None` when negative.
@@ -331,18 +291,10 @@ impl Int {
                 u64::try_from(small.unsigned_abs().isqrt()).expect("a u128 square root fits u64");
             return Some(Self::from_u64(root));
         }
-        let bits = u32::try_from(self.bit_len()).expect("a magnitude below 2^(2^32)");
-        // `x0 = 2^ceil(bits/2)` is at least `sqrt(self)`, which is what makes
-        // the monotone-descent termination test below correct.
-        let mut x = Self::one().shl(bits.div_ceil(2));
-        loop {
-            let (d, _) = self.div_rem(&x).expect("a Newton iterate is positive");
-            let y = x.add(&d).shr(1);
-            if y >= x {
-                return Some(x);
-            }
-            x = y;
-        }
+        self.value
+            .to_bigint()
+            .sqrt_floor()
+            .map(|value| Self::of(Integer::from_bigint(value)))
     }
 
     /// Parses a non-empty run of ASCII digits, with no sign and no separators.

@@ -18,8 +18,9 @@ use crate::bigint::BigInt;
 /// # Representation
 ///
 /// A value that fits `i128` is held inline and computed on with checked machine
-/// arithmetic; only a result that leaves `i128` allocates, as a [`BigInt`], and a
-/// result that comes back into range is held inline again. The split is
+/// arithmetic; a result that leaves `i128` uses a [`BigInt`], whose first three
+/// binary limbs also fit inline. A result that comes back into `i128` range is
+/// held in the machine representation again. The split is
 /// canonical — a value has exactly one representation — so the derived
 /// equality and hash are value equality and value hash, and the small-value path
 /// costs one checked machine operation and no allocation (the `exact` bench
@@ -54,7 +55,7 @@ impl Integer {
             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
     }
 
-    /// The value as a [`BigInt`] (allocates for an inline value).
+    /// The value as a [`BigInt`]; inline values convert without allocating.
     #[must_use]
     pub fn to_bigint(&self) -> BigInt {
         match &self.0 {
@@ -238,14 +239,14 @@ impl Integer {
 
     // ----- resource governance ---------------------------------------------
 
-    /// The size of the magnitude in base-`1e9` limbs — the unit every cost
+    /// The size of the magnitude in binary `u64` limbs — the unit every cost
     /// estimate is stated in (an inline value counts the limbs it would occupy,
-    /// at most five).
+    /// at most two).
     #[must_use]
     pub fn limb_len(&self) -> u64 {
         match &self.0 {
             Repr::Small(0) => 0,
-            Repr::Small(value) => u64::from(value.unsigned_abs().ilog10() / 9 + 1),
+            Repr::Small(value) => u64::from(value.unsigned_abs().ilog2() / 64 + 1),
             Repr::Big(value) => value.limb_len() as u64,
         }
     }
@@ -260,12 +261,21 @@ impl Integer {
         }
     }
 
+    /// Binary magnitude length, read without allocating or base conversion.
+    pub(crate) fn binary_bits(&self) -> u64 {
+        match &self.0 {
+            Repr::Small(0) => 0,
+            Repr::Small(value) => u64::from(value.unsigned_abs().ilog2()) + 1,
+            Repr::Big(value) => value.bit_len(),
+        }
+    }
+
     /// Heap bytes the value holds (zero inline).
     #[must_use]
     pub fn heap_bytes(&self) -> u64 {
         match &self.0 {
             Repr::Small(_) => 0,
-            Repr::Big(value) => cost::limb_bytes(value.limb_len() as u64),
+            Repr::Big(value) => value.allocated_bytes() as u64,
         }
     }
 
@@ -287,7 +297,9 @@ impl Integer {
             Repr::Small(value) => cost::Shape::of_i128(*value, 0),
             Repr::Big(value) => cost::Shape {
                 limbs: value.limb_len() as u64,
-                digits: value.decimal_digits(),
+                digits: cost::digits_for_bits(value.bit_len()),
+                minimum_digits: cost::minimum_digits_for_bits(value.bit_len()),
+                digits_exact: false,
                 scale: 0,
                 sign: value.signum(),
             },
@@ -308,17 +320,24 @@ impl Integer {
     }
 
     /// The cost of [`Self::to_f64`] / [`Self::to_f32`]: constant past `10^309`
-    /// (an infinity, read off the length), and otherwise a base conversion of at
-    /// most 35 limbs.
+    /// (an infinity, read off the length), and otherwise exact binary-ratio
+    /// rounding within the format's finite bit range.
     #[must_use]
     pub fn to_float_cost(&self) -> Cost {
-        if self.decimal_digits() >= 310 {
+        if matches!(self.0, Repr::Small(_)) {
+            return Cost::ZERO;
+        }
+        if matches!(&self.0, Repr::Big(value) if value.bit_len() >= 1025) {
             return Cost::new(1, 0);
         }
         let limbs = self.limb_len();
         Cost::new(
-            limbs.saturating_mul(limbs).saturating_add(1),
-            cost::limb_bytes(limbs),
+            limbs
+                .saturating_mul(limbs)
+                .saturating_mul(4)
+                .saturating_add(limbs.saturating_mul(8))
+                .saturating_add(1),
+            cost::limb_bytes(limbs.saturating_add(3)).saturating_mul(8),
         )
     }
 
@@ -335,8 +354,8 @@ impl Integer {
     }
 
     /// The exact order of the value against `value`; `None` only for `NaN`, and an
-    /// infinity is past every integer. Linear in the limbs, with no rounding of
-    /// either side.
+    /// infinity is past every integer, with no rounding of either side. Reading
+    /// decimal leading positions includes binary-to-decimal base conversion.
     #[must_use]
     pub fn cmp_f64(&self, value: f64) -> Option<Ordering> {
         super::decimal::cmp_scaled_f64(self, 0, value)
@@ -360,8 +379,8 @@ impl Integer {
         match &self.0 {
             Repr::Small(value) => cost::log2_upper_q16(value.unsigned_abs()),
             Repr::Big(value) => {
-                // |value| < (leading + 1) × 1e9^(limbs − 2).
-                let below = (value.limb_len() as u64).saturating_sub(2);
+                // |value| < (leading + 1) × 2^(64 × (limbs − 1)).
+                let below = (value.limb_len() as u64).saturating_sub(1);
                 cost::log2_upper_q16(u128::from(value.leading_u64()) + 1)
                     .saturating_add(below.saturating_mul(cost::LOG2_LIMB_Q16_UP))
             }
@@ -430,8 +449,9 @@ impl FromStr for Integer {
     /// Parse the `xsd:integer` lexical space (XSD 1.1 Part 2 §3.4.13.1): an
     /// optional `+` or `-`, then one or more ASCII digits, of any length. No
     /// whitespace is trimmed (a caller applying the `collapse` facet trims first),
-    /// matching [`crate::numeric::parse_integer`]. Linear in the length: the
-    /// base-`1e9` limbs are read straight off nine-digit groups.
+    /// matching [`crate::numeric::parse_integer`]. Binary base conversion reads
+    /// decimal chunks and multiplies the accumulated binary magnitude; large
+    /// inputs take quadratic limb work, accounted for by the parse cost.
     ///
     /// # Errors
     ///
@@ -538,14 +558,24 @@ impl Sub<&Integer> for &Integer {
 
 impl Mul<&Integer> for &Integer {
     type Output = Integer;
+    // Keep checked machine multiplication in its caller; spilled operands use
+    // the existing binary engine without imposing its temporary frame here.
+    #[inline]
     fn mul(self, rhs: &Integer) -> Integer {
         if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
             && let Some(product) = a.checked_mul(*b)
         {
             return Integer::from_i128(product);
         }
+        self.mul_big(rhs)
+    }
+}
+
+impl Integer {
+    #[cold]
+    fn mul_big(&self, rhs: &Self) -> Self {
         let (a, b) = self.big_pair(rhs);
-        Integer::from_bigint(&a * &b)
+        Self::from_bigint(&a * &b)
     }
 }
 

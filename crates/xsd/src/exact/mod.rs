@@ -93,7 +93,7 @@
 
 pub mod cost;
 
-mod binary;
+pub(crate) mod binary;
 mod decimal;
 mod error;
 mod integer;

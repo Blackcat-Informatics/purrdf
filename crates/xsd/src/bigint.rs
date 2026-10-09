@@ -1,82 +1,600 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! [`BigInt`]: an arbitrary-precision signed integer used to accumulate an exact
-//! running sum without an `i128`-bounded intermediate overflow poisoning the
-//! answer.
+//! The workspace's arbitrary-precision signed binary integer.
 //!
-//! # Why this exists
-//!
-//! `XsdValue::Integer` (see [`crate::value::XsdValue`]) is deliberately
-//! `i128`-bounded — an individual `xsd:integer` LITERAL beyond that magnitude
-//! hard-fails to parse (see the crate's module docs). That is a reasonable bound
-//! for one literal. It is NOT a reasonable bound for a running total accumulated
-//! across many literals: `xsd:integer`'s value space is genuinely unbounded per
-//! XSD, so `SUM`/`AVG` over a group whose individual values each fit comfortably
-//! in `i128` can still have a true mathematical total that does not — most
-//! simply, TWO values near `i128::MAX` add to a total near `2 × i128::MAX`, which
-//! is an entirely ordinary (if large) integer, not an error.
-//!
-//! [`crate::numeric::Decimal`] cannot serve this role: its mantissa is `i128`
-//! too (by the same deliberate, documented bound), so promoting a running
-//! integer sum through `Decimal` hits the identical ceiling one type up. A
-//! genuine "arbitrary precision" accumulator therefore needs a representation
-//! with no fixed width at all. `SUM` needs addition, narrowing back to `i128`
-//! and the canonical lexical form; `AVG`'s finish scales by a power of ten and
-//! divides by the row count ([`BigInt::mul_pow10`], [`BigInt::div_rem_u64`]).
-//!
-//! It is also the workspace's one arbitrary-precision integer, so the other
-//! exact-number jobs compute on it rather than on a second digit vector:
-//!
-//! * writing a binary floating-point value, or the midpoint between two, out in
-//!   full as a decimal ([`BigInt::from_binary`], over [`BigInt::mul_pow2`] and
-//!   [`BigInt::mul_pow5`]);
-//! * JSON numbers whose digits or exponent no machine word holds
-//!   ([`crate::json_number::JsonNumber`]), and JSON Schema's `multipleOf` over them
-//!   ([`BigInt::from_digits`], [`BigInt::mul`], [`BigInt::rem`]).
-//!
-//! And it is the engine of the arbitrary-precision numeric tower in
-//! [`crate::exact`]: the general arithmetic — subtraction, truncating division
-//! with a quotient ([`BigInt::div_rem`]), powers, the greatest common divisor,
-//! Karatsuba products and the operator traits — lives in this module's `arith`
-//! submodule, with the cost of each operation stated as a function of its
-//! operands' limb counts.
-//!
-//! # Representation
-//!
-//! Sign-magnitude: a `negative` flag plus a little-endian `Vec<u32>` of base-`1e9`
-//! limbs. Base `1e9` (rather than a binary base) makes [`BigInt::to_decimal_string`]
-//! a direct concatenation with no base conversion, and keeps every intermediate
-//! limb sum (at most `2 × (1e9 − 1) + 1 < 2^31`) comfortably inside a `u64`
-//! carry lane with no overflow reasoning beyond "two `u32`s and a carry fit in a
-//! `u64`". Zero is the canonical empty-limb-vector representation (`negative`
-//! always `false` for zero), so limb-vector equality is exactly value equality
-//! for anything this module constructs (every constructor trims trailing —
-//! i.e. most-significant — zero limbs).
+//! Three initialized inline limbs hold magnitudes below 2^192; larger values
+//! use a canonical little-endian vector. Every operation is integer-only.
+//! The exact numeric tower and allocation-bounded arithmetic share this home.
 
-use std::cmp::Ordering;
-use std::fmt::Write as _;
+use core::{cmp::Ordering, fmt};
+mod compat;
+pub use compat::KARATSUBA_THRESHOLD;
+#[cfg(test)]
+mod arithmetic_tests;
+pub(crate) mod scratch;
+mod storage;
+#[cfg(test)]
+mod tower_tests;
+use scratch::{Allocate, Unbounded};
+pub use scratch::{LimbScratch, LimbScratchError};
+use storage::Mag;
 
-mod arith;
+/// Number of decimal digits processed per limb-sized chunk.
+///
+/// 10<sup>19</sup> is the largest power of ten that fits in a `u64`.
+const DECIMAL_CHUNK: usize = 19;
 
-pub use arith::KARATSUBA_THRESHOLD;
+/// Powers of ten that fit in a `u64`, indexed by exponent.
+const POW10_U64: [u64; DECIMAL_CHUNK + 1] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
 
-/// Each limb holds a base-`1e9` digit group.
-const LIMB_BASE: u64 = 1_000_000_000;
+/// The base each decimal chunk multiplies the accumulator by (10<sup>19</sup>).
+const CHUNK_BASE: u64 = POW10_U64[DECIMAL_CHUNK];
 
-/// `i128::MIN`'s magnitude (`2^127`) — the one negative magnitude with no
-/// positive `i128` counterpart, handled specially by [`BigInt::to_i128`].
-const I128_MIN_MAGNITUDE: u128 = 1u128 << 127;
+// ---------------------------------------------------------------------------
+// Magnitude primitives
+//
+// Every helper below takes and returns a canonical magnitude: little-endian,
+// no trailing zero limbs, empty means zero.
+// ---------------------------------------------------------------------------
 
-/// An arbitrary-precision signed integer — see the module docs for why this
-/// exists and what it deliberately does not support.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Drops trailing zero limbs so the magnitude is canonical.
+fn mag_trim(m: &mut Mag) {
+    while m.last() == Some(&0) {
+        m.pop();
+    }
+}
+
+/// Builds a magnitude from a `u64`.
+fn mag_from_u64(v: u64) -> Mag {
+    if v == 0 {
+        Mag::new()
+    } else {
+        Mag::from_slice(&[v])
+    }
+}
+
+/// Builds a magnitude from a `u128`.
+fn mag_from_u128(v: u128) -> Mag {
+    let lo = v as u64;
+    let hi = (v >> 64) as u64;
+    if hi == 0 {
+        mag_from_u64(lo)
+    } else {
+        Mag::from_slice(&[lo, hi])
+    }
+}
+
+/// Returns the magnitude as a `u128`, or `None` if it needs more than 128 bits.
+fn mag_to_u128(a: &[u64]) -> Option<u128> {
+    match a.len() {
+        0 => Some(0),
+        1 => Some(u128::from(a[0])),
+        2 => Some(u128::from(a[0]) | (u128::from(a[1]) << 64)),
+        _ => None,
+    }
+}
+
+/// Returns `true` when the magnitude is exactly one.
+fn mag_is_one(a: &[u64]) -> bool {
+    a.len() == 1 && a[0] == 1
+}
+
+/// Compares two magnitudes numerically.
+fn mag_cmp(a: &[u64], b: &[u64]) -> Ordering {
+    a.len()
+        .cmp(&b.len())
+        .then_with(|| a.iter().rev().cmp(b.iter().rev()))
+}
+
+/// Number of bits in the magnitude; zero has zero bits.
+fn mag_bit_len(a: &[u64]) -> u64 {
+    match a.last() {
+        None => 0,
+        Some(&top) => (a.len() as u64 - 1) * 64 + u64::from(64 - top.leading_zeros()),
+    }
+}
+
+/// Number of trailing zero bits; zero (which has none) reports zero.
+fn mag_trailing_zeros(a: &[u64]) -> u64 {
+    match a.iter().position(|&limb| limb != 0) {
+        None => 0,
+        Some(i) => (i as u64) * 64 + u64::from(a[i].trailing_zeros()),
+    }
+}
+
+/// Schoolbook addition of two magnitudes.
+fn mag_add(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut out: Mag = storage.destination(long.len() + 1, 0)?;
+    let mut carry = 0u64;
+    for (i, &la) in long.iter().enumerate() {
+        let lb = short.get(i).copied().unwrap_or(0);
+        let sum = u128::from(la) + u128::from(lb) + u128::from(carry);
+        out.push(sum as u64);
+        carry = (sum >> 64) as u64;
+    }
+    if carry != 0 {
+        out.push(carry);
+    }
+    Ok(out)
+}
+
+/// Schoolbook subtraction of two magnitudes; `a` must be at least `b`.
+fn mag_sub(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    let mut out = storage.copy(a)?;
+    mag_sub_in_place(&mut out, b);
+    Ok(out)
+}
+
+/// The one borrow propagation used by subtraction and binary GCD.
+fn mag_sub_in_place(a: &mut Mag, b: &[u64]) {
+    debug_assert!(mag_cmp(a, b) != Ordering::Less, "mag_sub would go negative");
+    let mut borrow = false;
+    for (i, limb) in a.iter_mut().enumerate() {
+        let (partial, borrowed_a) = limb.overflowing_sub(b.get(i).copied().unwrap_or(0));
+        let (difference, borrowed_b) = partial.overflowing_sub(u64::from(borrow));
+        *limb = difference;
+        borrow = borrowed_a || borrowed_b;
+    }
+    debug_assert!(!borrow, "mag_sub called with a < b");
+    mag_trim(a);
+}
+
+/// Schoolbook multiplication of two magnitudes.
+fn mag_mul(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    if a.is_empty() || b.is_empty() {
+        return Ok(Mag::new());
+    }
+    if let (Some(x), Some(y)) = (mag_to_u64(a), mag_to_u64(b)) {
+        // Fast path: the whole product fits in a `u128`. This is the hot path
+        // for coordinate arithmetic, where operands are small integers.
+        return Ok(mag_from_u128(u128::from(x) * u128::from(y)));
+    }
+    let mut out: Mag = storage.destination(a.len() + b.len(), a.len() + b.len())?;
+    write_mul(a, b, &mut out);
+    mag_trim(&mut out);
+    Ok(out)
+}
+
+/// The single schoolbook product into initialized, complete destination limbs.
+fn write_mul(a: &[u64], b: &[u64], out: &mut [u64]) {
+    debug_assert_eq!(out.len(), a.len() + b.len());
+    for (i, &ai) in a.iter().enumerate() {
+        if ai == 0 {
+            continue;
+        }
+        let mut carry = 0u64;
+        for (j, &bj) in b.iter().enumerate() {
+            let idx = i + j;
+            let cur = u128::from(ai) * u128::from(bj) + u128::from(out[idx]) + u128::from(carry);
+            out[idx] = cur as u64;
+            carry = (cur >> 64) as u64;
+        }
+        // Row `i` is the first writer of limb `i + b.len()`: row `i - 1` stopped
+        // at `i + b.len() - 1`. So the carry can be stored, not accumulated.
+        out[i + b.len()] = carry;
+    }
+}
+
+/// Borrow a product's exact limbs directly into a following operation. Common
+/// binary64/fixed products use bounded stack storage; longer products use the
+/// same explicit allocator and never grow a scratch destination.
+fn with_product<T>(
+    a: &[u64],
+    b: &[u64],
+    storage: &impl Allocate,
+    evaluate: impl FnOnce(&[u64]) -> Result<T, LimbScratchError>,
+) -> Result<T, LimbScratchError> {
+    let length = a
+        .len()
+        .checked_add(b.len())
+        .ok_or(LimbScratchError::SizeOverflow)?;
+    if a.is_empty() || b.is_empty() {
+        return evaluate(&[]);
+    }
+    if length <= 8 {
+        let mut words = [0; 8];
+        write_mul(a, b, &mut words[..length]);
+        let retained = words[..length]
+            .iter()
+            .rposition(|&word| word != 0)
+            .map_or(0, |index| index + 1);
+        evaluate(&words[..retained])
+    } else {
+        let product = mag_mul(a, b, storage)?;
+        evaluate(&product)
+    }
+}
+
+/// Returns the magnitude as a `u64`, or `None` if it needs more than 64 bits.
+fn mag_to_u64(a: &[u64]) -> Option<u64> {
+    match a.len() {
+        0 => Some(0),
+        1 => Some(a[0]),
+        _ => None,
+    }
+}
+
+/// Computes `a * multiplier + addend` for a single-limb multiplier and addend.
+fn mag_mul_small_add(
+    a: &[u64],
+    multiplier: u64,
+    addend: u64,
+    storage: &impl Allocate,
+) -> Result<Mag, LimbScratchError> {
+    let mut out: Mag = storage.destination(a.len() + 1, 0)?;
+    let mut carry = u128::from(addend);
+    for &limb in a {
+        let cur = u128::from(limb) * u128::from(multiplier) + carry;
+        out.push(cur as u64);
+        carry = cur >> 64;
+    }
+    while carry != 0 {
+        out.push(carry as u64);
+        carry >>= 64;
+    }
+    mag_trim(&mut out);
+    Ok(out)
+}
+
+/// Divides a magnitude by a single non-zero limb, returning quotient and remainder.
+fn mag_divmod_small(
+    a: &[u64],
+    divisor: u64,
+    storage: &impl Allocate,
+) -> Result<(Mag, u64), LimbScratchError> {
+    debug_assert_ne!(divisor, 0, "division by zero");
+    let d = u128::from(divisor);
+    let mut out: Mag = storage.destination(a.len(), a.len())?;
+    let mut rem: u128 = 0;
+    for (slot, &limb) in out.iter_mut().zip(a.iter()).rev() {
+        let cur = (rem << 64) | u128::from(limb);
+        *slot = (cur / d) as u64;
+        rem = cur % d;
+    }
+    mag_trim(&mut out);
+    Ok((out, rem as u64))
+}
+
+/// Writes a sub-limb left shift into initialized storage.
+///
+/// The destination must have room for a nonzero final carry. Normalized
+/// division and arbitrary left shifts share this one carry propagation.
+fn write_shl(a: &[u64], bits: u32, out: &mut [u64]) {
+    debug_assert!(bits < 64);
+    debug_assert!(out.len() >= a.len());
+    if bits == 0 {
+        out[..a.len()].copy_from_slice(a);
+        return;
+    }
+    let mut carry = 0;
+    for (&limb, slot) in a.iter().zip(out.iter_mut()) {
+        *slot = (limb << bits) | carry;
+        carry = limb >> (64 - bits);
+    }
+    if out.len() > a.len() {
+        out[a.len()] = carry;
+    } else {
+        debug_assert_eq!(carry, 0, "shift destination omits nonzero carry");
+    }
+}
+
+/// Shifts a magnitude left by `bits`.
+fn mag_shl(a: &[u64], bits: u64, storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    if a.is_empty() {
+        return Ok(Mag::new());
+    }
+    let limb_shift = (bits / 64) as usize;
+    let bit_shift = (bits % 64) as u32;
+    let carry = bit_shift != 0 && a[a.len() - 1] >> (64 - bit_shift) != 0;
+    let mut out = storage.destination(
+        a.len() + limb_shift + usize::from(carry),
+        a.len() + limb_shift + usize::from(carry),
+    )?;
+    write_shl(a, bit_shift, &mut out[limb_shift..]);
+    Ok(out)
+}
+
+/// Shifts a magnitude right by `bits`, discarding the bits shifted out.
+fn mag_shr(a: &[u64], bits: u64, storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    let length = mag_bit_len(a).saturating_sub(bits).div_ceil(64) as usize;
+    let mut out = storage.destination(length, length)?;
+    let offset = (bits / 64) as usize;
+    let partial = (bits % 64) as u32;
+    for (index, word) in out.iter_mut().enumerate() {
+        *word = shifted_right_limb(a, index + offset, partial);
+    }
+    Ok(out)
+}
+
+fn shifted_right_limb(a: &[u64], source: usize, partial: u32) -> u64 {
+    if partial == 0 {
+        a[source]
+    } else {
+        (a[source] >> partial) | (a.get(source + 1).copied().unwrap_or(0) << (64 - partial))
+    }
+}
+
+/// Right-shift propagation shared by division denormalization and binary GCD.
+fn mag_shr_in_place(a: &mut Mag, bits: u64) {
+    let limb_shift = (bits / 64) as usize;
+    if limb_shift >= a.len() {
+        a.resize(0, 0);
+        return;
+    }
+    let bit_shift = (bits % 64) as u32;
+    let length = a.len() - limb_shift;
+    // Every source index is at or above its destination. Forward writes cannot
+    // overwrite a source before its final read, including zero whole limbs.
+    for i in 0..length {
+        let source = i + limb_shift;
+        a[i] = shifted_right_limb(a, source, bit_shift);
+    }
+    a.resize(length, 0);
+    mag_trim(a);
+}
+
+/// Divides normalized base-2^64 limbs, leaving the normalized remainder in `u`.
+///
+/// Let B=2^64 and n=v.len(). The top divisor limb is at least B/2, and u has
+/// one explicit guard limb. At quotient position j, division of the top two
+/// numerator limbs estimates the digit from above. Testing the next divisor
+/// limb reduces that estimate by at most two; subtraction of the full product
+/// needs at most one add-back. Thus each quotient digit costs O(n), without
+/// constructing a magnitude at every dividend bit.
+fn divide_normalized(u: &mut [u64], v: &[u64], quotient: &mut [u64]) {
+    let n = v.len();
+    debug_assert!(n >= 2 && v[n - 1] >> 63 == 1);
+    debug_assert_eq!(u.len(), n + quotient.len());
+    let base = 1u128 << 64;
+    let top = u128::from(v[n - 1]);
+    for j in (0..quotient.len()).rev() {
+        debug_assert!(u128::from(u[j + n]) <= top);
+        let (mut digit, mut remainder) = if u128::from(u[j + n]) == top {
+            (u64::MAX, u128::from(u[j + n - 1]) + top)
+        } else {
+            let pair = (u128::from(u[j + n]) << 64) | u128::from(u[j + n - 1]);
+            ((pair / top) as u64, pair % top)
+        };
+        while remainder < base
+            && u128::from(digit) * u128::from(v[n - 2])
+                > (remainder << 64) + u128::from(u[j + n - 2])
+        {
+            digit -= 1;
+            remainder += top;
+        }
+        let mut carry = 0u128;
+        for (i, &limb) in v.iter().enumerate() {
+            let product = u128::from(digit) * u128::from(limb) + carry;
+            let (difference, borrowed) = u[j + i].overflowing_sub(product as u64);
+            u[j + i] = difference;
+            carry = (product >> 64) + u128::from(borrowed);
+        }
+        let high = u128::from(u[j + n]);
+        u[j + n] = high.wrapping_sub(carry) as u64;
+        if high < carry {
+            digit -= 1;
+            let mut add_carry = 0u128;
+            for (i, &limb) in v.iter().enumerate() {
+                let sum = u128::from(u[j + i]) + u128::from(limb) + add_carry;
+                u[j + i] = sum as u64;
+                add_carry = sum >> 64;
+            }
+            u[j + n] = u[j + n].wrapping_add(add_carry as u64);
+        }
+        quotient[j] = digit;
+    }
+}
+
+/// Divides magnitudes, returning `(quotient, remainder)`; `b` must be non-zero.
+///
+/// Single-limb, u128 and power-of-two divisors have specialized exact paths.
+/// Other operands use normalized limb division. The three-limb common path
+/// uses stack scratch, preserving allocation-free inline integer arithmetic.
+fn mag_div_rem(
+    a: &[u64],
+    b: &[u64],
+    storage: &impl Allocate,
+) -> Result<(Mag, Mag), LimbScratchError> {
+    debug_assert!(!b.is_empty(), "division by zero");
+    if mag_cmp(a, b) == Ordering::Less {
+        return Ok((Mag::new(), storage.copy(a)?));
+    }
+    if b.len() == 1 {
+        let (q, r) = mag_divmod_small(a, b[0], storage)?;
+        return Ok((q, mag_from_u64(r)));
+    }
+    if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
+        return Ok((mag_from_u128(x / y), mag_from_u128(x % y)));
+    }
+    let power = mag_trailing_zeros(b);
+    if power + 1 == mag_bit_len(b) {
+        let quotient = mag_shr(a, power, storage)?;
+        let whole = (power / 64) as usize;
+        let partial = (power % 64) as u32;
+        let retained = whole + usize::from(partial != 0);
+        let mut remainder = storage.copy(&a[..retained.min(a.len())])?;
+        if partial != 0 && whole < remainder.len() {
+            remainder[whole] &= (1u64 << partial) - 1;
+        }
+        mag_trim(&mut remainder);
+        return Ok((quotient, remainder));
+    }
+    let shift = b[b.len() - 1].leading_zeros();
+    let quotient_length = a.len() - b.len() + 1;
+    if a.len() <= 8 {
+        let mut numerator = [0; 9];
+        let mut divisor = [0; 8];
+        let mut digits = [0; 8];
+        write_shl(a, shift, &mut numerator[..=a.len()]);
+        write_shl(b, shift, &mut divisor[..b.len()]);
+        divide_normalized(
+            &mut numerator[..=a.len()],
+            &divisor[..b.len()],
+            &mut digits[..quotient_length],
+        );
+        let mut quotient = storage.copy(&digits[..quotient_length])?;
+        let mut remainder = storage.copy(&numerator[..b.len()])?;
+        mag_trim(&mut quotient);
+        mag_trim(&mut remainder);
+        mag_shr_in_place(&mut remainder, u64::from(shift));
+        return Ok((quotient, remainder));
+    }
+    let mut numerator = storage.destination(a.len() + 1, a.len() + 1)?;
+    let mut divisor = storage.destination(b.len(), b.len())?;
+    let mut quotient = storage.destination(quotient_length, quotient_length)?;
+    write_shl(a, shift, &mut numerator);
+    write_shl(b, shift, &mut divisor);
+    divide_normalized(&mut numerator, &divisor, &mut quotient);
+    numerator.resize(b.len(), 0);
+    mag_trim(&mut quotient);
+    mag_trim(&mut numerator);
+    mag_shr_in_place(&mut numerator, u64::from(shift));
+    Ok((quotient, numerator))
+}
+
+/// Stein's binary greatest common divisor on magnitudes.
+fn mag_gcd(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    if a.is_empty() {
+        return storage.copy(b);
+    }
+    if b.is_empty() {
+        return storage.copy(a);
+    }
+    if mag_is_one(a) || mag_is_one(b) {
+        return Ok(Mag::from_slice(&[1]));
+    }
+    if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
+        return Ok(mag_from_u128(crate::wide::gcd(x, y)));
+    }
+    let common = mag_trailing_zeros(a).min(mag_trailing_zeros(b));
+    let mut u = mag_shr(a, mag_trailing_zeros(a), storage)?;
+    let mut v: Mag = storage.copy(b)?;
+    loop {
+        let zeros = mag_trailing_zeros(&v);
+        mag_shr_in_place(&mut v, zeros);
+        if mag_cmp(&u, &v) == Ordering::Greater {
+            core::mem::swap(&mut u, &mut v);
+        }
+        mag_sub_in_place(&mut v, &u);
+        if v.is_empty() {
+            break;
+        }
+    }
+    mag_shl(&u, common, storage)
+}
+
+/// Integer floor square root of a `u128`.
+fn isqrt_u128(n: u128) -> u128 {
+    if n == 0 {
+        return 0;
+    }
+    let bits = 128 - n.leading_zeros();
+    // `x0 = 2^ceil(bits/2) >= sqrt(n)`, which is the precondition integer
+    // Newton needs; it is also at most `2 * sqrt(n)`, so the loop converges in
+    // a handful of steps.
+    let mut x = 1u128 << bits.div_ceil(2);
+    loop {
+        let y = u128::midpoint(x, n / x);
+        if y >= x {
+            return x;
+        }
+        x = y;
+    }
+}
+
+fn mag_sqrt_floor(value: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScratchError> {
+    if value.is_empty() {
+        return Ok(Mag::new());
+    }
+    if let Some(v) = mag_to_u128(value) {
+        return Ok(mag_from_u128(isqrt_u128(v)));
+    }
+    let bits = mag_bit_len(value);
+    // `x0 = 2^ceil(bits/2)` is at least `sqrt(self)`, which is what makes
+    // the monotone-descent termination test below correct.
+    let mut x = mag_shl(&[1u64], bits.div_ceil(2), storage)?;
+    loop {
+        let (d, _) = mag_div_rem(value, &x, storage)?;
+        let y = mag_shr(&mag_add(&x, &d, storage)?, 1, storage)?;
+        if mag_cmp(&y, &x) != Ordering::Less {
+            break;
+        }
+        x = y;
+    }
+    Ok(x)
+}
+
+/// Accumulates a run of ASCII digit bytes into a magnitude.
+///
+/// The caller must have already established that every byte is an ASCII digit.
+fn mag_from_digit_bytes(digits: impl Iterator<Item = u8>) -> Option<Mag> {
+    let mut acc = Mag::new();
+    let mut any = false;
+    let mut chunk_value = 0u64;
+    let mut chunk_len = 0usize;
+    for byte in digits {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        any = true;
+        chunk_value = chunk_value * 10 + u64::from(byte - b'0');
+        chunk_len += 1;
+        if chunk_len == DECIMAL_CHUNK {
+            acc = mag_mul_small_add(&acc, CHUNK_BASE, chunk_value, &Unbounded)
+                .expect("unbounded integer storage");
+            chunk_value = 0;
+            chunk_len = 0;
+        }
+    }
+    if chunk_len > 0 {
+        acc = mag_mul_small_add(&acc, POW10_U64[chunk_len], chunk_value, &Unbounded)
+            .expect("unbounded integer storage");
+    }
+    any.then_some(acc)
+}
+
+// ---------------------------------------------------------------------------
+// BigInt
+// ---------------------------------------------------------------------------
+
+/// An arbitrary-precision signed integer.
+///
+/// The magnitude is little-endian base-2<sup>64</sup> with no trailing zero
+/// limbs, an empty magnitude is zero, and the sign flag is never set for zero.
+/// That gives exactly one representation per value, so `PartialEq`, `Eq` and
+/// `Hash` are derived and agree with the numeric relations.
+///
+/// All arithmetic is exact and allocation-bounded; nothing here rounds, wraps,
+/// saturates or touches a float.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct BigInt {
-    /// `true` for a negative value. Always `false` when `limbs` is empty (zero).
+    /// Sign flag; always `false` when the magnitude is empty.
     negative: bool,
-    /// Base-`1_000_000_000` limbs, least-significant first, no trailing
-    /// (most-significant) zero limb — the canonical form `PartialEq` relies on.
-    limbs: Vec<u32>,
+    /// Little-endian base-2^64 magnitude with no trailing zero limbs.
+    magnitude: Mag,
 }
 
 impl BigInt {
@@ -85,461 +603,781 @@ impl BigInt {
     pub const fn zero() -> Self {
         Self {
             negative: false,
-            limbs: Vec::new(),
+            magnitude: Mag::new(),
         }
     }
 
-    /// Whether this value is exactly zero.
+    /// The value one.
     #[must_use]
-    pub fn is_zero(&self) -> bool {
-        self.limbs.is_empty()
-    }
-
-    /// Construct from an `i128`, exactly (every `i128`, including `i128::MIN`, has
-    /// an exact `BigInt` representation).
-    #[must_use]
-    pub fn from_i128(value: i128) -> Self {
-        if value == 0 {
-            return Self::zero();
-        }
-        Self {
-            negative: value < 0,
-            limbs: magnitude_limbs(value.unsigned_abs()),
-        }
-    }
-
-    /// Construct from a `u128` **magnitude**, exactly — always non-negative.
-    ///
-    /// [`Self::from_i128`] cannot serve every magnitude this crate needs to compare:
-    /// `i128::MIN`'s magnitude is `2^127`, which has no `i128` counterpart at all, and
-    /// it is a perfectly ordinary `xsd:decimal` mantissa. The exact numeric order
-    /// ([`crate::numeric::numeric_total_cmp`]) compares magnitudes with the signs
-    /// already decided, so it needs the unsigned constructor rather than a signed one
-    /// it would immediately have to take the absolute value of.
-    #[must_use]
-    pub fn from_u128(magnitude: u128) -> Self {
-        if magnitude == 0 {
-            return Self::zero();
-        }
+    pub fn one() -> Self {
         Self {
             negative: false,
-            limbs: magnitude_limbs(magnitude),
+            magnitude: Mag::from_slice(&[1]),
         }
     }
 
-    /// Add `other` into `self` in place, exactly — this operation alone never
-    /// fails or truncates, whatever magnitude the two operands or their sum
-    /// reach: that is the entire point of an arbitrary-precision accumulator.
-    pub fn add_assign(&mut self, other: &Self) {
-        if other.is_zero() {
-            return;
-        }
-        if self.is_zero() {
-            self.clone_from(other);
-            return;
-        }
-        if self.negative == other.negative {
-            self.limbs = magnitude_add(&self.limbs, &other.limbs);
-        } else {
-            match magnitude_cmp(&self.limbs, &other.limbs) {
-                Ordering::Equal => *self = Self::zero(),
-                Ordering::Greater => {
-                    self.limbs = magnitude_sub(&self.limbs, &other.limbs);
-                }
-                Ordering::Less => {
-                    self.limbs = magnitude_sub(&other.limbs, &self.limbs);
-                    self.negative = other.negative;
-                }
-            }
-        }
-    }
-
-    /// Add the `i128` `value` into `self` in place, exactly. A thin convenience
-    /// over [`Self::add_assign`] for the common case of folding one more parsed
-    /// `xsd:integer` literal (already `i128`-bounded, per this crate's parse
-    /// layer) into a running `BigInt` total.
-    pub fn add_i128(&mut self, value: i128) {
-        self.add_assign(&Self::from_i128(value));
-    }
-
-    /// Narrow to `i128` if — and only if — the exact value fits. `None` means
-    /// genuinely out of `i128` range, not a truncated/wrapped approximation.
+    /// Builds an integer from an `i64`.
     #[must_use]
-    pub fn to_i128(&self) -> Option<i128> {
-        let mut magnitude: u128 = 0;
-        for &limb in self.limbs.iter().rev() {
-            magnitude = magnitude
-                .checked_mul(u128::from(LIMB_BASE))?
-                .checked_add(u128::from(limb))?;
-        }
-        if self.negative {
-            if magnitude == I128_MIN_MAGNITUDE {
-                return Some(i128::MIN);
-            }
-            i128::try_from(magnitude).ok().map(|m| -m)
-        } else {
-            i128::try_from(magnitude).ok()
-        }
+    pub fn from_i64(value: i64) -> Self {
+        Self::from_parts(value < 0, mag_from_u64(value.unsigned_abs()))
     }
 
-    /// The correctly rounded `f64` value (IEEE 754 round-to-nearest,
-    /// ties-to-even) — the conversion XPath `xs:double` casting and SPARQL's
-    /// `integer ⊂ double` promotion require when an out-of-`i128`-range running
-    /// integer sum joins the `xsd:double` tower. A magnitude that rounds past
-    /// `f64::MAX` (at or above `2^1024 − 2^970`) is `±∞`, as IEEE overflow
-    /// under round-to-nearest gives; zero is `+0.0`.
-    ///
-    /// The algorithm rounds ONCE: the magnitude is converted exactly to binary,
-    /// its top 64 significant bits are taken with a sticky bit OR-ed into the
-    /// lowest of them for any nonzero bit below (that bit sits far under the
-    /// 53-bit rounding position, so it only breaks ties, never moves one), the
-    /// resulting `u64` is rounded to 53 bits by the correctly rounded integer
-    /// cast, and the power-of-two scale is applied by an exact multiplication.
-    /// An earlier revision folded the base-`1e9` limbs through a Horner loop,
-    /// rounding at every limb, which could land one ulp away from the correctly
-    /// rounded value.
+    /// Builds an integer from an `i128`.
     #[must_use]
-    pub fn to_f64(&self) -> f64 {
-        // At 310 digits or more the magnitude is at least 10^309, past the overflow
-        // threshold: read off the length, so a long integer never pays the
-        // quadratic base conversion below.
-        if self.decimal_digits() >= 310 {
-            return if self.negative {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            };
-        }
-        let magnitude = match binary_top64(&self.limbs) {
-            BinaryTop::Small(value) => value as f64,
-            BinaryTop::Scaled { top, shift } => {
-                // `top`'s bit 63 is set, so `top as f64` lies in `[2^63, 2^64]`
-                // and `× 2^shift` is exact unless it overflows — and an overflow
-                // there is exactly IEEE's round-to-nearest overflow to `∞`. The
-                // product goes through `ieee::f64_mul` so that both the rounded
-                // `top` and the product are binary64 values on every target: on the
-                // x87 the bare expression keeps `top` unrounded and the product at
-                // the register's exponent range, so a tie that overflows to `∞`
-                // stays finite.
-                if shift > 1024 - 64 {
-                    f64::INFINITY
-                } else {
-                    crate::ieee::f64_mul(top as f64, pow2_f64(shift))
-                }
-            }
-        };
-        if self.negative { -magnitude } else { magnitude }
+    pub fn from_i128(value: i128) -> Self {
+        Self::from_parts(value < 0, mag_from_u128(value.unsigned_abs()))
     }
 
-    /// The correctly rounded `f32` value (round-to-nearest, ties-to-even) — the
-    /// `integer ⊂ float` twin of [`Self::to_f64`], by the same single-rounding
-    /// algorithm at 24 bits. Converting through [`Self::to_f64`] and narrowing
-    /// would round twice, which can differ from the correctly rounded value when
-    /// the first rounding lands exactly on an `f32` halfway point.
+    /// Builds a non-negative integer from a `u64`.
     #[must_use]
-    pub fn to_f32(&self) -> f32 {
-        // At 40 digits or more the magnitude is at least 10^39, past binary32's
-        // overflow threshold.
-        if self.decimal_digits() >= 40 {
-            return if self.negative {
-                f32::NEG_INFINITY
-            } else {
-                f32::INFINITY
-            };
-        }
-        let magnitude = match binary_top64(&self.limbs) {
-            BinaryTop::Small(value) => value as f32,
-            BinaryTop::Scaled { top, shift } => {
-                if shift > 128 - 64 {
-                    f32::INFINITY
-                } else {
-                    crate::ieee::f32_mul(top as f32, pow2_f32(shift))
-                }
-            }
-        };
-        if self.negative { -magnitude } else { magnitude }
+    pub fn from_u64(value: u64) -> Self {
+        Self::from_parts(false, mag_from_u64(value))
     }
 
-    /// The XSD 1.1 canonical `xsd:integer` lexical form (§3.3.13
-    /// `integerCanonicalMap`): optional `-` sign, then decimal digits with no
-    /// leading zero (`"0"` for zero itself).
+    /// Returns `true` when this is zero.
     #[must_use]
-    pub fn to_decimal_string(&self) -> String {
-        let digits = magnitude_decimal_digits(&self.limbs);
-        if self.negative {
-            format!("-{digits}")
-        } else {
-            digits
-        }
+    pub fn is_zero(&self) -> bool {
+        self.magnitude.is_empty()
     }
 
-    /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.1, §E.1
-    /// `decimalCanonicalMap`) of `self` interpreted as a fixed-point mantissa at
-    /// `scale` fractional digits — i.e. as if `self` were a
-    /// [`crate::numeric::Decimal`]'s mantissa, but with no `i128` bound on the
-    /// magnitude. Mirrors `Decimal::canonical_lexical`'s digit-split/trim
-    /// algorithm exactly (an integer-valued result has no decimal point; a
-    /// fractional one keeps its fractional part with trailing zeros trimmed).
-    ///
-    /// The text [`crate::numeric::bigint_avg_decimal_lexical`] renders; it reads
-    /// back through [`crate::parse`] as the same value, of any size.
-    #[must_use]
-    pub fn to_decimal_lexical(&self, scale: u32) -> String {
-        let digits = magnitude_decimal_digits(&self.limbs);
-        let scale = usize::try_from(scale).unwrap_or(usize::MAX);
-        let (int_part, frac_part) = if scale == 0 {
-            (digits, String::new())
-        } else if digits.len() > scale {
-            let split = digits.len() - scale;
-            (digits[..split].to_string(), digits[split..].to_string())
-        } else {
-            let pad = "0".repeat(scale - digits.len());
-            ("0".to_string(), format!("{pad}{digits}"))
-        };
-        let frac_trimmed = frac_part.trim_end_matches('0');
-        let sign = if self.negative { "-" } else { "" };
-        if frac_trimmed.is_empty() {
-            format!("{sign}{int_part}")
-        } else {
-            format!("{sign}{int_part}.{frac_trimmed}")
-        }
-    }
-
-    /// Whether this value is strictly negative (`false` for zero).
+    /// Returns `true` when this is strictly less than zero.
     #[must_use]
     pub fn is_negative(&self) -> bool {
         self.negative
     }
 
-    /// `self × 10^exp`, exactly — used by `AVG`'s finish to scale a running sum
-    /// up to `purrdf_xsd::numeric`'s `MAX_DECIMAL_SCALE` fractional digits BEFORE
-    /// dividing by the folded row count (see [`Self::div_rem_u64`]), mirroring
-    /// `decimal_div_raw`'s own scale-then-divide shape but over an
-    /// arbitrary-precision dividend.
+    /// Returns `-1`, `0` or `1` according to the sign.
     #[must_use]
-    pub fn mul_pow10(&self, exp: u32) -> Self {
-        if self.is_zero() || exp == 0 {
-            return self.clone();
-        }
-        let whole_limb_shift = usize::try_from(exp / 9).unwrap_or(usize::MAX);
-        let leftover = exp % 9;
-        let mut limbs = vec![0u32; whole_limb_shift];
-        limbs.extend_from_slice(&self.limbs);
-        if leftover > 0 {
-            // `leftover < 9`, so `10^leftover <= 1e8`, comfortably inside `u64`.
-            let factor = 10u64.pow(leftover);
-            limbs = mul_by_small(&limbs, factor);
-        }
-        Self {
-            negative: self.negative,
-            limbs,
-        }
-    }
-
-    /// `self × 2^exp`, exactly — the binary counterpart of [`Self::mul_pow10`].
-    ///
-    /// The decimal branch of the numeric tower is `mantissa / 10^scale`; the IEEE
-    /// branch (`xsd:float`, `xsd:double`) is a **dyadic** rational,
-    /// `significand × 2^exponent`, because every finite IEEE value is one exactly.
-    /// Putting the two branches on a common footing to compare them without
-    /// rounding therefore means scaling one side by a power of TWO, which a
-    /// base-`1e9` representation cannot express as a limb shift the way
-    /// [`Self::mul_pow10`] can. See [`crate::numeric::numeric_total_cmp`] for the
-    /// order this exists to make exact.
-    ///
-    /// `2^29 < LIMB_BASE`, so the scaling runs in 29-bit chunks through the same
-    /// single-limb multiply [`Self::mul_pow10`] uses, and every intermediate stays
-    /// inside the `u64` carry lane that multiply already argues for.
-    #[must_use]
-    pub fn mul_pow2(&self, exp: u32) -> Self {
-        if self.is_zero() || exp == 0 {
-            return self.clone();
-        }
-        // 29 bits at a time: `2^29 = 536_870_912 < LIMB_BASE`, so each chunk is a
-        // legal `mul_by_small` factor.
-        const CHUNK: u32 = 29;
-        let mut limbs = self.limbs.clone();
-        let mut remaining = exp;
-        while remaining > 0 {
-            let step = remaining.min(CHUNK);
-            limbs = mul_by_small(&limbs, 1u64 << step);
-            remaining -= step;
-        }
-        Self {
-            negative: self.negative,
-            limbs,
-        }
-    }
-
-    /// Divide by the positive machine integer `divisor`, truncating toward zero
-    /// exactly as integer division does, returning `(quotient, |remainder|)`.
-    /// `None` only for `divisor == 0` — `AVG`'s one caller always passes a
-    /// folded row COUNT, which is never zero for a non-empty group.
-    #[must_use]
-    pub fn div_rem_u64(&self, divisor: u64) -> Option<(Self, u64)> {
-        if divisor == 0 {
-            return None;
-        }
-        let (quotient_limbs, remainder) = magnitude_div_rem_u64(&self.limbs, divisor);
-        let quotient = Self {
-            negative: self.negative && !quotient_limbs.is_empty(),
-            limbs: quotient_limbs,
-        };
-        Some((quotient, remainder))
-    }
-}
-
-impl BigInt {
-    /// Parse `[+-]?DIGIT+`, exactly — `None` for any other text. Leading zeros
-    /// are allowed and `-0` is zero.
-    #[must_use]
-    pub fn from_digits(text: &str) -> Option<Self> {
-        let (negative, digits) = match text.as_bytes().first() {
-            Some(b'-') => (true, &text[1..]),
-            Some(b'+') => (false, &text[1..]),
-            _ => (false, text),
-        };
-        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
-        }
-        // Nine digits per limb, least significant limb first.
-        let bytes = digits.as_bytes();
-        let mut limbs = Vec::with_capacity(bytes.len() / 9 + 1);
-        let mut end = bytes.len();
-        while end > 0 {
-            let start = end.saturating_sub(9);
-            let limb = bytes[start..end]
-                .iter()
-                .fold(0_u32, |value, digit| value * 10 + u32::from(digit - b'0'));
-            limbs.push(limb);
-            end = start;
-        }
-        while limbs.last() == Some(&0) {
-            limbs.pop();
-        }
-        Some(Self {
-            negative: negative && !limbs.is_empty(),
-            limbs,
-        })
-    }
-
-    /// `numerator × 2^exponent` as an exact decimal: `(mantissa, scale)` with the
-    /// value `mantissa / 10^scale`.
-    ///
-    /// Every dyadic rational is a finite decimal, because `2^−k = 5^k / 10^k`: a
-    /// non-negative `exponent` scales by `2^exponent` at scale 0, a negative one
-    /// scales by `5^−exponent` at scale `−exponent`. This is how an IEEE value, or
-    /// the midpoint between two neighbouring ones (a dyadic rational one bit
-    /// finer), is written out in full; render it with
-    /// [`Self::to_decimal_lexical`].
-    #[must_use]
-    pub fn from_binary(numerator: i128, exponent: i32) -> (Self, u32) {
-        let value = Self::from_i128(numerator);
-        if exponent >= 0 {
-            (value.mul_pow2(exponent.unsigned_abs()), 0)
+    pub fn signum(&self) -> i32 {
+        if self.magnitude.is_empty() {
+            0
+        } else if self.negative {
+            -1
         } else {
-            let places = exponent.unsigned_abs();
-            (value.mul_pow5(places), places)
+            1
         }
     }
 
-    /// `self × factor`, exactly.
+    /// Returns the absolute value.
     #[must_use]
-    pub fn mul_small(&self, factor: u32) -> Self {
-        if factor == 0 {
-            return Self::zero();
-        }
+    pub fn abs(&self) -> Self {
         Self {
-            negative: self.negative,
-            // `factor < 2^32`, so each limb product `< 1e9 × 2^32 < 2^62` leaves
-            // room for the carry in the `u64` lane.
-            limbs: mul_by_small(&self.limbs, u64::from(factor)),
+            negative: false,
+            magnitude: self.magnitude.clone(),
         }
     }
 
-    /// `self × 5^exp`, exactly — with [`Self::mul_pow2`], the scaling that turns a
-    /// dyadic rational into a decimal one ([`Self::from_binary`]).
+    /// Returns the additive inverse.
+    ///
+    /// Negating zero yields zero: there is no negative zero in this type.
     #[must_use]
-    pub fn mul_pow5(&self, exp: u32) -> Self {
-        // 5^13 = 1_220_703_125 is the largest power of five a `u32` holds.
-        const CHUNK: u32 = 13;
-        if self.is_zero() || exp == 0 {
-            return self.clone();
-        }
-        let mut limbs = self.limbs.clone();
-        let mut remaining = exp;
-        while remaining > 0 {
-            let step = remaining.min(CHUNK);
-            limbs = mul_by_small(&limbs, 5_u64.pow(step));
-            remaining -= step;
-        }
-        Self {
-            negative: self.negative,
-            limbs,
+    pub fn neg(&self) -> Self {
+        Self::from_parts(!self.negative, self.magnitude.clone())
+    }
+
+    /// Returns `self + other`.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
+        self.add_using(other, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn add_in(&self, other: &Self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.add_using(other, scratch)
+    }
+
+    pub(crate) fn add_using(
+        &self,
+        other: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        self.combine_using(other, other.negative, storage)
+    }
+
+    fn combine_using(
+        &self,
+        other: &Self,
+        other_negative: bool,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        if self.negative == other_negative {
+            Ok(Self::from_parts(
+                self.negative,
+                mag_add(&self.magnitude, &other.magnitude, storage)?,
+            ))
+        } else {
+            match mag_cmp(&self.magnitude, &other.magnitude) {
+                Ordering::Equal => Ok(Self::zero()),
+                Ordering::Greater => Ok(Self::from_parts(
+                    self.negative,
+                    mag_sub(&self.magnitude, &other.magnitude, storage)?,
+                )),
+                Ordering::Less => Ok(Self::from_parts(
+                    other_negative,
+                    mag_sub(&other.magnitude, &self.magnitude, storage)?,
+                )),
+            }
         }
     }
 
-    /// `self × other`, exactly (schoolbook over the base-`1e9` limbs).
+    /// Returns `self - other`.
+    #[must_use]
+    pub fn sub(&self, other: &Self) -> Self {
+        self.sub_using(other, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn sub_in(&self, other: &Self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.sub_using(other, scratch)
+    }
+
+    pub(crate) fn sub_using(
+        &self,
+        other: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        self.combine_using(other, !other.negative, storage)
+    }
+
+    /// Returns `self * other`.
     #[must_use]
     pub fn mul(&self, other: &Self) -> Self {
-        if self.is_zero() || other.is_zero() {
-            return Self::zero();
+        self.mul_using(other, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn mul_in(&self, other: &Self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.mul_using(other, scratch)
+    }
+
+    pub(crate) fn mul_using(
+        &self,
+        other: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        Ok(Self::from_parts(
+            self.negative != other.negative,
+            mag_mul(&self.magnitude, &other.magnitude, storage)?,
+        ))
+    }
+
+    /// Returns `(quotient, remainder)`, or `None` when `other` is zero.
+    ///
+    /// Division **truncates toward zero** and the remainder takes the sign of
+    /// the dividend, exactly matching Rust's `/` and `%` on primitive integers:
+    ///
+    /// | `self` | `other` | quotient | remainder |
+    /// |---|---|---|---|
+    /// | `7` | `3` | `2` | `1` |
+    /// | `-7` | `3` | `-2` | `-1` |
+    /// | `7` | `-3` | `-2` | `1` |
+    /// | `-7` | `-3` | `2` | `-1` |
+    ///
+    /// The identity `quotient * other + remainder == self` holds in every case,
+    /// and `|remainder| < |other|`.
+    pub fn div_rem(&self, other: &Self) -> Option<(Self, Self)> {
+        self.div_rem_using(other, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn div_rem_in(
+        &self,
+        other: &Self,
+        scratch: &LimbScratch,
+    ) -> Result<Option<(Self, Self)>, LimbScratchError> {
+        self.div_rem_using(other, scratch)
+    }
+
+    pub(crate) fn div_rem_using(
+        &self,
+        other: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Option<(Self, Self)>, LimbScratchError> {
+        if other.is_zero() {
+            return Ok(None);
         }
-        Self {
-            negative: self.negative != other.negative,
-            limbs: magnitude_mul(&self.limbs, &other.limbs),
+        let (q, r) = mag_div_rem(&self.magnitude, &other.magnitude, storage)?;
+        Ok(Some((
+            Self::from_parts(self.negative != other.negative, q),
+            Self::from_parts(self.negative, r),
+        )))
+    }
+
+    /// Returns the greatest common divisor of `self` and `other`.
+    ///
+    /// The result is always non-negative; signs of the operands are ignored.
+    /// `gcd(0, n) == |n|`, `gcd(n, 0) == |n|` and `gcd(0, 0) == 0`.
+    #[must_use]
+    pub fn gcd(&self, other: &Self) -> Self {
+        self.gcd_using(other, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn gcd_in(&self, other: &Self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.gcd_using(other, scratch)
+    }
+
+    fn gcd_using(&self, other: &Self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
+        Ok(Self::from_parts(
+            false,
+            mag_gcd(&self.magnitude, &other.magnitude, storage)?,
+        ))
+    }
+
+    /// Returns 10<sup>`exp`</sup>.
+    #[must_use]
+    pub fn pow10(exp: u32) -> Self {
+        Self::pow10_using(exp, &Unbounded).expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn pow10_in(exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        Self::pow10_using(exp, scratch)
+    }
+
+    pub(crate) fn pow10_using(exp: u32, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
+        Self::one().mul_power_using(10, exp, DECIMAL_CHUNK as u32, storage)
+    }
+
+    /// Exact multiplication by a power of five through limb-sized factors.
+    #[must_use]
+    pub fn mul_pow5(&self, exp: u32) -> Self {
+        self.mul_pow5_using(exp, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same power multiplication in admitted reusable destinations.
+    /// # Errors
+    /// Refuses destination exhaustion or limb capacity without allocating.
+    pub fn mul_pow5_in(&self, exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.mul_pow5_using(exp, scratch)
+    }
+
+    pub(crate) fn mul_pow5_using(
+        &self,
+        exp: u32,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        self.mul_power_using(5, exp, 27, storage)
+    }
+
+    fn mul_power_using(
+        &self,
+        base: u64,
+        exp: u32,
+        chunk: u32,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        let mut magnitude = storage.copy(&self.magnitude)?;
+        let mut remaining = exp;
+        while remaining != 0 {
+            let step = remaining.min(chunk);
+            magnitude = mag_mul_small_add(&magnitude, base.pow(step), 0, storage)?;
+            remaining -= step;
+        }
+        Ok(Self::from_parts(self.negative, magnitude))
+    }
+
+    /// Remove at most `limit` exact factors of five. Full 27-factor chunks
+    /// precede at most 26 single-factor divisions. Sign is preserved.
+    pub(crate) fn strip_fives_using(
+        &self,
+        limit: u32,
+        storage: &impl Allocate,
+    ) -> Result<(Self, u32), LimbScratchError> {
+        let (value, removed) = self.strip_fives_wide_using(u64::from(limit), storage)?;
+        Ok((value, removed as u32))
+    }
+
+    /// The identical prime-removal body with a full integer-width counter.
+    /// Returned counts are bounded by both `limit` and the input bit length.
+    pub(crate) fn strip_fives_wide_using(
+        &self,
+        limit: u64,
+        storage: &impl Allocate,
+    ) -> Result<(Self, u64), LimbScratchError> {
+        if self.is_zero() {
+            return Ok((Self::zero(), 0));
+        }
+        let mut value = Self::from_parts(self.negative, storage.copy(&self.magnitude)?);
+        let mut remaining = limit;
+        let block = Self::from_u64(5_u64.pow(27));
+        while remaining >= 27 {
+            let (quotient, remainder) = value
+                .div_rem_using(&block, storage)?
+                .expect("nonzero factor");
+            if !remainder.is_zero() {
+                break;
+            }
+            value = quotient;
+            remaining -= 27;
+        }
+        let factor = Self::from_u64(5);
+        for _ in 0..remaining.min(26) {
+            let (quotient, remainder) = value
+                .div_rem_using(&factor, storage)?
+                .expect("nonzero factor");
+            if !remainder.is_zero() {
+                break;
+            }
+            value = quotient;
+            remaining -= 1;
+        }
+        Ok((value, limit - remaining))
+    }
+
+    /// Returns the value as an `i128`, or `None` when it does not fit.
+    pub fn to_i128(&self) -> Option<i128> {
+        let magnitude = mag_to_u128(&self.magnitude)?;
+        if self.negative {
+            // `i128::MIN` has magnitude `2^127`, which is representable as a
+            // negative value but not as a positive one.
+            if magnitude > 1u128 << 127 {
+                None
+            } else {
+                Some(magnitude.wrapping_neg() as i128)
+            }
+        } else if magnitude > i128::MAX as u128 {
+            None
+        } else {
+            Some(magnitude as i128)
         }
     }
 
-    /// `self mod divisor`, truncated as Rust's `%` is: the remainder takes the
-    /// sign of `self` and its magnitude is below `|divisor|`. `None` only for a
-    /// zero divisor.
+    /// Number of bits in the magnitude; zero for zero.
     #[must_use]
-    pub fn rem(&self, divisor: &Self) -> Option<Self> {
-        if divisor.is_zero() {
-            return None;
+    pub fn bit_len(&self) -> u64 {
+        mag_bit_len(&self.magnitude)
+    }
+
+    /// Number of low zero magnitude bits, or `None` for the integer zero.
+    #[must_use]
+    pub fn trailing_zeros(&self) -> Option<u64> {
+        (!self.is_zero()).then(|| mag_trailing_zeros(&self.magnitude))
+    }
+
+    /// Shifts the magnitude left by `bits`, preserving the sign.
+    ///
+    /// This multiplies by 2<sup>`bits`</sup> for every value, negative included.
+    #[must_use]
+    pub fn shl(&self, bits: u32) -> Self {
+        self.shl_using(bits, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn shl_in(&self, bits: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.shl_using(bits, scratch)
+    }
+
+    pub(crate) fn shl_using(
+        &self,
+        bits: u32,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        Ok(Self::from_parts(
+            self.negative,
+            mag_shl(&self.magnitude, u64::from(bits), storage)?,
+        ))
+    }
+
+    /// Shifts the magnitude right by `bits`, preserving the sign.
+    ///
+    /// The shift is applied to the **magnitude**, so it truncates **toward
+    /// zero** rather than toward negative infinity: `(-5).shr(1)` is `-2`, not
+    /// `-3`. This is division by 2<sup>`bits`</sup> under the same rounding rule
+    /// [`BigInt::div_rem`] uses, not Rust's arithmetic `>>` on a signed primitive.
+    #[must_use]
+    pub fn shr(&self, bits: u32) -> Self {
+        self.shr_using(bits, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn shr_in(&self, bits: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.shr_using(bits, scratch)
+    }
+
+    pub(crate) fn shr_using(
+        &self,
+        bits: u32,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        self.shr_wide_using(u64::from(bits), storage)
+    }
+
+    /// The same magnitude shift at the integer home's full bit-count width.
+    pub(crate) fn shr_wide_using(
+        &self,
+        bits: u64,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        Ok(Self::from_parts(
+            self.negative,
+            mag_shr(&self.magnitude, bits, storage)?,
+        ))
+    }
+
+    /// Returns the exact integer floor square root, or `None` when negative.
+    ///
+    /// The result `r` satisfies `r * r <= self < (r + 1) * (r + 1)`.
+    pub fn sqrt_floor(&self) -> Option<Self> {
+        self.sqrt_floor_using(&Unbounded)
+            .expect("unbounded integer storage")
+    }
+
+    /// The same exact operation using only admitted reusable limb destinations.
+    /// # Errors
+    /// Refuses exhausted destination count or limb capacity without allocating.
+    pub fn sqrt_floor_in(&self, scratch: &LimbScratch) -> Result<Option<Self>, LimbScratchError> {
+        self.sqrt_floor_using(scratch)
+    }
+
+    fn sqrt_floor_using(&self, storage: &impl Allocate) -> Result<Option<Self>, LimbScratchError> {
+        if self.negative {
+            return Ok(None);
         }
-        let limbs = magnitude_rem(&self.limbs, &divisor.limbs);
-        Some(Self {
-            negative: self.negative && !limbs.is_empty(),
-            limbs,
+        Ok(Some(Self::from_parts(
+            false,
+            mag_sqrt_floor(&self.magnitude, storage)?,
+        )))
+    }
+
+    /// Exact product followed by truncated division, without retaining a heap
+    /// product. The same product/division bodies serve ordinary operations.
+    /// # Errors
+    /// Refuses scratch exhaustion; a zero divisor returns `Ok(None)`.
+    pub fn mul_div_rem_in(
+        &self,
+        factor: &Self,
+        divisor: &Self,
+        scratch: &LimbScratch,
+    ) -> Result<Option<(Self, Self)>, LimbScratchError> {
+        self.mul_div_rem_using(factor, divisor, scratch)
+    }
+
+    /// Exact fused product/division using ordinary integer storage.
+    #[must_use]
+    pub fn mul_div_rem(&self, factor: &Self, divisor: &Self) -> Option<(Self, Self)> {
+        self.mul_div_rem_using(factor, divisor, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+    pub(crate) fn mul_div_rem_using(
+        &self,
+        factor: &Self,
+        divisor: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Option<(Self, Self)>, LimbScratchError> {
+        if divisor.is_zero() {
+            return Ok(None);
+        }
+        with_product(&self.magnitude, &factor.magnitude, storage, |product| {
+            let (q, r) = mag_div_rem(product, &divisor.magnitude, storage)?;
+            let negative = self.negative != factor.negative;
+            Ok(Some((
+                Self::from_parts(negative != divisor.negative, q),
+                Self::from_parts(negative, r),
+            )))
         })
     }
 
-    /// Whether the value is odd. Every limb above the first is a multiple of
-    /// `1e9`, which is even, so the lowest limb decides.
+    /// Exact floor root of a nonnegative product without retaining that product.
+    /// # Errors
+    /// Refuses scratch exhaustion; a negative product returns `Ok(None)`.
+    pub fn sqrt_product_floor_in(
+        &self,
+        factor: &Self,
+        scratch: &LimbScratch,
+    ) -> Result<Option<Self>, LimbScratchError> {
+        self.sqrt_product_using(factor, scratch)
+    }
+    /// Exact fused product/root using ordinary integer storage.
     #[must_use]
-    pub fn is_odd(&self) -> bool {
-        self.limbs.first().is_some_and(|limb| limb & 1 == 1)
+    pub fn sqrt_product_floor(&self, factor: &Self) -> Option<Self> {
+        self.sqrt_product_using(factor, &Unbounded)
+            .expect("unbounded integer storage")
+    }
+    fn sqrt_product_using(
+        &self,
+        factor: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Option<Self>, LimbScratchError> {
+        if self.is_zero() || factor.is_zero() {
+            return Ok(Some(Self::zero()));
+        }
+        if self.negative != factor.negative {
+            return Ok(None);
+        }
+        with_product(&self.magnitude, &factor.magnitude, storage, |product| {
+            Ok(Some(Self::from_parts(
+                false,
+                mag_sqrt_floor(product, storage)?,
+            )))
+        })
     }
 
-    /// The value with its sign reversed; zero stays zero.
+    /// Compare two exact products without retaining either common stack product.
+    /// # Errors
+    /// Refuses scratch limb/destination exhaustion without allocating a fallback.
+    pub fn compare_products_in(
+        a: &Self,
+        b: &Self,
+        c: &Self,
+        d: &Self,
+        scratch: &LimbScratch,
+    ) -> Result<Ordering, LimbScratchError> {
+        Self::compare_products_using(a, b, c, d, scratch)
+    }
+    /// Compare two exact products using ordinary integer storage.
+    #[must_use]
+    pub fn compare_products(a: &Self, b: &Self, c: &Self, d: &Self) -> Ordering {
+        Self::compare_products_using(a, b, c, d, &Unbounded).expect("unbounded integer storage")
+    }
+    pub(crate) fn compare_products_using(
+        a: &Self,
+        b: &Self,
+        c: &Self,
+        d: &Self,
+        storage: &impl Allocate,
+    ) -> Result<Ordering, LimbScratchError> {
+        let first_negative = !a.is_zero() && !b.is_zero() && a.negative != b.negative;
+        let second_negative = !c.is_zero() && !d.is_zero() && c.negative != d.negative;
+        if first_negative != second_negative {
+            return Ok(if first_negative {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            });
+        }
+        with_product(&a.magnitude, &b.magnitude, storage, |first| {
+            with_product(&c.magnitude, &d.magnitude, storage, |second| {
+                let order = mag_cmp(first, second);
+                Ok(if first_negative {
+                    order.reverse()
+                } else {
+                    order
+                })
+            })
+        })
+    }
+
+    /// Parses a non-empty run of ASCII digits, with no sign and no separators.
+    ///
+    /// Returns `None` for an empty string or for any byte that is not `0`–`9`.
+    /// Leading zeros are accepted and carry no meaning.
+    pub fn from_decimal_digits(digits: &str) -> Option<Self> {
+        Self::from_decimal_bytes(digits.bytes())
+    }
+
+    /// Parses a nonempty sequence of ASCII digits without allocating a string.
+    /// Sign and separators are refused; leading zeros are accepted.
+    pub fn from_decimal_bytes(digits: impl Iterator<Item = u8>) -> Option<Self> {
+        Some(Self::from_parts(false, mag_from_digit_bytes(digits)?))
+    }
+
+    /// Builds a non-negative integer from every `u128` magnitude.
+    #[must_use]
+    pub fn from_u128(value: u128) -> Self {
+        Self::from_parts(false, mag_from_u128(value))
+    }
+
+    /// Canonical little-endian binary limbs, with no most-significant zero.
+    #[must_use]
+    pub fn limbs(&self) -> &[u64] {
+        &self.magnitude
+    }
+
+    /// Heap bytes owned by this value, excluding its three inline limbs.
+    #[must_use]
+    pub fn allocated_bytes(&self) -> usize {
+        self.magnitude.allocated_bytes()
+    }
+
+    /// The exact unsigned magnitude, when it fits in `u128`.
+    #[must_use]
+    pub fn unsigned_abs_u128(&self) -> Option<u128> {
+        mag_to_u128(&self.magnitude)
+    }
+
+    /// Copy immutable limbs into an admitted reusable destination. Inline
+    /// magnitudes remain inline and require no arena slot.
+    /// # Errors
+    /// Refuses scratch capacity or destination exhaustion without allocating.
+    pub fn copy_in(&self, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        if matches!(self.magnitude, Mag::Pooled(_)) {
+            return Ok(self.clone());
+        }
+        Ok(Self::from_parts(
+            self.negative,
+            scratch.copy(&self.magnitude)?,
+        ))
+    }
+
+    /// Detach an immutable value from reusable destinations into ordinary owned
+    /// storage. Numerical preparations admit this copy before calling it.
+    #[must_use]
+    pub fn detached(&self) -> Self {
+        Self::from_parts(self.negative, Mag::from_slice(&self.magnitude))
+    }
+
+    /// Retain canonical immutable limbs in shared owned storage. Inline values
+    /// stay inline; subsequent clones share longer limbs without allocating.
+    /// Preparing shared storage is an admitted caller operation, never an
+    /// arithmetic fallback. Arithmetic always writes into fresh destinations.
+    #[must_use]
+    pub fn into_shared(mut self) -> Self {
+        self.magnitude = match self.magnitude {
+            Mag::Heap(words) => Mag::Shared(std::sync::Arc::new(words)),
+            Mag::Pooled(words) => Mag::Shared(std::sync::Arc::new(words.words().to_vec())),
+            magnitude => magnitude,
+        };
+        self
+    }
+
+    /// Exact heap retained after immutable sharing. This can be checked before
+    /// preparing ownership headers or copying reusable destination limbs.
+    #[must_use]
+    pub fn shared_owned_bytes(&self) -> usize {
+        match &self.magnitude {
+            Mag::Inline { .. } => 0,
+            Mag::Heap(words) => {
+                words.capacity() * size_of::<u64>() + size_of::<Vec<u64>>() + 2 * size_of::<usize>()
+            }
+            Mag::Shared(_) => self.allocated_bytes(),
+            Mag::Pooled(words) => {
+                size_of_val(words.words()) + size_of::<Vec<u64>>() + 2 * size_of::<usize>()
+            }
+        }
+    }
+
+    /// Heap bytes the detached canonical magnitude will retain.
+    #[must_use]
+    pub fn detached_heap_bytes(&self) -> usize {
+        if self.magnitude.len() <= 3 {
+            0
+        } else {
+            self.magnitude.len().saturating_mul(size_of::<u64>())
+        }
+    }
+
+    /// Builds a value from a sign flag and a magnitude, restoring the invariant.
+    fn from_parts(negative: bool, mut magnitude: Mag) -> Self {
+        mag_trim(&mut magnitude);
+        let value = Self {
+            negative: negative && !magnitude.is_empty(),
+            magnitude,
+        };
+        value.assert_canonical();
+        value
+    }
+
+    /// Checks the representation invariant. The checks compile out of release
+    /// builds; the call itself is unconditional so the function is never dead.
+    fn assert_canonical(&self) {
+        debug_assert!(
+            self.magnitude.last() != Some(&0),
+            "magnitude has a trailing zero limb"
+        );
+        debug_assert!(
+            !(self.negative && self.magnitude.is_empty()),
+            "zero must not carry a sign"
+        );
+    }
+
+    /// Returns `true` when this is exactly one.
+    #[must_use]
+    pub fn is_one(&self) -> bool {
+        !self.negative && mag_is_one(&self.magnitude)
+    }
+
+    /// Returns `true` when the magnitude is odd.
+    #[must_use]
+    pub fn is_odd(&self) -> bool {
+        self.magnitude.first().copied().unwrap_or(0) & 1 == 1
+    }
+
+    /// Additive inverse, preserving canonical zero.
     #[must_use]
     pub fn negated(&self) -> Self {
-        Self {
-            negative: !self.negative && !self.is_zero(),
-            limbs: self.limbs.clone(),
-        }
+        self.neg()
+    }
+
+    /// Exact bit length, also a conservative numerical workspace bound.
+    #[must_use]
+    pub fn bits_upper_bound(&self) -> usize {
+        usize::try_from(self.bit_len()).unwrap_or(usize::MAX)
+    }
+
+    /// Multiply by an exact power of two.
+    #[must_use]
+    pub fn mul_pow2(&self, exp: u32) -> Self {
+        self.shl(exp)
+    }
+
+    /// Exact power-of-two product with bounded reusable storage.
+    /// # Errors
+    /// Refuses scratch limb/destination exhaustion without allocating.
+    pub fn mul_pow2_in(&self, exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.shl_in(exp, scratch)
+    }
+
+    /// Multiply by an exact power of ten.
+    #[must_use]
+    pub fn mul_pow10(&self, exp: u32) -> Self {
+        self.mul(&Self::pow10(exp))
+    }
+
+    /// Exact power-of-ten product with bounded reusable storage.
+    /// # Errors
+    /// Refuses scratch limb/destination exhaustion without allocating.
+    pub fn mul_pow10_in(&self, exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
+        self.mul_in(&Self::pow10_in(exp, scratch)?, scratch)
+    }
+
+    /// Exact multiplication by a machine factor.
+    #[must_use]
+    pub fn mul_small(&self, factor: u32) -> Self {
+        self.mul(&Self::from_u64(u64::from(factor)))
+    }
+
+    /// Truncated quotient and unsigned remainder of a positive machine divisor.
+    /// Zero divisor returns `None`.
+    #[must_use]
+    pub fn div_rem_u64(&self, divisor: u64) -> Option<(Self, u64)> {
+        let (quotient, remainder) = self.div_rem(&Self::from_u64(divisor))?;
+        Some((quotient, remainder.unsigned_abs_u128()? as u64))
     }
 }
 
-/// The full arithmetic order on the value — sign first, then magnitude.
-///
-/// This is a genuine total order over the values this type represents, and it agrees
-/// with the derived `PartialEq` because the representation is canonical (zero is the
-/// empty limb vector with `negative == false`, and every constructor trims
-/// most-significant zero limbs), so two `BigInt`s compare `Equal` exactly when they
-/// are structurally equal. Providing it is safe in the way an `Ord` on
-/// [`crate::XsdValue`] would NOT be: an integer has one value space and one order,
-/// with no lexical form to conflate it with and no cross-datatype promotion to hide.
 impl Ord for BigInt {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.negative, other.negative) {
+            // Zero is never negative, so a sign mismatch already decides it.
             (false, true) => Ordering::Greater,
             (true, false) => Ordering::Less,
-            (false, false) => magnitude_cmp(&self.limbs, &other.limbs),
-            // Both negative: the larger magnitude is the smaller value.
-            (true, true) => magnitude_cmp(&other.limbs, &self.limbs),
+            (false, false) => mag_cmp(&self.magnitude, &other.magnitude),
+            (true, true) => mag_cmp(&other.magnitude, &self.magnitude),
         }
     }
 }
@@ -550,816 +1388,338 @@ impl PartialOrd for BigInt {
     }
 }
 
-/// A magnitude's binary form as far as a correctly rounded float conversion
-/// needs it: either the whole value (it fits `u128`, whose casts to `f64`/`f32`
-/// are themselves correctly rounded), or its top 64 significant bits with a
-/// sticky bit for everything below, plus the power of two they are scaled by.
-enum BinaryTop {
-    /// The exact magnitude.
-    Small(u128),
-    /// `value ≈ top × 2^shift`: `top` has bit 63 set, and its bit 0 is OR-ed
-    /// with "some discarded lower bit was nonzero" so that a round-to-nearest of
-    /// `top` to at most 53 bits rounds exactly as the full value would.
-    Scaled { top: u64, shift: u32 },
-}
-
-/// Convert base-`1e9` limbs (least significant first) into [`BinaryTop`], exactly.
-fn binary_top64(limbs: &[u32]) -> BinaryTop {
-    // Exact base conversion into little-endian base-2^64 words:
-    // `words = words × 1e9 + limb`, most significant limb first. Each word's
-    // product plus carry is `< 2^64 × 1e9 + 2^64 < 2^128`, so the `u128` lane
-    // never overflows.
-    let mut words: Vec<u64> = Vec::with_capacity(limbs.len() / 2 + 1);
-    for &limb in limbs.iter().rev() {
-        let mut carry = u128::from(limb);
-        for word in &mut words {
-            let product = u128::from(*word) * u128::from(LIMB_BASE) + carry;
-            // Low 64 bits of the product; the high half carries on.
-            *word = product as u64;
-            carry = product >> 64;
+impl fmt::Display for BigInt {
+    /// Writes the canonical decimal form: a `-` only when negative, no leading
+    /// zeros, and `0` for zero.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.magnitude.is_empty() {
+            return f.write_str("0");
         }
-        if carry > 0 {
-            // `carry < 2^64` by the bound above.
-            words.push(carry as u64);
+        let mut groups = Mag::new();
+        let mut cur = self.magnitude.clone();
+        while !cur.is_empty() {
+            let (q, r) =
+                mag_divmod_small(&cur, CHUNK_BASE, &Unbounded).expect("unbounded integer storage");
+            groups.push(r);
+            cur = q;
         }
-    }
-    match words.as_slice() {
-        [] => BinaryTop::Small(0),
-        [low] => BinaryTop::Small(u128::from(*low)),
-        [low, high] => BinaryTop::Small((u128::from(*high) << 64) | u128::from(*low)),
-        [lower @ .., next, top_word] => {
-            // `top_word != 0` (the conversion never pushes a zero word).
-            let lead = top_word.leading_zeros();
-            let top = if lead == 0 {
-                *top_word
-            } else {
-                (top_word << lead) | (next >> (64 - lead))
-            };
-            let dropped_from_next = if lead == 0 { *next } else { next << lead };
-            let sticky = dropped_from_next != 0 || lower.iter().any(|&word| word != 0);
-            // Bit length is `64 × (len − 1) + (64 − lead)`; the top 64 bits sit
-            // `bit_length − 64` places up. `words.len() ≤ u32::MAX / 64` for any
-            // magnitude this crate can build, so the product cannot overflow.
-            let word_count = u32::try_from(lower.len() + 2).unwrap_or(u32::MAX);
-            let shift = 64 * (word_count - 1) - lead;
-            BinaryTop::Scaled {
-                top: top | u64::from(sticky),
-                shift,
-            }
+        if self.negative {
+            f.write_str("-")?;
         }
-    }
-}
-
-/// `2^exp` as an `f64`, exactly, for `exp ≤ 1023`.
-fn pow2_f64(exp: u32) -> f64 {
-    debug_assert!(exp <= 1023, "2^{exp} is not a finite f64");
-    f64::from_bits((u64::from(exp) + 1023) << 52)
-}
-
-/// `2^exp` as an `f32`, exactly, for `exp ≤ 127`.
-fn pow2_f32(exp: u32) -> f32 {
-    debug_assert!(exp <= 127, "2^{exp} is not a finite f32");
-    f32::from_bits((exp + 127) << 23)
-}
-
-/// The canonical base-`1e9` limbs of a non-zero `u128` magnitude, least-significant
-/// first. Shared by [`BigInt::from_i128`] and [`BigInt::from_u128`], which differ only
-/// in where the sign comes from.
-fn magnitude_limbs(mut magnitude: u128) -> Vec<u32> {
-    let mut limbs = Vec::new();
-    while magnitude > 0 {
-        // `magnitude % LIMB_BASE < 1e9`, which fits `u32` with headroom to spare.
-        limbs.push((magnitude % u128::from(LIMB_BASE)) as u32);
-        magnitude /= u128::from(LIMB_BASE);
-    }
-    limbs
-}
-
-/// Render a canonical (no trailing zero limb) magnitude as unsigned decimal digits,
-/// with no leading zero (`"0"` for the empty/zero magnitude). Shared by
-/// [`BigInt::to_decimal_string`] and [`BigInt::to_decimal_lexical`], which differ
-/// only in the sign placement and in whether a decimal point is spliced in.
-fn magnitude_decimal_digits(limbs: &[u32]) -> String {
-    let Some((most_significant, rest)) = limbs.split_last() else {
-        return "0".to_string();
-    };
-    let mut out = String::with_capacity(limbs.len() * 9);
-    write!(out, "{most_significant}").expect("writing to a String cannot fail");
-    for limb in rest.iter().rev() {
-        write!(out, "{limb:09}").expect("writing to a String cannot fail");
-    }
-    out
-}
-
-/// Compare two canonical (no trailing zero limb) magnitudes.
-fn magnitude_cmp(a: &[u32], b: &[u32]) -> Ordering {
-    if a.len() != b.len() {
-        return a.len().cmp(&b.len());
-    }
-    for (x, y) in a.iter().rev().zip(b.iter().rev()) {
-        if x != y {
-            return x.cmp(y);
+        let mut rest = groups.iter().rev();
+        let leading = rest.next().expect("a non-zero magnitude has a group");
+        write!(f, "{leading}")?;
+        for group in rest {
+            write!(f, "{group:019}")?;
         }
+        Ok(())
     }
-    Ordering::Equal
 }
 
-/// `a + b` over base-`1e9` magnitudes (both little-endian, canonical).
+/// Exact floor of `sqrt(numerator/denominator) * 2^fractional_bits`.
+/// Returns `None` for a negative numerator, nonpositive denominator, or shift
+/// overflow. Resource admission is the caller's responsibility, as for [`BigInt`].
+#[must_use]
+pub fn sqrt_ratio_floor(
+    numerator: &BigInt,
+    denominator: &BigInt,
+    fractional_bits: u32,
+) -> Option<BigInt> {
+    sqrt_ratio_floor_using(numerator, denominator, fractional_bits, &Unbounded)
+        .expect("unbounded integer storage")
+}
+
+/// The same floor-square-root equation using admitted reusable destinations.
 ///
-/// `#[inline]`: `SUM` folds one `i128` per row through it, and that loop pays
-/// for a call per row when the arithmetic in `arith` makes it a shared callee.
-#[allow(
-    clippy::inline_always,
-    reason = "`add_assign` folds one value per `SUM` row through it; out of line, every row pays a call"
-)]
-#[inline(always)]
-fn magnitude_add(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = Vec::with_capacity(a.len().max(b.len()) + 1);
-    let mut carry: u64 = 0;
-    for i in 0..a.len().max(b.len()) {
-        let x = u64::from(a.get(i).copied().unwrap_or(0));
-        let y = u64::from(b.get(i).copied().unwrap_or(0));
-        let sum = x + y + carry;
-        // `sum % LIMB_BASE < 1e9`, which fits `u32` with headroom to spare.
-        out.push((sum % LIMB_BASE) as u32);
-        carry = sum / LIMB_BASE;
-    }
-    if carry > 0 {
-        // A carry out of a two-limb-plus-carry sum is `< LIMB_BASE`, which fits `u32`.
-        out.push(carry as u32);
-    }
-    out
+/// # Errors
+/// Refuses exhausted destination count or limb capacity without heap fallback.
+/// Invalid signed inputs or shift overflow return `Ok(None)` before allocation.
+pub fn sqrt_ratio_floor_in(
+    numerator: &BigInt,
+    denominator: &BigInt,
+    fractional_bits: u32,
+    scratch: &LimbScratch,
+) -> Result<Option<BigInt>, LimbScratchError> {
+    sqrt_ratio_floor_using(numerator, denominator, fractional_bits, scratch)
 }
 
-/// `a - b` over base-`1e9` magnitudes, requiring `a >= b` (per
-/// [`magnitude_cmp`]) — the caller always checks before calling. Returns the
-/// canonical (trailing-zero-limb-trimmed) result.
-fn magnitude_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = Vec::with_capacity(a.len());
-    let mut borrow: i64 = 0;
-    for (i, &a_limb) in a.iter().enumerate() {
-        let x = i64::from(a_limb);
-        let y = i64::from(b.get(i).copied().unwrap_or(0));
-        let mut diff = x - y - borrow;
-        if diff < 0 {
-            diff += i64::try_from(LIMB_BASE).expect("LIMB_BASE fits i64 with vast headroom");
-            borrow = 1;
-        } else {
-            borrow = 0;
-        }
-        // `diff` is in `[0, LIMB_BASE)` here by construction, so it fits `u32` exactly.
-        out.push(diff as u32);
+fn sqrt_ratio_floor_using(
+    numerator: &BigInt,
+    denominator: &BigInt,
+    fractional_bits: u32,
+    storage: &impl Allocate,
+) -> Result<Option<BigInt>, LimbScratchError> {
+    if numerator.is_negative() || denominator <= &BigInt::zero() {
+        return Ok(None);
     }
-    while out.last() == Some(&0) {
-        out.pop();
-    }
-    out
-}
-
-/// `a × factor` over a base-`1e9` magnitude, where `factor < 2^32`. Each limb's
-/// product is `< 1e9 × 2^32 < 2^62`, inside `u64` alongside the carry, which is
-/// itself below `2^32`.
-fn mul_by_small(a: &[u32], factor: u64) -> Vec<u32> {
-    let mut out = Vec::with_capacity(a.len() + 1);
-    let mut carry: u64 = 0;
-    for &limb in a {
-        let product = u64::from(limb) * factor + carry;
-        out.push((product % LIMB_BASE) as u32);
-        carry = product / LIMB_BASE;
-    }
-    while carry > 0 {
-        out.push((carry % LIMB_BASE) as u32);
-        carry /= LIMB_BASE;
-    }
-    while out.last() == Some(&0) {
-        out.pop();
-    }
-    out
-}
-
-/// `a × b` over base-`1e9` magnitudes (both canonical and non-empty). Each column
-/// accumulates `limb × limb + limb + carry < 1e18 + 2e9 < 2^64`.
-fn magnitude_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
-    let mut out = vec![0u32; a.len() + b.len()];
-    for (i, &x) in a.iter().enumerate() {
-        let mut carry: u64 = 0;
-        for (j, &y) in b.iter().enumerate() {
-            let cell = u64::from(x) * u64::from(y) + u64::from(out[i + j]) + carry;
-            // `cell % LIMB_BASE < 1e9`, which fits `u32`.
-            out[i + j] = (cell % LIMB_BASE) as u32;
-            carry = cell / LIMB_BASE;
-        }
-        // The top cell of this row is still zero, so the carry (`< 1e9`) fits.
-        out[i + b.len()] = carry as u32;
-    }
-    while out.last() == Some(&0) {
-        out.pop();
-    }
-    out
-}
-
-/// `a mod b` over base-`1e9` magnitudes, `b` canonical and non-empty: the
-/// remainder half of the long division in `arith`.
-fn magnitude_rem(a: &[u32], b: &[u32]) -> Vec<u32> {
-    arith::magnitude_div_rem(a, b).1
-}
-
-/// `a ÷ divisor` over a base-`1e9` magnitude, `divisor > 0` (the caller checks).
-/// Standard schoolbook single-limb-divisor long division, most significant limb
-/// first: at each step the running remainder satisfies `remainder < divisor`
-/// (the loop invariant), so `cur = remainder × LIMB_BASE + limb < divisor ×
-/// LIMB_BASE`, which makes the quotient digit `cur / divisor < LIMB_BASE` —
-/// always exactly one base-`1e9` digit, however large `divisor` is. Returns the
-/// canonical (trailing-zero-limb-trimmed) quotient and the final remainder.
-fn magnitude_div_rem_u64(a: &[u32], divisor: u64) -> (Vec<u32>, u64) {
-    let mut quotient = vec![0u32; a.len()];
-    let mut remainder: u128 = 0;
-    let divisor = u128::from(divisor);
-    for i in (0..a.len()).rev() {
-        let cur = remainder * u128::from(LIMB_BASE) + u128::from(a[i]);
-        quotient[i] = (cur / divisor) as u32;
-        remainder = cur % divisor;
-    }
-    while quotient.last() == Some(&0) {
-        quotient.pop();
-    }
-    (
-        quotient,
-        u64::try_from(remainder).expect("remainder < divisor <= u64::MAX"),
-    )
+    let Some(shift) = fractional_bits.checked_mul(2) else {
+        return Ok(None);
+    };
+    let shifted = numerator.shl_using(shift, storage)?;
+    let (quotient, _) = shifted
+        .div_rem_using(denominator, storage)?
+        .expect("validated positive denominator");
+    quotient.sqrt_floor_using(storage)
 }
 
 #[cfg(test)]
 mod tests {
     use super::BigInt;
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_hash::mix;
 
     #[test]
-    fn roundtrips_i128_extremes() {
-        for v in [
-            0_i128,
-            1,
-            -1,
-            i128::MAX,
-            i128::MIN,
-            i128::MAX - 1,
-            i128::MIN + 1,
+    fn detaching_owned_coefficients_returns_their_reusable_destinations() {
+        let expected = BigInt::one().shl(448).add(&BigInt::from_i64(19)).neg();
+        let detached = {
+            let scratch = super::LimbScratch::new(2, 16).unwrap();
+            let source = expected.copy_in(&scratch).unwrap();
+            assert_eq!(scratch.available(), 1);
+            let bytes = source.detached_heap_bytes();
+            let detached = source.detached();
+            assert_eq!(detached.allocated_bytes(), bytes);
+            assert_eq!(detached, expected);
+            drop(source);
+            assert_eq!(scratch.available(), scratch.destination_capacity());
+            detached
+        };
+        assert_eq!(detached, expected);
+        assert_eq!(BigInt::from_i64(-17).detached_heap_bytes(), 0);
+    }
+
+    #[test]
+    fn scaled_rational_square_root_is_exact_at_boundaries() {
+        for bits in [0, 1, 63, 96, 256] {
+            let denominator = BigInt::from_i64(7);
+            let numerator = BigInt::from_i64(2);
+            let root = super::sqrt_ratio_floor(&numerator, &denominator, bits).unwrap();
+            let scaled = numerator.shl(2 * bits);
+            assert!(root.mul(&root).mul(&denominator) <= scaled);
+            let next = root.add(&BigInt::one());
+            assert!(next.mul(&next).mul(&denominator) > scaled);
+        }
+        assert_eq!(
+            super::sqrt_ratio_floor(&BigInt::zero(), &BigInt::one(), 96),
+            Some(BigInt::zero())
+        );
+        assert_eq!(
+            super::sqrt_ratio_floor(&BigInt::from_i64(9), &BigInt::from_i64(4), 1),
+            Some(BigInt::from_i64(3))
+        );
+        assert!(super::sqrt_ratio_floor(&BigInt::from_i64(-1), &BigInt::one(), 96).is_none());
+        assert!(super::sqrt_ratio_floor(&BigInt::one(), &BigInt::zero(), 96).is_none());
+        assert!(super::sqrt_ratio_floor(&BigInt::one(), &BigInt::from_i64(-1), 96).is_none());
+        assert!(super::sqrt_ratio_floor(&BigInt::one(), &BigInt::one(), u32::MAX).is_none());
+    }
+
+    #[test]
+    fn admitted_ratio_roots_match_and_refuse_without_heap_fallback() {
+        let scratch = super::LimbScratch::new(32, 32).unwrap();
+        for bits in [0, 1, 63, 96, 256] {
+            for (numerator, denominator) in [(0, 1), (9, 4), (2, 7), (17, 3)] {
+                let numerator = BigInt::from_i64(numerator);
+                let denominator = BigInt::from_i64(denominator);
+                let expected = super::sqrt_ratio_floor(&numerator, &denominator, bits);
+                let window = CurrentThreadWindow::open();
+                let actual =
+                    super::sqrt_ratio_floor_in(&numerator, &denominator, bits, &scratch).unwrap();
+                assert_eq!(window.close().allocations, 0);
+                assert_eq!(actual, expected);
+            }
+        }
+        let small = super::LimbScratch::new(1, 3).unwrap();
+        let window = CurrentThreadWindow::open();
+        assert!(
+            super::sqrt_ratio_floor_in(&BigInt::one(), &BigInt::from_i64(7), 256, &small).is_err()
+        );
+        assert_eq!(window.close().allocations, 0);
+        for (numerator, denominator, bits) in
+            [(-1, 1, 96), (1, 0, 96), (1, -1, 96), (1, 1, u32::MAX)]
+        {
+            let window = CurrentThreadWindow::open();
+            assert_eq!(
+                super::sqrt_ratio_floor_in(
+                    &BigInt::from_i64(numerator),
+                    &BigInt::from_i64(denominator),
+                    bits,
+                    &small
+                ),
+                Ok(None)
+            );
+            assert_eq!(window.close().allocations, 0);
+        }
+    }
+
+    #[test]
+    fn inline_magnitude_survives_carry_borrow_and_spill() {
+        let inline = BigInt::one().shl(191).sub(&BigInt::one());
+        assert_eq!(inline.allocated_bytes(), 0);
+        let spilled = inline.shl(2);
+        assert_eq!(spilled.limbs().len(), 4);
+        assert!(spilled.allocated_bytes() >= 32);
+        let restored = spilled.shr(2);
+        assert_eq!(restored, inline);
+        assert_eq!(restored.allocated_bytes(), 0);
+        let window = CurrentThreadWindow::open();
+        let result = inline.add(&BigInt::one()).sub(&BigInt::one());
+        let counters = window.close();
+        assert_eq!(result, inline);
+        assert_eq!(counters.allocations, 0);
+    }
+
+    #[test]
+    fn binary_grid_division_matches_reconstruction_across_limb_edges() {
+        let mut seed = 0x28f6_8194_52cb_970d;
+        for _ in 0..512 {
+            let low = mix::splitmix64_next(&mut seed);
+            let high = mix::splitmix64_next(&mut seed);
+            let source = BigInt::from_u128((u128::from(high) << 64) | u128::from(low))
+                .shl(129)
+                .add(&BigInt::from_u64(low));
+            let shift = (mix::splitmix64_next(&mut seed) % 260) as u32;
+            let divisor = BigInt::one().shl(shift);
+            let (q, r) = source.div_rem(&divisor).unwrap();
+            assert_eq!(q.mul(&divisor).add(&r), source);
+            assert!(r >= BigInt::zero() && r < divisor);
+            assert_eq!(q, source.shr(shift));
+        }
+    }
+
+    #[test]
+    fn normalized_division_reconstructs_all_limb_normalizations() {
+        let mut seed = 0x385a_9e14_2db7_8cf0;
+        for length in 2..=32 {
+            for normalization in 0..64 {
+                let mut denominator_words = super::Mag::zeroed(length);
+                for limb in &mut denominator_words {
+                    *limb = mix::splitmix64_next(&mut seed);
+                }
+                denominator_words[length - 1] = (mix::splitmix64_next(&mut seed) >> normalization)
+                    | (1 << (63 - normalization));
+                let denominator = BigInt {
+                    negative: false,
+                    magnitude: denominator_words,
+                };
+                let wanted_quotient = BigInt::from_u128(
+                    (u128::from(mix::splitmix64_next(&mut seed)) << 64)
+                        | u128::from(mix::splitmix64_next(&mut seed)),
+                )
+                .shl((length as u32 % 5) * 64);
+                let wanted_remainder = denominator.sub(&BigInt::one());
+                let numerator = wanted_quotient.mul(&denominator).add(&wanted_remainder);
+                let (quotient, remainder) = numerator.div_rem(&denominator).unwrap();
+                assert_eq!(quotient, wanted_quotient);
+                assert_eq!(remainder, wanted_remainder);
+                assert_eq!(quotient.mul(&denominator).add(&remainder), numerator);
+                assert!(remainder >= BigInt::zero() && remainder < denominator);
+            }
+        }
+    }
+
+    #[test]
+    fn normalized_division_corrects_estimate_and_addback_edges() {
+        for words in [
+            [1, 0, 1 << 63],
+            [u64::MAX, 0, 1 << 63],
+            [u64::MAX, u64::MAX, 1 << 63],
+            [u64::MAX, u64::MAX, u64::MAX],
+            [0x1234, u64::MAX, 1],
         ] {
-            assert_eq!(BigInt::from_i128(v).to_i128(), Some(v), "roundtrip of {v}");
-        }
-    }
-
-    #[test]
-    fn adds_within_i128_exactly() {
-        let mut a = BigInt::from_i128(40);
-        a.add_i128(2);
-        assert_eq!(a.to_i128(), Some(42));
-        assert_eq!(a.to_decimal_string(), "42");
-    }
-
-    #[test]
-    fn cancels_back_into_i128_range() {
-        // i128::MAX + 1 + (-i128::MAX) == 1, even though the running total visits
-        // i128::MAX (fits) then i128::MAX + 1 (does NOT fit i128) along the way.
-        let mut sum = BigInt::from_i128(i128::MAX);
-        sum.add_i128(1);
-        sum.add_i128(-i128::MAX);
-        assert_eq!(sum.to_i128(), Some(1));
-        assert_eq!(sum.to_decimal_string(), "1");
-    }
-
-    #[test]
-    fn exceeds_i128_and_still_renders_exactly() {
-        let mut sum = BigInt::from_i128(i128::MAX);
-        sum.add_i128(i128::MAX);
-        assert_eq!(sum.to_i128(), None, "2 * i128::MAX must not fit i128");
-        assert_eq!(
-            sum.to_decimal_string(),
-            "340282366920938463463374607431768211454"
-        );
-    }
-
-    #[test]
-    fn negative_exceeds_i128_and_still_renders_exactly() {
-        let mut sum = BigInt::from_i128(i128::MIN);
-        sum.add_i128(i128::MIN);
-        assert_eq!(sum.to_i128(), None);
-        assert_eq!(
-            sum.to_decimal_string(),
-            "-340282366920938463463374607431768211456"
-        );
-    }
-
-    #[test]
-    fn to_decimal_lexical_matches_decimal_canonical_lexical_shape() {
-        // Integer-valued: no decimal point, matching XSD 1.1 §E.1 `decimalCanonicalMap`.
-        assert_eq!(BigInt::from_i128(0).to_decimal_lexical(0), "0");
-        assert_eq!(BigInt::from_i128(42).to_decimal_lexical(0), "42");
-        // scale > 0 but the magnitude's digits are all consumed by trailing zeros:
-        // 4200 at scale 2 is "42.00" -> trimmed to "42".
-        assert_eq!(BigInt::from_i128(4200).to_decimal_lexical(2), "42");
-        // Fractional, trailing zeros trimmed but not the whole fraction: 425 at
-        // scale 2 is "4.25".
-        assert_eq!(BigInt::from_i128(425).to_decimal_lexical(2), "4.25");
-        // Magnitude shorter than scale: leading zero padding in the fraction.
-        assert_eq!(BigInt::from_i128(5).to_decimal_lexical(3), "0.005");
-        // Negative sign preserved.
-        assert_eq!(BigInt::from_i128(-425).to_decimal_lexical(2), "-4.25");
-    }
-
-    #[test]
-    fn to_decimal_lexical_exceeds_i128_and_still_renders_exactly() {
-        // The whole point of this method: a magnitude with no i128 mantissa
-        // representation at all still renders as exact canonical decimal text —
-        // 2 * i128::MAX at scale 18 (AVG's fixed target scale).
-        let mut dividend = BigInt::from_i128(i128::MAX);
-        dividend.add_i128(i128::MAX);
-        let scaled = dividend.mul_pow10(18);
-        assert_eq!(
-            scaled.to_decimal_lexical(18),
-            "340282366920938463463374607431768211454"
-        );
-    }
-
-    #[test]
-    fn addition_is_commutative_and_order_independent() {
-        let values: [i128; 5] = [i128::MAX, 1, -i128::MAX, i128::MIN / 2, -(i128::MIN / 2)];
-        let forward = {
-            let mut acc = BigInt::zero();
-            for v in values {
-                acc.add_i128(v);
-            }
-            acc
-        };
-        let backward = {
-            let mut acc = BigInt::zero();
-            for v in values.iter().rev() {
-                acc.add_i128(*v);
-            }
-            acc
-        };
-        assert_eq!(forward, backward);
-        assert_eq!(forward.to_decimal_string(), "1");
-    }
-
-    #[test]
-    fn zero_is_canonical() {
-        let mut a = BigInt::from_i128(5);
-        a.add_i128(-5);
-        assert!(a.is_zero());
-        assert_eq!(a.to_decimal_string(), "0");
-        assert_eq!(a, BigInt::zero());
-    }
-
-    // A deterministic SplitMix64 counter stream for the float-conversion
-    // tests: the workspace's shared test stream, through `purrdf-testkit` (a
-    // dev-dependency).
-    use purrdf_testkit::rng::splitmix64_next as splitmix64;
-
-    /// The exact `BigInt` `Σ words[i] × 2^(64 i)`, negated when `negative`.
-    fn from_words(words: &[u64], negative: bool) -> BigInt {
-        let mut acc = BigInt::zero();
-        for &word in words.iter().rev() {
-            acc = acc.mul_pow2(64);
-            acc.add_assign(&BigInt::from_u128(u128::from(word)));
-        }
-        if negative && !acc.is_zero() {
-            acc.negative = true;
-        }
-        acc
-    }
-
-    /// `2^exp`, exactly.
-    fn pow2(exp: u32) -> BigInt {
-        BigInt::from_i128(1).mul_pow2(exp)
-    }
-
-    /// `a × 2^exp + offset`, exactly.
-    fn scaled(a: u64, exp: u32, offset: i128) -> BigInt {
-        let mut value = BigInt::from_u128(u128::from(a)).mul_pow2(exp);
-        value.add_i128(offset);
-        value
-    }
-
-    /// A random magnitude of exactly `bits` significant bits (zero for `bits == 0`).
-    fn random_of_bit_length(state: &mut u64, bits: u32) -> BigInt {
-        if bits == 0 {
-            return BigInt::zero();
-        }
-        let word_count = bits.div_ceil(64) as usize;
-        let mut words: Vec<u64> = (0..word_count).map(|_| splitmix64(state)).collect();
-        let top_bits = bits - 64 * (word_count as u32 - 1);
-        let top = words.last_mut().expect("at least one word");
-        if top_bits < 64 {
-            *top &= (1u64 << top_bits) - 1;
-        }
-        *top |= 1u64 << (top_bits - 1);
-        // Sometimes clear every word below the top one, so exact ties and
-        // near-powers of two are drawn too, not only dense bit patterns.
-        if splitmix64(state).is_multiple_of(8) {
-            let len = words.len();
-            for word in &mut words[..len - 1] {
-                *word = 0;
-            }
-        }
-        from_words(&words, splitmix64(state).is_multiple_of(2))
-    }
-
-    /// The independent oracle: Rust's decimal-to-float parser is correctly
-    /// rounded (round-half-even, `±∞` on overflow), so parsing the exact decimal
-    /// form gives the correctly rounded conversion by a route that shares no code
-    /// with [`BigInt::to_f64`]/[`BigInt::to_f32`].
-    fn oracle_f64(value: &BigInt) -> f64 {
-        value
-            .to_decimal_string()
-            .parse::<f64>()
-            .expect("decimal integer parses")
-    }
-
-    fn oracle_f32(value: &BigInt) -> f32 {
-        value
-            .to_decimal_string()
-            .parse::<f32>()
-            .expect("decimal integer parses")
-    }
-
-    fn assert_matches_oracle(value: &BigInt) {
-        assert_eq!(
-            value.to_f64().to_bits(),
-            oracle_f64(value).to_bits(),
-            "to_f64 of {}",
-            value.to_decimal_string()
-        );
-        assert_eq!(
-            value.to_f32().to_bits(),
-            oracle_f32(value).to_bits(),
-            "to_f32 of {}",
-            value.to_decimal_string()
-        );
-    }
-
-    /// The conversion this module shipped before: a Horner fold over the
-    /// base-`1e9` limbs, rounding at every limb. Kept only as the refused side of
-    /// the witness below.
-    fn horner_to_f64(value: &BigInt) -> f64 {
-        let mut acc = 0.0_f64;
-        for &limb in value.limbs.iter().rev() {
-            acc = acc.mul_add(super::LIMB_BASE as f64, f64::from(limb));
-        }
-        if value.negative { -acc } else { acc }
-    }
-
-    #[test]
-    fn float_conversions_are_correctly_rounded_across_bit_lengths() {
-        let mut state = 0x5EED_0F64_u64;
-        for bits in 0..=1100_u32 {
-            for _ in 0..6 {
-                assert_matches_oracle(&random_of_bit_length(&mut state, bits));
-            }
-        }
-    }
-
-    #[test]
-    fn float_conversions_are_correctly_rounded_at_powers_of_two_and_ties() {
-        assert_matches_oracle(&BigInt::zero());
-        assert_eq!(BigInt::zero().to_f64().to_bits(), 0, "zero is +0.0");
-        for exp in 0..=1100_u32 {
-            let power = pow2(exp);
-            assert_matches_oracle(&power);
-            for offset in [-2_i128, -1, 1, 2] {
-                let mut near = power.clone();
-                near.add_i128(offset);
-                assert_matches_oracle(&near);
-            }
-        }
-        // 2^54 ± k: the ulp there is 4, so ±2 are exact ties and ±1/±3 sit just
-        // below/above halfway.
-        for offset in -8_i128..=8 {
-            assert_matches_oracle(&scaled(1, 54, offset));
-        }
-        // Exact 53-bit ties at every scale (even and odd kept significands), and
-        // the values one unit either side of each.
-        for exp in 1..=1000_u32 {
-            for significand in [(1u64 << 53) + 1, (1u64 << 53) + 3, (1u64 << 54) - 1] {
-                for offset in [-1_i128, 0, 1] {
-                    assert_matches_oracle(&scaled(significand, exp, offset));
+            let divisor = BigInt {
+                negative: false,
+                magnitude: super::Mag::from_slice(&words),
+            };
+            for quotient in [
+                BigInt::one(),
+                BigInt::from_i64(2),
+                BigInt::from_u64(u64::MAX),
+                BigInt::one().shl(192).sub(&BigInt::one()),
+            ] {
+                let remainder = divisor.sub(&BigInt::one());
+                let numerator = quotient.mul(&divisor).add(&remainder);
+                for negative_numerator in [false, true] {
+                    for negative_divisor in [false, true] {
+                        let numerator = if negative_numerator {
+                            numerator.neg()
+                        } else {
+                            numerator.clone()
+                        };
+                        let signed_divisor = if negative_divisor {
+                            divisor.neg()
+                        } else {
+                            divisor.clone()
+                        };
+                        let (q, r) = numerator.div_rem(&signed_divisor).unwrap();
+                        assert_eq!(q.mul(&signed_divisor).add(&r), numerator);
+                        assert_eq!(q.abs(), quotient);
+                        assert_eq!(r.abs(), remainder);
+                    }
                 }
             }
-            // The same ties at 24 bits, for `to_f32`.
-            for significand in [(1u64 << 24) + 1, (1u64 << 24) + 3] {
-                for offset in [-1_i128, 0, 1] {
-                    assert_matches_oracle(&scaled(significand, exp, offset));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn float_conversions_overflow_exactly_at_the_rounding_boundary() {
-        // f64::MAX = (2^53 − 1) × 2^971; the halfway point to 2^1024 is
-        // (2^54 − 1) × 2^970, a tie whose even neighbour is 2^1024 → ∞.
-        let max = scaled((1u64 << 53) - 1, 971, 0);
-        assert_eq!(max.to_f64(), f64::MAX);
-        let halfway = scaled((1u64 << 54) - 1, 970, 0);
-        let mut below = halfway.clone();
-        below.add_i128(-1);
-        assert_eq!(below.to_f64(), f64::MAX, "just below halfway rounds down");
-        assert_eq!(halfway.to_f64(), f64::INFINITY, "the tie rounds to even: ∞");
-        assert_eq!(pow2(1024).to_f64(), f64::INFINITY);
-        assert_eq!(pow2(1100).to_f64(), f64::INFINITY);
-        let mut negative = halfway.clone();
-        negative.negative = true;
-        assert_eq!(negative.to_f64(), f64::NEG_INFINITY);
-        for value in [&max, &below, &halfway, &negative] {
-            assert_matches_oracle(value);
-        }
-        // f32::MAX = (2^24 − 1) × 2^104; halfway to 2^128 is (2^25 − 1) × 2^103.
-        let f32_halfway = scaled((1u64 << 25) - 1, 103, 0);
-        let mut f32_below = f32_halfway.clone();
-        f32_below.add_i128(-1);
-        assert_eq!(f32_below.to_f32(), f32::MAX);
-        assert_eq!(f32_halfway.to_f32(), f32::INFINITY);
-        assert_matches_oracle(&f32_halfway);
-        assert_matches_oracle(&f32_below);
-    }
-
-    /// The refused-old / neighbour-new pair: search the random stream for a value
-    /// the old per-limb Horner fold rounded away from the correctly rounded
-    /// result, assert such a value exists (so this test observes the defect, not
-    /// a vacuous pass), and assert the new conversion matches the oracle there
-    /// and on every neighbour the search inspected.
-    #[test]
-    fn the_old_horner_conversion_is_refused_and_the_new_one_matches_the_oracle() {
-        let mut state = 0x0DD_BA11_u64;
-        let mut witness: Option<BigInt> = None;
-        'search: for bits in 54..=400_u32 {
-            for _ in 0..64 {
-                let value = random_of_bit_length(&mut state, bits);
-                let oracle = oracle_f64(&value);
-                assert_eq!(value.to_f64().to_bits(), oracle.to_bits());
-                if horner_to_f64(&value).to_bits() != oracle.to_bits() {
-                    witness = Some(value);
-                    break 'search;
-                }
-            }
-        }
-        let witness = witness.expect("the old Horner fold misrounds some value in the stream");
-        assert_ne!(
-            horner_to_f64(&witness).to_bits(),
-            oracle_f64(&witness).to_bits()
-        );
-        assert_eq!(witness.to_f64().to_bits(), oracle_f64(&witness).to_bits());
-    }
-
-    /// `(2^24 + 1) × 2^103 + 1` sits just above an `f32` halfway point, so it
-    /// rounds up to `(2^24 + 2) × 2^103`; going through `f64` first drops the
-    /// `+ 1` and leaves an exact tie that rounds to even, `2^127` — the double
-    /// rounding `to_f32` exists to avoid.
-    #[test]
-    fn to_f32_rounds_once_where_narrowing_to_f64_would_round_twice() {
-        let value = scaled((1u64 << 24) + 1, 103, 1);
-        let correct = f32::from_bits((254 << 23) | 1);
-        assert_eq!(value.to_f32().to_bits(), correct.to_bits());
-        assert_eq!(oracle_f32(&value).to_bits(), correct.to_bits());
-        assert_ne!((value.to_f64() as f32).to_bits(), correct.to_bits());
-    }
-
-    /// A value the old Horner fold rounds one ulp high (`9.174069745714053e24`
-    /// against the correctly rounded `9.174069745714052e24`).
-    const PINNED_WITNESS: u128 = 9_174_069_745_714_051_707_214_353;
-
-    /// A fixed witness found by the search above, pinned so the defect stays
-    /// visible even if the random stream's draw order ever changes.
-    #[test]
-    fn pinned_horner_witness_rounds_correctly() {
-        let witness = BigInt::from_u128(PINNED_WITNESS);
-        assert_ne!(
-            horner_to_f64(&witness).to_bits(),
-            oracle_f64(&witness).to_bits()
-        );
-        assert_eq!(witness.to_f64().to_bits(), oracle_f64(&witness).to_bits());
-    }
-
-    #[test]
-    fn mul_pow10_is_exact_across_a_limb_boundary() {
-        let a = BigInt::from_i128(123);
-        assert_eq!(a.mul_pow10(0).to_decimal_string(), "123");
-        assert_eq!(a.mul_pow10(2).to_decimal_string(), "12300");
-        // 9 (a whole limb) plus a leftover of 2 more digits.
-        assert_eq!(
-            a.mul_pow10(11).to_decimal_string(),
-            format!("123{}", "0".repeat(11))
-        );
-        let neg = BigInt::from_i128(-7);
-        assert_eq!(neg.mul_pow10(3).to_decimal_string(), "-7000");
-        assert_eq!(BigInt::zero().mul_pow10(5), BigInt::zero());
-    }
-
-    #[test]
-    fn div_rem_u64_matches_i128_division_within_i128_range() {
-        for (dividend, divisor) in [(100_i128, 3_u64), (-100, 3), (7, 2), (-7, 2), (0, 5)] {
-            let (quotient, remainder) = BigInt::from_i128(dividend).div_rem_u64(divisor).unwrap();
-            let expected_q = dividend / i128::from(divisor);
-            let expected_r = (dividend % i128::from(divisor)).unsigned_abs();
+            // With n=3 and zero middle divisor limb, the estimate 2 for
+            // 2*v-1 passes the second-limb test and needs the full add-back.
+            let numerator = divisor.mul(&BigInt::from_i64(2)).sub(&BigInt::one());
             assert_eq!(
-                quotient.to_i128(),
-                Some(expected_q),
-                "{dividend} / {divisor}"
-            );
-            assert_eq!(u128::from(remainder), expected_r, "{dividend} % {divisor}");
-        }
-    }
-
-    #[test]
-    fn div_rem_u64_rejects_zero_divisor() {
-        assert!(BigInt::from_i128(5).div_rem_u64(0).is_none());
-    }
-
-    /// `i128::MIN`'s magnitude is `2^127`, which `from_i128` can only reach as a
-    /// NEGATIVE value — the exact numeric order needs it as a magnitude.
-    #[test]
-    fn from_u128_reaches_the_magnitude_no_i128_can_hold() {
-        let magnitude = i128::MIN.unsigned_abs();
-        assert!(i128::try_from(magnitude).is_err());
-        let big = BigInt::from_u128(magnitude);
-        assert!(!big.is_negative());
-        assert_eq!(
-            big.to_decimal_string(),
-            "170141183460469231731687303715884105728"
-        );
-        assert_eq!(BigInt::from_u128(0), BigInt::zero());
-        assert_eq!(BigInt::from_u128(42), BigInt::from_i128(42));
-    }
-
-    #[test]
-    fn mul_pow2_is_exact_across_chunk_boundaries() {
-        let one = BigInt::from_i128(1);
-        assert_eq!(one.mul_pow2(0), one);
-        assert_eq!(one.mul_pow2(10).to_i128(), Some(1024));
-        // Straddles the 29-bit chunking twice over.
-        assert_eq!(one.mul_pow2(64).to_i128(), Some(1i128 << 64));
-        assert_eq!(one.mul_pow2(126).to_i128(), Some(1i128 << 126));
-        // And beyond i128 entirely, where the whole point is that nothing wraps.
-        assert_eq!(
-            one.mul_pow2(128).to_decimal_string(),
-            "340282366920938463463374607431768211456"
-        );
-        assert_eq!(BigInt::from_i128(-3).mul_pow2(4).to_i128(), Some(-48));
-        assert_eq!(BigInt::zero().mul_pow2(9), BigInt::zero());
-    }
-
-    #[test]
-    fn ord_agrees_with_i128_and_survives_the_i128_ceiling() {
-        let values: [i128; 7] = [i128::MIN, -5, -1, 0, 1, 5, i128::MAX];
-        for a in values {
-            for b in values {
-                assert_eq!(
-                    BigInt::from_i128(a).cmp(&BigInt::from_i128(b)),
-                    a.cmp(&b),
-                    "{a} vs {b}"
-                );
-            }
-        }
-        // Two totals that both escaped i128 still order exactly.
-        let mut huge = BigInt::from_i128(i128::MAX);
-        huge.add_i128(i128::MAX);
-        let mut huger = huge.clone();
-        huger.add_i128(1);
-        assert!(huge < huger);
-        assert!(BigInt::from_i128(i128::MAX) < huge);
-    }
-
-    #[test]
-    fn mul_pow10_then_div_rem_u64_reproduces_exact_decimal_division() {
-        // (i128::MAX + i128::MAX) / 2 == i128::MAX exactly — an average whose
-        // SUM does not fit i128 but whose quotient does.
-        let mut sum = BigInt::from_i128(i128::MAX);
-        sum.add_i128(i128::MAX);
-        let scaled = sum.mul_pow10(18);
-        let (quotient, _remainder) = scaled.div_rem_u64(2).unwrap();
-        assert_eq!(
-            quotient.to_decimal_string(),
-            format!("{}{}", i128::MAX, "0".repeat(18))
-        );
-    }
-
-    #[test]
-    fn from_digits_reads_signed_digit_runs_and_refuses_anything_else() {
-        for text in ["", "+", "-", "1.0", "1e3", " 1", "0x1", "1_0"] {
-            assert_eq!(BigInt::from_digits(text), None, "{text:?}");
-        }
-        assert_eq!(BigInt::from_digits("-0"), Some(BigInt::zero()));
-        assert_eq!(BigInt::from_digits("+007"), Some(BigInt::from_i128(7)));
-        let long = "123456789012345678901234567890123456789";
-        assert_eq!(
-            BigInt::from_digits(long)
-                .map(|value| value.to_decimal_string())
-                .as_deref(),
-            Some(long)
-        );
-        assert_eq!(
-            BigInt::from_digits(&i128::MIN.to_string()),
-            Some(BigInt::from_i128(i128::MIN))
-        );
-    }
-
-    /// `mul` and `rem` agree with `i128` wherever it holds the product, and
-    /// `rem` keeps the dividend's sign as Rust's `%` does.
-    #[test]
-    fn mul_and_rem_match_i128_arithmetic() {
-        let values: [i128; 12] = [
-            0,
-            1,
-            -1,
-            7,
-            -13,
-            999_999_999,
-            1_000_000_000,
-            -1_000_000_007,
-            123_456_789_012_345_678,
-            -(1 << 62),
-            (1 << 63) - 25,
-            4_611_686_018_427_387_903,
-        ];
-        for &a in &values {
-            for &b in &values {
-                let product = BigInt::from_i128(a).mul(&BigInt::from_i128(b));
-                assert_eq!(product.to_i128(), Some(a * b), "{a} × {b}");
-                if b == 0 {
-                    assert_eq!(BigInt::from_i128(a).rem(&BigInt::zero()), None);
-                } else {
-                    let rem = BigInt::from_i128(a).rem(&BigInt::from_i128(b));
-                    assert_eq!(rem.and_then(|r| r.to_i128()), Some(a % b), "{a} % {b}");
-                }
-            }
-        }
-    }
-
-    /// Multi-limb divisors: `(q·d + r) mod d == r` for large `q` and `r < d`.
-    #[test]
-    fn rem_by_a_multi_limb_divisor_recovers_the_remainder() {
-        let divisors = [
-            "1000000000",
-            "1000000001",
-            "999999999999999999",
-            "123456789123456789123456789",
-            "1000000000000000000000000000000000001",
-        ];
-        let quotients = ["1", "999999999", "98765432109876543210987654321", "5"];
-        for divisor in divisors {
-            let d = BigInt::from_digits(divisor).expect("digits");
-            for quotient in quotients {
-                let q = BigInt::from_digits(quotient).expect("digits");
-                for remainder in ["0", "1", "999999999"] {
-                    let r = BigInt::from_digits(remainder).expect("digits");
-                    let mut n = q.mul(&d);
-                    n.add_assign(&r);
-                    assert_eq!(
-                        n.rem(&d),
-                        Some(r.clone()),
-                        "{quotient}·{divisor}+{remainder}"
-                    );
-                    assert_eq!(n.negated().rem(&d), Some(r.negated()));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn mul_pow5_and_mul_pow2_compose_to_mul_pow10() {
-        let value = BigInt::from_i128(-123_456_789_987);
-        for exp in [0, 1, 12, 13, 14, 29, 100, 400] {
-            assert_eq!(
-                value.mul_pow5(exp).mul_pow2(exp),
-                value.mul_pow10(exp),
-                "{exp}"
+                numerator.div_rem(&divisor).unwrap(),
+                (BigInt::one(), divisor.sub(&BigInt::one()))
             );
         }
-        assert_eq!(BigInt::from_i128(3).mul_small(0), BigInt::zero());
+    }
+
+    #[test]
+    fn inplace_binary_gcd_preserves_exact_common_factors() {
+        let mut seed = 0x9cd6_418a_30f5_e272;
+        for length in 3..=24 {
+            let mut words = super::Mag::zeroed(length);
+            for limb in &mut words {
+                *limb = mix::splitmix64_next(&mut seed);
+            }
+            words[length - 1] |= 1;
+            let factor = BigInt {
+                negative: false,
+                magnitude: words,
+            };
+            let x = factor.mul(&BigInt::from_i64(17)).shl(65);
+            let y = factor.mul(&BigInt::from_i64(19)).shl(127);
+            let expected = factor.shl(65);
+            assert_eq!(x.gcd(&y), expected);
+            assert_eq!(y.gcd(&x.neg()), expected);
+            assert!(x.div_rem(&expected).unwrap().1.is_zero());
+            assert!(y.div_rem(&expected).unwrap().1.is_zero());
+        }
+    }
+
+    #[test]
+    fn common_normalized_division_and_gcd_keep_inline_storage() {
+        let numerator = BigInt::one().shl(191).add(&BigInt::from_u128(
+            0x81eb_e24d_e521_0389_9bc0_726e_1554_02af,
+        ));
+        let denominator = BigInt::one()
+            .shl(127)
+            .add(&BigInt::from_u64(0xc61e_53a4_5e87_19cb));
+        let window = CurrentThreadWindow::open();
+        let (quotient, remainder) = numerator.div_rem(&denominator).unwrap();
+        let gcd = numerator.gcd(&denominator);
+        let counters = window.close();
+        assert_eq!(counters.allocations, 0);
+        assert_eq!(quotient.mul(&denominator).add(&remainder), numerator);
+        assert!(numerator.div_rem(&gcd).unwrap().1.is_zero());
+        assert!(denominator.div_rem(&gcd).unwrap().1.is_zero());
+    }
+
+    #[test]
+    fn decimal_byte_parser_validates_without_a_string_intermediate() {
         assert_eq!(
-            BigInt::from_i128(-3).mul_small(u32::MAX).to_i128(),
-            Some(-3 * i128::from(u32::MAX))
+            BigInt::from_decimal_bytes(
+                b"000170141183460469231731687303715884105728"
+                    .iter()
+                    .copied()
+            )
+            .unwrap(),
+            BigInt::one().shl(127)
         );
-    }
-
-    #[test]
-    fn from_binary_writes_dyadic_values_out_in_full() {
-        let show = |numerator: i128, exponent: i32| {
-            let (mantissa, scale) = BigInt::from_binary(numerator, exponent);
-            mantissa.to_decimal_lexical(scale)
-        };
-        assert_eq!(show(3, 0), "3");
-        assert_eq!(show(3, 4), "48");
-        assert_eq!(show(3, -1), "1.5");
-        assert_eq!(show(-1, -3), "-0.125");
-        assert_eq!(show(0, -1074), "0");
-    }
-
-    #[test]
-    fn parity_and_negation() {
-        assert!(BigInt::from_i128(1_000_000_001).is_odd());
-        assert!(!BigInt::from_i128(-1_000_000_000).is_odd());
-        assert!(!BigInt::zero().is_odd());
-        assert_eq!(BigInt::zero().negated(), BigInt::zero());
-        assert_eq!(BigInt::from_i128(5).negated(), BigInt::from_i128(-5));
+        assert!(BigInt::from_decimal_bytes(core::iter::empty()).is_none());
+        assert!(BigInt::from_decimal_bytes(b"12x".iter().copied()).is_none());
+        assert!(BigInt::from_decimal_bytes(b"-1".iter().copied()).is_none());
     }
 }

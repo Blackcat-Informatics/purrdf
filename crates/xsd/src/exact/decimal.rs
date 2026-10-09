@@ -67,19 +67,7 @@ impl Decimal {
             return Self { unscaled, scale };
         }
         if let Some(value) = unscaled.as_i128() {
-            let negative = value < 0;
-            let (magnitude, stripped) = strip_zeros(value.unsigned_abs(), scale);
-            let magnitude = i128::try_from(magnitude).unwrap_or(i128::MIN);
-            return Self {
-                // Only i128::MIN's magnitude fails the conversion, and it is
-                // stripped of nothing (it is not a multiple of ten).
-                unscaled: Integer::from_i128(if negative && magnitude != i128::MIN {
-                    -magnitude
-                } else {
-                    magnitude
-                }),
-                scale: scale - stripped,
-            };
+            return Self::from_small(value, scale);
         }
         let big = unscaled.to_bigint();
         let zeros = u32::try_from(big.trailing_decimal_zeros().min(u64::from(scale)))
@@ -210,8 +198,16 @@ impl Decimal {
         if self.is_zero() {
             return None;
         }
-        let exponent = self.shape().magnitude_exponent();
-        if exponent >= overflow {
+        let shape = self.shape();
+        let exponent = shape.magnitude_exponent();
+        let minimum = if shape.digits_exact {
+            exponent
+        } else {
+            i64::try_from(cost::minimum_digits_for_bits(self.unscaled.binary_bits()))
+                .unwrap_or(i64::MAX / 4)
+                - i64::from(self.scale)
+        };
+        if minimum >= overflow {
             Some(Ordering::Greater)
         } else if exponent <= underflow {
             Some(Ordering::Less)
@@ -343,6 +339,7 @@ impl Decimal {
     ///
     /// [`ExactError::ScaleOverflow`] when the product's scale would pass
     /// `u32::MAX` digits.
+    #[inline]
     pub fn try_mul(&self, rhs: &Self) -> Result<Self, ExactError> {
         let scale = self
             .scale
@@ -353,12 +350,23 @@ impl Decimal {
         {
             return Ok(Self::from_small(product, scale));
         }
-        Ok(Self::new(&self.unscaled * &rhs.unscaled, scale))
+        Ok(self.mul_big(rhs, scale))
+    }
+
+    // Spilled multiplication/canonicalization owns a larger working frame;
+    // keep it separate from the checked machine-coefficient caller.
+    #[cold]
+    fn mul_big(&self, rhs: &Self, scale: u32) -> Self {
+        Self::new(&self.unscaled * &rhs.unscaled, scale)
     }
 
     /// The canonical decimal `value × 10^-scale` for an inline coefficient: no
     /// trailing zero to strip is the common case, decided by one remainder.
+    #[inline]
     fn from_small(value: i128, scale: u32) -> Self {
+        if value == 0 {
+            return Self::ZERO;
+        }
         let has_trailing_zero = mod10(value.unsigned_abs()) == 0;
         if scale == 0 || !has_trailing_zero {
             return Self {
@@ -366,7 +374,28 @@ impl Decimal {
                 scale,
             };
         }
-        Self::new(Integer::from_i128(value), scale)
+        let (value, scale) = Self::normalize_small(value, scale);
+        Self {
+            unscaled: Integer::from_i128(value),
+            scale,
+        }
+    }
+
+    // Strip inline coefficients without constructing an owned Integer for the
+    // generic spilled canonicalizer and carrying its larger temporary frame.
+    #[cold]
+    fn normalize_small(value: i128, scale: u32) -> (i128, u32) {
+        let negative = value < 0;
+        let (magnitude, stripped) = strip_zeros(value.unsigned_abs(), scale);
+        let magnitude = i128::try_from(magnitude).unwrap_or(i128::MIN);
+        // Only i128::MIN's magnitude fails the conversion, and it is
+        // stripped of nothing (it is not a multiple of ten).
+        let value = if negative && magnitude != i128::MIN {
+            -magnitude
+        } else {
+            magnitude
+        };
+        (value, scale - stripped)
     }
 
     /// Both coefficients at the larger scale, when both are inline and the
@@ -519,7 +548,7 @@ impl Decimal {
 
     // ----- resource governance ---------------------------------------------
 
-    /// The coefficient's size in base-`1e9` limbs.
+    /// The coefficient's size in binary `u64` limbs.
     #[must_use]
     pub fn limb_len(&self) -> u64 {
         self.unscaled.limb_len()
@@ -535,12 +564,11 @@ impl Decimal {
     pub(crate) fn shape(&self) -> cost::Shape {
         match self.unscaled.as_i128() {
             Some(value) => cost::Shape::of_i128(value, u64::from(self.scale)),
-            None => cost::Shape {
-                limbs: self.limb_len(),
-                digits: self.unscaled.decimal_digits(),
-                scale: u64::from(self.scale),
-                sign: self.signum(),
-            },
+            None => {
+                let mut shape = self.unscaled.shape();
+                shape.scale = u64::from(self.scale);
+                shape
+            }
         }
     }
 
@@ -590,13 +618,32 @@ impl Decimal {
     /// The cost of [`Self::round`] (and the integer roundings).
     #[must_use]
     pub fn round_cost(&self, precision: i32) -> Cost {
+        let limbs = self.limb_len();
+        if i64::from(precision) >= i64::from(self.scale) {
+            return Cost::new(limbs, cost::limb_bytes(limbs));
+        }
+        let shape = self.shape();
+        // Excess fractional padding is discarded without constructing its power
+        // of ten. Only the coefficient's digits can participate in a division.
+        let drop = (i64::from(self.scale) - i64::from(precision))
+            .unsigned_abs()
+            .min(shape.digits);
+        let conversion = cost::coefficient_conversion(shape);
         let up = if precision < 0 {
             u64::from(precision.unsigned_abs())
         } else {
             0
         };
-        Cost::new(self.limb_len().saturating_add(2), 0)
-            .saturating_add(cost::shift10(self.limb_len(), up))
+        conversion
+            .saturating_add(conversion)
+            .saturating_add(conversion)
+            .saturating_add(cost::shift10(0, drop))
+            .saturating_add(cost::div(
+                limbs,
+                cost::limbs_for_digits(drop).saturating_add(1),
+            ))
+            .saturating_add(cost::decimal_unary(shape))
+            .saturating_add(cost::shift10(limbs, up))
     }
 
     /// The cost of [`Self::to_f64`] / [`Self::to_f32`]: constant past the format's
@@ -615,8 +662,9 @@ impl Decimal {
     }
 
     /// The exact order of the value against `value`; `None` only for `NaN`, and an
-    /// infinity is past every decimal. Linear in the coefficient: the signs or the
-    /// two magnitudes' leading positions decide most pairs outright, and otherwise
+    /// infinity is past every decimal. The signs or the two magnitudes' leading
+    /// positions decide most pairs outright; reading those positions includes
+    /// binary-to-decimal base conversion. Otherwise
     /// the value's scale is within about 330 digits of its coefficient's length and
     /// both sides are scaled to integers and compared ([`Self::cmp_f64_cost`]).
     #[must_use]
@@ -889,7 +937,8 @@ impl FromStr for Decimal {
     /// Parse the `xsd:decimal` lexical space (XSD 1.1 Part 2 §3.3.3.1) of any
     /// length: an optional sign, then digits with at most one `.` and at least one
     /// digit (`.5`, `1.`, `-0012.3400`). No whitespace is trimmed, matching
-    /// [`crate::numeric::parse_decimal`]. Linear in the length.
+    /// [`crate::numeric::parse_decimal`]. Scanning is linear in the length;
+    /// spilled coefficients additionally require quadratic base conversion.
     ///
     /// # Errors
     ///
@@ -975,7 +1024,18 @@ impl Ord for Decimal {
         }
         // Same sign, both nonzero: the leading-digit position decides first, so
         // two values of wildly different scale compare without aligning.
-        let magnitude = match self.magnitude_exponent().cmp(&other.magnitude_exponent()) {
+        let (a_low, a_high) = self.shape().comparison_exponents();
+        let (b_low, b_high) = other.shape().comparison_exponents();
+        let separated = if a_low > b_high {
+            Some(Ordering::Greater)
+        } else if b_low > a_high {
+            Some(Ordering::Less)
+        } else {
+            None
+        };
+        let magnitude = match separated
+            .unwrap_or_else(|| self.magnitude_exponent().cmp(&other.magnitude_exponent()))
+        {
             Ordering::Equal => {
                 let (a, b, _) = self.aligned(other);
                 a.abs().cmp(&b.abs())
