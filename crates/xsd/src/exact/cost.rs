@@ -592,30 +592,6 @@ const fn clamp_exponent(value: i128) -> i64 {
     }
 }
 
-#[cfg(test)]
-mod comparison_bounds_tests {
-    use super::{Shape, decimal_cmp};
-
-    #[test]
-    fn extreme_digit_and_scale_bounds_preserve_containment() {
-        let shape = Shape {
-            limbs: u64::MAX,
-            digits: u64::MAX,
-            minimum_digits: u64::MAX,
-            digits_exact: true,
-            scale: u64::MAX,
-            sign: 1,
-        };
-        let (lower, upper) = shape.comparison_exponents();
-        assert!(lower <= 0 && upper >= 0);
-        let one = Shape { scale: 1, ..shape };
-        let two = Shape { scale: 2, ..shape };
-        assert_eq!(one.comparison_exponents(), (i64::MAX, i64::MAX));
-        assert_eq!(two.comparison_exponents(), (i64::MAX, i64::MAX));
-        assert!(decimal_cmp(one, two).work() > 1);
-    }
-}
-
 /// Rendering a value of this shape as its canonical lexical form: one pass over
 /// the coefficient's digits, then the bytes of the text (the leading zeros of a
 /// small fraction included).
@@ -926,4 +902,28 @@ pub fn compare_chain(values: &[Shape], rounds: u64) -> Cost {
 pub const fn sort_rounds(n: usize) -> u64 {
     let rounds = n.saturating_sub(1).bit_width() as u64;
     if rounds == 0 { 1 } else { rounds }
+}
+
+#[cfg(test)]
+mod comparison_bounds_tests {
+    use super::{Shape, decimal_cmp};
+
+    #[test]
+    fn extreme_digit_and_scale_bounds_preserve_containment() {
+        let shape = Shape {
+            limbs: u64::MAX,
+            digits: u64::MAX,
+            minimum_digits: u64::MAX,
+            digits_exact: true,
+            scale: u64::MAX,
+            sign: 1,
+        };
+        let (lower, upper) = shape.comparison_exponents();
+        assert!(lower <= 0 && upper >= 0);
+        let one = Shape { scale: 1, ..shape };
+        let two = Shape { scale: 2, ..shape };
+        assert_eq!(one.comparison_exponents(), (i64::MAX, i64::MAX));
+        assert_eq!(two.comparison_exponents(), (i64::MAX, i64::MAX));
+        assert!(decimal_cmp(one, two).work() > 1);
+    }
 }
