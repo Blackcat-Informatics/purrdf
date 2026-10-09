@@ -662,8 +662,9 @@ impl Decimal {
     }
 
     /// The exact order of the value against `value`; `None` only for `NaN`, and an
-    /// infinity is past every decimal. Linear in the coefficient: the signs or the
-    /// two magnitudes' leading positions decide most pairs outright, and otherwise
+    /// infinity is past every decimal. The signs or the two magnitudes' leading
+    /// positions decide most pairs outright; reading those positions includes
+    /// binary-to-decimal base conversion. Otherwise
     /// the value's scale is within about 330 digits of its coefficient's length and
     /// both sides are scaled to integers and compared ([`Self::cmp_f64_cost`]).
     #[must_use]
@@ -936,7 +937,8 @@ impl FromStr for Decimal {
     /// Parse the `xsd:decimal` lexical space (XSD 1.1 Part 2 §3.3.3.1) of any
     /// length: an optional sign, then digits with at most one `.` and at least one
     /// digit (`.5`, `1.`, `-0012.3400`). No whitespace is trimmed, matching
-    /// [`crate::numeric::parse_decimal`]. Linear in the length.
+    /// [`crate::numeric::parse_decimal`]. Scanning is linear in the length;
+    /// spilled coefficients additionally require quadratic base conversion.
     ///
     /// # Errors
     ///

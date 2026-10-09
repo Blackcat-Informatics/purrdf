@@ -320,8 +320,8 @@ impl Integer {
     }
 
     /// The cost of [`Self::to_f64`] / [`Self::to_f32`]: constant past `10^309`
-    /// (an infinity, read off the length), and otherwise a base conversion of at
-    /// most 35 limbs.
+    /// (an infinity, read off the length), and otherwise exact binary-ratio
+    /// rounding within the format's finite bit range.
     #[must_use]
     pub fn to_float_cost(&self) -> Cost {
         if matches!(self.0, Repr::Small(_)) {
@@ -354,8 +354,8 @@ impl Integer {
     }
 
     /// The exact order of the value against `value`; `None` only for `NaN`, and an
-    /// infinity is past every integer. Linear in the limbs, with no rounding of
-    /// either side.
+    /// infinity is past every integer, with no rounding of either side. Reading
+    /// decimal leading positions includes binary-to-decimal base conversion.
     #[must_use]
     pub fn cmp_f64(&self, value: f64) -> Option<Ordering> {
         super::decimal::cmp_scaled_f64(self, 0, value)
