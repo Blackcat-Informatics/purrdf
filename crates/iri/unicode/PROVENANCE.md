@@ -82,6 +82,18 @@ Added 2026-10-05 for XPath's full lower/upper case-variant relation:
   `SpecialCasing-17.0.0.txt`, dated 2025-07-31, SHA-256
   `efc25faf19de21b92c1194c111c932e03d2a5eaf18194e33f1156e96de4c9588`.
 
+Added 2026-10-09, verbatim Unicode 17 data for default sentence boundaries
+under UAX 29 revision 47:
+
+- `auxiliary/SentenceBreakProperty.txt` —
+  `https://www.unicode.org/Public/17.0.0/ucd/auxiliary/SentenceBreakProperty.txt`,
+  header `SentenceBreakProperty-17.0.0.txt`, SHA-256
+  `871c0c985ad95125e25b302414065a10839d068970bceb383ecec138f22a0a18`
+- `auxiliary/SentenceBreakTest.txt` —
+  `https://www.unicode.org/Public/17.0.0/ucd/auxiliary/SentenceBreakTest.txt`,
+  header `SentenceBreakTest-17.0.0.txt`, all 512 declared cases, SHA-256
+  `12cb47d028ded0c1cb8a28558f95479cbcd24559c46977015c82f3b50a1cc6e4`.
+
 ## `16.0.0/` — Unicode 16.0.0
 
 From `https://www.unicode.org/Public/16.0.0/ucd/`:
