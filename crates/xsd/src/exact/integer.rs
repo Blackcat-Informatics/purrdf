@@ -18,8 +18,9 @@ use crate::bigint::BigInt;
 /// # Representation
 ///
 /// A value that fits `i128` is held inline and computed on with checked machine
-/// arithmetic; only a result that leaves `i128` allocates, as a [`BigInt`], and a
-/// result that comes back into range is held inline again. The split is
+/// arithmetic; a result that leaves `i128` uses a [`BigInt`], whose first three
+/// binary limbs also fit inline. A result that comes back into `i128` range is
+/// held in the machine representation again. The split is
 /// canonical — a value has exactly one representation — so the derived
 /// equality and hash are value equality and value hash, and the small-value path
 /// costs one checked machine operation and no allocation (the `exact` bench
@@ -54,7 +55,7 @@ impl Integer {
             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
     }
 
-    /// The value as a [`BigInt`] (allocates for an inline value).
+    /// The value as a [`BigInt`]; inline values convert without allocating.
     #[must_use]
     pub fn to_bigint(&self) -> BigInt {
         match &self.0 {
