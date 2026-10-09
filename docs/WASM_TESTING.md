@@ -9,16 +9,19 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 28 named cases in 12 integration targets,
-with 33 executions across 16 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 29 named cases in 13 integration targets,
+with 34 executions across 17 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
-interface, except the two numeric byte-identity targets. WebAssembly has 32- and
+interface, except the numeric and sentence byte-identity targets. WebAssembly has 32- and
 64-bit integers only, so every `i128` step of the arbitrary-precision numeric
 tower and every `u64`/`u128` carry lane under it is lowered differently there; a
 lowering bug would bind a different digit rather than crash. Those targets hold
 the tower's answers and the evaluator's numeric results — the governor's
 refusals among them — to the native ones by a pinned digest both targets
-reproduce. Runner preflight additionally exercises panic handling, refused flags
+reproduce. The sentence probe reproduces pinned UTF-8 segments and byte offsets
+through the public borrowed iterators, including paragraph separators, ignored
+characters, abbreviations and multilingual/emoji segments. The full official
+sentence corpus remains a native Rust conformance check. Runner preflight additionally exercises panic handling, refused flags
 and sealed host reads. Every other numeric expectation, general digest vectors,
 geometry, index determinism and codec corpora run in native Rust.
 
@@ -73,6 +76,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `copy_kernels_match_portable` | Calls simd128 overlapping match-copy operations against a bytewise reference. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `match_length_kernels_match_portable` | Calls the simd128 match-length kernel against the portable kernel over vector widths and mismatch positions. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `hash_kernels_match_portable` | Calls the simd128 window-hash kernel against the scalar reference over lengths and offsets. |
+| `purrdf-text` / `wasm_determinism` | scalar | `the_sentence_boundaries_are_reproduced_on_this_target` | Reproduces pinned borrowed UTF-8 sentence bytes and offsets from the same versioned Sentence_Break tables, including the alphanumeric filter and empty input. |
 
 The hash benchmark targets remain native benchmarks. No benchmark smoke target
 runs in the WASM lane; the selected testkit host-clock case exercises its WASM

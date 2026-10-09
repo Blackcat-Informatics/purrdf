@@ -654,6 +654,8 @@ impl SkolemRegistry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChaseError {
+    /// The complete existential rule bundle violates a declaration.
+    NeverDerive(crate::admission::AdmissionRefusal),
     /// [`certify`] could not prove the program terminating.
     ///
     /// Running it anyway could invent nulls forever, and truncating the run would return a
@@ -754,6 +756,7 @@ pub enum ChaseError {
 impl fmt::Display for ChaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
             Self::NonTerminating { violations } => {
                 write!(
                     f,
@@ -1344,6 +1347,23 @@ pub fn chase_until(
     stop: Option<&dyn StopSignal>,
 ) -> Result<ChaseOutcome, ChaseError> {
     chase_with(program, edb, &EvalOptions::default(), stop)
+}
+
+/// The original [`chase_with`] with sourced full-IR never-derive admission.
+/// # Errors
+/// Returns exact protected/undecidable head refusal before the ordinary
+/// executor's fragment checks, then the same errors as [`chase_with`].
+pub fn chase_with_declarations(
+    program: &[DlClause],
+    edb: RelationStore,
+    options: &EvalOptions,
+    stop: Option<&dyn StopSignal>,
+    declarations: &crate::admission::NeverDeriveDeclarations,
+) -> Result<ChaseOutcome, ChaseError> {
+    declarations
+        .admit(program)
+        .map_err(ChaseError::NeverDerive)?;
+    chase_with(program, edb, options, stop)
 }
 
 /// [`chase_until`] under the caller's stored-fact and join-step limits

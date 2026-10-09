@@ -160,6 +160,8 @@ fn assert_one_version() {
         "Scripts.txt",
         "SpecialCasing.txt",
         "WordBreakProperty.txt",
+        "SentenceBreakProperty.txt",
+        "SentenceBreakTest.txt",
         "GraphemeBreakProperty.txt",
         "GraphemeBreakTest.txt",
     ] {
@@ -877,11 +879,12 @@ fn text() -> String {
     let mut out = String::new();
     let source = source_line(
         "`UnicodeData.txt`, `DerivedCoreProperties.txt`, `CaseFolding.txt`, \
-         `WordBreakProperty.txt`, `emoji-data.txt`, `Scripts.txt`, \
+         `WordBreakProperty.txt`, `SentenceBreakProperty.txt`, `emoji-data.txt`, `Scripts.txt`, \
          `ScriptExtensions.txt`, `PropList.txt`, `DerivedJoiningType.txt`, `GraphemeBreakProperty.txt`, `emoji-test.txt` and `emoji-variation-sequences.txt`",
     );
     let mut doc = vec![
-        "The full case folding and word-boundary data of `purrdf_text::unicode`,".to_owned(),
+        "The full case folding, word- and sentence-boundary data of `purrdf_text::unicode`,"
+            .to_owned(),
         "read through `purrdf_lex::unicode::lookup_two_stage`.".to_owned(),
         String::new(),
     ];
@@ -989,10 +992,71 @@ fn text() -> String {
         "u32",
         &text_properties(&entries),
     );
+    emit_sentence_break(&mut out);
     emit_grapheme_and_emoji(&mut out);
     out.truncate(out.trim_end().len());
     out.push('\n');
     out
+}
+
+/// The complete default Sentence_Break property, emitted by the text table set.
+/// Its separate data identity does not change the existing analyzer token law.
+fn emit_sentence_break(out: &mut String) {
+    let values = [
+        "Other",
+        "CR",
+        "LF",
+        "Extend",
+        "Sep",
+        "Format",
+        "Sp",
+        "Lower",
+        "Upper",
+        "OLetter",
+        "Numeric",
+        "ATerm",
+        "STerm",
+        "Close",
+        "SContinue",
+    ];
+    let data = read("SentenceBreakProperty.txt");
+    let mut properties = vec![0u8; CODE_SPACE as usize];
+    for fields in data_lines(&data) {
+        let value = values
+            .iter()
+            .position(|name| *name == fields[1])
+            .unwrap_or_else(|| panic!("unknown Sentence_Break value {:?}", fields[1]));
+        let (low, high) = range(fields[0]);
+        for point in low..=high {
+            assert_eq!(
+                properties[point as usize], 0,
+                "{point:04X} has two Sentence_Break values"
+            );
+            properties[point as usize] = u8::try_from(value).expect("fifteen sentence classes");
+        }
+    }
+    for (value, name) in values.iter().enumerate().skip(1) {
+        let constant = name.to_uppercase();
+        let _ = writeln!(
+            out,
+            "/// `Sentence_Break={name}`.\npub(crate) const SB_{constant}: u8 = {value};"
+        );
+    }
+    emit_two_stage(
+        out,
+        "SENTENCE",
+        "Default Sentence_Break values (0: Other)",
+        "u8",
+        &two_stage(&properties),
+    );
+    let mut input = Vec::new();
+    purrdf_hash::frame::frame_le(&mut input, b"SentenceBreakProperty.txt");
+    purrdf_hash::frame::frame_le(&mut input, data.as_bytes());
+    let _ = writeln!(
+        out,
+        "/// Content identity of the pinned Sentence_Break property input.\npub(crate) const SENTENCE_DATA_DIGEST: [u8; 32] = {:?};",
+        purrdf_hash::blake3::hash(&input).as_bytes()
+    );
 }
 
 /// UAX 29 extended-grapheme properties and the finite Emoji 17 recognition set.

@@ -753,6 +753,8 @@ impl StepGovernor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError {
+    /// The full rule bundle violates an assessor-only declaration.
+    NeverDerive(crate::admission::AdmissionRefusal),
     /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
     /// Datalog rule and this evaluator has no semantics for it.
     ///
@@ -985,6 +987,7 @@ pub fn generated_term_budget_origin(report: BudgetReport) -> String {
 impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
             Self::NonDatalogHead { rule, form } => write!(
                 f,
                 "clause {rule} has {} {form} head: the semi-naive evaluator runs Datalog \
@@ -1184,6 +1187,20 @@ impl Evaluation {
 }
 
 // ── Compilation: stratification with a named cycle ──────────────────────────────
+
+/// The original [`compile`] with sourced full-IR never-derive admission.
+/// # Errors
+/// Returns exact protected/undecidable head refusal before the ordinary
+/// executor's fragment checks, then the same errors as [`compile`].
+pub fn compile_with_declarations(
+    rules: Vec<DlClause>,
+    declarations: &crate::admission::NeverDeriveDeclarations,
+) -> Result<Executable, EvalError> {
+    declarations.admit(&rules).map_err(EvalError::NeverDerive)?;
+    compile(rules)?
+        .admit_declarations(declarations)
+        .map_err(EvalError::NeverDerive)
+}
 
 /// Compile a rule program into the executor's [`Executable`], or refuse it.
 ///

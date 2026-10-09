@@ -68,3 +68,7 @@ harness = false
 [[test]]
 name = "rules_runtime"
 harness = false
+
+[[test]]
+name = "never_derive"
+harness = false

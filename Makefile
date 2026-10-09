@@ -748,6 +748,9 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test numeric_wasm_determinism -- --exact \
 				the_hand_answers_are_reproduced_on_this_target \
 				the_numeric_transcript_digest_is_reproduced_on_this_target \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+				the_sentence_boundaries_are_reproduced_on_this_target \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
