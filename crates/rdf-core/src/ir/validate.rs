@@ -33,6 +33,112 @@ use purrdf_events::MAX_TERM_NESTING_DEPTH;
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Iri,
+    Blank,
+    Literal,
+    Triple,
+}
+
+fn interned_kind(term: &InternedTerm) -> Kind {
+    match term {
+        InternedTerm::Iri(_) => Kind::Iri,
+        InternedTerm::Blank { .. } => Kind::Blank,
+        InternedTerm::Literal(_) => Kind::Literal,
+        InternedTerm::Triple { .. } => Kind::Triple,
+    }
+}
+
+/// The borrowed-value door onto the same positional and literal rules freeze
+/// enforces. No temporary dataset or duplicate term table is constructed.
+pub(crate) fn validate_record(record: &super::mutable::RecordValues) -> Result<(), RdfDiagnostic> {
+    use super::term::TermValue;
+    let value = |term: &TermValue| {
+        term.try_fold(
+            |leaf| {
+                let kind = match leaf {
+                    TermValue::Iri(iri) => {
+                        super::absolute::check_absolute(iri)
+                            .map_err(|error| diag(error.diagnostic_code(), error.to_string()))?;
+                        Kind::Iri
+                    }
+                    TermValue::Blank { .. } => Kind::Blank,
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                        ..
+                    } => {
+                        super::absolute::check_absolute(datatype)
+                            .map_err(|error| diag(error.diagnostic_code(), error.to_string()))?;
+                        crate::RdfLiteral::diagnose_components(
+                            datatype,
+                            language.as_deref(),
+                            *direction,
+                        )
+                        .map_err(|(code, message)| diag(code, message))?;
+                        // Values at this native boundary already carry their
+                        // blank scopes. Parse through the ingress home, retaining
+                        // the authored bytes rather than binding a new document.
+                        crate::cdt_blank::bind_cdt_blank_labels(
+                            lexical_form,
+                            datatype,
+                            crate::cdt_blank::BlankBinding::Decoded(
+                                crate::blank_label::LabelAlphabet::BlankNodeLabel,
+                            ),
+                        )
+                        .map_err(RdfDiagnostic::from)?;
+                        Kind::Literal
+                    }
+                    TermValue::Triple { .. } => unreachable!("triple components are folded"),
+                };
+                Ok::<_, RdfDiagnostic>((kind, 0usize))
+            },
+            |(subject, sd), (predicate, pd), (_, od)| {
+                require_subject_kind(
+                    subject,
+                    || "triple term subject".to_owned(),
+                    TRIPLE_COMPONENT_SUBJECT,
+                )?;
+                require_predicate_kind(predicate, || "triple term predicate".to_owned())?;
+                let depth = sd.max(pd).max(od) + 1;
+                if depth > MAX_TERM_NESTING_DEPTH {
+                    return Err(nesting_limit());
+                }
+                Ok((Kind::Triple, depth))
+            },
+        )
+        .map(|(kind, _)| kind)
+    };
+    let q = &record.quad;
+    let s = value(&q.s)?;
+    let p = value(&q.p)?;
+    let o = value(&q.o)?;
+    let g = q.g.as_ref().map(value).transpose()?;
+    require_subject_kind(s, || "record subject".to_owned(), ASSERTED_SUBJECT)?;
+    require_predicate_kind(p, || "record predicate".to_owned())?;
+    if let Some(g) = g {
+        require_graph_kind(g, || "record graph".to_owned())?;
+    }
+    if record.kind == super::mutable::RecordKind::Reifier {
+        if !matches!(&q.p, TermValue::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES) {
+            return Err(diag(
+                "rdf-ir-reifier-predicate",
+                "a reifier record must use rdf:reifies",
+            ));
+        }
+        if !matches!(o, Kind::Triple) {
+            return Err(diag(
+                "rdf-ir-reifier-not-triple",
+                "a reifier record must bind a triple term",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
 /// is structurally sound, or a precise [`RdfDiagnostic`] on the first violation.
 pub(crate) fn validate(builder: &RdfDatasetBuilder) -> Result<(), RdfDiagnostic> {
@@ -307,13 +413,21 @@ fn require_subject(
     ctx: impl FnOnce() -> String,
     triple_reason: &str,
 ) -> Result<(), RdfDiagnostic> {
-    match builder.term(id) {
-        InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
-        InternedTerm::Literal(_) => Err(diag(
+    require_subject_kind(interned_kind(builder.term(id)), ctx, triple_reason)
+}
+
+fn require_subject_kind(
+    kind: Kind,
+    ctx: impl FnOnce() -> String,
+    triple_reason: &str,
+) -> Result<(), RdfDiagnostic> {
+    match kind {
+        Kind::Iri | Kind::Blank => Ok(()),
+        Kind::Literal => Err(diag(
             "rdf-ir-literal-subject",
             format!("{} must not be a literal", ctx()),
         )),
-        InternedTerm::Triple { .. } => Err(diag(
+        Kind::Triple => Err(diag(
             "rdf-ir-triple-subject",
             format!("{} must be an IRI or blank node; {triple_reason}", ctx()),
         )),
@@ -333,13 +447,17 @@ fn require_iri_predicate(
     id: TermId,
     ctx: impl FnOnce() -> String,
 ) -> Result<(), RdfDiagnostic> {
-    if !matches!(builder.term(id), InternedTerm::Iri(_)) {
+    require_predicate_kind(interned_kind(builder.term(id)), ctx)
+}
+
+fn require_predicate_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
+    if !matches!(kind, Kind::Iri) {
         return Err(diag(
             "rdf-ir-predicate-not-iri",
             format!(
                 "{} must be an IRI, but resolves to {}",
                 ctx(),
-                kind_str(builder.term(id))
+                kind_name(kind)
             ),
         ));
     }
@@ -352,14 +470,18 @@ fn require_graph_name(
     id: TermId,
     ctx: impl FnOnce() -> String,
 ) -> Result<(), RdfDiagnostic> {
-    match builder.term(id) {
-        InternedTerm::Iri(_) | InternedTerm::Blank { .. } => Ok(()),
+    require_graph_kind(interned_kind(builder.term(id)), ctx)
+}
+
+fn require_graph_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
+    match kind {
+        Kind::Iri | Kind::Blank => Ok(()),
         other => Err(diag(
             "rdf-ir-graph-name-invalid",
             format!(
                 "{} must be an IRI or blank node, but resolves to {}",
                 ctx(),
-                kind_str(other)
+                kind_name(other)
             ),
         )),
     }
@@ -370,11 +492,15 @@ fn quad_ref_ctx(index: usize, position: &str) -> String {
 }
 
 fn kind_str(term: &InternedTerm) -> &'static str {
-    match term {
-        InternedTerm::Iri(_) => "an IRI",
-        InternedTerm::Blank { .. } => "a blank node",
-        InternedTerm::Literal(_) => "a literal",
-        InternedTerm::Triple { .. } => "a triple term",
+    kind_name(interned_kind(term))
+}
+
+fn kind_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Iri => "an IRI",
+        Kind::Blank => "a blank node",
+        Kind::Literal => "a literal",
+        Kind::Triple => "a triple term",
     }
 }
 

@@ -80,11 +80,8 @@ pub enum GraphExistenceMode {
     RememberEmpty,
 }
 
-/// The `rdf:reifies` predicate IRI — mirrors [`super::dataset`]'s private copy (kept
-/// local rather than exported: both classify the SAME fold, independently, from a
-/// value/id they already hold). A delta-added row shaped `_ rdf:reifies <<( … )>>`
-/// is the RDF 1.2 reifier declaration `freeze` folds out of the flat quad delta (see
-/// [`MutableDataset::freeze`]).
+/// Ordinary insertion recognizes this declaration predicate before publishing
+/// a typed physical row; snapshot and freeze replay those normalized roles.
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// A dense index into a [`MutableDataset`]'s OWN delta term interner. Newtype (not a
@@ -116,12 +113,53 @@ pub(crate) enum MutTermId {
 /// both as the membership key of the `suppressed` set and as the dedup key of the
 /// `added` set, so the two layers speak the same identity language. `g == None`
 /// names the default graph.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) struct QuadKey {
     pub s: MutTermId,
     pub p: MutTermId,
     pub o: MutTermId,
     pub g: Option<MutTermId>,
+}
+
+/// The physical RDF table containing a record. Equal quad values in different
+/// tables are distinct records.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[non_exhaustive]
+pub enum RecordKind {
+    /// An asserted quad, including a declaration-shaped quad explicitly kept ordinary.
+    Ordinary,
+    /// A resource binding to a triple term through `rdf:reifies`.
+    Reifier,
+    /// A statement annotation, including an annotation with no declaration.
+    Annotation,
+}
+
+impl RecordKind {
+    const ALL: [Self; 3] = [Self::Ordinary, Self::Reifier, Self::Annotation];
+}
+
+/// Owned terms and the exact physical table they belong to.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct RecordValues {
+    /// Physical table, never an inference hint.
+    pub kind: RecordKind,
+    /// Dataset-independent term values.
+    pub quad: QuadValues,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub(crate) struct RecordKey {
+    pub kind: RecordKind,
+    pub quad: QuadKey,
+}
+
+/// A reversible ordinary-API classification. Collapsed source records retain
+/// their origins until explicitly removed, so removing the declaration can
+/// restore their original, distinct physical roles.
+#[derive(Clone, Copy, Debug)]
+struct Reclassification {
+    target: RecordKey,
+    ordinal: Option<u64>,
 }
 
 /// The delta's own small term interner. Terms not found in the base are minted here,
@@ -213,14 +251,14 @@ pub struct MutableDataset {
     /// `added_ord`, since — per the workspace's hash-determinism policy — hash
     /// iteration order must never be observed, even a fixed-key one built from a
     /// different insertion sequence than some other equal-content set.
-    added: FastSet<QuadKey>,
+    added: FastSet<RecordKey>,
     /// The insertion ordinal of each key currently in `added`, so `freeze()` and
     /// `effective_keys()` can replay delta-added quads in the order the caller
     /// actually added them — never in `added`'s hash-iteration order (see
     /// [`Self::added_in_order`]). A key present in `added` is always present here
     /// with the SAME ordinal it was (re)inserted at; removed keys are dropped from
     /// both maps together.
-    added_ord: FastMap<QuadKey, u64>,
+    added_ord: FastMap<RecordKey, u64>,
     /// The next ordinal `insert_key` will hand out to a brand-new `added` entry.
     /// Monotonically increasing for the lifetime of this `MutableDataset` — never
     /// reused, even across a remove/reinsert of the same key.
@@ -228,8 +266,17 @@ pub struct MutableDataset {
     /// Base quads suppressed (logically removed). A base quad is effective iff it is
     /// NOT in this set. Fixed-key hashed; only ever probed by membership, never
     /// iterated for order.
-    suppressed: FastSet<QuadKey>,
-    suppressed_rows: usize,
+    suppressed: FastSet<RecordKey>,
+    /// Maintained physical reference counts; public churn metrics count values.
+    caller_added: FastMap<RecordKey, u64>,
+    caller_suppressed: FastSet<RecordKey>,
+    added_values: FastMap<QuadKey, usize>,
+    suppressed_values: FastMap<QuadKey, usize>,
+    /// Delta records admitted through the classifying, value-only API.
+    automatic: FastMap<(MutTermId, Option<MutTermId>), FastSet<RecordKey>>,
+    reclassified: FastMap<(MutTermId, Option<MutTermId>), FastMap<RecordKey, Reclassification>>,
+    added_reifiers: FastMap<(MutTermId, Option<MutTermId>), usize>,
+    classification_created: FastSet<RecordKey>,
     /// Named graphs declared on top of the base, in declaration order, deduplicated:
     /// each survives [`freeze`](Self::freeze) and every snapshot as a declared graph
     /// whether or not it owns a quad.
@@ -265,7 +312,14 @@ impl MutableDataset {
             added_ord: FastMap::default(),
             next_added_ord: 0,
             suppressed: FastSet::default(),
-            suppressed_rows: 0,
+            caller_added: FastMap::default(),
+            caller_suppressed: FastSet::default(),
+            added_values: FastMap::default(),
+            suppressed_values: FastMap::default(),
+            automatic: FastMap::default(),
+            reclassified: FastMap::default(),
+            added_reifiers: FastMap::default(),
+            classification_created: FastSet::default(),
             declared_graphs: Vec::new(),
             graph_rows: FastMap::default(),
             withdrawn_graphs: Arc::default(),
@@ -397,6 +451,76 @@ impl MutableDataset {
     #[must_use]
     pub fn base(&self) -> &Arc<RdfDataset> {
         &self.base
+    }
+
+    /// Insert into exactly the requested physical table, without inferred classification.
+    ///
+    /// # Errors
+    /// Refuses invalid RDF terms, positions and noncanonical reifier records before
+    /// publishing membership.
+    pub fn insert_record(&mut self, record: &RecordValues) -> Result<bool, crate::RdfDiagnostic> {
+        super::validate::validate_record(record)?;
+        let quad = self.key_of(&record.quad).map_err(|error| {
+            crate::RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+        })?;
+        let before = self.effective_count();
+        let key = RecordKey {
+            kind: record.kind,
+            quad,
+        };
+        let changed = self.insert_record_rows(key, None);
+        if changed {
+            self.caller_insert(key);
+        }
+        self.apply_graph_change(quad.g, before);
+        Ok(changed)
+    }
+
+    /// Remove only the requested physical role. Missing values mint no terms.
+    pub fn remove_record(&mut self, record: &RecordValues) -> bool {
+        let Some(quad) = self.key_of_existing(&record.quad) else {
+            return false;
+        };
+        let before = self.effective_count();
+        let key = RecordKey {
+            kind: record.kind,
+            quad,
+        };
+        let changed = self.remove_record_rows(key);
+        if changed {
+            self.caller_remove(key);
+            self.forget_classification(key);
+        }
+        self.apply_graph_change(quad.g, before);
+        changed
+    }
+
+    /// Take a stable, owned snapshot retaining each record's physical role.
+    ///
+    /// # Errors
+    /// Refuses invalid unpublished delta records through snapshot admission.
+    pub fn records_for_pattern(
+        &self,
+        s: Option<&TermValue>,
+        p: Option<&TermValue>,
+        o: Option<&TermValue>,
+        g: GraphMatchValue<'_>,
+    ) -> Result<Vec<RecordValues>, crate::RdfDiagnostic> {
+        let view = self.snapshot_view()?;
+        Ok(super::import::record_values(&view)?
+            .into_iter()
+            .filter(|record| {
+                let q = &record.quad;
+                s.is_none_or(|s| q.s == *s)
+                    && p.is_none_or(|p| q.p == *p)
+                    && o.is_none_or(|o| q.o == *o)
+                    && match g {
+                        GraphMatchValue::Any => true,
+                        GraphMatchValue::Default => q.g.is_none(),
+                        GraphMatchValue::Named(g) => q.g.as_ref() == Some(g),
+                    }
+            })
+            .collect())
     }
 
     /// Visit every retained blank identity without freezing or copying the dataset.
@@ -586,157 +710,159 @@ impl MutableDataset {
         self.delta.find(value).map(MutTermId::Delta)
     }
 
-    /// Whether a base [`QuadKey`] (all components `Base`) names a quad in the base.
-    fn base_occurrences(&self, key: &QuadKey) -> usize {
-        let (MutTermId::Base(s), MutTermId::Base(p), MutTermId::Base(o)) = (key.s, key.p, key.o)
-        else {
-            return 0;
+    fn base_contains_record(&self, key: RecordKey) -> bool {
+        let q = key.quad;
+        let (MutTermId::Base(s), MutTermId::Base(p), MutTermId::Base(o)) = (q.s, q.p, q.o) else {
+            return false;
         };
-        let g = match key.g {
+        let g = match q.g {
             None => GraphMatch::Default,
             Some(MutTermId::Base(g)) => GraphMatch::Named(g),
-            // A delta graph id can never name a base quad.
-            Some(MutTermId::Delta(_)) => return 0,
+            Some(MutTermId::Delta(_)) => return false,
         };
-        usize::from(
-            RdfDataset::quads_for_pattern_indexed(&self.base, Some(s), Some(p), Some(o), g)
-                .next()
-                .is_some(),
-        ) + usize::from(
-            self.base
+        match key.kind {
+            RecordKind::Ordinary => {
+                RdfDataset::quads_for_pattern_indexed(&self.base, Some(s), Some(p), Some(o), g)
+                    .next()
+                    .is_some()
+            }
+            RecordKind::Reifier => self
+                .base
                 .reifier_quads_of(s)
                 .any(|q| q.p == p && q.o == o && g.matches(q.g)),
-        ) + usize::from(
-            self.base
+            RecordKind::Annotation => self
+                .base
                 .annotations_of_with_graph(s)
                 .any(|(pred, obj, graph)| pred == p && obj == o && g.matches(graph)),
-        )
-    }
-
-    fn base_contains(&self, key: &QuadKey) -> bool {
-        self.base_occurrences(key) > 0
-    }
-
-    // -- mutation core ----------------------------------------------------------------
-
-    /// Insert an effective quad (the four rules, insert side). Returns `true` if the
-    /// effective set changed.
-    fn insert_key(&mut self, key: QuadKey) -> bool {
-        let rows = self.insert_rows(key);
-        if rows > 0
-            && let Some(graph) = key.g
-        {
-            let first_rows = {
-                let live = self.graph_rows_of(graph);
-                *live += rows;
-                *live == rows
-            };
-            if first_rows {
-                if let MutTermId::Base(id) = graph
-                    && self.withdrawn_graphs.contains(&id)
-                {
-                    Arc::make_mut(&mut self.withdrawn_graphs).remove(&id);
-                }
-                if self.graph_existence == GraphExistenceMode::RememberEmpty
-                    && !matches!(graph, MutTermId::Base(id) if self.base.has_named_graph(id))
-                {
-                    self.declare_graph(self.mut_value(graph));
-                }
-            }
         }
-        rows > 0
     }
 
-    /// The insert side of the four rules; the number of RDF rows it made effective.
-    fn insert_rows(&mut self, key: QuadKey) -> usize {
-        // Rule 1: inserting a currently-suppressed base quad un-suppresses it (and
-        // does NOT also push to `added`).
+    fn contains_record_key(&self, key: RecordKey) -> bool {
+        self.added.contains(&key)
+            || (!self.suppressed.contains(&key) && self.base_contains_record(key))
+    }
+
+    fn contains_key(&self, quad: &QuadKey) -> bool {
+        RecordKind::ALL
+            .into_iter()
+            .any(|kind| self.contains_record_key(RecordKey { kind, quad: *quad }))
+    }
+
+    fn increment_value(index: &mut FastMap<QuadKey, usize>, key: QuadKey) {
+        *index.entry(key).or_default() += 1;
+    }
+
+    fn decrement_value(index: &mut FastMap<QuadKey, usize>, key: QuadKey) {
+        let count = index
+            .get_mut(&key)
+            .expect("physical membership has a value reference");
+        *count -= 1;
+        if *count == 0 {
+            index.remove(&key);
+        }
+    }
+
+    // Physical transitions deliberately do not change graph lifetime. Their
+    // caller applies the net change after a complete conversion/value operation.
+    fn insert_record_rows(&mut self, key: RecordKey, ordinal: Option<u64>) -> bool {
         if self.suppressed.remove(&key) {
-            let occurrences = self.base_occurrences(&key);
-            self.suppressed_rows -= occurrences;
-            return occurrences;
+            return true;
         }
-        // Already effective (present in base-and-not-suppressed, or already added)?
-        if self.contains_key(&key) {
-            return 0;
+        if self.contains_record_key(key) {
+            return false;
         }
-        let inserted = self.added.insert(key);
-        if inserted {
-            // A brand-new `added` entry: stamp it with the next insertion ordinal so
-            // `added_in_order` can replay delta-added quads in call order rather than
-            // `added`'s hash-iteration order.
-            self.added_ord.insert(key, self.next_added_ord);
-            self.next_added_ord += 1;
+        self.added.insert(key);
+        if key.kind == RecordKind::Reifier {
+            *self
+                .added_reifiers
+                .entry((key.quad.s, key.quad.g))
+                .or_default() += 1;
         }
-        usize::from(inserted)
+        let ordinal = ordinal.unwrap_or_else(|| {
+            let ordinal = self.next_added_ord;
+            self.next_added_ord = ordinal.checked_add(1).expect("insertion ordinal exhausted");
+            ordinal
+        });
+        self.added_ord.insert(key, ordinal);
+        true
     }
 
-    /// Remove an effective quad (the four rules, remove side). Returns `true` if the
-    /// effective set changed.
-    fn remove_key(&mut self, key: QuadKey) -> bool {
-        let rows = self.remove_rows(key);
-        if rows > 0
-            && let Some(graph) = key.g
-        {
-            let live = self.graph_rows_of(graph);
-            *live -= rows;
-            if *live == 0 && self.graph_existence == GraphExistenceMode::Implicit {
-                if let MutTermId::Base(graph) = graph {
-                    Arc::make_mut(&mut self.withdrawn_graphs).insert(graph);
-                }
-                self.withdraw_emptied_declaration(graph);
-            }
-        }
-        rows > 0
-    }
-
-    /// A graph declared through [`Self::declare_named_graph`] follows the base's rule:
-    /// the mutation that removes its last row withdraws the declaration. Called only
-    /// when the graph's live row count reaches zero, and probes only when some
-    /// declaration exists, so neither a dataset without one nor a removal that leaves
-    /// rows behind pays anything.
-    fn withdraw_emptied_declaration(&mut self, graph: MutTermId) {
-        if self.declared_graphs.is_empty() {
-            return;
-        }
-        let index = match graph {
-            MutTermId::Base(_) => {
-                let value = self.mut_value(graph);
-                self.declared_graphs.iter().position(|g| *g == value)
-            }
-            MutTermId::Delta(id) => {
-                let value = self.delta.value(id);
-                self.declared_graphs.iter().position(|g| g == value)
-            }
-        };
-        if let Some(index) = index {
-            self.declared_graphs.remove(index);
-        }
-    }
-
-    /// The remove side of the four rules; the number of RDF rows it took away.
-    fn remove_rows(&mut self, key: QuadKey) -> usize {
-        // Rule 2: removing a delta-added quad drops it from `added` (no suppression).
+    fn remove_record_rows(&mut self, key: RecordKey) -> bool {
         if self.added.remove(&key) {
-            // Drop the matching ordinal too — a later reinsert of the SAME key mints a
-            // fresh (later) ordinal, so it replays at its new position, not its stale one.
+            if key.kind == RecordKind::Reifier {
+                let count = self
+                    .added_reifiers
+                    .get_mut(&(key.quad.s, key.quad.g))
+                    .expect("added reifier has a subject index");
+                *count -= 1;
+                if *count == 0 {
+                    self.added_reifiers.remove(&(key.quad.s, key.quad.g));
+                }
+            }
             self.added_ord.remove(&key);
-            return 1;
+            return true;
         }
-        // Rule 3: removing a base quad (not in `added`) creates a suppression — but
-        // only if it is actually an effective base quad and not already suppressed.
-        let occurrences = self.base_occurrences(&key);
-        if occurrences > 0 && self.suppressed.insert(key) {
-            self.suppressed_rows += occurrences;
-            return occurrences;
-        }
-        0
+        self.base_contains_record(key) && self.suppressed.insert(key)
     }
 
-    /// The live row count of the named graph `graph`, seeded on first touch. Every
-    /// mutation in a graph passes through here, so a graph not yet in the map has
-    /// never been mutated: a base graph's live count is then its base count, and a
-    /// delta graph — which no base row can name — holds none.
+    // Public mutation metrics describe caller intent, not the physical masks and
+    // derived targets needed to normalize classification. Keep their value reference
+    // counts at the mutation boundary, so reads remain allocation-free.
+    fn caller_insert(&mut self, key: RecordKey) {
+        if self.base_contains_record(key) {
+            if self.caller_suppressed.remove(&key) {
+                Self::decrement_value(&mut self.suppressed_values, key.quad);
+            }
+        } else if !self.caller_added.contains_key(&key) {
+            let ordinal = self.added_ord[&key];
+            self.caller_added.insert(key, ordinal);
+            Self::increment_value(&mut self.added_values, key.quad);
+        }
+    }
+
+    fn caller_remove_origin(&mut self, key: RecordKey) {
+        if self.caller_added.remove(&key).is_some() {
+            Self::decrement_value(&mut self.added_values, key.quad);
+        }
+        if self.base_contains_record(key) && self.caller_suppressed.insert(key) {
+            Self::increment_value(&mut self.suppressed_values, key.quad);
+        }
+    }
+
+    fn caller_remove(&mut self, key: RecordKey) {
+        let origins: Vec<_> = self
+            .reclassified
+            .get(&(key.quad.s, key.quad.g))
+            .into_iter()
+            .flat_map(|conversions| conversions.iter())
+            .filter_map(|(&source, conversion)| (conversion.target == key).then_some(source))
+            .collect();
+        self.caller_remove_origin(key);
+        for source in origins {
+            self.caller_remove_origin(source);
+        }
+    }
+
+    fn forget_classification(&mut self, key: RecordKey) {
+        let scope = (key.quad.s, key.quad.g);
+        if let Some(origins) = self.automatic.get_mut(&scope) {
+            origins.remove(&key);
+        }
+        self.classification_created.remove(&key);
+        if let Some(conversions) = self.reclassified.get_mut(&scope) {
+            conversions.retain(|source, conversion| {
+                if conversion.target == key {
+                    if let Some(origins) = self.automatic.get_mut(&scope) {
+                        origins.remove(source);
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+
     fn graph_rows_of(&mut self, graph: MutTermId) -> &mut usize {
         let base = &self.base;
         self.graph_rows.entry(graph).or_insert_with(|| match graph {
@@ -745,37 +871,270 @@ impl MutableDataset {
         })
     }
 
-    /// Whether a [`QuadKey`] is in the effective set: `(base ∪ added) − suppressed`.
-    fn contains_key(&self, key: &QuadKey) -> bool {
-        if self.suppressed.contains(key) {
-            return false;
+    fn apply_graph_change(&mut self, graph: Option<MutTermId>, before: usize) {
+        let after = self.effective_count();
+        let Some(graph) = graph else {
+            return;
+        };
+        let live = self.graph_rows_of(graph);
+        let old = *live;
+        *live = if after >= before {
+            old + (after - before)
+        } else {
+            old - (before - after)
+        };
+        let now = *live;
+        if now == 0 && old > 0 && self.graph_existence == GraphExistenceMode::Implicit {
+            if let MutTermId::Base(id) = graph {
+                Arc::make_mut(&mut self.withdrawn_graphs).insert(id);
+            }
+            self.withdraw_emptied_declaration(graph);
+        } else if now > 0 && old == 0 {
+            if let MutTermId::Base(id) = graph {
+                Arc::make_mut(&mut self.withdrawn_graphs).remove(&id);
+            }
+            if self.graph_existence == GraphExistenceMode::RememberEmpty
+                && !matches!(graph, MutTermId::Base(id) if self.base.has_named_graph(id))
+            {
+                self.declare_graph(self.mut_value(graph));
+            }
         }
-        self.added.contains(key) || self.base_contains(key)
     }
 
-    /// The delta-added keys, replayed in the order they were actually added — NEVER
-    /// `added`'s own hash-iteration order.
-    ///
-    /// `added`/`suppressed` are fixed-key hashed sets, which makes hash-bucket layout
-    /// a pure (reproducible) function of content — but reproducible-given-content is
-    /// not enough: two processes that inserted the same quads in a different order
-    /// (or that hashed to different bucket counts along the way) can still iterate a
-    /// fixed-key `HashSet` in different orders. Per the workspace's hash-determinism
-    /// policy (`crate::hash`), the fix is never "iterate the hash set" — it's an
-    /// explicit sort. Here that sort key is `added_ord`, the insertion ordinal minted
-    /// in [`Self::insert_key`], so `freeze()`/`quads_for_pattern` reproduce the exact
-    /// call-order sequence a caller built, independent of hash layout or process.
-    fn added_in_order(&self) -> Vec<QuadKey> {
-        let mut ordered: Vec<(u64, QuadKey)> = self
+    fn withdraw_emptied_declaration(&mut self, graph: MutTermId) {
+        if self.declared_graphs.is_empty() {
+            return;
+        }
+        let value = self.mut_value(graph);
+        if let Some(index) = self.declared_graphs.iter().position(|g| *g == value) {
+            self.declared_graphs.remove(index);
+        }
+    }
+
+    fn declaration_key(&self, q: QuadKey) -> bool {
+        let predicate = match q.p {
+            MutTermId::Base(id) => {
+                matches!(self.base.resolve(id), TermRef::Iri(iri) if iri == RDF_REIFIES)
+            }
+            MutTermId::Delta(id) => {
+                matches!(self.delta.value(id), TermValue::Iri(iri) if iri == RDF_REIFIES)
+            }
+        };
+        predicate
+            && match q.o {
+                MutTermId::Base(id) => matches!(self.base.resolve(id), TermRef::Triple { .. }),
+                MutTermId::Delta(id) => matches!(self.delta.value(id), TermValue::Triple { .. }),
+            }
+    }
+
+    fn has_effective_reifier(&self, s: MutTermId, g: Option<MutTermId>) -> bool {
+        let base = match s {
+            MutTermId::Base(id) => self.base.reifier_quads_of(id).any(|q| {
+                let quad = Self::base_key(q);
+                quad.g == g
+                    && self.contains_record_key(RecordKey {
+                        kind: RecordKind::Reifier,
+                        quad,
+                    })
+            }),
+            MutTermId::Delta(_) => false,
+        };
+        base || self
+            .added_reifiers
+            .get(&(s, g))
+            .is_some_and(|count| *count > 0)
+    }
+
+    fn base_key(q: super::QuadIds) -> QuadKey {
+        QuadKey {
+            s: MutTermId::Base(q.s),
+            p: MutTermId::Base(q.p),
+            o: MutTermId::Base(q.o),
+            g: q.g.map(MutTermId::Base),
+        }
+    }
+
+    fn normalize_subject(&mut self, subject: MutTermId, graph: Option<MutTermId>) {
+        let matches = |q: QuadKey| q.s == subject && q.g == graph;
+        let old = self
+            .reclassified
+            .remove(&(subject, graph))
+            .unwrap_or_default();
+        // Remove only generated target rows, never an independently existing row
+        // that a conversion happened to collide with.
+        for conversion in old.values() {
+            if self.classification_created.remove(&conversion.target) {
+                self.remove_record_rows(conversion.target);
+            }
+        }
+        for (source, conversion) in old {
+            self.insert_record_rows(source, conversion.ordinal);
+        }
+        let effective_reifier = self.has_effective_reifier(subject, graph);
+        let mut candidates = Vec::new();
+        if let MutTermId::Base(id) = subject {
+            let g = graph.map_or(GraphMatch::Default, |g| match g {
+                MutTermId::Base(g) => GraphMatch::Named(g),
+                MutTermId::Delta(_) => GraphMatch::Any,
+            });
+            candidates.extend(
+                self.base
+                    .quads_for_pattern_indexed(Some(id), None, None, g)
+                    .map(|q| RecordKey {
+                        kind: RecordKind::Ordinary,
+                        quad: Self::base_key(q),
+                    }),
+            );
+            candidates.extend(
+                self.base
+                    .annotations_of_with_graph(id)
+                    .map(|(p, o, g)| RecordKey {
+                        kind: RecordKind::Annotation,
+                        quad: Self::base_key(super::QuadIds { s: id, p, o, g }),
+                    })
+                    .filter(|key| matches(key.quad)),
+            );
+        }
+        if let Some(origins) = self.automatic.get(&(subject, graph)) {
+            candidates.extend(origins.iter().copied());
+        }
+        // Base origins have a canonical typed-key order. Delta origins follow
+        // their unique insertion ordinal; a total tie-break never exposes hash
+        // iteration order when a base origin meets the first delta ordinal.
+        candidates.sort_unstable_by_key(|key| {
+            (
+                self.added_ord
+                    .get(key)
+                    .copied()
+                    .map_or((0, 0), |ordinal| (1, ordinal)),
+                *key,
+            )
+        });
+        candidates.dedup();
+        for source in candidates {
+            if !matches(source.quad) || !self.contains_record_key(source) {
+                continue;
+            }
+            self.classify_record(source, effective_reifier);
+        }
+    }
+
+    fn classify_record(&mut self, source: RecordKey, effective_reifier: bool) {
+        let physical = match source.kind {
+            RecordKind::Ordinary => StatementKind::Ordinary,
+            RecordKind::Annotation => StatementKind::Annotation,
+            RecordKind::Reifier => return,
+        };
+        let original_reifier = match source.quad.s {
+            MutTermId::Base(id) => self
+                .base
+                .reifier_quads_of(id)
+                .any(|q| Self::base_key(q).g == source.quad.g),
+            MutTermId::Delta(_) => false,
+        };
+        let target_kind =
+            match classify_statement(physical, true, original_reifier, effective_reifier)
+                .expect("visible record has a classification")
+            {
+                StatementKind::Ordinary => RecordKind::Ordinary,
+                StatementKind::Annotation => RecordKind::Annotation,
+            };
+        if target_kind == source.kind {
+            return;
+        }
+        let ordinal = self.added_ord.get(&source).copied();
+        self.remove_record_rows(source);
+        let target = RecordKey {
+            kind: target_kind,
+            quad: source.quad,
+        };
+        if self.insert_record_rows(target, ordinal) {
+            self.classification_created.insert(target);
+        }
+        if let (Some(old), Some(current)) = (ordinal, self.added_ord.get_mut(&target)) {
+            *current = (*current).min(old);
+        }
+        self.reclassified
+            .entry((source.quad.s, source.quad.g))
+            .or_default()
+            .insert(source, Reclassification { target, ordinal });
+    }
+
+    fn insert_key(&mut self, quad: QuadKey) -> bool {
+        let before = self.effective_count();
+        let mut changed = false;
+        let mut restored = Vec::new();
+        for kind in RecordKind::ALL {
+            let key = RecordKey { kind, quad };
+            if self.suppressed.contains(&key)
+                && !self
+                    .reclassified
+                    .get(&(quad.s, quad.g))
+                    .is_some_and(|conversions| conversions.contains_key(&key))
+                && self.insert_record_rows(key, None)
+            {
+                self.caller_insert(key);
+                restored.push(key);
+                changed = true;
+            }
+        }
+        if !changed && !self.contains_key(&quad) {
+            let kind = if self.declaration_key(quad) {
+                RecordKind::Reifier
+            } else {
+                RecordKind::Ordinary
+            };
+            let key = RecordKey { kind, quad };
+            changed = self.insert_record_rows(key, None);
+            if changed {
+                self.caller_insert(key);
+            }
+            if kind == RecordKind::Ordinary {
+                self.automatic
+                    .entry((quad.s, quad.g))
+                    .or_default()
+                    .insert(key);
+                let reifier = self.has_effective_reifier(quad.s, quad.g);
+                self.classify_record(key, reifier);
+            }
+        }
+        if changed && self.declaration_key(quad) {
+            self.normalize_subject(quad.s, quad.g);
+        } else {
+            let reifier = self.has_effective_reifier(quad.s, quad.g);
+            for key in restored {
+                self.classify_record(key, reifier);
+            }
+        }
+        self.apply_graph_change(quad.g, before);
+        changed
+    }
+
+    fn remove_key(&mut self, quad: QuadKey) -> bool {
+        let before = self.effective_count();
+        let mut changed = false;
+        for kind in RecordKind::ALL {
+            let key = RecordKey { kind, quad };
+            if self.contains_record_key(key) {
+                changed |= self.remove_record_rows(key);
+                self.caller_remove(key);
+                self.forget_classification(key);
+            }
+        }
+        if changed && self.declaration_key(quad) {
+            self.normalize_subject(quad.s, quad.g);
+        }
+        self.apply_graph_change(quad.g, before);
+        changed
+    }
+
+    fn added_in_order(&self) -> Vec<RecordKey> {
+        let mut ordered: Vec<_> = self
             .added_ord
             .iter()
             .map(|(&key, &ord)| (ord, key))
             .collect();
-        debug_assert_eq!(
-            ordered.len(),
-            self.added.len(),
-            "added/added_ord must stay in lockstep"
-        );
+        debug_assert_eq!(ordered.len(), self.added.len());
         ordered.sort_unstable_by_key(|&(ord, _)| ord);
         ordered.into_iter().map(|(_, key)| key).collect()
     }
@@ -891,13 +1250,13 @@ impl MutableDataset {
     /// The number of quads added on top of the base (delta size).
     #[must_use]
     pub fn added_len(&self) -> usize {
-        self.added.len()
+        self.added_values.len()
     }
 
     /// The number of base quads currently suppressed.
     #[must_use]
     pub fn suppressed_len(&self) -> usize {
-        self.suppressed.len()
+        self.suppressed_values.len()
     }
 
     /// Iterate the effective quads as value-quads — the independent test/property-test
@@ -906,29 +1265,9 @@ impl MutableDataset {
     /// public surface is [`DatasetMut`].
     #[cfg(test)]
     fn effective_value_quads(&self) -> Vec<QuadValues> {
-        let mut out: Vec<QuadValues> = Vec::new();
-        // Base quads that are not suppressed.
-        for q in self
-            .base
-            .quads()
-            .chain(self.base.reifier_quads())
-            .chain(self.base.annotation_quads())
-        {
-            let key = QuadKey {
-                s: MutTermId::Base(q.s),
-                p: MutTermId::Base(q.p),
-                o: MutTermId::Base(q.o),
-                g: q.g.map(MutTermId::Base),
-            };
-            if !self.suppressed.contains(&key) {
-                out.push(self.quad_values_of(&key));
-            }
-        }
-        // Delta-added quads, in call order (never `added`'s hash-iteration order).
-        for key in self.added_in_order() {
-            out.push(self.quad_values_of(&key));
-        }
-        out
+        self.effective_record_keys()
+            .map(|key| self.quad_values_of(&key.quad))
+            .collect()
     }
 
     /// Resolve a [`QuadKey`] to a value-quad (each component to its [`TermValue`]).
@@ -1013,8 +1352,35 @@ impl MutableDataset {
         &self,
         limits: super::view_accounting::ViewLimits,
     ) -> Result<DeltaDatasetView, crate::RdfDiagnostic> {
+        let base_id = |id| match id {
+            MutTermId::Base(id) => id,
+            MutTermId::Delta(_) => unreachable!("base-origin conversion has only base terms"),
+        };
+        let converted: FastSet<_> = self
+            .reclassified
+            .values()
+            .flat_map(|origins| origins.iter())
+            .filter(|(source, conversion)| {
+                matches!(source.quad.s, MutTermId::Base(_))
+                    && conversion.ordinal.is_none()
+                    && self.added.contains(&conversion.target)
+                    && self.classification_created.contains(&conversion.target)
+            })
+            .map(|(source, conversion)| {
+                (
+                    conversion.target.kind,
+                    super::QuadIds {
+                        s: base_id(source.quad.s),
+                        p: base_id(source.quad.p),
+                        o: base_id(source.quad.o),
+                        g: source.quad.g.map(base_id),
+                    },
+                )
+            })
+            .collect();
         let mut builder = self.base.rebuild_builder();
-        let mut admission = DeltaAdmission::new(&self.base, self.suppressed.len(), limits);
+        let mut admission =
+            DeltaAdmission::new(&self.base, self.suppressed.len(), converted.len(), limits);
         self.append_delta(&mut builder, &mut admission)?;
         let extent = admission.check(&builder)?;
         let delta = builder.freeze()?;
@@ -1048,17 +1414,23 @@ impl MutableDataset {
         let suppressed = self
             .suppressed
             .iter()
-            .map(|q| super::QuadIds {
-                s: base_id(q.s),
-                p: base_id(q.p),
-                o: base_id(q.o),
-                g: q.g.map(base_id),
+            .map(|key| {
+                (
+                    key.kind,
+                    super::QuadIds {
+                        s: base_id(key.quad.s),
+                        p: base_id(key.quad.p),
+                        o: base_id(key.quad.o),
+                        g: key.quad.g.map(base_id),
+                    },
+                )
             })
             .collect();
         let view = DeltaDatasetView::new(
             Arc::clone(&self.base),
             delta,
             suppressed,
+            converted,
             Arc::clone(&self.withdrawn_graphs),
             limits,
         )?;
@@ -1080,71 +1452,41 @@ impl MutableDataset {
         builder: &mut RdfDatasetBuilder,
         admission: &mut DeltaAdmission<'_>,
     ) -> Result<(), crate::RdfDiagnostic> {
-        let added_values: Vec<QuadValues> = self
-            .added_in_order()
-            .into_iter()
-            .map(|k| self.quad_values_of(&k))
+        // Preserve authored term admission order before replaying derived base
+        // conversions. Native indexes order by term identity, so minting a derived
+        // predicate first would reorder otherwise unchanged caller-added probes.
+        let mut caller_terms: Vec<_> = self
+            .caller_added
+            .iter()
+            .filter(|(key, _)| {
+                self.added.contains(key)
+                    || self
+                        .reclassified
+                        .get(&(key.quad.s, key.quad.g))
+                        .and_then(|conversions| conversions.get(key))
+                        .is_some_and(|conversion| self.added.contains(&conversion.target))
+            })
             .collect();
-        let mut reifier_subjects = FastSet::default();
-        let mut reifier_decl: Vec<bool> = Vec::with_capacity(added_values.len());
-        for q in &added_values {
-            let is_decl = matches!(&q.p, TermValue::Iri(iri) if iri == RDF_REIFIES)
-                && matches!(q.o, TermValue::Triple { .. });
-            if is_decl {
-                reifier_subjects.insert((q.g.clone(), q.s.clone()));
-            }
-            reifier_decl.push(is_decl);
-        }
-        // Pass 2: push reifier declarations first (so the side table is populated
-        // before any freeze consumer inspects it), then classify the rest.
-        for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
-            if !is_decl {
-                continue;
-            }
-            let TermValue::Triple { s, p, o } = &q.o else {
-                unreachable!("is_decl implies a triple-term object");
-            };
-            let reifier = builder.intern_value(&q.s);
-            let s = builder.intern_value(s);
-            let p = builder.intern_value(p);
-            let o = builder.intern_value(o);
-            let triple = builder.intern_triple(s, p, o);
-            let g = q.g.as_ref().map(|g| builder.intern_value(g));
-            builder.push_reifier_in_graph(reifier, triple, g);
-            admission.row(builder, g)?;
-        }
-        for (q, &is_decl) in added_values.iter().zip(&reifier_decl) {
-            if is_decl {
-                continue;
-            }
-            let s = builder.intern_value(&q.s);
-            let p = builder.intern_value(&q.p);
-            let o = builder.intern_value(&q.o);
-            let g = q.g.as_ref().map(|g| builder.intern_value(g));
-            // A quad whose subject is a reifier is that reifier's annotation, in its
-            // own graph — mirroring `fold_statement_layer`'s pass 2 so an UPDATE freeze
-            // and a parse of the same statement agree.
-            if reifier_subjects.contains(&(q.g.clone(), q.s.clone()))
-                || self.base.term_id_by_value(&q.s).is_some_and(|id| {
-                    self.base.reifier_quads_of(id).any(|row| {
-                        row.g.map(|graph| self.base_value(graph)) == q.g
-                            && !self.suppressed.contains(&QuadKey {
-                                s: MutTermId::Base(row.s),
-                                p: MutTermId::Base(row.p),
-                                o: MutTermId::Base(row.o),
-                                g: row.g.map(MutTermId::Base),
-                            })
-                    })
-                })
+        caller_terms.sort_unstable_by_key(|(_, ordinal)| **ordinal);
+        for (key, _) in caller_terms {
+            let quad = self.quad_values_of(&key.quad);
+            for term in [&quad.s, &quad.p, &quad.o]
+                .into_iter()
+                .chain(quad.g.as_ref())
             {
-                builder.push_annotation_in_graph(s, p, o, g);
-            } else {
-                builder.push_quad(s, p, o, g);
+                builder.intern_value(term);
+                admission.check(builder)?;
             }
-            admission.row(builder, g)?;
         }
-        // Declarations last, so a delta that declares nothing interns exactly as it
-        // always did.
+        for key in self.added_in_order() {
+            let record = RecordValues {
+                kind: key.kind,
+                quad: self.quad_values_of(&key.quad),
+            };
+            builder.push_record_unchecked(&record);
+            let graph = record.quad.g.as_ref().map(|g| builder.intern_value(g));
+            admission.row(builder, graph)?;
+        }
         for graph in &self.declared_graphs {
             let id = builder.intern_value(graph);
             builder.declare_named_graph(id);
@@ -1166,6 +1508,7 @@ impl MutableDataset {
 struct DeltaAdmission<'a> {
     base: &'a RdfDataset,
     suppressed: usize,
+    converted: usize,
     limits: super::view_accounting::ViewLimits,
     /// The distinct named graphs the delta names, by row or by declaration — the
     /// one table the freeze deduplicates.
@@ -1184,11 +1527,13 @@ impl<'a> DeltaAdmission<'a> {
     fn new(
         base: &'a RdfDataset,
         suppressed: usize,
+        converted: usize,
         limits: super::view_accounting::ViewLimits,
     ) -> Self {
         Self {
             base,
             suppressed,
+            converted,
             limits,
             graphs: FastSet::default(),
             last_graph: None,
@@ -1215,8 +1560,9 @@ impl<'a> DeltaAdmission<'a> {
             .saturating_mul(DeltaDatasetView::AUXILIARY_BYTES_PER_DELTA_TERM)
             .saturating_add(
                 self.suppressed
+                    .saturating_add(self.converted)
                     .saturating_add(rows)
-                    .saturating_mul(4 * size_of::<super::QuadIds>()),
+                    .saturating_mul(4 * size_of::<(RecordKind, super::QuadIds)>()),
             );
         (stats, extent)
     }
@@ -1481,25 +1827,18 @@ impl MutableDataset {
     /// All effective quad KEYS (base-not-suppressed ∪ added), in MutTermId space,
     /// yielded lazily: base quads in frozen order, then the delta. The sole caller
     /// filters and maps them once, so no base-sized `Vec` is materialized.
-    fn effective_keys(&self) -> impl Iterator<Item = QuadKey> + '_ {
-        let base = self
-            .base
-            .quads()
-            .chain(self.base.reifier_quads())
-            .chain(self.base.annotation_quads())
-            .filter_map(|q| {
-                let key = QuadKey {
-                    s: MutTermId::Base(q.s),
-                    p: MutTermId::Base(q.p),
-                    o: MutTermId::Base(q.o),
-                    g: q.g.map(MutTermId::Base),
-                };
-                (!self.suppressed.contains(&key)).then_some(key)
-            });
-        // Delta-added quads, in call order (never `added`'s hash-iteration order) —
-        // `quads_for_pattern` (the sole caller) filters this sequence, so its own
-        // output order inherits the same call-order guarantee.
+    fn effective_record_keys(&self) -> impl Iterator<Item = RecordKey> + '_ {
+        let base = super::import::record_ids(self.base.as_ref())
+            .map(|(kind, q)| RecordKey {
+                kind,
+                quad: Self::base_key(q),
+            })
+            .filter(|key| !self.suppressed.contains(key));
         base.chain(self.added_in_order())
+    }
+
+    fn effective_keys(&self) -> impl Iterator<Item = QuadKey> + '_ {
+        self.effective_record_keys().map(|key| key.quad)
     }
 
     /// The effective quads as `Copy` base-or-frozen `QuadIds` is NOT exposed: ids
@@ -1509,13 +1848,11 @@ impl MutableDataset {
     #[doc(hidden)]
     pub fn effective_count(&self) -> usize {
         // O(1) from the mutation invariants (no base scan):
-        //   • `suppressed_rows` counts all native table occurrences hidden by
-        //     suppression keys, including equal rows in different tables;
-        //   • every key in `added` is a non-base, non-suppressed quad (insert adds
-        //     only when `!contains_key`), so `added.len()` quads are net-new;
+        //   • suppression keys name exact physical base roles;
+        //   • every added record is absent from the visible base in that role;
         //   • `added` and `suppressed` are disjoint.
         // Hence effective = base ∪ added − suppressed has exactly this cardinality.
-        self.base.rdf_row_count() + self.added.len() - self.suppressed_rows
+        self.base.rdf_row_count() + self.added.len() - self.suppressed.len()
     }
 }
 
@@ -1533,6 +1870,616 @@ const _: fn() = || {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn typed_composites_refuse_malformed_values_and_preserve_bound_identity() {
+        let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+        for datatype in [purrdf_cdt::CDT_LIST, purrdf_cdt::CDT_MAP] {
+            let record = RecordValues {
+                kind: RecordKind::Ordinary,
+                quad: QuadValues::triple(
+                    iri_val("s"),
+                    iri_val("p"),
+                    TermValue::typed_literal("broken [_:missing", datatype),
+                ),
+            };
+            assert_eq!(
+                mutable.insert_record(&record).unwrap_err().code,
+                "cdt-literal-malformed"
+            );
+            assert_eq!(mutable.delta.values.len(), 0);
+            assert_eq!(mutable.effective_count(), 0);
+            let mut builder = RdfDatasetBuilder::new();
+            assert!(builder.push_record(&record).is_err());
+            assert_eq!(builder.term_count(), 0);
+        }
+        let scope = crate::BlankScope(73);
+        let label = crate::blank_label::encode_blank_label(
+            "embedded",
+            scope,
+            crate::blank_label::LabelAlphabet::BlankNodeLabel,
+        );
+        let lexical = format!("[ _:{label}, _:{label} ]");
+        let record = RecordValues {
+            kind: RecordKind::Annotation,
+            quad: QuadValues::triple(
+                iri_val("s"),
+                iri_val("p"),
+                TermValue::typed_literal(&lexical, purrdf_cdt::CDT_LIST),
+            ),
+        };
+        assert!(mutable.insert_record(&record).unwrap());
+        assert_eq!(typed_image(&mutable), std::iter::once(record).collect());
+        let frozen = mutable.freeze().unwrap();
+        assert!(frozen.term_id_by_blank("embedded", scope).is_some());
+    }
+    #[test]
+    fn normalization_has_stable_order_through_conversion_and_undo() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/r");
+        let p = builder.intern_iri("http://example.org/p");
+        let b = builder.intern_iri("http://example.org/b");
+        let a = builder.intern_iri("http://example.org/a");
+        builder.push_quad(s, p, b, None);
+        builder.push_quad(s, p, a, None);
+        let base = builder.freeze().unwrap();
+        let declaration = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        for noise in 0..32 {
+            let mut mutable = MutableDataset::new(Arc::clone(&base));
+            for index in 0..noise {
+                let row = q(&format!("noise{index}"), "p", "o");
+                assert!(mutable.insert(row.clone()).unwrap());
+                assert!(mutable.remove(&row));
+            }
+            assert!(mutable.insert(q("r", "p", "c")).unwrap());
+            assert!(mutable.insert(q("r", "p", "d")).unwrap());
+            for _ in 0..3 {
+                assert!(mutable.insert(declaration.clone()).unwrap());
+                assert_eq!(
+                    mutable.quads_for_pattern(None, None, None, GraphMatchValue::Any),
+                    [
+                        q("r", "p", "c"),
+                        q("r", "p", "d"),
+                        declaration.clone(),
+                        q("r", "p", "b"),
+                        q("r", "p", "a")
+                    ]
+                );
+                assert!(mutable.remove(&declaration));
+                assert_eq!(
+                    mutable.quads_for_pattern(None, None, None, GraphMatchValue::Any),
+                    [
+                        q("r", "p", "b"),
+                        q("r", "p", "a"),
+                        q("r", "p", "c"),
+                        q("r", "p", "d")
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn typed_base_three_roles_restore_each_exactly_and_remove_base_plus_delta() {
+        let quad = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        let mut builder = RdfDatasetBuilder::new();
+        for kind in RecordKind::ALL {
+            builder
+                .push_record(&RecordValues {
+                    kind,
+                    quad: quad.clone(),
+                })
+                .unwrap();
+        }
+        let base = builder.freeze().unwrap();
+        for kind in RecordKind::ALL {
+            let mut mutable = MutableDataset::new(Arc::clone(&base));
+            assert!(mutable.remove(&quad));
+            assert_eq!(mutable.suppressed_len(), 1);
+            let record = RecordValues {
+                kind,
+                quad: quad.clone(),
+            };
+            assert!(mutable.insert_record(&record).unwrap());
+            assert_eq!(typed_image(&mutable), std::iter::once(record).collect());
+            assert_eq!(mutable.suppressed_len(), 1);
+        }
+        let mut ordinary = RdfDatasetBuilder::new();
+        ordinary
+            .push_record(&RecordValues {
+                kind: RecordKind::Ordinary,
+                quad: quad.clone(),
+            })
+            .unwrap();
+        let mut mutable = MutableDataset::new(ordinary.freeze().unwrap());
+        assert!(
+            mutable
+                .insert_record(&RecordValues {
+                    kind: RecordKind::Annotation,
+                    quad: quad.clone()
+                })
+                .unwrap()
+        );
+        assert!(mutable.remove(&quad));
+        assert_eq!(mutable.added_len(), 0);
+        assert_eq!(mutable.suppressed_len(), 1);
+        assert!(typed_image(&mutable).is_empty());
+    }
+    #[test]
+    fn public_mutation_metrics_exclude_derived_classification() {
+        let row = q("r", "p", "o");
+        let declaration = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        for original in [RecordKind::Ordinary, RecordKind::Annotation] {
+            let mut builder = RdfDatasetBuilder::new();
+            builder
+                .push_record(&RecordValues {
+                    kind: original,
+                    quad: row.clone(),
+                })
+                .unwrap();
+            if original == RecordKind::Annotation {
+                builder
+                    .push_record(&RecordValues {
+                        kind: RecordKind::Reifier,
+                        quad: declaration.clone(),
+                    })
+                    .unwrap();
+            }
+            let mut mutable = MutableDataset::new(builder.freeze().unwrap());
+            if original == RecordKind::Ordinary {
+                assert!(mutable.insert(declaration.clone()).unwrap());
+                assert_eq!((mutable.added_len(), mutable.suppressed_len()), (1, 0));
+                assert_eq!(
+                    typed_image(&mutable),
+                    [
+                        RecordValues {
+                            kind: RecordKind::Annotation,
+                            quad: row.clone()
+                        },
+                        RecordValues {
+                            kind: RecordKind::Reifier,
+                            quad: declaration.clone()
+                        },
+                    ]
+                    .into_iter()
+                    .collect()
+                );
+                assert!(mutable.remove(&declaration));
+            } else {
+                assert!(mutable.remove(&declaration));
+                assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 1));
+                assert_eq!(
+                    typed_image(&mutable),
+                    std::iter::once(RecordValues {
+                        kind: RecordKind::Ordinary,
+                        quad: row.clone()
+                    })
+                    .collect()
+                );
+                assert!(mutable.insert(declaration.clone()).unwrap());
+            }
+            assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 0));
+            assert!(mutable.remove(&row));
+            assert_eq!(mutable.added_len(), 0);
+            assert_eq!(mutable.suppressed_len(), 1);
+            assert!(mutable.insert(row.clone()).unwrap());
+            assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 0));
+        }
+        let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+        assert!(mutable.insert(row.clone()).unwrap());
+        assert!(mutable.insert(declaration.clone()).unwrap());
+        assert_eq!((mutable.added_len(), mutable.suppressed_len()), (2, 0));
+        assert!(mutable.remove(&row));
+        assert_eq!((mutable.added_len(), mutable.suppressed_len()), (1, 0));
+        assert!(mutable.remove(&declaration));
+        assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 0));
+    }
+
+    #[test]
+    fn normalization_does_not_reorder_an_independently_added_target() {
+        let original = q("r", "p", "o");
+        let first = q("z", "p", "z");
+        let mut builder = RdfDatasetBuilder::new();
+        builder
+            .push_record(&RecordValues {
+                kind: RecordKind::Ordinary,
+                quad: original.clone(),
+            })
+            .unwrap();
+        let mut mutable = MutableDataset::new(builder.freeze().unwrap());
+        for quad in [&first, &original] {
+            assert!(
+                mutable
+                    .insert_record(&RecordValues {
+                        kind: RecordKind::Annotation,
+                        quad: quad.clone()
+                    })
+                    .unwrap()
+            );
+        }
+        let declaration = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        assert!(mutable.insert(declaration.clone()).unwrap());
+        let view = mutable.snapshot_view().unwrap();
+        let annotations: Vec<_> = super::super::import::record_values(&view)
+            .unwrap()
+            .into_iter()
+            .filter(|record| record.kind == RecordKind::Annotation)
+            .map(|record| record.quad)
+            .collect();
+        assert_eq!(annotations, [first.clone(), original.clone()]);
+        assert_eq!(mutable.effective_count(), 3);
+        assert!(mutable.remove(&declaration));
+        assert_eq!(
+            typed_image(&mutable),
+            [
+                RecordValues {
+                    kind: RecordKind::Ordinary,
+                    quad: original.clone()
+                },
+                RecordValues {
+                    kind: RecordKind::Annotation,
+                    quad: first
+                },
+                RecordValues {
+                    kind: RecordKind::Annotation,
+                    quad: original
+                }
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn ordinary_restoration_classifies_suppressed_base_roles() {
+        for original in [RecordKind::Ordinary, RecordKind::Annotation] {
+            let mut builder = RdfDatasetBuilder::new();
+            let s = builder.intern_iri("http://example.org/r");
+            let p = builder.intern_iri("http://example.org/p");
+            let o = builder.intern_iri("http://example.org/o");
+            let triple = builder.intern_triple(s, p, o);
+            if original == RecordKind::Ordinary {
+                builder.push_quad(s, p, o, None);
+            } else {
+                builder.push_annotation(s, p, o);
+                builder.push_reifier(s, triple);
+            }
+            let mut mutable = MutableDataset::new(builder.freeze().unwrap());
+            let record = RecordValues {
+                kind: original,
+                quad: q("r", "p", "o"),
+            };
+            assert!(mutable.remove_record(&record));
+            let declaration = QuadValues::triple(
+                iri_val("r"),
+                TermValue::iri(RDF_REIFIES),
+                TermValue::Triple {
+                    s: iri_val("r").into(),
+                    p: iri_val("p").into(),
+                    o: iri_val("o").into(),
+                },
+            );
+            if original == RecordKind::Ordinary {
+                assert!(mutable.insert(declaration).unwrap());
+            } else {
+                assert!(mutable.remove(&declaration));
+            }
+            assert!(mutable.insert(record.quad.clone()).unwrap());
+            let desired = if original == RecordKind::Ordinary {
+                RecordKind::Annotation
+            } else {
+                RecordKind::Ordinary
+            };
+            assert!(typed_image(&mutable).contains(&RecordValues {
+                kind: desired,
+                quad: record.quad.clone()
+            }));
+            assert!(!typed_image(&mutable).contains(&record));
+        }
+    }
+    #[test]
+    fn classification_restores_only_targets_it_owned() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/r");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_iri("http://example.org/o");
+        builder.push_quad(s, p, o, None);
+        builder.push_annotation(s, p, o);
+        let mut mutable = MutableDataset::new(builder.freeze().unwrap());
+        let record = RecordValues {
+            kind: RecordKind::Annotation,
+            quad: q("r", "p", "o"),
+        };
+        assert!(mutable.remove_record(&record));
+        let declaration = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        assert!(mutable.insert(declaration.clone()).unwrap());
+        assert_eq!(mutable.freeze().unwrap().quad_count(), 0);
+        assert_eq!(mutable.freeze().unwrap().annotations().count(), 1);
+        assert!(mutable.remove(&declaration));
+        assert_eq!(
+            typed_image(&mutable),
+            std::iter::once(RecordValues {
+                kind: RecordKind::Ordinary,
+                quad: record.quad
+            })
+            .collect()
+        );
+        assert_eq!(mutable.effective_count(), 1);
+        assert_eq!(mutable.suppressed_len(), 1);
+    }
+    fn typed_image(mutable: &MutableDataset) -> std::collections::BTreeSet<RecordValues> {
+        let values = mutable
+            .records_for_pattern(None, None, None, GraphMatchValue::Any)
+            .unwrap();
+        let frozen = mutable.freeze().unwrap();
+        let from_frozen = super::super::import::record_values(frozen.as_ref()).unwrap();
+        assert_eq!(values.len(), mutable.effective_count());
+        let values: std::collections::BTreeSet<_> = values.into_iter().collect();
+        assert_eq!(values.len(), mutable.effective_count());
+        assert_eq!(values, from_frozen.into_iter().collect());
+        values
+    }
+
+    #[test]
+    fn typed_three_role_state_machine_matches_physical_model() {
+        for mode in [
+            GraphExistenceMode::Implicit,
+            GraphExistenceMode::RememberEmpty,
+        ] {
+            let mut mutable = MutableDataset::new_with_graph_existence(
+                RdfDatasetBuilder::new().freeze().unwrap(),
+                mode,
+            );
+            let mut model = std::collections::BTreeSet::new();
+            for step in 0..120usize {
+                let kind = RecordKind::ALL[step % 3];
+                let object = TermValue::Triple {
+                    s: iri_val("s").into(),
+                    p: iri_val("p").into(),
+                    o: iri_val(&format!("o{}", step % 5)).into(),
+                };
+                let quad = QuadValues::quad(
+                    iri_val("r"),
+                    TermValue::iri(RDF_REIFIES),
+                    object,
+                    iri_val(&format!("g{}", step % 2)),
+                );
+                let record = RecordValues { kind, quad };
+                if (step / 3) % 4 == 0 {
+                    assert_eq!(mutable.remove_record(&record), model.remove(&record));
+                } else {
+                    let changed = model.insert(record.clone());
+                    assert_eq!(mutable.insert_record(&record).unwrap(), changed);
+                }
+                assert_eq!(typed_image(&mutable), model, "{mode:?} step {step}");
+            }
+        }
+    }
+
+    #[test]
+    fn typed_exact_ingress_does_not_classify_and_snapshots_are_independent() {
+        let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+        let quad = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        for kind in RecordKind::ALL {
+            assert!(
+                mutable
+                    .insert_record(&RecordValues {
+                        kind,
+                        quad: quad.clone()
+                    })
+                    .unwrap()
+            );
+        }
+        assert_eq!(mutable.added_len(), 1);
+        assert_eq!(mutable.effective_count(), 3);
+        let retained = mutable.snapshot_view().unwrap();
+        let image = super::super::import::record_values(&retained).unwrap();
+        assert_eq!(image.len(), 3);
+        assert!(mutable.remove(&quad));
+        assert_eq!(mutable.effective_count(), 0);
+        assert_eq!(
+            super::super::import::record_values(&retained).unwrap(),
+            image
+        );
+        assert!(
+            mutable
+                .insert_record(&RecordValues {
+                    kind: RecordKind::Annotation,
+                    quad
+                })
+                .unwrap()
+        );
+        assert_eq!(typed_image(&mutable).len(), 1);
+        let fresh = MutableDataset::new(mutable.freeze().unwrap());
+        assert_eq!(typed_image(&fresh), typed_image(&mutable));
+    }
+
+    #[test]
+    fn typed_ingress_refuses_invalid_roles_without_membership_or_term_publication() {
+        let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+        for (kind, quad) in [
+            (RecordKind::Reifier, q("s", "p", "o")),
+            (
+                RecordKind::Ordinary,
+                QuadValues::triple(TermValue::simple_literal("bad"), iri_val("p"), iri_val("o")),
+            ),
+            (
+                RecordKind::Annotation,
+                QuadValues::triple(iri_val("s"), TermValue::blank("p"), iri_val("o")),
+            ),
+            (
+                RecordKind::Ordinary,
+                QuadValues::quad(
+                    iri_val("s"),
+                    iri_val("p"),
+                    iri_val("o"),
+                    TermValue::simple_literal("graph"),
+                ),
+            ),
+            (
+                RecordKind::Ordinary,
+                QuadValues::triple(TermValue::iri("relative"), iri_val("p"), iri_val("o")),
+            ),
+        ] {
+            assert!(mutable.insert_record(&RecordValues { kind, quad }).is_err());
+            assert_eq!(mutable.delta.values.len(), 0);
+            assert_eq!(mutable.effective_count(), 0);
+        }
+    }
+
+    #[test]
+    fn typed_snapshot_limits_price_role_masks_and_refusal_adds_no_successful_work() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_iri("http://example.org/o");
+        builder.push_quad(s, p, o, None);
+        builder.push_annotation(s, p, o);
+        let mut mutable = MutableDataset::new(builder.freeze().unwrap());
+        assert!(mutable.remove(&q("s", "p", "o")));
+        let view = mutable.snapshot_view().unwrap();
+        let stats = view.stats();
+        assert_eq!(
+            stats.auxiliary_bytes,
+            2 * 4 * size_of::<(RecordKind, super::super::QuadIds)>()
+        );
+        let before = mutable.work_stats();
+        assert!(
+            mutable
+                .snapshot_view_with_limits(crate::ViewLimits {
+                    max_auxiliary_bytes: stats.auxiliary_bytes - 1,
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert_eq!(mutable.work_stats(), before);
+        assert!(
+            mutable
+                .snapshot_view_with_limits(crate::ViewLimits {
+                    max_auxiliary_bytes: stats.auxiliary_bytes,
+                    ..Default::default()
+                })
+                .is_ok()
+        );
+    }
+    #[test]
+    fn typed_roles_restore_one_and_ordinary_mutation_restores_all() {
+        for mode in [
+            GraphExistenceMode::Implicit,
+            GraphExistenceMode::RememberEmpty,
+        ] {
+            let mut builder = RdfDatasetBuilder::new();
+            let s = builder.intern_iri("http://example.org/s");
+            let p = builder.intern_iri("http://example.org/p");
+            let o = builder.intern_iri("http://example.org/o");
+            let g = builder.intern_iri("http://example.org/g");
+            builder.push_quad(s, p, o, Some(g));
+            builder.push_annotation_in_graph(s, p, o, Some(g));
+            let mut mutable =
+                MutableDataset::new_with_graph_existence(builder.freeze().unwrap(), mode);
+            let quad = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("g"));
+            assert!(mutable.remove(&quad));
+            assert_eq!(mutable.effective_count(), 0);
+            assert_eq!(mutable.suppressed_len(), 1);
+            let record = RecordValues {
+                kind: RecordKind::Annotation,
+                quad: quad.clone(),
+            };
+            assert!(mutable.insert_record(&record).unwrap());
+            assert!(!mutable.insert_record(&record).unwrap());
+            assert_eq!(mutable.effective_count(), 1);
+            assert_eq!(mutable.suppressed_len(), 1);
+            assert_eq!(mutable.added_len(), 0);
+            assert_eq!(mutable.freeze().unwrap().quad_count(), 0);
+            assert_eq!(mutable.freeze().unwrap().annotations().count(), 1);
+            assert!(mutable.insert(quad.clone()).unwrap());
+            assert_eq!(mutable.effective_count(), 2);
+            assert_eq!(mutable.suppressed_len(), 0);
+            assert_eq!(
+                mutable
+                    .records_for_pattern(None, None, None, GraphMatchValue::Any)
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert!(mutable.remove_record(&record));
+            assert_eq!(mutable.effective_count(), 1);
+            assert_eq!(mutable.freeze().unwrap().quad_count(), 1);
+        }
+    }
+    #[test]
+    fn classification_collision_counts_the_actual_physical_rows() {
+        let mut builder = RdfDatasetBuilder::new();
+        let r = builder.intern_iri("http://example.org/r");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_iri("http://example.org/o");
+        builder.push_quad(r, p, o, None);
+        builder.push_annotation(r, p, o);
+        let mut mutable = MutableDataset::new(builder.freeze().unwrap());
+        assert!(
+            mutable
+                .insert(QuadValues::triple(
+                    iri_val("r"),
+                    TermValue::iri(RDF_REIFIES),
+                    TermValue::Triple {
+                        s: iri_val("r").into(),
+                        p: iri_val("p").into(),
+                        o: iri_val("o").into()
+                    },
+                ))
+                .unwrap()
+        );
+        let frozen = mutable.freeze().unwrap();
+        assert_eq!(frozen.rdf_row_count(), 2);
+        assert_eq!(mutable.effective_count(), frozen.rdf_row_count());
+    }
     use super::*;
     use crate::ir::RdfDatasetBuilder;
     use crate::model::RdfLiteral;

@@ -85,6 +85,44 @@ pub struct DatasetImportStats {
     pub named_graphs: usize,
 }
 
+/// The three physical streams, in their stable table order.
+pub(crate) fn record_ids<D: DatasetView>(
+    view: &D,
+) -> impl Iterator<Item = (super::mutable::RecordKind, crate::QuadIds<D::Id>)> + '_ {
+    use super::mutable::RecordKind;
+    view.quads()
+        .map(|q| (RecordKind::Ordinary, q))
+        .chain(view.reifier_quads().map(|q| (RecordKind::Reifier, q)))
+        .chain(view.annotation_quads().map(|q| (RecordKind::Annotation, q)))
+}
+
+/// Export exact physical records from an admitted native view.
+///
+/// # Errors
+/// Refuses an invalid term handle rather than returning an incomplete snapshot.
+pub fn record_values<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+) -> Result<Vec<super::mutable::RecordValues>, crate::RdfDiagnostic> {
+    record_ids(view)
+        .map(|(kind, q)| {
+            let value = |id| {
+                view.term_value(id).map_err(|error| {
+                    crate::RdfDiagnostic::error("rdf-ir-record-term", error.to_string())
+                })
+            };
+            Ok(super::mutable::RecordValues {
+                kind,
+                quad: super::mutable::QuadValues {
+                    s: value(q.s)?,
+                    p: value(q.p)?,
+                    o: value(q.o)?,
+                    g: q.g.map(value).transpose()?,
+                },
+            })
+        })
+        .collect()
+}
+
 /// A read or bounded resident-materialization failure.
 #[derive(Debug, Clone)]
 #[non_exhaustive]

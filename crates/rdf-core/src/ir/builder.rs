@@ -1347,6 +1347,35 @@ impl RdfDatasetBuilder {
         let _ = self.push_quad_with_handle(s, p, o, g);
     }
 
+    /// Append an exact physical record after validating its complete RDF structure.
+    ///
+    /// # Errors
+    /// Refuses malformed terms, positions or a noncanonical reifier record before
+    /// adding any record to this builder.
+    pub fn push_record(
+        &mut self,
+        record: &super::mutable::RecordValues,
+    ) -> Result<(), RdfDiagnostic> {
+        super::validate::validate_record(record)?;
+        self.push_record_unchecked(record);
+        Ok(())
+    }
+
+    pub(crate) fn push_record_unchecked(&mut self, record: &super::mutable::RecordValues) {
+        use super::mutable::RecordKind;
+        use crate::backend::TermFactory as _;
+        let q = &record.quad;
+        let s = self.intern_value(&q.s);
+        let p = self.intern_value(&q.p);
+        let o = self.intern_value(&q.o);
+        let g = q.g.as_ref().map(|g| self.intern_value(g));
+        match record.kind {
+            RecordKind::Ordinary => self.push_quad(s, p, o, g),
+            RecordKind::Reifier => self.push_reifier_in_graph(s, o, g),
+            RecordKind::Annotation => self.push_annotation_in_graph(s, p, o, g),
+        }
+    }
+
     /// Push a quad and return its actual deduplicated-row handle.
     ///
     /// A duplicate returns the existing row's handle; a new quad returns its
