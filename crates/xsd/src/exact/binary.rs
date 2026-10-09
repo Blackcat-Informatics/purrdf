@@ -68,12 +68,19 @@ pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Forma
         return 0;
     }
     let infinity = sign | (((1_u64 << exponent_bits) - 1) << fraction_bits);
-    // n ∈ [10^(dn−1), 10^dn) and d ∈ [10^(dd−1), 10^dd), so
-    // log2(n/d) ∈ (log2(10)·(dn − dd − 1), log2(10)·(dn − dd + 1)).
-    let dn = i64::try_from(n.decimal_digits()).unwrap_or(i64::MAX / 4);
-    let dd = i64::try_from(d.decimal_digits()).unwrap_or(i64::MAX / 4);
-    let low = log2_of_pow10(dn - dd - 1) - 1;
-    let high = log2_of_pow10(dn - dd + 1) + 2;
+    // n ∈ [2^(bn−1), 2^bn) and d ∈ [2^(bd−1), 2^bd), so
+    // log2(n/d) ∈ (bn − bd − 1, bn − bd + 1). Reading binary
+    // lengths needs no allocation or decimal conversion.
+    let delta = i128::from(n.bit_len()) - i128::from(d.bit_len());
+    let clamp = |value: i128| {
+        i64::try_from(value).unwrap_or(if value < 0 {
+            i64::MIN / 4
+        } else {
+            i64::MAX / 4
+        })
+    };
+    let low = clamp(delta - 1);
+    let high = clamp(delta + 1);
     // value ≥ 2^low: beyond the largest binade, it overflows.
     if low > format.max_exponent + 1 {
         return infinity;
@@ -83,7 +90,7 @@ pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Forma
     if high < min_quantum {
         return sign;
     }
-    // q = ⌊value · 2^k⌋ < 2^126, and ≥ 2^(126 − (high − low)) ≥ 2^113.
+    // q = ⌊value · 2^k⌋ < 2^126, and ≥ 2^(126 − (high − low)) ≥ 2^124.
     let k = 126 - high;
     let (numerator, denominator) = if k >= 0 {
         (n.mul_pow2(u32::try_from(k).unwrap_or(u32::MAX)), d.clone())

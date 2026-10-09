@@ -1777,7 +1777,15 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 /// so what a loop holds past its ceiling is about one block in flight per worker. On
 /// 4,400 rows of 1.75 MB of scratch each, under a 400,000,000-byte ceiling, peak memory
 /// is 438 MB on 1 thread, 505 MB on 8 and 536 MB on 32, the data taking 67 MB.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 13;
+///
+/// # v14
+///
+/// The schedule stays unchanged. Arbitrary-precision numeric costs now measure
+/// binary `u64` limbs, including eight-byte storage, binary arithmetic and
+/// decimal base conversion. Constant-time shape bounds are conservative and
+/// cannot take exact-decimal exponent shortcuts. Machine-word dispatch remains
+/// unchanged. Consumers must remeasure numeric fuel and scratch ceilings.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 14;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
@@ -2797,15 +2805,16 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 13);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 14);
         assert_eq!(
-            pinned, "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
-            "the consumer's v13 receipt identity pins the unchanged charge table"
+            schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
+            "7c3c1ce57ec4606ab0585912dcc5be6549fa4a2b282227727b3ebc17141e6f70",
+            "the historical v13 identity pins the unchanged charge table"
         );
         assert_ne!(
-            schedule_digest(GOVERNOR_PROFILE_ID, 12, &CHARGE_SCHEDULE),
+            schedule_digest(GOVERNOR_PROFILE_ID, 13, &CHARGE_SCHEDULE),
             pinned,
-            "exact-arithmetic charging cannot reuse the v12 receipt identity"
+            "binary-limb charging cannot reuse the v13 receipt identity"
         );
         assert_eq!(pinned.len(), 64, "lowercase-hex SHA-256");
         assert!(

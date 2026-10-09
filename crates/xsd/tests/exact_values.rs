@@ -279,7 +279,11 @@ fn cost_is_charged_for_every_tower_operation() {
     let big = int(&"9".repeat(1000));
     assert_eq!(numeric_cost(&small, &small, CostOp::Mul).work(), 0);
     let cost = numeric_cost(&big, &big, CostOp::Mul);
-    assert!(cost.work() > 10_000 && cost.bytes() > 400, "{cost:?}");
+    let limbs = big.to_exact_integer().expect("an integer").limb_len();
+    assert!(
+        cost.work() >= limbs * limbs && cost.bytes() >= 2 * limbs * size_of::<u64>() as u64,
+        "{cost:?} for {limbs} binary limbs"
+    );
     // A tower operand meeting a double pays for its conversion — constant past the
     // double range, where the answer is read off the length — and a bounded one
     // does not.

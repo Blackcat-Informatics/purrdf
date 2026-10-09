@@ -388,6 +388,10 @@ prop_test! {
         }
         let (dx, dy) = (Decimal::from_integer(x), Decimal::new(y, exp));
         prop_assert!((&dx + &dy).heap_bytes() <= dx.add_cost(&dy).bytes());
+        for precision in [-39, -1, 0, 1, i32::try_from(exp).expect("small exponent")] {
+            let rounded = dy.round(precision, Rounding::HalfEven);
+            prop_assert!(rounded.heap_bytes() <= dy.round_cost(precision).bytes());
+        }
         if !dy.is_zero() {
             let quotient = dx.div(&dy, DivisionPolicy::default()).expect("nonzero");
             prop_assert!(quotient.heap_bytes() <= dx.div_cost(&dy, DivisionPolicy::default()).bytes());

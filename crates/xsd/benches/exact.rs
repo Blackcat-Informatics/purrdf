@@ -18,8 +18,9 @@
 //!   `parse_decimal`, `Decimal::to_f64`). The tower's inline representation is
 //!   what keeps the left column close to the right one.
 //! - `xsd_exact_growth/*/<digits>` — one operation on operands of 40 to 40 000
-//!   decimal digits: addition, parsing and rendering stay linear, products grow
-//!   as Karatsuba's `n^1.585`, division as quotient × divisor length.
+//!   decimal digits: binary addition stays linear; decimal parsing and rendering
+//!   include base conversion, products grow as Karatsuba's `n^1.585`, and
+//!   division as quotient × divisor length.
 //! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — the two product
 //!   algorithms on either side of `KARATSUBA_THRESHOLD`, the evidence for where
 //!   it sits.

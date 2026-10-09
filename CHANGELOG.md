@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Shared exact integer engine:** arbitrary-precision Integer, Decimal,
+  Rational, numeric codecs and geometric facades share binary `u64` limbs.
+  Small exact integers retain inline `i128` arithmetic; the binary engine adds
+  inline magnitude storage, bounded reusable scratch and Karatsuba products.
+  Governor profile 14 prices binary storage and decimal base conversion.
+
 - **RDFLib compatibility queries:** Graph, Dataset, ConjunctiveGraph and the
   SPARQL processor compile contextual mappings through the shared Rust evaluator.
   Repeated assignments and initial bindings now follow RDFLib's mapping/context
