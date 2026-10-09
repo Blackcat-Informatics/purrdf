@@ -1227,6 +1227,9 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Exercise the declared minimum; uv's moving latest can outrun wheel support.
+      UV_PYTHON: "3.13"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1329,6 +1332,8 @@ jobs:
     name: conformance (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.13"
     strategy:
       fail-fast: false
       matrix:
