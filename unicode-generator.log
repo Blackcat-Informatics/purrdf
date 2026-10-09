@@ -1,0 +1,16 @@
+   Compiling typenum v1.20.1
+   Compiling libc v0.2.186
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/lex)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/stack)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/testkit)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 7.79s
+     Running `/opt/purrdf-foundation-qualification/target/debug/examples/gen_unicode_tables text`

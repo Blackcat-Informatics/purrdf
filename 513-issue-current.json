@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Summary\n\nUAX #29 **sentence** boundaries (rules SB1-SB998) in `purrdf-text`, beside the word boundaries it already has (`text/src/unicode.rs`, `word_bounds` and `word_indices`), from the same Unicode 17.0.0 tables (`purrdf_lex::unicode::UNICODE_VERSION`).\n\n## Why\n\nKatamari is taking ownership of embedding (ADR-0046, Proposed). A long literal is embedded as several windows, each with its span, because whole-record vectors blurred multi-topic records in `lillith_memetics`' sprints.\n\nThe segmentation rule is part of the embedding space's **identity**, so it must be deterministic, language-independent and pinned:\n- sentence boundaries by UAX #29 at a pinned Unicode version;\n- sizes and overlap in code points;\n- a sentence longer than a window cut at a code-point boundary.\n\nmemetics' lab splitter (ASCII `. ! ?` before a space, sized in bytes) was not fit to be identity, which is why it has to be the standard algorithm. The same segmentation serves any family that windows text.\n\n## What it needs\n\n- `sentence_bounds` and `sentence_indices` with the same contract as the word functions, over the workspace's pinned tables.\n- Conformance against the Unicode `SentenceBreakTest.txt` for the pinned version.\n- Byte-identical output across targets.\n\n## Acceptance criteria\n\n- Passes every `SentenceBreakTest.txt` case for Unicode 17.0.0.\n- A version bump is visible: the version is part of what a caller records as identity.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-09T08:16:19Z",
+  "labels": [],
+  "milestone": null,
+  "number": 513,
+  "state": "OPEN",
+  "title": "text: UAX #29 sentence boundaries beside word boundaries, on the pinned Unicode tables",
+  "updatedAt": "2026-10-09T08:16:19Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/513"
+}

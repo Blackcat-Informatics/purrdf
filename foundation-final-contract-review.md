@@ -1,0 +1,36 @@
+# Independent applied foundation contract review
+
+CONTRACT VERDICT: PASS
+LOCAL DELIVERY QUALIFICATION: PASS
+OVERALL MERGE QUALIFICATION: NOT MET — fresh final-head hosted CI and ghprsq remain required
+
+Scope: the complete supplied 513 sentence-boundary and 514 sourced never-derive contracts in the isolated foundation worktree. 517 is not included and no completion credit is assigned to it. This reviewer performed source/log inspection only; no build, test, generator, shipping-source edit, Git mutation or forge operation. The final evidence update includes a read-only diff of the five CI YAML lines.
+
+## Complete behavior and real callers
+
+| Contract | Applied source and evidence |
+|---|---|
+| All authority contributions form a union that reuse cannot withdraw | admission.rs private ordered predicate/source map; declare/extend only add. Private NeverDeriveCertificate binds the full authored program and every source. Parsed/Stratified/Planned/Executable and ScheduledProgram carry it without a mutable escape. The shared program_declarations macro now owns the consuming additive transition for both program carriers. |
+| Total full-IR protection, direct/transitive authored refusal | check_heads examines every head_atoms item before narrower execution gates, including existential/conjunctive/disjunctive heads. Existing dependency_edges_with and shortest_path produce deterministic authored-rule chains. Wildcard, cycle, negative-read, opaque-guard and changed-program cases have actual assertions. Nonempty policy plus unresolved heads is explicitly UndecidableHead; no EDB-dependent weakening or opaque-guard execution substitutes for the static rule-set check. |
+| Actual registration/compiler/executor/cache utility | compile_with_declarations, Parsed::with_declarations, compile_scheduled_with_declarations and chase_with_declarations invoke admission before fragment/planning/firing. Cache key folds complete policy identity, and actual lookup stores the sourced compiler's success or typed refusal. Existing empty-policy identity/behavior is preserved. |
+| Useful positive reasoning over the owned-case shape | Public fixture supplies eventTypeDeception, heldStandpoint and projectedStandpoint as three actual premises, derives structuralWitness, independently reads asserted intent, and asserts exactly two derivations with no new intent derivation. Public scheduled/chase controls derive an actual witness. All nine never_derive cases PASS in native matrix2 and actual never-derive-wasm-1.log. |
+| Full pinned default sentence law | sentence.rs implements SB1-SB998 with the actual raw/ignored/terminal/paragraph precedence and monotone SB8 decisive lookahead. sentence_bounds tiles the original UTF-8 bytes; sentence_indices uses the same alphanumeric-index filter as word_indices. Iterator/clone state is inline; no artificial length or depth limit. |
+| One generator/version and visible identity | The existing lex Unicode generator validates Unicode17 inputs and emits the complete Sentence_Break property through the existing two-stage table owner. text unicode version aliases lex's sole version and tables assert it. Public SENTENCE_BOUNDARY_LAW and SENTENCE_DATA_DIGEST let callers record the complete segmentation identity; no second version authority or embedding-window policy is introduced. |
+| Conformance, borrowed storage and cross-target bytes | unicode_conformance validates frozen property/corpus hashes and executes all512 official SentenceBreakTest cases. Existing all1944 word cases and all-scalar folding remain in the same native suite. native matrix2 reports these PASS, zero-allocation original/partially-cloned borrowed cursor PASS, and long-lookahead linear-work test PASS. sentence-wasm-1.log executes the shared public byte-answer/offset/version probe on actual WASM with PASS. |
+
+The code meets the supplied contracts without a new dependency, semantic feature, ontology default, alternate rule engine or duplicate Unicode generator. The finite source-defined unresolved-head refusal is the issue's required total-decision behavior, not a supported-operation shortcut. The actual executor fragment gates remain intact and are not represented as new disjunctive/existential execution semantics.
+
+## Settled qualification and final-head delta
+
+Final reviewed head: `49d49a3c50cf38b595bc3e77df5e89f8f2b1896c`. Shipping Rust behavior is the previously reviewed `e0df2247b` source; the final diff adds five lines in `.github/workflows/ci.yaml` and nothing else.
+
+The two mandatory full-check failures remain failures: attempt1 found a cursor lifetime lint; attempt2 found duplicate program-admission and word/sentence index bodies. Their settled common homes have affected all-target clippy and shared-helper PASS, with no ledger exemption. Attempt3's compiler/hygiene prefix passed, then its first workspace-test run failed three helper-census fixtures solely because the separate private Cargo build directory lacked a `CACHEDIR.TAG` ancestor. The standard directory marker was restored without changing shipping source or suppressing a fixture.
+
+The exact remaining mandatory suffix completed with exit0 in `foundation-make-check-3-continuation.log`: the complete workspace native test and doctest run, downstream preserve_order consumer, rdf-core-hygiene/ring-fence, and full release-crate WASM build all PASS. Its first 71 helper-census tests include the original three directory-policy failures now passing. The settled runtime run includes the nine public never-derive cases, complete official sentence/word/fold corpus tests, borrowed/zero-allocation cursor tests and corrected source census. Read the prefix and continuation together; the failed initial runtime segment is not renamed a pass, and the continuation does not replace or omit a mandatory suffix. There were three full invocations including their failures.
+
+Normal signed commit/hooks and push are documented at both source and final CI-only heads. The final delta sets `UV_PYTHON: "3.13"` in the existing pytest and conformance-shard jobs. It changes no gate command, assertion, matrix member, corpus, dependency version, shipping Rust or carrier semantics. Both jobs invoke their existing Make targets, so the job-level environment reaches the uv interpreter selection. The declared project minimum/classifier is Python3.13, and the locked pyarrow25.0.1 package includes the cp313 manylinux_x86_64 wheel. This fixes the demonstrated old-head Python3.15 wheel/setup mismatch through an explicit supported interpreter, without bypassing acceptance.
+
+Old-head hosted run38001181978 failed Python dependency installation and its aggregate; it remains FAILED. Fresh hosted CI on the final head has not completed in the evidence supplied to this reviewer and is **NOT MET**. PR publication and protected integration through ghprsq are also **NOT MET**; no merged/closed-issue credit follows from this review.
+
+VERDICT: PASS for the complete supplied #513/#514 behavior and settled local qualification. No unresolved contract or design defect was found. A concrete, locally qualified PR can proceed to fresh hosted qualification; merge remains conditional on that real result and the ordinary ghprsq prerequisites. No additional review panel is required by this evidence update.
+

@@ -1,0 +1,13 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/sparql-results)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/stack)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/514-datalog-never-derive-declarations/crates/text)
+    Finished `test` profile [optimized] target(s) in 39.34s
+     Running tests/wasm_determinism.rs (/opt/purrdf-foundation-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-text/1ab7cd5fd68cb77a/out/wasm_determinism-1ab7cd5fd68cb77a.wasm)
+
+running 1 test
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

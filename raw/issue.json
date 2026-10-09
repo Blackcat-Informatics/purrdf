@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Summary\n\n**Never-derive declarations** for rule sets. A set of predicates that may only be *asserted*, by an assessor, and never *derived* by a rule. Registering or evaluating a rule set must check reachability over its rule heads, transitively, and refuse a rule set that could derive a declared predicate, naming the path.\n\n## Why\n\nGMEOW already has one such obligation: `logic:IntentNotFromDeceptionObligation`. No rule anywhere may derive `gmeow:deceptiveIntentClaim`; intent is an assessor's defeasible attribution, never an entailment (`gmeow-ontology` `slices/core/deception/docs.md`, and conformance case `conformance/logic/cases/deception/held-projected-no-intent/`). gmeow enforces it in its own `make verify`.\n\nGuilt, diagnosis and motive have the same shape. Katamari's rule sets (ADR-0045 45.4a, Proposed) need the check at registration. Patrick has ruled that declarations come from more than one place: the ontology, the store's profile and the rule set itself. The set in force is the **union**, and no layer can withdraw another's.\n\n## What it needs\n\n- A declaration input to rule-set admission: a set of predicate IRIs, possibly assembled from several sources, with the source of each recorded.\n- Static reachability over the dependency graph of rule heads, including through intermediate derived predicates and through the chase's existential heads. A rule set that can reach a declared predicate is refused, and the refusal names the chain of rules.\n- The check is total and exact. A rule set the analysis cannot decide is refused, never admitted.\n\n## Acceptance criteria\n\n- GMEOW's deception case is reproduced: a rule set deriving `gmeow:deceptiveIntentClaim` directly, or through an intermediate predicate, is refused with the path.\n- An unrelated rule set over the same data is admitted.\n- The result is deterministic.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-09T08:16:21Z",
+  "labels": [],
+  "milestone": null,
+  "number": 514,
+  "state": "OPEN",
+  "title": "datalog: never-derive declarations -- refuse a rule set that can reach an assessor-only predicate",
+  "updatedAt": "2026-10-09T08:16:21Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/514"
+}

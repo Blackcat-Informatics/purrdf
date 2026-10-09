@@ -1,0 +1,5 @@
+The complete sourced-admission implementation and the ready sentence-boundary sibling contract are pushed in commit e0df2247b on `paudley/514-datalog-never-derive-declarations`. The normal signed commit hooks passed. The delivery includes private additive policy certificates, real compiler/scheduled/chase/cache callers, pinned generated sentence properties and public borrowed iterators.
+
+Nine admission fixtures passed natively and on WASM; the complete official sentence corpus, original word/fold cases, allocation checks and WASM byte probe passed. Independent complete-contract inspection found no unresolved behavior gap. The final full repository gate is running after correcting compiler/shared-helper hygiene and regenerating the domain registry. Earlier failed attempts are retained in the selected Stage evidence.
+
+This is an implementation update, not completion: final gate, PR checks/review, merge and closure are still pending. Host-cost work is excluded from this delivery. Authoritative plan and current acceptance index are the selected Stage `plan.md` and `validation.md`.

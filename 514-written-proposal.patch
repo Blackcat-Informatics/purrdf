@@ -1,0 +1,1215 @@
+--- a/crates/datalog/Cargo.toml
++++ b/crates/datalog/Cargo.toml
+@@ -68,3 +68,7 @@
+ [[test]]
+ name = "rules_runtime"
+ harness = false
++
++[[test]]
++name = "never_derive"
++harness = false
+--- a/crates/datalog/README.md
++++ b/crates/datalog/README.md
+@@ -124,3 +124,29 @@
+ - [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+ - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
+ - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
++
++## Assessor-only predicates
++
++`admission::NeverDeriveDeclarations` is a caller-supplied union of predicate
++IRIs and ontology, store-profile and rule-set sources. Repeated declarations
++retain every source. Its API adds obligations and cannot remove another
++authority's contribution. PurRDF supplies no ontology namespace or policy.
++
++Use `seminaive::compile_with_declarations`,
++`schedule::compile_scheduled_with_declarations`,
++`chase::chase_with_declarations`, or `plan::Parsed::with_declarations` at
++registration or execution. Admission inspects every head atom in the full
++DL-clause IR before an executor's ordinary fragment restrictions. Protected
++heads produce a typed refusal with the predicate, sources and deterministic
++authored rule chain. A predicate-variable head that cannot be proved safe
++produces an explicit undecidable refusal; guards are never invoked to supply
++a safety proof. Reading an asserted protected predicate is allowed. An empty
++head derives no predicate.
++
++Compiled and scheduled programs retain immutable certificates. Their
++`admit_declarations` method unions additional profile obligations with the
++original sources before reusing a program; an empty later profile cannot
++withdraw prior obligations. `PlanCache::get_or_compile_with_declarations`
++binds successes and refusals to the rules, planner, caller contract and
++complete declaration/source identity. An empty effective set preserves the
++ordinary execution and cache identity.
+--- /dev/null
++++ b/crates/datalog/src/admission.rs
+@@ -0,0 +1,327 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Assessor-only predicates: a monotone, sourced rule-admission contract.
++//! No vocabulary or process-wide policy is supplied by this crate.
++
++use std::collections::{BTreeMap, BTreeSet};
++use std::fmt;
++
++use crate::clause::{ClauseTerm, DlClause};
++use crate::plan::{ANY_PREDICATE, dependency_edges_with, predicate_symbol};
++
++/// The authority layer contributing a declaration. Layers cannot withdraw one
++/// another's declarations; identical predicate/source pairs coalesce.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub enum DeclarationLayer {
++    /// Ontology-authored obligations.
++    Ontology,
++    /// Store or application profile obligations.
++    StoreProfile,
++    /// Obligations authored with the rule bundle.
++    RuleSet,
++}
++
++/// A caller's stable identifier for the source of a declaration.
++#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct DeclarationSource {
++    /// The authority that contributed the obligation.
++    pub layer: DeclarationLayer,
++    /// Caller-owned source identity, such as a document or profile IRI.
++    pub identity: String,
++}
++
++/// The effective union of assessor-only declarations, with every source kept.
++/// There is deliberately no remove, replace or layer-override operation.
++#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
++pub struct NeverDeriveDeclarations {
++    predicates: BTreeMap<String, BTreeSet<DeclarationSource>>,
++}
++
++impl NeverDeriveDeclarations {
++    /// Add a declaration without changing any existing authority's contribution.
++    pub fn declare(&mut self, predicate: String, source: DeclarationSource) {
++        self.predicates.entry(predicate).or_default().insert(source);
++    }
++
++    /// Add all declarations and sources from another authority's set.
++    pub fn extend(&mut self, declarations: &Self) {
++        for (predicate, sources) in &declarations.predicates {
++            self.predicates
++                .entry(predicate.clone())
++                .or_default()
++                .extend(sources.iter().cloned());
++        }
++    }
++
++    /// The effective predicate and its sorted, deduplicated provenance.
++    pub fn iter(&self) -> impl Iterator<Item = (&str, &BTreeSet<DeclarationSource>)> {
++        self.predicates
++            .iter()
++            .map(|(predicate, sources)| (predicate.as_str(), sources))
++    }
++
++    /// Whether no authority contributed an obligation.
++    #[must_use]
++    pub fn is_empty(&self) -> bool {
++        self.predicates.is_empty()
++    }
++
++    /// Content identity includes every predicate, authority layer and source.
++    #[must_use]
++    pub fn digest(&self) -> [u8; 32] {
++        use purrdf_hash::frame::frame_le_into;
++        const DOMAIN: purrdf_hash::Domain =
++            purrdf_hash::Domain::new(b"purrdf-datalog/never-derive-declarations/v1");
++        let mut hasher = purrdf_hash::blake3::Hasher::new();
++        frame_le_into(&mut hasher, DOMAIN.as_bytes());
++        hasher.update(&(self.predicates.len() as u64).to_le_bytes());
++        for (predicate, sources) in &self.predicates {
++            frame_le_into(&mut hasher, predicate.as_bytes());
++            hasher.update(&(sources.len() as u64).to_le_bytes());
++            for source in sources {
++                let layer = match source.layer {
++                    DeclarationLayer::Ontology => 0,
++                    DeclarationLayer::StoreProfile => 1,
++                    DeclarationLayer::RuleSet => 2,
++                };
++                hasher.update(&[layer]);
++                frame_le_into(&mut hasher, source.identity.as_bytes());
++            }
++        }
++        *hasher.finalize().as_bytes()
++    }
++
++    /// Check the full DL-clause IR, before any executor narrows its head forms.
++    /// # Errors
++    /// Refuses a reachable protected head, or a head whose predicate cannot be
++    /// established statically. A guard is never invoked as a safety proof.
++    pub fn admit(&self, rules: &[DlClause]) -> Result<NeverDeriveCertificate, AdmissionRefusal> {
++        if !self.is_empty() {
++            check_heads(rules, self)?;
++        }
++        Ok(NeverDeriveCertificate {
++            program: crate::cache::canonical_rule_hash(rules),
++            declarations: self.clone(),
++        })
++    }
++}
++
++/// One authored rule in a refusal's deterministic source-to-head chain.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct DerivationStep {
++    /// Zero-based authored rule position.
++    pub rule: usize,
++    /// The predicate derived by this step; unbracketed for constant IRI heads.
++    pub predicate: String,
++}
++
++/// Exact static violation, or a static decision the analysis cannot establish.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum AdmissionRefusal {
++    /// A rule chain could derive an assessor-only predicate.
++    ProtectedHead {
++        /// The protected predicate, supplied by the caller.
++        predicate: String,
++        /// Every authority contributing this declaration.
++        sources: Vec<DeclarationSource>,
++        /// Stable authored rule/predicate chain.
++        chain: Vec<DerivationStep>,
++    },
++    /// A variable or otherwise unresolved head may name a protected predicate.
++    UndecidableHead {
++        /// The first authored rule with an unresolved predicate.
++        rule: usize,
++        /// The declarations whose protection could not be proved.
++        declarations: NeverDeriveDeclarations,
++    },
++    /// A cached certificate was supplied for another rule bundle.
++    ProgramChanged,
++}
++
++impl fmt::Display for AdmissionRefusal {
++    fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::ProtectedHead {
++                predicate, chain, ..
++            } => {
++                write!(
++                    output,
++                    "rule admission refuses derivation of assessor-only predicate <{predicate}>:"
++                )?;
++                for step in chain {
++                    write!(output, " rule {} -> <{}>", step.rule, step.predicate)?;
++                }
++                Ok(())
++            }
++            Self::UndecidableHead { rule, .. } => write!(
++                output,
++                "rule {rule}'s head predicate cannot be proved disjoint from the never-derive declarations"
++            ),
++            Self::ProgramChanged => output.write_str(
++                "never-derive admission certificate belongs to a different rule program",
++            ),
++        }
++    }
++}
++impl std::error::Error for AdmissionRefusal {}
++
++/// Immutable admission bound to the complete rule bundle and declaration union.
++/// The private fields prevent a caller constructing an unchecked certificate.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct NeverDeriveCertificate {
++    program: [u8; 32],
++    declarations: NeverDeriveDeclarations,
++}
++
++impl NeverDeriveCertificate {
++    /// The union actually admitted, including all declaration sources.
++    #[must_use]
++    pub fn declarations(&self) -> &NeverDeriveDeclarations {
++        &self.declarations
++    }
++
++    /// Re-admit under an additional profile without withdrawing earlier layers.
++    /// # Errors
++    /// A changed bundle, protected derivation, or unresolved head is refused.
++    pub fn extend(
++        &self,
++        rules: &[DlClause],
++        additions: &NeverDeriveDeclarations,
++    ) -> Result<Self, AdmissionRefusal> {
++        if self.program != crate::cache::canonical_rule_hash(rules) {
++            return Err(AdmissionRefusal::ProgramChanged);
++        }
++        let mut effective = self.declarations.clone();
++        effective.extend(additions);
++        effective.admit(rules)
++    }
++}
++
++fn check_heads(
++    rules: &[DlClause],
++    declarations: &NeverDeriveDeclarations,
++) -> Result<(), AdmissionRefusal> {
++    let mut protected = Vec::new();
++    let mut unresolved = None;
++    for (rule, clause) in rules.iter().enumerate() {
++        for head in clause.head_atoms() {
++            match head.predicate() {
++                ClauseTerm::Iri(predicate) => {
++                    if let Some(sources) = declarations.predicates.get(predicate) {
++                        protected.push((rule, predicate.clone(), sources));
++                    }
++                }
++                ClauseTerm::Var(_) | ClauseTerm::Literal(_) | ClauseTerm::DefaultGraph => {
++                    unresolved.get_or_insert(rule);
++                }
++            }
++        }
++    }
++    if let Some(rule) = unresolved {
++        return Err(AdmissionRefusal::UndecidableHead {
++            rule,
++            declarations: declarations.clone(),
++        });
++    }
++    if protected.is_empty() {
++        return Ok(());
++    }
++    let (graph, heads) = rule_dependencies(rules);
++    let destinations: BTreeSet<_> = graph.values().flatten().copied().collect();
++    let roots: Vec<_> = (0..rules.len())
++        .filter(|rule| !destinations.contains(rule))
++        .collect();
++    let mut chosen: Option<(Vec<usize>, String, &BTreeSet<DeclarationSource>)> = None;
++    for (last, predicate, sources) in protected {
++        let path = roots
++            .iter()
++            .filter_map(|root| crate::paths::shortest_path(&graph, root, &last))
++            .min_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)))
++            .unwrap_or_else(|| vec![last]);
++        let better = chosen
++            .as_ref()
++            .is_none_or(|(previous, previous_predicate, _)| {
++                (path.len(), &path, &predicate) < (previous.len(), previous, previous_predicate)
++            });
++        if better {
++            chosen = Some((path, predicate, sources));
++        }
++    }
++    let (path, predicate, sources) = chosen.expect("a protected head was collected");
++    let chain = path
++        .iter()
++        .enumerate()
++        .map(|(position, rule)| {
++            let selected = if position + 1 == path.len() {
++                predicate.clone()
++            } else {
++                let next = path[position + 1];
++                let symbol = heads[rule]
++                    .iter()
++                    .find(|symbol| reads_predicate(&rules[next], symbol))
++                    .expect("dependency edge names a head read by the next rule");
++                rules[*rule]
++                    .head_atoms()
++                    .find(|head| predicate_symbol(head) == *symbol)
++                    .and_then(|head| head.predicate_iri())
++                    .expect("protected analysis admitted only constant IRI heads")
++                    .to_owned()
++            };
++            DerivationStep {
++                rule: *rule,
++                predicate: selected,
++            }
++        })
++        .collect();
++    Err(AdmissionRefusal::ProtectedHead {
++        predicate,
++        sources: sources.iter().cloned().collect(),
++        chain,
++    })
++}
++
++fn reads_predicate(rule: &DlClause, symbol: &str) -> bool {
++    rule.body()
++        .iter()
++        .chain(
++            rule.negations()
++                .iter()
++                .flat_map(crate::guard::Negation::atoms),
++        )
++        .any(|atom| predicate_symbol(atom) == symbol || predicate_symbol(atom) == ANY_PREDICATE)
++}
++
++fn rule_dependencies(
++    rules: &[DlClause],
++) -> (
++    BTreeMap<usize, BTreeSet<usize>>,
++    BTreeMap<usize, BTreeSet<String>>,
++) {
++    let mut producers: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
++    let mut heads: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
++    for (index, clause) in rules.iter().enumerate() {
++        for head in clause.head_atoms() {
++            let symbol = predicate_symbol(head);
++            producers.entry(symbol.clone()).or_default().insert(index);
++            heads.entry(index).or_default().insert(symbol);
++        }
++    }
++    let (_, edges) = dependency_edges_with(rules, |rule, _, body, _| (rule, body));
++    let mut graph: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
++    for (rule, body) in edges {
++        let Some(rule) = rule else {
++            continue;
++        };
++        if body == ANY_PREDICATE {
++            for producer in producers.values().flatten() {
++                graph.entry(*producer).or_default().insert(rule);
++            }
++        } else {
++            for producer in producers.get(&body).into_iter().flatten() {
++                graph.entry(*producer).or_default().insert(rule);
++            }
++        }
++    }
++    (graph, heads)
++}
+--- a/crates/datalog/src/cache.rs
++++ b/crates/datalog/src/cache.rs
+@@ -506,6 +506,27 @@
+ }
+ 
+ impl PlanIdentity {
++    /// Identity of the rules and every admission declaration and source.
++    #[must_use]
++    pub fn with_declarations(
++        contract_hash: &str,
++        rules: &[DlClause],
++        declarations: &crate::admission::NeverDeriveDeclarations,
++    ) -> Self {
++        if declarations.is_empty() {
++            return Self::new(contract_hash, rules);
++        }
++        const DOMAIN: purrdf_hash::Domain =
++            purrdf_hash::Domain::new(b"purrdf-datalog/never-derive-plan/v1");
++        let mut hasher = purrdf_hash::blake3::Hasher::new();
++        frame_le_into(&mut hasher, DOMAIN.as_bytes());
++        hasher.update(Self::new(contract_hash, rules).digest());
++        hasher.update(&declarations.digest());
++        Self {
++            digest: Digest32::new(*hasher.finalize().as_bytes()),
++        }
++    }
++
+     /// The identity of `rules` compiled under `contract_hash` by this planner.
+     ///
+     /// `contract_hash` is whatever digest the caller uses to identify the *configuration*
+@@ -651,6 +672,26 @@
+     /// failure to produce one.
+     pub fn get_or_compile(&mut self, contract_hash: &str, rules: Vec<DlClause>) -> PlanLookup {
+         let identity = PlanIdentity::new(contract_hash, &rules);
++        self.lookup_or_compile(identity, rules, None)
++    }
++
++    /// Cache admitted programs and typed refusals by the complete policy identity.
++    pub fn get_or_compile_with_declarations(
++        &mut self,
++        contract_hash: &str,
++        rules: Vec<DlClause>,
++        declarations: &crate::admission::NeverDeriveDeclarations,
++    ) -> PlanLookup {
++        let identity = PlanIdentity::with_declarations(contract_hash, &rules, declarations);
++        self.lookup_or_compile(identity, rules, Some(declarations))
++    }
++
++    fn lookup_or_compile(
++        &mut self,
++        identity: PlanIdentity,
++        rules: Vec<DlClause>,
++        declarations: Option<&crate::admission::NeverDeriveDeclarations>,
++    ) -> PlanLookup {
+         let stamp = self.tick();
+         if let Some(entry) = self.entries.get_mut(&identity) {
+             entry.used = stamp;
+@@ -663,7 +704,11 @@
+         }
+ 
+         let planning_units = static_planning_units(&rules);
+-        let plan = compile(rules).map(Arc::new);
++        let plan = match declarations {
++            Some(declarations) => crate::seminaive::compile_with_declarations(rules, declarations),
++            None => compile(rules),
++        }
++        .map(Arc::new);
+         self.insert(identity, plan.clone());
+         PlanLookup {
+             plan,
+--- a/crates/datalog/src/chase.rs
++++ b/crates/datalog/src/chase.rs
+@@ -654,6 +654,8 @@
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum ChaseError {
++    /// The complete existential rule bundle violates a declaration.
++    NeverDerive(crate::admission::AdmissionRefusal),
+     /// [`certify`] could not prove the program terminating.
+     ///
+     /// Running it anyway could invent nulls forever, and truncating the run would return a
+@@ -754,6 +756,7 @@
+ impl fmt::Display for ChaseError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
+             Self::NonTerminating { violations } => {
+                 write!(
+                     f,
+@@ -1346,6 +1349,23 @@
+     chase_with(program, edb, &EvalOptions::default(), stop)
+ }
+ 
++/// The original [`chase_with`] with sourced full-IR never-derive admission.
++/// # Errors
++/// Returns exact protected/undecidable head refusal before the ordinary
++/// executor's fragment checks, then the same errors as [`chase_with`].
++pub fn chase_with_declarations(
++    program: &[DlClause],
++    edb: RelationStore,
++    options: &EvalOptions,
++    stop: Option<&dyn StopSignal>,
++    declarations: &crate::admission::NeverDeriveDeclarations,
++) -> Result<ChaseOutcome, ChaseError> {
++    declarations
++        .admit(program)
++        .map_err(ChaseError::NeverDerive)?;
++    chase_with(program, edb, options, stop)
++}
++
+ /// [`chase_until`] under the caller's stored-fact and join-step limits
+ /// ([`EvalOptions::with_max_stored_facts`], [`EvalOptions::with_max_join_steps`]).
+ ///
+--- a/crates/datalog/src/lib.rs
++++ b/crates/datalog/src/lib.rs
+@@ -287,6 +287,7 @@
+ // re-export keeps the crate's public module path unchanged for every existing
+ // caller.
+ pub use purrdf_core::binding_pattern;
++pub mod admission;
+ pub mod cache;
+ pub mod chase;
+ pub mod clause;
+--- a/crates/datalog/src/plan.rs
++++ b/crates/datalog/src/plan.rs
+@@ -159,6 +159,15 @@
+ pub(crate) fn dependency_edges(
+     rules: &[DlClause],
+ ) -> (BTreeSet<String>, Vec<(String, String, bool)>) {
++    dependency_edges_with(rules, |_, head, body, negative| (head, body, negative))
++}
++
++/// The original dependency walk, with each authored edge's producing rule.
++/// Wildcard coupling is graph structure rather than an authored rule and has no index.
++pub(crate) fn dependency_edges_with<T>(
++    rules: &[DlClause],
++    mut edge: impl FnMut(Option<usize>, String, String, bool) -> T,
++) -> (BTreeSet<String>, Vec<T>) {
+     // Every predicate symbol, heads and body atoms alike.
+     let mut preds: BTreeSet<String> = BTreeSet::new();
+     let mut wildcard_head = false;
+@@ -187,19 +196,25 @@
+     }
+ 
+     // Edges: (head predicate, body predicate, negative?).
+-    let mut edges: Vec<(String, String, bool)> = Vec::new();
+-    for rule in rules {
++    let mut edges = Vec::new();
++    for (rule_index, rule) in rules.iter().enumerate() {
+         for head in rule.head_atoms() {
+             let head_symbol = predicate_symbol(head);
+             for atom in rule.body() {
+-                edges.push((
++                edges.push(edge(
++                    Some(rule_index),
+                     head_symbol.clone(),
+                     predicate_symbol(atom),
+                     atom.is_negated(),
+                 ));
+             }
+             for atom in rule.negations().iter().flat_map(Negation::atoms) {
+-                edges.push((head_symbol.clone(), predicate_symbol(atom), true));
++                edges.push(edge(
++                    Some(rule_index),
++                    head_symbol.clone(),
++                    predicate_symbol(atom),
++                    true,
++                ));
+             }
+         }
+     }
+@@ -214,10 +229,10 @@
+         .collect();
+     for symbol in &concrete {
+         if wildcard_body {
+-            edges.push((ANY_PREDICATE.to_owned(), symbol.clone(), false));
++            edges.push(edge(None, ANY_PREDICATE.to_owned(), symbol.clone(), false));
+         }
+         if wildcard_head {
+-            edges.push((symbol.clone(), ANY_PREDICATE.to_owned(), false));
++            edges.push(edge(None, symbol.clone(), ANY_PREDICATE.to_owned(), false));
+         }
+     }
+ 
+@@ -1285,11 +1300,31 @@
+ /// calls without borrowing a caller's scratch buffer.
+ #[derive(Debug, Clone)]
+ pub struct Parsed {
++    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
+     /// The program, in authored order.
+     rules: Arc<[DlClause]>,
+ }
+ 
+ impl Parsed {
++    /// Admit the complete clause IR under every supplied declaration source.
++    /// # Errors
++    /// Returns exact admission or ordinary Datalog fragment refusal.
++    pub fn with_declarations(
++        rules: Vec<DlClause>,
++        declarations: &crate::admission::NeverDeriveDeclarations,
++    ) -> Result<Self, crate::seminaive::EvalError> {
++        let certificate = declarations
++            .admit(&rules)
++            .map_err(crate::seminaive::EvalError::NeverDerive)?;
++        let mut parsed =
++            Self::new(rules).map_err(|error| crate::seminaive::EvalError::NonDatalogHead {
++                rule: error.clause(),
++                form: error.form(),
++            })?;
++        parsed.admission = Some(Arc::new(certificate));
++        Ok(parsed)
++    }
++
+     /// Enter the pipeline with a parsed rule program, or refuse a clause the semi-naive
+     /// evaluator has no semantics for.
+     ///
+@@ -1316,6 +1351,7 @@
+         }
+         Ok(Self {
+             rules: Arc::from(rules),
++            admission: None,
+         })
+     }
+ 
+@@ -1342,6 +1378,7 @@
+         }
+ 
+         Some(Stratified {
++            admission: self.admission,
+             rules: self.rules,
+             strata,
+         })
+@@ -1365,6 +1402,7 @@
+ /// Stage 2: a stratifiable program with its per-stratum rule grouping memoized.
+ #[derive(Debug, Clone)]
+ pub struct Stratified {
++    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
+     /// The program, in authored order.
+     rules: Arc<[DlClause]>,
+     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
+@@ -1376,6 +1414,7 @@
+     pub fn plan(self) -> Planned {
+         let plans: Vec<RulePlan> = self.rules.iter().map(RulePlan::for_rule).collect();
+         Planned {
++            admission: self.admission,
+             rules: self.rules,
+             strata: self.strata,
+             plans,
+@@ -1386,6 +1425,7 @@
+ /// Stage 3: a stratified program with its per-rule join plans memoized.
+ #[derive(Debug, Clone)]
+ pub struct Planned {
++    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
+     /// The program, in authored order.
+     rules: Arc<[DlClause]>,
+     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
+@@ -1404,6 +1444,7 @@
+             .map(|r| predicate_symbol(datalog_head(r)))
+             .collect();
+         Executable {
++            admission: self.admission,
+             rules: self.rules,
+             strata: self.strata,
+             plans: self.plans,
+@@ -1419,6 +1460,7 @@
+ /// the program was stratified (stage 1 → 2) and planned (stage 2 → 3).
+ #[derive(Debug, Clone)]
+ pub struct Executable {
++    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
+     /// The program, in authored order.
+     rules: Arc<[DlClause]>,
+     /// `strata[k]` = the program-order indices of stratum `k`'s rules.
+@@ -1430,6 +1472,29 @@
+ }
+ 
+ impl Executable {
++    /// Every declaration source admitted with this immutable program.
++    #[must_use]
++    pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
++        self.admission
++            .as_deref()
++            .map(crate::admission::NeverDeriveCertificate::declarations)
++    }
++
++    /// Re-admit a reused program without withdrawing its earlier declarations.
++    /// # Errors
++    /// Returns a typed refusal before any rule can execute under the new profile.
++    pub fn admit_declarations(
++        mut self,
++        additions: &crate::admission::NeverDeriveDeclarations,
++    ) -> Result<Self, crate::admission::AdmissionRefusal> {
++        let certificate = match &self.admission {
++            Some(existing) => existing.extend(&self.rules, additions)?,
++            None => additions.admit(&self.rules)?,
++        };
++        self.admission = Some(Arc::new(certificate));
++        Ok(self)
++    }
++
+     /// The number of strata (a completion frontier's total).
+     pub fn stratum_count(&self) -> usize {
+         self.strata.len()
+--- a/crates/datalog/src/schedule.rs
++++ b/crates/datalog/src/schedule.rs
+@@ -140,6 +140,7 @@
+ /// A rule program compiled for the ordered schedule.
+ #[derive(Debug, Clone)]
+ pub struct ScheduledProgram {
++    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
+     /// The program, in authored order.
+     rules: Arc<[DlClause]>,
+     /// One store-independent join plan per rule.
+@@ -151,6 +152,29 @@
+ }
+ 
+ impl ScheduledProgram {
++    /// Every source retained by this program's declaration union.
++    #[must_use]
++    pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
++        self.admission
++            .as_deref()
++            .map(crate::admission::NeverDeriveCertificate::declarations)
++    }
++
++    /// Admit a reused schedule under additional declarations, keeping older layers.
++    /// # Errors
++    /// Returns the same full-IR refusal as ordinary rule compilation.
++    pub fn admit_declarations(
++        mut self,
++        additions: &crate::admission::NeverDeriveDeclarations,
++    ) -> Result<Self, crate::admission::AdmissionRefusal> {
++        let certificate = match &self.admission {
++            Some(existing) => existing.extend(&self.rules, additions)?,
++            None => additions.admit(&self.rules)?,
++        };
++        self.admission = Some(Arc::new(certificate));
++        Ok(self)
++    }
++
+     /// The program's rules, in authored order.
+     pub fn rules(&self) -> &[DlClause] {
+         &self.rules
+@@ -167,6 +191,21 @@
+     pub fn contract_hash(&self, options: &EvalOptions) -> ContractHash {
+         cache::scheduled_contract_hash(&self.rules, &self.schedule, options)
+     }
++}
++
++/// The original [`compile_scheduled`] with sourced full-IR never-derive admission.
++/// # Errors
++/// Returns exact protected/undecidable head refusal before the ordinary
++/// executor's fragment checks, then the same errors as [`compile_scheduled`].
++pub fn compile_scheduled_with_declarations(
++    rules: Vec<DlClause>,
++    schedule: Schedule,
++    declarations: &crate::admission::NeverDeriveDeclarations,
++) -> Result<ScheduledProgram, EvalError> {
++    declarations.admit(&rules).map_err(EvalError::NeverDerive)?;
++    compile_scheduled(rules, schedule)?
++        .admit_declarations(declarations)
++        .map_err(EvalError::NeverDerive)
+ }
+ 
+ /// Compile `rules` for the ordered `schedule`, or refuse them.
+@@ -221,6 +260,7 @@
+         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
+         .collect();
+     Ok(ScheduledProgram {
++        admission: None,
+         rules: Arc::from(rules),
+         plans,
+         runtimes,
+--- a/crates/datalog/src/seminaive.rs
++++ b/crates/datalog/src/seminaive.rs
+@@ -753,6 +753,8 @@
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum EvalError {
++    /// The full rule bundle violates an assessor-only declaration.
++    NeverDerive(crate::admission::AdmissionRefusal),
+     /// A clause's head is existential, disjunctive, conjunctive or `false`, so it is not a
+     /// Datalog rule and this evaluator has no semantics for it.
+     ///
+@@ -985,6 +987,7 @@
+ impl fmt::Display for EvalError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            Self::NeverDerive(refusal) => fmt::Display::fmt(refusal, f),
+             Self::NonDatalogHead { rule, form } => write!(
+                 f,
+                 "clause {rule} has {} {form} head: the semi-naive evaluator runs Datalog \
+@@ -1185,6 +1188,20 @@
+ 
+ // ── Compilation: stratification with a named cycle ──────────────────────────────
+ 
++/// The original [`compile`] with sourced full-IR never-derive admission.
++/// # Errors
++/// Returns exact protected/undecidable head refusal before the ordinary
++/// executor's fragment checks, then the same errors as [`compile`].
++pub fn compile_with_declarations(
++    rules: Vec<DlClause>,
++    declarations: &crate::admission::NeverDeriveDeclarations,
++) -> Result<Executable, EvalError> {
++    declarations.admit(&rules).map_err(EvalError::NeverDerive)?;
++    compile(rules)?
++        .admit_declarations(declarations)
++        .map_err(EvalError::NeverDerive)
++}
++
+ /// Compile a rule program into the executor's [`Executable`], or refuse it.
+ ///
+ /// This is [`crate::plan`]'s pipeline with three refusals attached: a clause whose head is
+--- /dev/null
++++ b/crates/datalog/tests/never_derive.rs
+@@ -0,0 +1,428 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Sourced admission through actual compiler, scheduled, chase and cache doors.
++
++use purrdf_datalog::admission::{
++    AdmissionRefusal, DeclarationLayer, DeclarationSource, DerivationStep, NeverDeriveDeclarations,
++};
++use purrdf_datalog::cache::{PlanCache, PlanIdentity};
++use purrdf_datalog::chase::{ChaseError, chase_with_declarations};
++use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct};
++use purrdf_datalog::guard::{Guard, GuardReads, Negation, NoGuards};
++use purrdf_datalog::plan::Parsed;
++use purrdf_datalog::schedule::{
++    Layer, NoHooks, Schedule, compile_scheduled_with_declarations, evaluate_scheduled,
++};
++use purrdf_datalog::seminaive::{
++    EvalError, EvalOptions, compile, compile_with_declarations, evaluate,
++};
++use purrdf_datalog::store::RelationStore;
++
++const INTENT: &str = "https://example.org/deceptiveIntentClaim";
++const FLAGGED: &str = "https://example.org/flaggedProjection";
++const STRUCTURAL: &str = "https://example.org/structuralWitness";
++
++fn atom(predicate: &str) -> ClauseAtom {
++    ClauseAtom::positive(ClauseTerm::var("?x"), predicate, ClauseTerm::var("?y"))
++}
++
++fn rule(head: &str, body: &str) -> DlClause {
++    DlClause::datalog(atom(head), vec![atom(body)])
++}
++
++fn declarations() -> NeverDeriveDeclarations {
++    let mut declarations = NeverDeriveDeclarations::default();
++    declarations.declare(
++        INTENT.to_owned(),
++        DeclarationSource {
++            layer: DeclarationLayer::Ontology,
++            identity: "https://example.org/assessor-obligation".to_owned(),
++        },
++    );
++    declarations
++}
++
++fn direct_and_transitive_refusals_name_authored_paths() {
++    let declarations = declarations();
++    for (rules, expected) in [
++        (
++            vec![rule(INTENT, FLAGGED)],
++            vec![DerivationStep {
++                rule: 0,
++                predicate: INTENT.to_owned(),
++            }],
++        ),
++        (
++            vec![rule(STRUCTURAL, FLAGGED), rule(INTENT, STRUCTURAL)],
++            vec![
++                DerivationStep {
++                    rule: 0,
++                    predicate: STRUCTURAL.to_owned(),
++                },
++                DerivationStep {
++                    rule: 1,
++                    predicate: INTENT.to_owned(),
++                },
++            ],
++        ),
++    ] {
++        let reference = declarations
++            .admit(&rules)
++            .expect_err("protected production is refused");
++        let AdmissionRefusal::ProtectedHead {
++            predicate,
++            chain,
++            sources,
++        } = &reference
++        else {
++            panic!("{reference:?}");
++        };
++        assert_eq!(predicate, INTENT);
++        assert_eq!(chain, &expected);
++        assert_eq!(sources.len(), 1);
++        for _ in 0..4 {
++            assert_eq!(declarations.admit(&rules).unwrap_err(), reference);
++            assert_eq!(
++                compile_with_declarations(rules.clone(), &declarations).unwrap_err(),
++                EvalError::NeverDerive(reference.clone())
++            );
++        }
++    }
++}
++
++fn unrelated_deception_structure_executes_and_asserted_intent_stays_readable() {
++    let declarations = declarations();
++    let program = compile_with_declarations(
++        vec![
++            DlClause::datalog(
++                ClauseAtom::positive(
++                    ClauseTerm::var("?event"),
++                    STRUCTURAL,
++                    ClauseTerm::var("?projected"),
++                ),
++                vec![
++                    ClauseAtom::positive(
++                        ClauseTerm::var("?event"),
++                        "https://example.org/eventType",
++                        ClauseTerm::iri("https://example.org/eventTypeDeception"),
++                    ),
++                    ClauseAtom::positive(
++                        ClauseTerm::var("?event"),
++                        "https://example.org/heldStandpoint",
++                        ClauseTerm::var("?held"),
++                    ),
++                    ClauseAtom::positive(
++                        ClauseTerm::var("?event"),
++                        "https://example.org/projectedStandpoint",
++                        ClauseTerm::var("?projected"),
++                    ),
++                ],
++            ),
++            rule("https://example.org/assessorRead", INTENT),
++        ],
++        &declarations,
++    )
++    .unwrap();
++    let mut input = RelationStore::new();
++    for (predicate, object) in [
++        (
++            "https://example.org/eventType",
++            "<https://example.org/eventTypeDeception>",
++        ),
++        (
++            "https://example.org/heldStandpoint",
++            "<https://example.org/private-standpoint>",
++        ),
++        (
++            "https://example.org/projectedStandpoint",
++            "<https://example.org/statement>",
++        ),
++    ] {
++        input.insert(
++            "<https://example.org/alice>",
++            &format!("<{predicate}>"),
++            object,
++            RelationStore::DEFAULT_GRAPH,
++        );
++    }
++    for predicate in [FLAGGED, INTENT] {
++        input.insert(
++            "<https://example.org/alice>",
++            &format!("<{predicate}>"),
++            "<https://example.org/statement>",
++            RelationStore::DEFAULT_GRAPH,
++        );
++    }
++    let outcome = evaluate(&program, input).unwrap();
++    for predicate in [
++        FLAGGED,
++        INTENT,
++        STRUCTURAL,
++        "https://example.org/assessorRead",
++    ] {
++        assert!(outcome.facts().contains(
++            "<https://example.org/alice>",
++            &format!("<{predicate}>"),
++            "<https://example.org/statement>",
++            RelationStore::DEFAULT_GRAPH
++        ));
++    }
++    assert_eq!(outcome.derivations().len(), 2);
++    assert!(
++        outcome
++            .derivations()
++            .iter()
++            .all(|derivation| derivation.fact().predicate != format!("<{INTENT}>"))
++    );
++}
++
++fn every_authority_survives_union_and_reused_program_admission() {
++    let mut policy = declarations();
++    for layer in [DeclarationLayer::StoreProfile, DeclarationLayer::RuleSet] {
++        policy.declare(
++            INTENT.to_owned(),
++            DeclarationSource {
++                layer,
++                identity: "https://example.org/profile".to_owned(),
++            },
++        );
++    }
++    policy.extend(&NeverDeriveDeclarations::default());
++    assert_eq!(policy.iter().next().unwrap().1.len(), 3);
++    let safe = vec![rule(STRUCTURAL, FLAGGED)];
++    let program = compile_with_declarations(safe.clone(), &policy)
++        .unwrap()
++        .admit_declarations(&NeverDeriveDeclarations::default())
++        .unwrap();
++    assert_eq!(program.declarations(), Some(&policy));
++    let legacy = compile(vec![rule(INTENT, FLAGGED)]).unwrap();
++    assert!(
++        matches!(legacy.admit_declarations(&policy), Err(AdmissionRefusal::ProtectedHead { sources, .. }) if sources.len() == 3)
++    );
++    let parsed = Parsed::with_declarations(safe, &policy)
++        .unwrap()
++        .stratify()
++        .unwrap()
++        .plan()
++        .into_executable();
++    assert_eq!(parsed.declarations(), Some(&policy));
++}
++
++fn existential_conjunctive_disjunctive_heads_cannot_bypass_admission() {
++    let policy = declarations();
++    let heads = [
++        (
++            vec![HeadDisjunct::new(vec![ClauseAtom::positive(
++                ClauseTerm::var("?x"),
++                INTENT,
++                ClauseTerm::var("?fresh"),
++            )])],
++            vec!["?fresh".to_owned()],
++        ),
++        (
++            vec![HeadDisjunct::new(vec![atom(STRUCTURAL), atom(INTENT)])],
++            vec![],
++        ),
++        (
++            vec![
++                HeadDisjunct::new(vec![atom(STRUCTURAL)]),
++                HeadDisjunct::new(vec![atom(INTENT)]),
++            ],
++            vec![],
++        ),
++    ];
++    for (head, existentials) in heads {
++        let rules = vec![DlClause::new(head, existentials, vec![atom(FLAGGED)])];
++        assert!(matches!(
++            compile_with_declarations(rules.clone(), &policy),
++            Err(EvalError::NeverDerive(
++                AdmissionRefusal::ProtectedHead { .. }
++            ))
++        ));
++        assert!(matches!(
++            Parsed::with_declarations(rules.clone(), &policy),
++            Err(EvalError::NeverDerive(
++                AdmissionRefusal::ProtectedHead { .. }
++            ))
++        ));
++        assert!(matches!(
++            compile_scheduled_with_declarations(
++                rules.clone(),
++                Schedule::new(vec![Layer::new(vec![vec![0]], vec![])]),
++                &policy
++            ),
++            Err(EvalError::NeverDerive(
++                AdmissionRefusal::ProtectedHead { .. }
++            ))
++        ));
++        assert!(matches!(
++            chase_with_declarations(
++                &rules,
++                RelationStore::new(),
++                &EvalOptions::default(),
++                None,
++                &policy
++            ),
++            Err(ChaseError::NeverDerive(
++                AdmissionRefusal::ProtectedHead { .. }
++            ))
++        ));
++    }
++}
++
++fn wildcard_absent_protected_symbol_is_explicitly_undecidable() {
++    let head = ClauseAtom::quad(
++        ClauseTerm::var("?x"),
++        ClauseTerm::var("?predicate"),
++        ClauseTerm::var("?y"),
++        ClauseTerm::DefaultGraph,
++    );
++    let rules = vec![DlClause::datalog(head.clone(), vec![head])];
++    assert!(matches!(
++        declarations().admit(&rules),
++        Err(AdmissionRefusal::UndecidableHead { rule: 0, .. })
++    ));
++    assert!(NeverDeriveDeclarations::default().admit(&rules).is_ok());
++    // The mixed bundle must refuse without a diagnostic-path panic.
++    let mut mixed = rules;
++    mixed.push(rule(INTENT, FLAGGED));
++    assert!(matches!(
++        declarations().admit(&mixed),
++        Err(AdmissionRefusal::UndecidableHead { rule: 0, .. })
++    ));
++}
++
++fn cached_acceptance_and_refusal_bind_all_policy_sources() {
++    let rules = vec![rule(INTENT, FLAGGED)];
++    let empty = NeverDeriveDeclarations::default();
++    let policy = declarations();
++    let mut cache = PlanCache::new(8);
++    let free = cache.get_or_compile("consumer", rules.clone());
++    assert!(free.plan().is_ok());
++    let protected = cache.get_or_compile_with_declarations("consumer", rules.clone(), &policy);
++    assert!(!protected.cache_hit());
++    assert!(matches!(protected.plan(), Err(EvalError::NeverDerive(_))));
++    let warm = cache.get_or_compile_with_declarations("consumer", rules.clone(), &policy);
++    assert!(warm.cache_hit());
++    assert_eq!(warm.plan_builds(), 0);
++    let mut additional = policy.clone();
++    additional.declare(
++        INTENT.to_owned(),
++        DeclarationSource {
++            layer: DeclarationLayer::RuleSet,
++            identity: "https://example.org/rule-author".to_owned(),
++        },
++    );
++    assert!(
++        !cache
++            .get_or_compile_with_declarations("consumer", rules.clone(), &additional)
++            .cache_hit()
++    );
++    assert_eq!(
++        PlanIdentity::new("consumer", &rules),
++        PlanIdentity::with_declarations("consumer", &rules, &empty)
++    );
++    assert_ne!(
++        PlanIdentity::with_declarations("consumer", &rules, &policy),
++        PlanIdentity::with_declarations("consumer", &rules, &additional)
++    );
++}
++
++fn cyclic_dependencies_and_empty_heads_have_total_decisions() {
++    let policy = declarations();
++    assert!(
++        policy
++            .admit(&[rule(STRUCTURAL, FLAGGED), rule(FLAGGED, STRUCTURAL)])
++            .is_ok()
++    );
++    assert!(matches!(
++        policy.admit(&[rule(INTENT, STRUCTURAL), rule(STRUCTURAL, INTENT)]),
++        Err(AdmissionRefusal::ProtectedHead { .. })
++    ));
++    assert!(
++        policy
++            .admit(&[DlClause::inconsistency(vec![atom(INTENT)])])
++            .is_ok()
++    );
++}
++
++fn scheduled_and_chase_safe_programs_really_produce_structural_witnesses() {
++    let policy = declarations();
++    let rules = vec![rule(STRUCTURAL, FLAGGED)];
++    let schedule = Schedule::new(vec![Layer::new(vec![vec![0]], vec![])]);
++    let program = compile_scheduled_with_declarations(rules.clone(), schedule, &policy)
++        .unwrap()
++        .admit_declarations(&NeverDeriveDeclarations::default())
++        .unwrap();
++    assert_eq!(program.declarations(), Some(&policy));
++    let mut input = RelationStore::new();
++    input.insert(
++        "<https://example.org/alice>",
++        &format!("<{FLAGGED}>"),
++        "<https://example.org/statement>",
++        RelationStore::DEFAULT_GRAPH,
++    );
++    let scheduled = evaluate_scheduled(
++        &program,
++        input.clone(),
++        &NoGuards,
++        &mut NoHooks,
++        &EvalOptions::default(),
++        None,
++    )
++    .unwrap();
++    let chased =
++        chase_with_declarations(&rules, input, &EvalOptions::default(), None, &policy).unwrap();
++    assert_eq!(
++        scheduled.facts().facts_sorted(),
++        chased.facts().facts_sorted()
++    );
++    assert_eq!(scheduled.derivations().len(), 1);
++    assert_eq!(chased.derivations().len(), 1);
++    assert!(scheduled.facts().contains(
++        "<https://example.org/alice>",
++        &format!("<{STRUCTURAL}>"),
++        "<https://example.org/statement>",
++        RelationStore::DEFAULT_GRAPH
++    ));
++}
++
++fn negative_reads_and_opaque_guards_do_not_exempt_protected_heads() {
++    let policy = declarations();
++    let safe =
++        rule(STRUCTURAL, FLAGGED).with_negations(vec![Negation::new(vec![atom(INTENT)], vec![])]);
++    assert!(policy.admit(&[safe]).is_ok());
++    let guarded = rule(INTENT, FLAGGED).with_guards(vec![Guard::new(
++        "https://example.org/opaquePredicateDecision",
++        vec!["?x".to_owned()],
++        vec![],
++        GuardReads::Bindings,
++    )]);
++    assert!(matches!(
++        policy.admit(&[guarded]),
++        Err(AdmissionRefusal::ProtectedHead { .. })
++    ));
++    let certificate = policy.admit(&[rule(STRUCTURAL, FLAGGED)]).unwrap();
++    assert_eq!(
++        certificate
++            .extend(
++                &[rule(FLAGGED, STRUCTURAL)],
++                &NeverDeriveDeclarations::default()
++            )
++            .unwrap_err(),
++        AdmissionRefusal::ProgramChanged
++    );
++}
++
++purrdf_testkit::harness_main!(
++    direct_and_transitive_refusals_name_authored_paths,
++    unrelated_deception_structure_executes_and_asserted_intent_stays_readable,
++    every_authority_survives_union_and_reused_program_admission,
++    existential_conjunctive_disjunctive_heads_cannot_bypass_admission,
++    wildcard_absent_protected_symbol_is_explicitly_undecidable,
++    cached_acceptance_and_refusal_bind_all_policy_sources,
++    cyclic_dependencies_and_empty_heads_have_total_decisions,
++    scheduled_and_chase_safe_programs_really_produce_structural_witnesses,
++    negative_reads_and_opaque_guards_do_not_exempt_protected_heads
++);

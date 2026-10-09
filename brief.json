@@ -1,0 +1,67 @@
+{
+  "issue": 514,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "datalog: never-derive declarations -- refuse a rule set that can reach an assessor-only predicate",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0045",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 319,
+      "title": "Design: a composition layer over the ranked property-function producers",
+      "state": "CLOSED"
+    },
+    {
+      "number": 400,
+      "title": "Opt-in remembered empty named graphs for the mutable dataset and SPARQL Update",
+      "state": "CLOSED"
+    },
+    {
+      "number": 344,
+      "title": "SIMD sweep: the stable-channel ceiling, fast variant functions, and a full hot-path audit",
+      "state": "CLOSED"
+    },
+    {
+      "number": 179,
+      "title": "SPARQL evaluation budgets: fuel/deadline/row-cap governors in EvalOptions with a typed budget-exhausted outcome",
+      "state": "CLOSED"
+    },
+    {
+      "number": 185,
+      "title": "Property-function (magic predicate) registry",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "semantic-identity-loss": 1,
+    "none": 18,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #514 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "ADR-0045 cited by the issue but no file in docs/adr/",
+    "ADRs: 1 cited; 0 resolved on disk",
+    "forge search on ['datalog:', 'never-derive', 'declarations']: 7 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}
