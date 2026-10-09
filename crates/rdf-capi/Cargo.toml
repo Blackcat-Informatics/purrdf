@@ -61,6 +61,11 @@ purrdf-hash = { workspace = true }
 # Shared test text: the SPARQL string literals the regex-law tests build.
 purrdf-testkit = { workspace = true }
 
+[[example]]
+name = "native_ci_profile"
+path = "examples/native_ci_profile.rs"
+test = false
+
 # The lone feature the whole workspace is permitted to declare. `cargo capi`
 # (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`
 # when it builds the C-ABI target and hard-errors if the crate does not declare
