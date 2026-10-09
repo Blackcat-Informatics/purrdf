@@ -103,24 +103,31 @@ pub(crate) fn record_ids<D: DatasetView>(
 pub fn record_values<D: DatasetView<ReadError = Infallible>>(
     view: &D,
 ) -> Result<Vec<super::mutable::RecordValues>, crate::RdfDiagnostic> {
-    record_ids(view)
-        .map(|(kind, q)| {
-            let value = |id| {
-                view.term_value(id).map_err(|error| {
-                    crate::RdfDiagnostic::error("rdf-ir-record-term", error.to_string())
-                })
-            };
-            Ok(super::mutable::RecordValues {
-                kind,
-                quad: super::mutable::QuadValues {
-                    s: value(q.s)?,
-                    p: value(q.p)?,
-                    o: value(q.o)?,
-                    g: q.g.map(value).transpose()?,
-                },
+    record_values_from(view, record_ids(view))
+}
+
+/// Resolve only the selected physical rows, after indexed pattern admission.
+pub(crate) fn record_values_from<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+    rows: impl Iterator<Item = (super::mutable::RecordKind, crate::QuadIds<D::Id>)>,
+) -> Result<Vec<super::mutable::RecordValues>, crate::RdfDiagnostic> {
+    rows.map(|(kind, q)| {
+        let value = |id| {
+            view.term_value(id).map_err(|error| {
+                crate::RdfDiagnostic::error("rdf-ir-record-term", error.to_string())
             })
+        };
+        Ok(super::mutable::RecordValues {
+            kind,
+            quad: super::mutable::QuadValues {
+                s: value(q.s)?,
+                p: value(q.p)?,
+                o: value(q.o)?,
+                g: q.g.map(value).transpose()?,
+            },
         })
-        .collect()
+    })
+    .collect()
 }
 
 /// A read or bounded resident-materialization failure.

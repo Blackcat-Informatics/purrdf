@@ -506,21 +506,44 @@ impl MutableDataset {
         o: Option<&TermValue>,
         g: GraphMatchValue<'_>,
     ) -> Result<Vec<RecordValues>, crate::RdfDiagnostic> {
+        use crate::DatasetView as _;
         let view = self.snapshot_view()?;
-        Ok(super::import::record_values(&view)?
-            .into_iter()
-            .filter(|record| {
-                let q = &record.quad;
-                s.is_none_or(|s| q.s == *s)
-                    && p.is_none_or(|p| q.p == *p)
-                    && o.is_none_or(|o| q.o == *o)
-                    && match g {
-                        GraphMatchValue::Any => true,
-                        GraphMatchValue::Default => q.g.is_none(),
-                        GraphMatchValue::Named(g) => q.g.as_ref() == Some(g),
-                    }
+        let lookup = |value: Option<&TermValue>| -> Option<Option<DeltaViewId>> {
+            value.map_or(Some(None), |value| match view.term_id_by_value(value) {
+                Ok(id) => id.map(Some),
+                Err(error) => match error {},
             })
-            .collect())
+        };
+        let (Some(s), Some(p), Some(o)) = (lookup(s), lookup(p), lookup(o)) else {
+            return Ok(Vec::new());
+        };
+        let g = match g {
+            GraphMatchValue::Any => GraphMatch::Any,
+            GraphMatchValue::Default => GraphMatch::Default,
+            GraphMatchValue::Named(value) => {
+                let Some(Some(id)) = lookup(Some(value)) else {
+                    return Ok(Vec::new());
+                };
+                GraphMatch::Named(id)
+            }
+        };
+        let matches = |q: &crate::QuadIds<DeltaViewId>| {
+            s.is_none_or(|s| q.s == s) && p.is_none_or(|p| q.p == p) && o.is_none_or(|o| q.o == o)
+        };
+        let rows = view
+            .quads_for_pattern(s, p, o, g)
+            .map(|q| (RecordKind::Ordinary, q))
+            .chain(
+                view.reifier_quads_in_graph(g)
+                    .filter(matches)
+                    .map(|q| (RecordKind::Reifier, q)),
+            )
+            .chain(
+                view.annotation_quads_in_graph(g)
+                    .filter(matches)
+                    .map(|q| (RecordKind::Annotation, q)),
+            );
+        super::import::record_values_from(&view, rows)
     }
 
     /// Visit every retained blank identity without freezing or copying the dataset.
@@ -1870,6 +1893,51 @@ const _: fn() = || {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_records_match_physical_roles_before_owning_term_payloads() {
+        use super::*;
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/s");
+        let predicate = builder.intern_iri("https://example.org/p");
+        let object = builder.intern_iri("https://example.org/o");
+        let graph = builder.intern_iri("https://example.org/g");
+        let other = builder.intern_iri("https://example.org/other");
+        builder.push_quad(subject, predicate, object, Some(graph));
+        builder.push_annotation_in_graph(subject, predicate, object, Some(graph));
+        builder.push_quad(subject, predicate, object, Some(other));
+        builder.push_quad(subject, predicate, object, None);
+        let mutable = MutableDataset::new(builder.freeze().unwrap());
+        let s = TermValue::iri("https://example.org/s");
+        let p = TermValue::iri("https://example.org/p");
+        let o = TermValue::iri("https://example.org/o");
+        let g = TermValue::iri("https://example.org/g");
+        let selected = mutable
+            .records_for_pattern(Some(&s), Some(&p), Some(&o), GraphMatchValue::Named(&g))
+            .unwrap();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].kind, RecordKind::Ordinary);
+        assert_eq!(selected[1].kind, RecordKind::Annotation);
+        assert_eq!(selected[0].quad, selected[1].quad);
+        assert_eq!(
+            mutable
+                .records_for_pattern(None, None, None, GraphMatchValue::Default)
+                .unwrap()
+                .len(),
+            1
+        );
+        let absent = TermValue::iri("https://example.org/absent");
+        for (s, p, o, g) in [
+            (Some(&absent), None, None, GraphMatchValue::Any),
+            (None, Some(&absent), None, GraphMatchValue::Any),
+            (None, None, Some(&absent), GraphMatchValue::Any),
+            (None, None, None, GraphMatchValue::Named(&absent)),
+        ] {
+            assert_eq!(
+                mutable.records_for_pattern(s, p, o, g).unwrap(),
+                Vec::<RecordValues>::new()
+            );
+        }
+    }
     #[test]
     fn typed_composites_refuse_malformed_values_and_preserve_bound_identity() {
         let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
