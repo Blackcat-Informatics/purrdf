@@ -110,13 +110,32 @@ pub const fn parse(len: u64) -> Cost {
 /// digits for a decimal) as its canonical lexical form.
 #[must_use]
 pub const fn render(limbs: u64, scale: u64) -> Cost {
-    let digits = limbs
-        .saturating_mul(20)
-        .saturating_add(scale)
-        .saturating_add(3);
+    let digits = limbs.saturating_mul(20).saturating_add(3);
+    render_parts(limbs, digits, digits.saturating_add(scale))
+}
+
+// Display divides by 10^19, once per coefficient group, not once per
+// output digit. Each pass initializes its quotient and computes division and
+// remainder over at most `limbs` words. Linear terms cover the initial clone,
+// trimming and amortized group growth; fractional padding only costs text.
+const fn render_parts(limbs: u64, digits: u64, text: u64) -> Cost {
+    let groups = digits.div_ceil(19);
+    let work = groups
+        .saturating_mul(limbs.saturating_mul(3).saturating_add(10))
+        .saturating_add(limbs)
+        // Decimal formatting reads coefficient text before writing the final
+        // padded text. Each is bounded by the final rendered length.
+        .saturating_add(text.saturating_mul(2))
+        .saturating_add(1);
+    // Coefficient/quotient copies and old/new group buffers can coexist.
+    // Decimal formatting additionally holds its coefficient text, padded text
+    // and destination string, including geometric spare string capacity.
+    let words = limbs
+        .saturating_mul(3)
+        .saturating_add(groups.saturating_mul(3));
     Cost::new(
-        digits.saturating_mul(limbs.saturating_add(1)),
-        digits.saturating_add(limb_bytes(limbs).saturating_mul(2)),
+        work,
+        limb_bytes(words).saturating_add(text.saturating_mul(6)),
     )
 }
 
@@ -597,16 +616,7 @@ const fn clamp_exponent(value: i128) -> i64 {
 /// small fraction included).
 #[must_use]
 pub(crate) const fn render_shape(value: Shape) -> Cost {
-    let text = value.rendered_len();
-    Cost::new(
-        value
-            .limbs
-            .saturating_mul(value.limbs.saturating_add(1))
-            .saturating_mul(20)
-            .saturating_add(text)
-            .saturating_add(1),
-        text.saturating_add(limb_bytes(value.limbs).saturating_mul(3)),
-    )
+    render_parts(value.limbs, value.digits, value.rendered_len())
 }
 
 /// Reading decimal digits converts only the coefficient, without fractional padding.
