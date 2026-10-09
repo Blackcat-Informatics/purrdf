@@ -1074,9 +1074,6 @@ impl MutableDataset {
         if self.insert_record_rows(target, ordinal) {
             self.classification_created.insert(target);
         }
-        if let (Some(old), Some(current)) = (ordinal, self.added_ord.get_mut(&target)) {
-            *current = (*current).min(old);
-        }
         self.reclassified
             .entry((source.quad.s, source.quad.g))
             .or_default()
@@ -2164,6 +2161,69 @@ mod tests {
         assert_eq!((mutable.added_len(), mutable.suppressed_len()), (1, 0));
         assert!(mutable.remove(&declaration));
         assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 0));
+    }
+
+    #[test]
+    fn normalization_preserves_delta_target_ordinal_through_undo() {
+        let original = q("r", "p", "o");
+        let first = q("z", "p", "z");
+        let mut mutable = MutableDataset::new(RdfDatasetBuilder::new().freeze().unwrap());
+        assert!(mutable.insert(original.clone()).unwrap());
+        for quad in [&first, &original] {
+            assert!(
+                mutable
+                    .insert_record(&RecordValues {
+                        kind: RecordKind::Annotation,
+                        quad: quad.clone()
+                    })
+                    .unwrap()
+            );
+        }
+        let original_order = mutable.added_in_order();
+        let original_ordinals: Vec<_> = original_order
+            .iter()
+            .map(|key| mutable.added_ord[key])
+            .collect();
+        // Native annotation indexes sort by term identity. The earlier ordinary
+        // row already admitted r, so compare the real public stream across the
+        // conversion rather than assuming annotation insertion order.
+        let annotations = |mutable: &MutableDataset| {
+            let view = mutable.snapshot_view().unwrap();
+            super::super::import::record_values(&view)
+                .unwrap()
+                .into_iter()
+                .filter(|record| record.kind == RecordKind::Annotation)
+                .map(|record| record.quad)
+                .collect::<Vec<_>>()
+        };
+        let original_annotations = annotations(&mutable);
+        assert_eq!(original_annotations, [original, first]);
+        let declaration = QuadValues::triple(
+            iri_val("r"),
+            TermValue::iri(RDF_REIFIES),
+            TermValue::Triple {
+                s: iri_val("s").into(),
+                p: iri_val("p").into(),
+                o: iri_val("o").into(),
+            },
+        );
+        assert!(mutable.insert(declaration.clone()).unwrap());
+        assert_eq!(mutable.added_ord[&original_order[2]], original_ordinals[2]);
+        assert_eq!(annotations(&mutable), original_annotations);
+        assert!(mutable.remove(&declaration));
+        assert_eq!(annotations(&mutable), original_annotations);
+        assert_eq!(mutable.added_in_order(), original_order);
+        assert_eq!(
+            original_order
+                .iter()
+                .map(|key| mutable.added_ord[key])
+                .collect::<Vec<_>>(),
+            original_ordinals
+        );
+        let mut ordinals: Vec<_> = mutable.added_ord.values().copied().collect();
+        ordinals.sort_unstable();
+        ordinals.dedup();
+        assert_eq!(ordinals.len(), mutable.added_ord.len());
     }
 
     #[test]
