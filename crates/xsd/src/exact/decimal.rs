@@ -374,26 +374,28 @@ impl Decimal {
                 scale,
             };
         }
-        Self::normalize_small(value, scale)
+        let (value, scale) = Self::normalize_small(value, scale);
+        Self {
+            unscaled: Integer::from_i128(value),
+            scale,
+        }
     }
 
     // Strip inline coefficients without constructing an owned Integer for the
     // generic spilled canonicalizer and carrying its larger temporary frame.
     #[cold]
-    fn normalize_small(value: i128, scale: u32) -> Self {
+    fn normalize_small(value: i128, scale: u32) -> (i128, u32) {
         let negative = value < 0;
         let (magnitude, stripped) = strip_zeros(value.unsigned_abs(), scale);
         let magnitude = i128::try_from(magnitude).unwrap_or(i128::MIN);
-        Self {
-            // Only i128::MIN's magnitude fails the conversion, and it is
-            // stripped of nothing (it is not a multiple of ten).
-            unscaled: Integer::from_i128(if negative && magnitude != i128::MIN {
-                -magnitude
-            } else {
-                magnitude
-            }),
-            scale: scale - stripped,
-        }
+        // Only i128::MIN's magnitude fails the conversion, and it is
+        // stripped of nothing (it is not a multiple of ten).
+        let value = if negative && magnitude != i128::MIN {
+            -magnitude
+        } else {
+            magnitude
+        };
+        (value, scale - stripped)
     }
 
     /// Both coefficients at the larger scale, when both are inline and the
