@@ -1,0 +1,21 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: be3fdeb84d77c1bfd5210347079a494eb96fe7c8
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 507
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/507
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: aab23cbf20b68483ae58bf8440cd882bf1e1897b
+GhpRsq-Head-Ref: paudley/401-update-transfers-preserve-rdf-1-2
+GhpRsq-Head-OID: be3fdeb84d77c1bfd5210347079a494eb96fe7c8
+GhpRsq-Result-Tree: f3e37b71b407eefa386fe7d6e6ce5ccfc10f8c8a
+GhpRsq-Result-Commit: 3b6ec4d9f76984b62c0b07ede69cdd98baf813f5
+GhpRsq-Parent-Hashes: be3fdeb84d77c1bfd5210347079a494eb96fe7c8
+GhpRsq-Squash-Notes-SHA256: 12487616f46a3f0ddf4ae078b28f03740bc37dc54eedb6c5d67099478f2aeb7c
+GhpRsq-Defect-Class: semantic-identity-loss
+GhpRsq-Stage-Tree: 49b26ccf78691463345102955a1ddf6763e77674
+GhpRsq-Stage-Ref: refs/ghprsq/pr/507/stage
+GhpRsq-Stage-Files: 255
