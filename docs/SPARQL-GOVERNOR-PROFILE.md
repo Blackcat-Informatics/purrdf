@@ -185,7 +185,7 @@ units mean nothing outside this build.
 | `committed-output-row` | 1 | row committed to an operator's output |
 | `bgp-candidate-quad` | 1 | candidate quad examined while matching a basic graph pattern |
 | `path-frontier-expansion` | 1 | property-path frontier node expanded |
-| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes); in addition, one per base-`1e9` limb operation of every `xsd:integer`/`xsd:decimal` operation that runs on the arbitrary-precision tower — arithmetic, comparison, the unary functions, a cast, the rendering of a result, a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY`/statistical fold over such values, and any division under a non-default division policy — charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs |
+| `row-expression-evaluation` | 1 | expression evaluated over one row (per row, not per sub-expression, so the cost is stable across planner changes); in addition, one per binary `u64` limb operation of every `xsd:integer`/`xsd:decimal` operation that runs on the arbitrary-precision tower — arithmetic, comparison, the unary functions, a cast, the rendering of a result, a `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY`/statistical fold over such values, and any division under a non-default division policy — charged with the operation's own cost bound (computed from the operand sizes alone) before the operation runs |
 | `user-function-invocation` | 1 | user-defined function invocation |
 | `remote-request-issued` | 1 | request issued to a remote endpoint |
 | `remote-row-ingested` | 1 | row ingested from a remote endpoint's response |
