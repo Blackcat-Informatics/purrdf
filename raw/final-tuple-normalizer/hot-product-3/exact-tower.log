@@ -1,0 +1,31 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 7.19s
+     Running tests/exact_tower.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-xsd/6d574a53f9baa031/out/exact_tower-6d574a53f9baa031)
+
+running 23 tests
+test a_scaled_divisor_past_two_to_the_127_rounds_like_the_oracle ... ok
+test division_by_zero_is_refused_and_a_unit_divisor_is_not ... ok
+test factorials_past_i128_are_exact ... ok
+test comparison_with_a_double_matches_the_oracle ... ok
+test cost_estimates_bound_the_result ... ok
+test bounded_narrowing_is_exact_or_refused ... ok
+test lexical_refusals_have_valid_neighbours ... ok
+test narrowing_refuses_one_past_each_bound_and_accepts_the_bound ... ok
+test non_finite_sources_are_refused_and_finite_extremes_are_not ... ok
+test non_terminating_quotients_are_refused_and_terminating_ones_are_exact ... ok
+test power_estimates_track_the_actual_size ... ok
+test decimal_rounding_matches_the_oracle ... ok
+test scale_overflow_is_refused_and_a_representable_product_is_not ... ok
+test the_tower_agrees_with_the_bounded_arithmetic ... ok
+test decimal_division_matches_the_oracle ... ok
+test zero_rounds_to_zero_in_every_direction_at_every_precision ... ok
+test integer_arithmetic_matches_the_oracle ... ok
+test rational_arithmetic_matches_the_oracle ... ok
+test float_conversions_round_once ... ok
+test float_sources_convert_exactly ... ok
+test decimal_arithmetic_matches_the_oracle ... ok
+test karatsuba_products_match_the_oracle ... ok
+test vast_scales_match_the_oracle ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.19s
+

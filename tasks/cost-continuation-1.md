@@ -1,0 +1,9 @@
+# Corrected decimal-price continuation
+
+Status: FAILED, owning comparison controls remain unresolved. Actual session53901 returned101. No cancellation, hook or commit ran. Scope `purrdf-477-cost-continuation-20261008` was captured active with invocation `5f03a4abed494c0baf57dfb3ea6ff60f`, MemoryMax68719476736 and MemorySwapMax0; raw managed SDK, inherited kache, private target/build and eight jobs.
+
+Complete raw commands/logs/source inventory and per-command exits: `/opt/purrdf-477-qualification/logs/cost-continuation-1/`. Updated `exact_tower::cost_estimates_bound_the_result` passed its expanded result-allocation checks, actual exit0/one pass. The evaluator command ran numeric_governance: nine passes, two failures (`a_comparison_that_aligns_is_charged`, `extremes_and_sorts_are_charged_for_their_comparisons`). Alignment neighbor consumed18108627575 fuel; the allegedly refused query completed true consuming17245758820. The unchanged refusal assertions exposed an invalid relative-work premise or remaining owning price defect; no expectation was weakened.
+
+Because Cargo stopped on that target, numeric_parallel_determinism, numeric_wasm_determinism, profile identity, governor corpus, strict/fmt/hygiene and final source-readback commands remain UNRUN. Earlier XSD47/Geo87 arithmetic answers are retained as scoped evidence, not current pricing completion.
+
+Source observation: the first failing aligned pair actually has equal scales, so aligning adds no decimal power. Its different-magnitude neighbor has a slightly longer binary coefficient and now pays real quadratic decimal coefficient conversion. The former constant-time decimal-limb shortcut premise therefore cannot be assumed for the binary implementation. Root and the independent reviewer own adjudication; no further shipping edits occurred in this qualifier.

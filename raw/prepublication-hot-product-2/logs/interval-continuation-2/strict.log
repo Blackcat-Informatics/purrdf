@@ -1,0 +1,49 @@
+    Checking const-oid v0.10.2
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/iri)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf-events)
+    Checking regex-automata v0.4.14
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/deflate)
+    Checking crossbeam-utils v0.8.21
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf-core)
+    Checking either v1.16.0
+    Checking digest v0.11.3
+    Checking hashbrown v0.17.1
+    Checking crossbeam-epoch v0.9.18
+    Checking libc v0.2.186
+    Checking sha2 v0.11.0
+    Checking inout v0.2.2
+    Checking crossbeam-deque v0.8.6
+    Checking cmov v0.5.4
+    Checking rayon-core v1.13.0
+    Checking cpubits v0.1.1
+    Checking cipher v0.5.2
+    Checking ctutils v0.4.2
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/testkit)
+    Checking aead v0.6.1
+    Checking ctr v0.10.1
+    Checking rayon v1.12.0
+    Checking universal-hash v0.6.1
+    Checking aes v0.9.3
+    Checking regex v1.12.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/stack)
+    Checking getrandom v0.3.4
+    Checking polyval v0.7.3
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/ed25519)
+    Checking ghash v0.6.0
+    Checking visual-hashing v1.0.0
+    Checking structured-zstd v0.0.49
+    Checking aes-gcm v0.11.1
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/gts)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/datalog)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/geo)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/shapes)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 58.40s

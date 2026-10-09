@@ -1,0 +1,53 @@
+$ stagectl pr-checks 506
+SUCCESS    test
+SUCCESS    conformance
+SUCCESS    simd-asm
+SUCCESS    CodeQL
+SUCCESS    aarch64
+SUCCESS    windows-mtime
+SUCCESS    simd-asm-config (wasm32)
+SUCCESS    cross-arch
+SUCCESS    test (integration-1)
+SUCCESS    test (integration-2)
+SUCCESS    test (integration-3)
+SUCCESS    conformance (python)
+SUCCESS    projection-oracles
+SUCCESS    capi
+SUCCESS    doc
+SUCCESS    msrv
+SUCCESS    wasm
+SUCCESS    wasm-package
+SUCCESS    wasm-exec
+SUCCESS    wasm-schema-oracles
+SUCCESS    simd-asm-config (x86_64)
+SUCCESS    simd-asm-config (x86_64-v3)
+SUCCESS    simd-asm-config (x86_64-v4)
+SUCCESS    conformance (sparql)
+SUCCESS    simd-asm-config (aarch64-neoverse-v1)
+SUCCESS    workspace
+SUCCESS    miri
+SUCCESS    python-publisher
+SUCCESS    test (lib)
+SUCCESS    test (doc)
+SUCCESS    pytest
+SUCCESS    cross-arch-riscv64 (suites)
+SUCCESS    cross-arch-riscv64 (determinism-serial)
+SUCCESS    cross-arch-riscv64 (determinism-one-worker)
+SUCCESS    test (integration-4)
+SUCCESS    conformance (shapes)
+SUCCESS    cross-arch-riscv64 (determinism-more-workers)
+SUCCESS    avx512-sde
+SUCCESS    simd-asm-config (wasm32-simd128)
+SUCCESS    conformance (core)
+SUCCESS    simd-asm-config (aarch64)
+SKIPPED    native-profile
+SKIPPED    native-profile-comparison
+SKIPPED    simd-asm-projection
+SKIPPED    native-profile-admission
+SUCCESS    Analyze (javascript-typescript)
+SUCCESS    Analyze (rust)
+SUCCESS    Analyze (c-cpp)
+SUCCESS    Analyze (python)
+SUCCESS    Analyze (actions)
+SUCCESS    CodeRabbit
+state: pass

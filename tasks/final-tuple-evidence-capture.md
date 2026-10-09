@@ -1,0 +1,7 @@
+# Final tuple-normalizer evidence capture
+
+Approved bounded evidence capture returned0:88 records/356KiB in raw/final-tuple-normalizer. It retains complete frozen hot-product3 logs/exits/source manifest, final matched18 estimate snapshot and newly preserved hot-product2 retained-estimates. Original→copy diff-qr returned0 for each of the three roots; exact paths/sizes and lossless hashes are adjacent inventory.tsv/.sha256. Earlier219-record/37MiB checkpoint remains unchanged and originals remain in /opt. No SDK target/build/cache or new runtime was copied/executed.
+
+Qualifier supplied actual96826 terminal0 and updated current-qualification-and-performance.md: tower23/exact-values9/strict/fmt/census/benchmark/source-readback all0; all18 cases improved or detected no regression. Small integer product69% faster; Decimal−2.44% with quick interval−20.07..+37.91% means no detected regression within this accepted comparison, not universal equivalence. Growth400/4000/40000digits90.62/74.50/58.03% faster. This source checkpoint is frozen for root's normal commit/push; it is not the first a3eb published head.
+
+Fresh final-head hosted wasm/CLI/Python/C/full-suite criteria remain pending. First-head CI has the separately retained actual Clippy ordering failure. No arithmetic/performance result is silently transferred across a production change; moving unchanged cfg(test) code can be assessed by root without a new manual host campaign or arbitrary repeat of18benchmarks.

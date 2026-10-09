@@ -1,0 +1,38 @@
+OK: purrdf-core has no PyO3 normal dependency
+python3 scripts/check-layers.py --ring-fence
+OK: `purrdf-hash` has zero runtime dependencies; every runtime dependency of purrdf-deflate, purrdf-ed25519, purrdf-events, purrdf-iri, purrdf-lex, purrdf-testkit, purrdf-xsd is listed in its layers.toml row
+python3 scripts/check-layers.py --self-test
+PASS: the declared graph, as resolved, passes
+PASS: an undeclared first-party edge fails
+PASS: an unlisted edge to the root is asked to be listed, not refused as a layering breach
+PASS: a listed edge the graph lost is STALE
+PASS: a member with no row fails
+PASS: a pending crate and edge that now exist must be flipped
+PASS: a declared cycle fails
+PASS: the fixture has no cycle
+PASS: home-for a caller and its dependency is the dependency
+PASS: home-for two chained callers is the lower one
+PASS: home-for a caller alone is itself
+PASS: home-for crates that share nothing else is the root
+PASS: a ring-fenced crate whose every dependency is listed passes
+PASS: a ring-fenced crate with an unlisted external dependency fails
+PASS: an unfenced crate may take an external dependency
+PASS: a listed external the ring-fenced crate dropped is STALE
+PASS: a root with any runtime dependency fails the ring-fence
+PASS: normal edges are counted, dev-only and build-only edges are not
+PASS: an `external` on the root is refused
+PASS: a doubled external is refused
+PASS: a root with dependencies is refused
+PASS: a dep with no row is refused
+PASS: a pending = false entry is refused
+PASS: an unknown key is refused
+PASS: every forbid-unsafe crate carrying the attribute passes
+PASS: a crate whose forbid attribute is only commented out is reported
+PASS: a crate with no lib.rs is reported
+OK: check-layers self-test
+python3 scripts/check-layers.py
+OK: 220 first-party normal edges across 43 members match layers.toml (0 planned edges, 0 planned crates); 6 crates forbid unsafe_code
+python3 scripts/check-terminal-predicates.py --self-test
+check-terminal-predicates.py: self-test OK
+python3 scripts/check-terminal-predicates.py
+OK: every scanner's terminals come from crates/lex/src/terminals.rs (1 reasoned exemptions)

@@ -1,0 +1,885 @@
+﻿2026-10-09T00:50:18.9443332Z Current runner version: '2.337.0'
+2026-10-09T00:50:18.9458099Z ##[group]Runner Image Provisioner
+2026-10-09T00:50:18.9458779Z Hosted Compute Agent
+2026-10-09T00:50:18.9459351Z Version: 20261002.596
+2026-10-09T00:50:18.9459800Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+2026-10-09T00:50:18.9460268Z Build Date: 2026-10-02T22:28:27Z
+2026-10-09T00:50:18.9460676Z Worker ID: {49a4bb6f-75a5-41b7-b52f-00669a762820}
+2026-10-09T00:50:18.9461158Z Region: centralus
+2026-10-09T00:50:18.9461498Z Cloud: Azure
+2026-10-09T00:50:18.9461859Z ##[endgroup]
+2026-10-09T00:50:18.9462888Z ##[group]Operating System
+2026-10-09T00:50:18.9463257Z Ubuntu
+2026-10-09T00:50:18.9463670Z 24.04.5
+2026-10-09T00:50:18.9463984Z LTS
+2026-10-09T00:50:18.9464337Z ##[endgroup]
+2026-10-09T00:50:18.9464714Z ##[group]Runner Image
+2026-10-09T00:50:18.9465070Z Image: ubuntu-24.04
+2026-10-09T00:50:18.9465462Z Version: 20261004.327.1
+2026-10-09T00:50:18.9466213Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-09T00:50:18.9467164Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+2026-10-09T00:50:18.9467714Z ##[endgroup]
+2026-10-09T00:50:18.9468427Z ##[group]GITHUB_TOKEN Permissions
+2026-10-09T00:50:18.9469708Z Contents: read
+2026-10-09T00:50:18.9470185Z Metadata: read
+2026-10-09T00:50:18.9470525Z ##[endgroup]
+2026-10-09T00:50:18.9471780Z Secret source: Actions
+2026-10-09T00:50:18.9472411Z Cache mode: write
+2026-10-09T00:50:18.9472799Z Prepare workflow directory
+2026-10-09T00:50:18.9832952Z Prepare all required actions
+2026-10-09T00:50:18.9863658Z Getting action download info
+2026-10-09T00:50:19.2104445Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+2026-10-09T00:50:19.5641602Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+2026-10-09T00:50:19.7584135Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-09T00:50:20.8458352Z Complete job name: pytest
+2026-10-09T00:50:20.9466801Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+2026-10-09T00:50:20.9467221Z with:
+2026-10-09T00:50:20.9467428Z   persist-credentials: false
+2026-10-09T00:50:20.9467662Z   repository: Blackcat-Informatics/purrdf
+2026-10-09T00:50:20.9469422Z   token: ***
+2026-10-09T00:50:20.9469617Z   ssh-strict: true
+2026-10-09T00:50:20.9469816Z   ssh-user: git
+2026-10-09T00:50:20.9470004Z   clean: true
+2026-10-09T00:50:20.9470208Z   sparse-checkout-cone-mode: true
+2026-10-09T00:50:20.9470431Z   fetch-depth: 1
+2026-10-09T00:50:20.9470621Z   fetch-tags: false
+2026-10-09T00:50:20.9470818Z   show-progress: true
+2026-10-09T00:50:20.9471013Z   lfs: false
+2026-10-09T00:50:20.9471208Z   submodules: false
+2026-10-09T00:50:20.9471413Z   set-safe-directory: true
+2026-10-09T00:50:20.9471636Z   allow-unsafe-pr-checkout: false
+2026-10-09T00:50:20.9471968Z ##[endgroup]
+2026-10-09T00:50:21.0163758Z Syncing repository: Blackcat-Informatics/purrdf
+2026-10-09T00:50:21.0164792Z ##[group]Getting Git version info
+2026-10-09T00:50:21.0165087Z Working directory is '/home/runner/work/purrdf/purrdf'
+2026-10-09T00:50:21.0165551Z [command]/usr/bin/git version
+2026-10-09T00:50:21.0218460Z git version 2.55.0
+2026-10-09T00:50:21.0231050Z ##[endgroup]
+2026-10-09T00:50:21.0237540Z Temporarily overriding HOME='/home/runner/work/_temp/8c1654ca-8ec0-472a-b924-5bee7b4a96f0' before making global git config changes
+2026-10-09T00:50:21.0238435Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T00:50:21.0241350Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-09T00:50:21.0615201Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+2026-10-09T00:50:21.0617192Z ##[group]Determining repository object format
+2026-10-09T00:50:21.0618259Z ##[endgroup]
+2026-10-09T00:50:21.0618831Z ##[group]Initializing the repository
+2026-10-09T00:50:21.0621411Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+2026-10-09T00:50:21.1830766Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-09T00:50:21.1831388Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-09T00:50:21.1831937Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-09T00:50:21.1832400Z hint: call:
+2026-10-09T00:50:21.1832668Z hint:
+2026-10-09T00:50:21.1833035Z hint: 	git config --global init.defaultBranch <name>
+2026-10-09T00:50:21.1833422Z hint:
+2026-10-09T00:50:21.1833790Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-09T00:50:21.1834377Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-09T00:50:21.1834819Z hint:
+2026-10-09T00:50:21.1835095Z hint: 	git branch -m <name>
+2026-10-09T00:50:21.1835395Z hint:
+2026-10-09T00:50:21.1835816Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-09T00:50:21.1836423Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+2026-10-09T00:50:21.1841827Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+2026-10-09T00:50:21.2911363Z ##[endgroup]
+2026-10-09T00:50:21.2911873Z ##[group]Disabling automatic garbage collection
+2026-10-09T00:50:21.2914680Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-09T00:50:21.3510000Z ##[endgroup]
+2026-10-09T00:50:21.3510555Z ##[group]Setting up auth
+2026-10-09T00:50:21.3511736Z Removing SSH command configuration
+2026-10-09T00:50:21.3515266Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T00:50:21.3540015Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T00:50:21.3947835Z Removing HTTP extra header
+2026-10-09T00:50:21.3951181Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T00:50:21.3979878Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T00:50:21.4201949Z Removing includeIf entries pointing to credentials config files
+2026-10-09T00:50:21.4203136Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T00:50:21.4214502Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T00:50:21.4345211Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-09T00:50:21.4620399Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:21.4712568Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:21.5025837Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:21.5116268Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:21.5325284Z ##[endgroup]
+2026-10-09T00:50:21.5325785Z ##[group]Fetching the repository
+2026-10-09T00:50:21.5329551Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +b8ef6f983cd2ef74bee2560f112eb90adea2b6a4:refs/remotes/pull/506/merge
+2026-10-09T00:50:24.3792787Z From https://github.com/Blackcat-Informatics/purrdf
+2026-10-09T00:50:24.3793450Z  * [new ref]           b8ef6f983cd2ef74bee2560f112eb90adea2b6a4 -> pull/506/merge
+2026-10-09T00:50:24.3796702Z ##[endgroup]
+2026-10-09T00:50:24.3797115Z ##[group]Determining the checkout info
+2026-10-09T00:50:24.3797562Z ##[endgroup]
+2026-10-09T00:50:24.3802267Z [command]/usr/bin/git sparse-checkout disable
+2026-10-09T00:50:24.3844786Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-09T00:50:24.3867241Z ##[group]Checking out the ref
+2026-10-09T00:50:24.3870262Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/506/merge
+2026-10-09T00:50:25.3513583Z Note: switching to 'refs/remotes/pull/506/merge'.
+2026-10-09T00:50:25.3513938Z 
+2026-10-09T00:50:25.3514132Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-09T00:50:25.3514571Z changes and commit them, and you can discard any commits you make in this
+2026-10-09T00:50:25.3515036Z state without impacting any branches by switching back to a branch.
+2026-10-09T00:50:25.3515306Z 
+2026-10-09T00:50:25.3515528Z If you want to create a new branch to retain commits you create, you may
+2026-10-09T00:50:25.3515937Z do so (now or later) by using -c with the switch command. Example:
+2026-10-09T00:50:25.3516164Z 
+2026-10-09T00:50:25.3516281Z   git switch -c <new-branch-name>
+2026-10-09T00:50:25.3516437Z 
+2026-10-09T00:50:25.3516542Z Or undo this operation with:
+2026-10-09T00:50:25.3516679Z 
+2026-10-09T00:50:25.3516760Z   git switch -
+2026-10-09T00:50:25.3517637Z 
+2026-10-09T00:50:25.3517881Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-09T00:50:25.3518148Z 
+2026-10-09T00:50:25.3518436Z HEAD is now at b8ef6f98 Merge 7661141059435d16ce2d8efcf82c0333eccc2a41 into fb827822265d431c9d7e8a48c8c272d79dc084ac
+2026-10-09T00:50:25.3543433Z ##[endgroup]
+2026-10-09T00:50:25.3583628Z [command]/usr/bin/git log -1 --format=%H
+2026-10-09T00:50:25.3605303Z b8ef6f983cd2ef74bee2560f112eb90adea2b6a4
+2026-10-09T00:50:25.3614183Z ##[group]Removing auth
+2026-10-09T00:50:25.3614774Z Removing SSH command configuration
+2026-10-09T00:50:25.3617240Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T00:50:25.3644342Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T00:50:25.3836064Z Removing HTTP extra header
+2026-10-09T00:50:25.3859645Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T00:50:25.3864692Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T00:50:25.4047912Z Removing includeIf entries pointing to credentials config files
+2026-10-09T00:50:25.4050879Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T00:50:25.4073919Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-09T00:50:25.4074448Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-09T00:50:25.4074946Z includeif.gitdir:/github/workspace/.git.path
+2026-10-09T00:50:25.4075364Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-09T00:50:25.4081876Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+2026-10-09T00:50:25.4101718Z /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4110643Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4143630Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+2026-10-09T00:50:25.4160869Z /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4166095Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4191907Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-09T00:50:25.4208618Z /github/runner_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4214255Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4267038Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-09T00:50:25.4284144Z /github/runner_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4291575Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config
+2026-10-09T00:50:25.4316264Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T00:50:25.4496039Z Removing credentials config '/home/runner/work/_temp/git-credentials-97f2d67c-f228-48b5-9922-d7b80a2589c8.config'
+2026-10-09T00:50:25.4496753Z ##[endgroup]
+2026-10-09T00:50:25.4710366Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+2026-10-09T00:50:25.4710586Z with:
+2026-10-09T00:50:25.4710698Z   toolchain: nightly
+2026-10-09T00:50:25.4710822Z ##[endgroup]
+2026-10-09T00:50:25.4767303Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-10-09T00:50:25.4797452Z ##[group]Run : parse toolchain version
+2026-10-09T00:50:25.4797663Z [36;1m: parse toolchain version[0m
+2026-10-09T00:50:25.4797823Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-10-09T00:50:25.4798118Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-10-09T00:50:25.4798426Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-10-09T00:50:25.4798590Z [36;1m  exit 1[0m
+2026-10-09T00:50:25.4798776Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-10-09T00:50:25.4799166Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-10-09T00:50:25.4799453Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.4799729Z [36;1m  else[0m
+2026-10-09T00:50:25.4799951Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.4800199Z [36;1m  fi[0m
+2026-10-09T00:50:25.4800365Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-10-09T00:50:25.4800657Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.4800908Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-10-09T00:50:25.4801194Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.4801458Z [36;1melse[0m
+2026-10-09T00:50:25.4801601Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.4801768Z [36;1mfi[0m
+2026-10-09T00:50:25.5025011Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:25.5025206Z env:
+2026-10-09T00:50:25.5025325Z   toolchain: nightly
+2026-10-09T00:50:25.5025455Z ##[endgroup]
+2026-10-09T00:50:25.5124356Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=35]
+2026-10-09T00:50:25.5138389Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-10-09T00:50:25.5156335Z ##[group]Run : construct rustup command line
+2026-10-09T00:50:25.5156524Z [36;1m: construct rustup command line[0m
+2026-10-09T00:50:25.5156777Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.5157125Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.5157396Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:25.5201566Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:25.5201750Z env:
+2026-10-09T00:50:25.5201857Z   targets: 
+2026-10-09T00:50:25.5201965Z   components: 
+2026-10-09T00:50:25.5202078Z ##[endgroup]
+2026-10-09T00:50:25.5272065Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=13]
+2026-10-09T00:50:25.5274144Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-10-09T00:50:25.5290970Z ##[group]Run : set $CARGO_HOME
+2026-10-09T00:50:25.5291128Z [36;1m: set $CARGO_HOME[0m
+2026-10-09T00:50:25.5291312Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-10-09T00:50:25.5334241Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:25.5334426Z ##[endgroup]
+2026-10-09T00:50:25.5396311Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=12]
+2026-10-09T00:50:25.5397822Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-10-09T00:50:25.5449544Z ##[group]Run : install rustup if needed
+2026-10-09T00:50:25.5449725Z [36;1m: install rustup if needed[0m
+2026-10-09T00:50:25.5449899Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-10-09T00:50:25.5450319Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-10-09T00:50:25.5450728Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-10-09T00:50:25.5450889Z [36;1mfi[0m
+2026-10-09T00:50:25.5495367Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:25.5495552Z env:
+2026-10-09T00:50:25.5495670Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:25.5495813Z ##[endgroup]
+2026-10-09T00:50:25.5557661Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=15]
+2026-10-09T00:50:25.5560328Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-10-09T00:50:25.5563978Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-09T00:50:25.5565838Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+2026-10-09T00:50:25.5583326Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+2026-10-09T00:50:25.5583652Z [36;1mrustup toolchain install nightly --profile minimal --no-self-update[0m
+2026-10-09T00:50:25.5627544Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:25.5627730Z env:
+2026-10-09T00:50:25.5627847Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:25.5628000Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-10-09T00:50:25.5628140Z ##[endgroup]
+2026-10-09T00:50:25.6105756Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+2026-10-09T00:50:25.9091709Z info: latest update on 2026-10-08 for version 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-09T00:50:25.9092200Z info: downloading 3 components
+2026-10-09T00:50:32.6126082Z 
+2026-10-09T00:50:32.6183917Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-09T00:50:32.6184176Z 
+2026-10-09T00:50:32.6271005Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=7070]
+2026-10-09T00:50:32.6277009Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+2026-10-09T00:50:32.6418747Z ##[group]Run rustup default nightly
+2026-10-09T00:50:32.6419188Z [36;1mrustup default nightly[0m
+2026-10-09T00:50:32.6476047Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.6476244Z env:
+2026-10-09T00:50:32.6476374Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.6476522Z ##[endgroup]
+2026-10-09T00:50:32.6677958Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+2026-10-09T00:50:32.6924645Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+2026-10-09T00:50:32.6924907Z 
+2026-10-09T00:50:32.6986655Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-09T00:50:32.6987392Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+2026-10-09T00:50:32.6987896Z 
+2026-10-09T00:50:32.7000988Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=72]
+2026-10-09T00:50:32.7004482Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-10-09T00:50:32.7033551Z ##[group]Run : create cachekey
+2026-10-09T00:50:32.7033733Z [36;1m: create cachekey[0m
+2026-10-09T00:50:32.7034023Z [36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-09T00:50:32.7034542Z [36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-09T00:50:32.7034823Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-09T00:50:32.7084415Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.7084602Z env:
+2026-10-09T00:50:32.7084723Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.7084869Z ##[endgroup]
+2026-10-09T00:50:32.7454944Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=44]
+2026-10-09T00:50:32.7457005Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-10-09T00:50:32.7531742Z ##[group]Run : disable incremental compilation
+2026-10-09T00:50:32.7532067Z [36;1m: disable incremental compilation[0m
+2026-10-09T00:50:32.7532351Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-10-09T00:50:32.7532649Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-10-09T00:50:32.7532897Z [36;1mfi[0m
+2026-10-09T00:50:32.7587188Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.7587381Z env:
+2026-10-09T00:50:32.7587506Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.7587649Z ##[endgroup]
+2026-10-09T00:50:32.7659217Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=20]
+2026-10-09T00:50:32.7660739Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-10-09T00:50:32.7737876Z ##[group]Run : enable colors in Cargo output
+2026-10-09T00:50:32.7738165Z [36;1m: enable colors in Cargo output[0m
+2026-10-09T00:50:32.7738440Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-10-09T00:50:32.7738729Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-10-09T00:50:32.7739092Z [36;1mfi[0m
+2026-10-09T00:50:32.7786627Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.7786812Z env:
+2026-10-09T00:50:32.7786934Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.7787087Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:32.7787212Z ##[endgroup]
+2026-10-09T00:50:32.7909796Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=24]
+2026-10-09T00:50:32.7913069Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-10-09T00:50:32.7936955Z ##[group]Run : enable Cargo sparse registry
+2026-10-09T00:50:32.7937395Z [36;1m: enable Cargo sparse registry[0m
+2026-10-09T00:50:32.7937717Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-10-09T00:50:32.7938328Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-10-09T00:50:32.7939215Z [36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-10-09T00:50:32.7939724Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-09T00:50:32.7940145Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-10-09T00:50:32.7940429Z [36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-10-09T00:50:32.7940886Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-10-09T00:50:32.7941347Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-10-09T00:50:32.7941667Z [36;1m  fi[0m
+2026-10-09T00:50:32.7941834Z [36;1mfi[0m
+2026-10-09T00:50:32.7987498Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.7987685Z env:
+2026-10-09T00:50:32.7987804Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.7987949Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:32.7988075Z   CARGO_TERM_COLOR: always
+2026-10-09T00:50:32.7988204Z ##[endgroup]
+2026-10-09T00:50:32.8253503Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=33]
+2026-10-09T00:50:32.8257869Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-10-09T00:50:32.8340728Z ##[group]Run : work around spurious network errors in curl 8.0
+2026-10-09T00:50:32.8341108Z [36;1m: work around spurious network errors in curl 8.0[0m
+2026-10-09T00:50:32.8341586Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-10-09T00:50:32.8342161Z [36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-10-09T00:50:32.8342566Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-10-09T00:50:32.8342840Z [36;1mfi[0m
+2026-10-09T00:50:32.8392352Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.8392541Z env:
+2026-10-09T00:50:32.8392661Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.8392806Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:32.8392933Z   CARGO_TERM_COLOR: always
+2026-10-09T00:50:32.8393063Z ##[endgroup]
+2026-10-09T00:50:32.8554183Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=29]
+2026-10-09T00:50:32.8556820Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-10-09T00:50:32.9669759Z ##[group]Run rustc +nightly --version --verbose
+2026-10-09T00:50:32.9670098Z [36;1mrustc +nightly --version --verbose[0m
+2026-10-09T00:50:32.9739658Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-09T00:50:32.9739965Z env:
+2026-10-09T00:50:32.9740159Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:32.9740386Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:32.9740588Z   CARGO_TERM_COLOR: always
+2026-10-09T00:50:32.9740786Z ##[endgroup]
+2026-10-09T00:50:33.0460099Z rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+2026-10-09T00:50:33.0460561Z binary: rustc
+2026-10-09T00:50:33.0460837Z commit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+2026-10-09T00:50:33.0461126Z commit-date: 2026-10-07
+2026-10-09T00:50:33.0461301Z host: x86_64-unknown-linux-gnu
+2026-10-09T00:50:33.0461493Z release: 1.101.0-nightly
+2026-10-09T00:50:33.0461626Z LLVM version: 23.1.3
+2026-10-09T00:50:33.0475529Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=191]
+2026-10-09T00:50:33.0780561Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-09T00:50:33.0781042Z with:
+2026-10-09T00:50:33.0781222Z   shared-key: workspace-test
+2026-10-09T00:50:33.0781430Z   save-if: false
+2026-10-09T00:50:33.0781615Z   prefix-key: v0-rust
+2026-10-09T00:50:33.0781808Z   add-job-id-key: true
+2026-10-09T00:50:33.0782005Z   add-rust-environment-hash-key: true
+2026-10-09T00:50:33.0782158Z   cache-targets: true
+2026-10-09T00:50:33.0782284Z   cache-all-crates: false
+2026-10-09T00:50:33.0782425Z   cache-workspace-crates: false
+2026-10-09T00:50:33.0782567Z   cache-provider: github
+2026-10-09T00:50:33.0782693Z   cache-bin: true
+2026-10-09T00:50:33.0782805Z   lookup-only: false
+2026-10-09T00:50:33.0782923Z   cmd-format: {0}
+2026-10-09T00:50:33.0783033Z env:
+2026-10-09T00:50:33.0783151Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:33.0783292Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:33.0783417Z   CARGO_TERM_COLOR: always
+2026-10-09T00:50:33.0783545Z ##[endgroup]
+2026-10-09T00:50:33.2516456Z (node:2265) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-09T00:50:33.2517079Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-09T00:50:38.8826640Z ##[group]Cache Configuration
+2026-10-09T00:50:38.8826917Z Cache Provider:
+2026-10-09T00:50:38.8827094Z     github
+2026-10-09T00:50:38.8827251Z Workspaces:
+2026-10-09T00:50:38.8827425Z     /home/runner/work/purrdf/purrdf
+2026-10-09T00:50:38.8827633Z Cache Paths:
+2026-10-09T00:50:38.8827809Z     /home/runner/.cargo/bin
+2026-10-09T00:50:38.8828023Z     /home/runner/.cargo/.crates.toml
+2026-10-09T00:50:38.8828253Z     /home/runner/.cargo/.crates2.json
+2026-10-09T00:50:38.8828473Z     /home/runner/.cargo/registry
+2026-10-09T00:50:38.8828678Z     /home/runner/.cargo/git
+2026-10-09T00:50:38.8829047Z     /home/runner/work/purrdf/purrdf/target
+2026-10-09T00:50:38.8829267Z Restore Key:
+2026-10-09T00:50:38.8829504Z     v0-rust-workspace-test-Linux-x64-ef9e25b4
+2026-10-09T00:50:38.8829772Z Cache Key:
+2026-10-09T00:50:38.8829983Z     v0-rust-workspace-test-Linux-x64-ef9e25b4-34a76a15
+2026-10-09T00:50:38.8830252Z .. Prefix:
+2026-10-09T00:50:38.8830433Z   - v0-rust-workspace-test-Linux-x64
+2026-10-09T00:50:38.8830657Z .. Environment considered:
+2026-10-09T00:50:38.8830854Z   - Rust Versions:
+2026-10-09T00:50:38.8831157Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+2026-10-09T00:50:38.8831607Z     - 1.99.0 x86_64-unknown-linux-gnu b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+2026-10-09T00:50:38.8831997Z     - 1.101.0-nightly x86_64-unknown-linux-gnu 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+2026-10-09T00:50:38.8832223Z   - CARGO_HOME
+2026-10-09T00:50:38.8832339Z   - CARGO_INCREMENTAL
+2026-10-09T00:50:38.8832461Z   - CARGO_TERM_COLOR
+2026-10-09T00:50:38.8832586Z .. Lockfiles considered:
+2026-10-09T00:50:38.8832761Z   - /home/runner/work/purrdf/purrdf/bindings/python/Cargo.toml
+2026-10-09T00:50:38.8833012Z   - /home/runner/work/purrdf/purrdf/bindings/python/rust-toolchain.toml
+2026-10-09T00:50:38.8833256Z   - /home/runner/work/purrdf/purrdf/Cargo.lock
+2026-10-09T00:50:38.8833466Z   - /home/runner/work/purrdf/purrdf/crates/alloc-probe/Cargo.toml
+2026-10-09T00:50:38.8833692Z   - /home/runner/work/purrdf/purrdf/crates/bench/Cargo.toml
+2026-10-09T00:50:38.8833898Z   - /home/runner/work/purrdf/purrdf/crates/cdt/Cargo.toml
+2026-10-09T00:50:38.8834096Z   - /home/runner/work/purrdf/purrdf/crates/cli/Cargo.toml
+2026-10-09T00:50:38.8834304Z   - /home/runner/work/purrdf/purrdf/crates/columnar/Cargo.toml
+2026-10-09T00:50:38.8834537Z   - /home/runner/work/purrdf/purrdf/crates/conformance-kit/Cargo.toml
+2026-10-09T00:50:38.8834771Z   - /home/runner/work/purrdf/purrdf/crates/datalog/Cargo.toml
+2026-10-09T00:50:38.8834988Z   - /home/runner/work/purrdf/purrdf/crates/deflate/Cargo.toml
+2026-10-09T00:50:38.8835200Z   - /home/runner/work/purrdf/purrdf/crates/ed25519/Cargo.toml
+2026-10-09T00:50:38.8835808Z   - /home/runner/work/purrdf/purrdf/crates/entail/Cargo.toml
+2026-10-09T00:50:38.8836036Z   - /home/runner/work/purrdf/purrdf/crates/envelope-probe/Cargo.toml
+2026-10-09T00:50:38.8836385Z   - /home/runner/work/purrdf/purrdf/crates/geo/Cargo.toml
+2026-10-09T00:50:38.8836585Z   - /home/runner/work/purrdf/purrdf/crates/gts/Cargo.toml
+2026-10-09T00:50:38.8836902Z   - /home/runner/work/purrdf/purrdf/crates/hash-conformance/Cargo.toml
+2026-10-09T00:50:38.8837249Z   - /home/runner/work/purrdf/purrdf/crates/hash/Cargo.toml
+2026-10-09T00:50:38.8837513Z   - /home/runner/work/purrdf/purrdf/crates/helper-census/Cargo.toml
+2026-10-09T00:50:38.8837845Z   - /home/runner/work/purrdf/purrdf/crates/hnsw/Cargo.toml
+2026-10-09T00:50:38.8838049Z   - /home/runner/work/purrdf/purrdf/crates/iri/Cargo.toml
+2026-10-09T00:50:38.8838247Z   - /home/runner/work/purrdf/purrdf/crates/json/Cargo.toml
+2026-10-09T00:50:38.8838460Z   - /home/runner/work/purrdf/purrdf/crates/jsonschema/Cargo.toml
+2026-10-09T00:50:38.8838754Z   - /home/runner/work/purrdf/purrdf/crates/lex/Cargo.toml
+2026-10-09T00:50:38.8839220Z   - /home/runner/work/purrdf/purrdf/crates/markdown/Cargo.toml
+2026-10-09T00:50:38.8839442Z   - /home/runner/work/purrdf/purrdf/crates/purrdf/Cargo.toml
+2026-10-09T00:50:38.8839685Z   - /home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml
+2026-10-09T00:50:38.8840034Z   - /home/runner/work/purrdf/purrdf/crates/rdf-core/Cargo.toml
+2026-10-09T00:50:38.8840404Z   - /home/runner/work/purrdf/purrdf/crates/rdf-events/Cargo.toml
+2026-10-09T00:50:38.8840695Z   - /home/runner/work/purrdf/purrdf/crates/rdf-wasm/Cargo.toml
+2026-10-09T00:50:38.8840903Z   - /home/runner/work/purrdf/purrdf/crates/rdf/Cargo.toml
+2026-10-09T00:50:38.8841233Z   - /home/runner/work/purrdf/purrdf/crates/retrieval/Cargo.toml
+2026-10-09T00:50:38.8841562Z   - /home/runner/work/purrdf/purrdf/crates/shapes/Cargo.toml
+2026-10-09T00:50:38.8841900Z   - /home/runner/work/purrdf/purrdf/crates/shex/Cargo.toml
+2026-10-09T00:50:38.8842112Z   - /home/runner/work/purrdf/purrdf/crates/slice/Cargo.toml
+2026-10-09T00:50:38.8842397Z   - /home/runner/work/purrdf/purrdf/crates/sparql-algebra/Cargo.toml
+2026-10-09T00:50:38.8842806Z   - /home/runner/work/purrdf/purrdf/crates/sparql-conformance/Cargo.toml
+2026-10-09T00:50:38.8843180Z   - /home/runner/work/purrdf/purrdf/crates/sparql-eval/Cargo.toml
+2026-10-09T00:50:38.8843415Z   - /home/runner/work/purrdf/purrdf/crates/sparql-results/Cargo.toml
+2026-10-09T00:50:38.8843747Z   - /home/runner/work/purrdf/purrdf/crates/stack/Cargo.toml
+2026-10-09T00:50:38.8843958Z   - /home/runner/work/purrdf/purrdf/crates/testkit/Cargo.toml
+2026-10-09T00:50:38.8844166Z   - /home/runner/work/purrdf/purrdf/crates/text/Cargo.toml
+2026-10-09T00:50:38.8844377Z   - /home/runner/work/purrdf/purrdf/crates/validate/Cargo.toml
+2026-10-09T00:50:38.8844636Z   - /home/runner/work/purrdf/purrdf/crates/wasm-link/Cargo.toml
+2026-10-09T00:50:38.8844876Z   - /home/runner/work/purrdf/purrdf/crates/xsd/Cargo.toml
+2026-10-09T00:50:38.8845078Z   - /home/runner/work/purrdf/purrdf/rust-toolchain.toml
+2026-10-09T00:50:38.8845415Z ##[endgroup]
+2026-10-09T00:50:38.8845488Z 
+2026-10-09T00:50:38.8845540Z ... Restoring cache ...
+2026-10-09T00:50:39.0339783Z Cache hit for: v0-rust-workspace-test-Linux-x64-ef9e25b4-34a76a15
+2026-10-09T00:50:39.8656209Z Received 36530831 of 36530831 (100.0%), 50.6 MBs/sec
+2026-10-09T00:50:39.8656458Z Cache Size: ~35 MB (36530831 B)
+2026-10-09T00:50:39.8672792Z [command]/usr/bin/tar -xf /home/runner/work/_temp/3c236049-e023-4fe8-84a3-bdcbd87b9566/cache.tzst -P -C /home/runner/work/purrdf/purrdf --use-compress-program unzstd
+2026-10-09T00:50:40.0083064Z Cache restored successfully
+2026-10-09T00:50:40.0101881Z Restored from cache key "v0-rust-workspace-test-Linux-x64-ef9e25b4-34a76a15" full match: true.
+2026-10-09T00:50:40.1180894Z ##[group]Run curl -LsSf https://astral.sh/uv/install.sh | sh
+2026-10-09T00:50:40.1181318Z [36;1mcurl -LsSf https://astral.sh/uv/install.sh | sh[0m
+2026-10-09T00:50:40.1181637Z [36;1mecho "$HOME/.local/bin" >> "$GITHUB_PATH"[0m
+2026-10-09T00:50:40.1241859Z shell: /usr/bin/bash -e {0}
+2026-10-09T00:50:40.1242011Z env:
+2026-10-09T00:50:40.1242131Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:40.1242437Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:40.1242571Z   CARGO_TERM_COLOR: always
+2026-10-09T00:50:40.1242703Z   CACHE_ON_FAILURE: false
+2026-10-09T00:50:40.1242834Z ##[endgroup]
+2026-10-09T00:50:40.4412956Z downloading uv 0.12.24 x86_64-unknown-linux-gnu
+2026-10-09T00:50:40.9323665Z installing to /home/runner/.local/bin
+2026-10-09T00:50:40.9368502Z   uv
+2026-10-09T00:50:40.9382800Z   uvx
+2026-10-09T00:50:40.9411239Z everything's installed!
+2026-10-09T00:50:41.0499291Z ##[group]Run make pytest
+2026-10-09T00:50:41.0499566Z [36;1mmake pytest[0m
+2026-10-09T00:50:41.0554943Z shell: /usr/bin/bash -e {0}
+2026-10-09T00:50:41.0555096Z env:
+2026-10-09T00:50:41.0555221Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T00:50:41.0555374Z   CARGO_INCREMENTAL: 0
+2026-10-09T00:50:41.0555507Z   CARGO_TERM_COLOR: always
+2026-10-09T00:50:41.0555646Z   CACHE_ON_FAILURE: false
+2026-10-09T00:50:41.0555779Z ##[endgroup]
+2026-10-09T00:50:41.2037479Z cargo run -q --locked -p helper-census -- --python-binding-tests
+2026-10-09T00:51:16.2492286Z OK: no Rust test module under bindings/python/src (28 sources scanned)
+2026-10-09T00:51:16.2494720Z cd bindings/python && uv sync --locked --group dev && uv run --locked pytest tests
+2026-10-09T00:51:16.4152776Z Downloading cpython-3.14.8-linux-x86_64-gnu (download) (34.6MiB)
+2026-10-09T00:51:17.2828647Z  Downloaded cpython-3.14.8-linux-x86_64-gnu (download)
+2026-10-09T00:51:17.4086532Z Using CPython 3.14.8
+2026-10-09T00:51:17.4086900Z Creating virtual environment at: .venv
+2026-10-09T00:51:17.4115097Z Resolved 107 packages in 0.89ms
+2026-10-09T00:51:17.4229448Z    Building purrdf @ file:///home/runner/work/purrdf/purrdf/bindings/python
+2026-10-09T00:51:17.4702161Z Downloading babel (9.7MiB)
+2026-10-09T00:51:17.4706063Z Downloading sqlalchemy (3.1MiB)
+2026-10-09T00:51:17.4714039Z Downloading pygments (1.2MiB)
+2026-10-09T00:51:17.4861398Z Downloading maturin (10.1MiB)
+2026-10-09T00:51:17.4864116Z Downloading sphinx (3.7MiB)
+2026-10-09T00:51:17.4865724Z Downloading pandas (10.4MiB)
+2026-10-09T00:51:17.4866572Z Downloading ast-serialize (1.2MiB)
+2026-10-09T00:51:17.4869080Z Downloading mypy (14.3MiB)
+2026-10-09T00:51:17.4870171Z Downloading numpy (15.9MiB)
+2026-10-09T00:51:17.4871073Z Downloading pyarrow (47.8MiB)
+2026-10-09T00:51:17.4872169Z Downloading pydantic-core (2.0MiB)
+2026-10-09T00:51:17.4873148Z Downloading pyshacl (1.2MiB)
+2026-10-09T00:51:17.4875034Z Downloading duckdb (20.5MiB)
+2026-10-09T00:51:17.6521644Z    Building antlr4-python3-runtime==4.9.3
+2026-10-09T00:51:17.6760071Z    Building cfgraph==0.2.1
+2026-10-09T00:51:17.6769743Z  Downloaded ast-serialize
+2026-10-09T00:51:17.6770000Z  Downloaded pyshacl
+2026-10-09T00:51:17.6770202Z  Downloaded pygments
+2026-10-09T00:51:17.6770415Z    Building pytest-logging==2015.11.4
+2026-10-09T00:51:17.7047222Z  Downloaded pydantic-core
+2026-10-09T00:51:17.7370375Z  Downloaded sqlalchemy
+2026-10-09T00:51:17.7589585Z  Downloaded sphinx
+2026-10-09T00:51:17.9183402Z  Downloaded babel
+2026-10-09T00:51:17.9421793Z  Downloaded maturin
+2026-10-09T00:51:17.9501995Z  Downloaded pandas
+2026-10-09T00:51:18.0580250Z  Downloaded numpy
+2026-10-09T00:51:18.0589409Z  Downloaded mypy
+2026-10-09T00:51:18.0841573Z  Downloaded duckdb
+2026-10-09T00:51:18.3710320Z  Downloaded pyarrow
+2026-10-09T00:51:18.8022665Z       Built cfgraph==0.2.1
+2026-10-09T00:51:18.8065412Z       Built pytest-logging==2015.11.4
+2026-10-09T00:51:18.8291618Z       Built antlr4-python3-runtime==4.9.3
+2026-10-09T00:56:49.7902365Z       Built purrdf @ file:///home/runner/work/purrdf/purrdf/bindings/python
+2026-10-09T00:56:49.7996477Z Prepared 104 packages in 5m 32s
+2026-10-09T00:56:49.8762775Z Installed 104 packages in 76ms
+2026-10-09T00:56:49.8764465Z  + alabaster==1.0.0
+2026-10-09T00:56:49.8764692Z  + annotated-types==0.7.0
+2026-10-09T00:56:49.8764953Z  + antlr4-python3-runtime==4.9.3
+2026-10-09T00:56:49.8765198Z  + arrow==1.4.0
+2026-10-09T00:56:49.8765398Z  + ast-serialize==0.6.0
+2026-10-09T00:56:49.8765610Z  + attrs==26.1.0
+2026-10-09T00:56:49.8765796Z  + babel==2.18.0
+2026-10-09T00:56:49.8766040Z  + certifi==2026.6.17
+2026-10-09T00:56:49.8766546Z  + cfgraph==0.2.1
+2026-10-09T00:56:49.8766730Z  + chardet==7.4.3
+2026-10-09T00:56:49.8766933Z  + charset-normalizer==3.4.7
+2026-10-09T00:56:49.8767149Z  + click==8.4.2
+2026-10-09T00:56:49.8767337Z  + curies==0.13.13
+2026-10-09T00:56:49.8767527Z  + deprecated==1.3.1
+2026-10-09T00:56:49.8767728Z  + deprecation==2.1.0
+2026-10-09T00:56:49.8767921Z  + docutils==0.22.4
+2026-10-09T00:56:49.8768314Z  + duckdb==1.5.5
+2026-10-09T00:56:49.8768497Z  + et-xmlfile==2.0.0
+2026-10-09T00:56:49.8768685Z  + fqdn==1.5.1
+2026-10-09T00:56:49.8769007Z  + graphviz==0.21
+2026-10-09T00:56:49.8769257Z  + greenlet==3.5.3
+2026-10-09T00:56:49.8769454Z  + hbreader==0.9.1
+2026-10-09T00:56:49.8769726Z  + html5rdf==1.2.1
+2026-10-09T00:56:49.8769933Z  + idna==3.18
+2026-10-09T00:56:49.8770155Z  + imagesize==2.0.0
+2026-10-09T00:56:49.8770412Z  + iniconfig==2.3.0
+2026-10-09T00:56:49.8770621Z  + isodate==0.7.2
+2026-10-09T00:56:49.8770859Z  + isoduration==20.11.0
+2026-10-09T00:56:49.8771193Z  + jinja2==3.1.6
+2026-10-09T00:56:49.8771427Z  + json-flattener==0.1.9
+2026-10-09T00:56:49.8771644Z  + jsonasobj==1.3.1
+2026-10-09T00:56:49.8771832Z  + jsonasobj2==1.0.4
+2026-10-09T00:56:49.8772027Z  + jsonpointer==3.1.1
+2026-10-09T00:56:49.8772236Z  + jsonschema==4.26.0
+2026-10-09T00:56:49.8772465Z  + jsonschema-specifications==2025.9.1
+2026-10-09T00:56:49.8772725Z  + librt==0.12.0
+2026-10-09T00:56:49.8772982Z  + linkml==1.11.1
+2026-10-09T00:56:49.8773183Z  + linkml-runtime==1.11.1
+2026-10-09T00:56:49.8773438Z  + markupsafe==3.0.3
+2026-10-09T00:56:49.8773672Z  + maturin==1.14.1
+2026-10-09T00:56:49.8773908Z  + mypy==2.1.0
+2026-10-09T00:56:49.8774161Z  + mypy-extensions==1.1.0
+2026-10-09T00:56:49.8774371Z  + numpy==2.5.0
+2026-10-09T00:56:49.8774566Z  + openpyxl==3.1.5
+2026-10-09T00:56:49.8774848Z  + owlrl==7.1.4
+2026-10-09T00:56:49.8775027Z  + packaging==26.2
+2026-10-09T00:56:49.8775211Z  + pandas==3.0.3
+2026-10-09T00:56:49.8775467Z  + parse==1.22.1
+2026-10-09T00:56:49.8775673Z  + pathspec==1.1.1
+2026-10-09T00:56:49.8775955Z  + pluggy==1.6.0
+2026-10-09T00:56:49.8776212Z  + prefixcommons==0.1.12
+2026-10-09T00:56:49.8776427Z  + prefixmaps==0.2.6
+2026-10-09T00:56:49.8776651Z  + prettytable==3.18.0
+2026-10-09T00:56:49.8777106Z  + purrdf==3.0.1 (from file:///home/runner/work/purrdf/purrdf/bindings/python)
+2026-10-09T00:56:49.8777457Z  + pyarrow==25.0.1
+2026-10-09T00:56:49.8777640Z  + pydantic==2.13.4
+2026-10-09T00:56:49.8777844Z  + pydantic-core==2.46.4
+2026-10-09T00:56:49.8778056Z  + pygments==2.20.0
+2026-10-09T00:56:49.8778240Z  + pyjsg==0.12.4
+2026-10-09T00:56:49.8778454Z  + pyparsing==3.3.2
+2026-10-09T00:56:49.8778664Z  + pyshacl==0.31.0
+2026-10-09T00:56:49.8778993Z  + pyshex==0.9.0
+2026-10-09T00:56:49.8779284Z  + pyshexc==0.10.3.post1
+2026-10-09T00:56:49.8779533Z  + pystow==0.8.19
+2026-10-09T00:56:49.8779710Z  + pytest==9.0.3
+2026-10-09T00:56:49.8792122Z  + pytest-logging==2015.11.4
+2026-10-09T00:56:49.8792421Z  + python-dateutil==2.9.0.post0
+2026-10-09T00:56:49.8792569Z  + pyyaml==6.0.3
+2026-10-09T00:56:49.8792685Z  + rdflib==7.6.0
+2026-10-09T00:56:49.8792816Z  + rdflib-jsonld==0.6.1
+2026-10-09T00:56:49.8792948Z  + rdflib-shim==1.0.3
+2026-10-09T00:56:49.8793073Z  + referencing==0.37.0
+2026-10-09T00:56:49.8793198Z  + requests==2.34.2
+2026-10-09T00:56:49.8793323Z  + rfc3339-validator==0.1.4
+2026-10-09T00:56:49.8793459Z  + rfc3987==1.3.8
+2026-10-09T00:56:49.8793581Z  + roman-numerals==4.1.0
+2026-10-09T00:56:49.8793713Z  + rpds-py==2026.6.3
+2026-10-09T00:56:49.8793835Z  + shexjsg==0.9.0
+2026-10-09T00:56:49.8793952Z  + six==1.17.0
+2026-10-09T00:56:49.8794071Z  + snowballstemmer==3.1.1
+2026-10-09T00:56:49.8794207Z  + sparqlslurper==0.5.1
+2026-10-09T00:56:49.8794336Z  + sparqlwrapper==2.0.0
+2026-10-09T00:56:49.8794465Z  + sphinx==9.1.0
+2026-10-09T00:56:49.8794584Z  + sphinx-click==6.2.0
+2026-10-09T00:56:49.8794726Z  + sphinxcontrib-applehelp==2.0.0
+2026-10-09T00:56:49.8794887Z  + sphinxcontrib-devhelp==2.0.0
+2026-10-09T00:56:49.8795044Z  + sphinxcontrib-htmlhelp==2.1.0
+2026-10-09T00:56:49.8795201Z  + sphinxcontrib-jsmath==1.0.1
+2026-10-09T00:56:49.8795501Z  + sphinxcontrib-qthelp==2.0.0
+2026-10-09T00:56:49.8795660Z  + sphinxcontrib-serializinghtml==2.0.0
+2026-10-09T00:56:49.8795820Z  + sqlalchemy==2.0.51
+2026-10-09T00:56:49.8795945Z  + sssom==0.4.17
+2026-10-09T00:56:49.8796063Z  + sssom-schema==1.0.0
+2026-10-09T00:56:49.8796186Z  + tqdm==4.68.3
+2026-10-09T00:56:49.8796309Z  + typing-extensions==4.15.0
+2026-10-09T00:56:49.8796454Z  + typing-inspection==0.4.2
+2026-10-09T00:56:49.8796684Z  + tzdata==2026.2
+2026-10-09T00:56:49.8796927Z  + uri-template==1.3.0
+2026-10-09T00:56:49.8797108Z  + urllib3==2.8.0
+2026-10-09T00:56:49.8797260Z  + validators==0.35.0
+2026-10-09T00:56:49.8797389Z  + watchdog==6.0.0
+2026-10-09T00:56:49.8797505Z  + wcwidth==0.8.2
+2026-10-09T00:56:49.8797623Z  + webcolors==25.10.0
+2026-10-09T00:56:49.8797743Z  + wrapt==2.2.2
+2026-10-09T00:56:51.3199623Z ============================= test session starts ==============================
+2026-10-09T00:56:51.3201141Z platform linux -- Python 3.14.8, pytest-9.0.3, pluggy-1.6.0
+2026-10-09T00:56:51.3201569Z rootdir: /home/runner/work/purrdf/purrdf/bindings/python
+2026-10-09T00:56:51.3201865Z configfile: pyproject.toml
+2026-10-09T00:56:51.3202071Z collected 4197 items
+2026-10-09T00:56:51.3202172Z 
+2026-10-09T00:56:55.1808242Z tests/test_acceptance_matrix.py ....s.                                   [  0%]
+2026-10-09T00:56:55.1972103Z tests/test_aggregate_namespace.py ...........                            [  0%]
+2026-10-09T00:56:55.2637309Z tests/test_argument_refusals.py ...........................              [  1%]
+2026-10-09T00:56:55.2732045Z tests/test_codec_fidelity.py .........................                   [  1%]
+2026-10-09T00:56:55.4082046Z tests/test_collection.py .........                                       [  1%]
+2026-10-09T00:56:55.5296761Z tests/test_compat_parity.py ...........                                  [  2%]
+2026-10-09T00:56:55.5428558Z tests/test_construct_named_graphs.py ................................... [  2%]
+2026-10-09T00:56:55.5466223Z .........                                                                [  3%]
+2026-10-09T00:56:55.6119396Z tests/test_contextual_mappings.py ...............                        [  3%]
+2026-10-09T00:56:55.6210609Z tests/test_dataset.py ...........                                        [  3%]
+2026-10-09T00:56:55.6230563Z tests/test_dataset_canonicalization.py ......                            [  3%]
+2026-10-09T00:56:55.6393413Z tests/test_division_policy.py ..................                         [  4%]
+2026-10-09T00:56:55.6492875Z tests/test_document_base.py ...................................          [  5%]
+2026-10-09T00:56:55.6506673Z tests/test_engine_configuration.py ...                                   [  5%]
+2026-10-09T00:56:55.6525270Z tests/test_entail.py ....                                                [  5%]
+2026-10-09T00:56:55.7783566Z tests/test_entail_reasoning.py ......................................... [  6%]
+2026-10-09T00:56:55.7948797Z .............................                                            [  7%]
+2026-10-09T00:56:55.9688016Z tests/test_entail_regimes.py ........................................... [  8%]
+2026-10-09T00:56:56.1273509Z ............................................                             [  9%]
+2026-10-09T00:56:56.1396436Z tests/test_frozen_escape_vectors.py .................................... [  9%]
+2026-10-09T00:56:56.1637145Z ........................................................................ [ 11%]
+2026-10-09T00:56:56.1880769Z ........................................................................ [ 13%]
+2026-10-09T00:56:56.2126908Z ........................................................................ [ 15%]
+2026-10-09T00:56:56.2369994Z ........................................................................ [ 16%]
+2026-10-09T00:56:56.2597833Z ........................................................................ [ 18%]
+2026-10-09T00:56:56.2821979Z ........................................................................ [ 20%]
+2026-10-09T00:56:56.3043693Z ........................................................................ [ 21%]
+2026-10-09T00:56:56.3262198Z ........................................................................ [ 23%]
+2026-10-09T00:56:56.3481888Z ........................................................................ [ 25%]
+2026-10-09T00:56:56.3702491Z ........................................................................ [ 27%]
+2026-10-09T00:56:56.3928158Z ........................................................................ [ 28%]
+2026-10-09T00:56:56.4167288Z ........................................................................ [ 30%]
+2026-10-09T00:56:56.4408196Z ........................................................................ [ 32%]
+2026-10-09T00:56:56.4647182Z ........................................................................ [ 33%]
+2026-10-09T00:56:56.4887471Z ........................................................................ [ 35%]
+2026-10-09T00:56:56.5125574Z ........................................................................ [ 37%]
+2026-10-09T00:57:00.4688048Z ........................................................................ [ 39%]
+2026-10-09T00:57:22.3103021Z ................................                                         [ 39%]
+2026-10-09T00:57:22.3221533Z tests/test_frozen_lex_vectors.py ....................................... [ 40%]
+2026-10-09T00:57:22.3436848Z ........................................................................ [ 42%]
+2026-10-09T00:57:22.3645597Z ........................................................................ [ 44%]
+2026-10-09T00:57:22.3856356Z ........................................................................ [ 45%]
+2026-10-09T00:57:22.4073917Z ........................................................................ [ 47%]
+2026-10-09T00:57:22.4285922Z ........................................................................ [ 49%]
+2026-10-09T00:57:22.4499278Z ........................................................................ [ 51%]
+2026-10-09T00:57:22.4710816Z ........................................................................ [ 52%]
+2026-10-09T00:57:22.4923537Z ........................................................................ [ 54%]
+2026-10-09T00:57:22.5135404Z ........................................................................ [ 56%]
+2026-10-09T00:57:22.5348229Z ........................................................................ [ 57%]
+2026-10-09T00:57:22.5552410Z ........................................................................ [ 59%]
+2026-10-09T00:57:22.5751671Z ........................................................................ [ 61%]
+2026-10-09T00:57:22.5950084Z ........................................................................ [ 63%]
+2026-10-09T00:57:22.6146884Z ........................................................................ [ 64%]
+2026-10-09T00:57:22.6344710Z ........................................................................ [ 66%]
+2026-10-09T00:57:22.6542903Z ........................................................................ [ 68%]
+2026-10-09T00:57:22.6743407Z ........................................................................ [ 69%]
+2026-10-09T00:57:22.6941732Z ........................................................................ [ 71%]
+2026-10-09T00:57:31.5244260Z .............................................                            [ 72%]
+2026-10-09T00:57:31.5255259Z tests/test_graph.py ..                                                   [ 72%]
+2026-10-09T00:57:31.5559104Z tests/test_graph_facade.py ..............x....                           [ 73%]
+2026-10-09T00:57:31.5586976Z tests/test_gts_fold_view.py ..........                                   [ 73%]
+2026-10-09T00:57:31.5611518Z tests/test_gts_fold_view_self_reaching.py ........                       [ 73%]
+2026-10-09T00:57:31.5636768Z tests/test_gts_ingest_report.py ........                                 [ 73%]
+2026-10-09T00:57:31.9632523Z tests/test_gts_relational_export.py .................                    [ 74%]
+2026-10-09T00:57:31.9646836Z tests/test_jsonld_baseline.py ...                                        [ 74%]
+2026-10-09T00:57:31.9672712Z tests/test_jsonld_configured.py ......                                   [ 74%]
+2026-10-09T00:57:31.9824364Z tests/test_namespaces.py ............................................... [ 75%]
+2026-10-09T00:57:32.0057742Z ................                                                         [ 76%]
+2026-10-09T00:57:32.0811233Z tests/test_native_store_contract.py .........                            [ 76%]
+2026-10-09T00:57:32.0903735Z tests/test_paths.py ....................                                 [ 76%]
+2026-10-09T00:57:32.1019868Z tests/test_plugin_discovery.py ......................................... [ 77%]
+2026-10-09T00:57:32.1176521Z .........................................                                [ 78%]
+2026-10-09T00:57:32.1210959Z tests/test_prepared_prebound_grouping.py .......                         [ 78%]
+2026-10-09T00:57:32.1309241Z tests/test_prepared_query.py .......................                     [ 79%]
+2026-10-09T00:57:32.1427882Z tests/test_projection.py ..........                                      [ 79%]
+2026-10-09T00:57:32.1598543Z tests/test_property_functions.py ....................................... [ 80%]
+2026-10-09T00:57:32.1915642Z ..........................................                               [ 81%]
+2026-10-09T00:57:32.2322734Z tests/test_query.py .......xx                                            [ 81%]
+2026-10-09T00:57:32.2886362Z tests/test_query_governors.py .......................................... [ 82%]
+2026-10-09T00:57:32.2914850Z .....                                                                    [ 82%]
+2026-10-09T00:57:32.3036440Z tests/test_query_presentation.py ....................                    [ 83%]
+2026-10-09T00:57:32.3049314Z tests/test_rdf_dataset_layers.py ...                                     [ 83%]
+2026-10-09T00:57:32.6409053Z tests/test_rdflib_shadow.py ............                                 [ 83%]
+2026-10-09T00:57:33.3101556Z tests/test_rdflib_suite.py ..                                            [ 83%]
+2026-10-09T00:57:33.3242211Z tests/test_rdflib_version.py .                                           [ 83%]
+2026-10-09T00:57:33.3249734Z tests/test_redeclared_withdrawn_graph.py .                               [ 83%]
+2026-10-09T00:57:33.3278988Z tests/test_resource.py ........                                          [ 83%]
+2026-10-09T00:57:42.0738813Z tests/test_retrieval.py ................................................ [ 85%]
+2026-10-09T00:57:42.7453985Z ........................................................................ [ 86%]
+2026-10-09T00:57:42.7485979Z .........                                                                [ 87%]
+2026-10-09T00:57:42.7621956Z tests/test_retrieval_cost_counters.py ....                               [ 87%]
+2026-10-09T00:57:42.8585332Z tests/test_retrieval_vector_producers.py ...........................     [ 87%]
+2026-10-09T00:57:42.9119084Z tests/test_sarif.py ....                                                 [ 87%]
+2026-10-09T00:57:43.1479928Z tests/test_scan_order_determinism.py .                                   [ 87%]
+2026-10-09T00:57:43.1493426Z tests/test_serialize_declared_empty_graphs.py ...                        [ 87%]
+2026-10-09T00:57:43.1516345Z tests/test_serialize_loss.py ........                                    [ 88%]
+2026-10-09T00:57:43.1816376Z tests/test_serialize_output_short_write.py ....                          [ 88%]
+2026-10-09T00:57:43.1836887Z tests/test_sha3.py ......                                                [ 88%]
+2026-10-09T00:57:43.1895044Z tests/test_shacl_change_path.py ..........                               [ 88%]
+2026-10-09T00:57:43.6660969Z tests/test_shacl_change_path_typing.py .....                             [ 88%]
+2026-10-09T00:57:43.6688549Z tests/test_shacl_conformance_disallows.py .....                          [ 88%]
+2026-10-09T00:57:43.6705204Z tests/test_shacl_extension_usage.py ....                                 [ 88%]
+2026-10-09T00:57:43.6844044Z tests/test_shacl_owl_imports.py ...............                          [ 89%]
+2026-10-09T00:57:43.6882258Z tests/test_shacl_product.py ........                                     [ 89%]
+2026-10-09T00:57:43.6888649Z tests/test_shacl_result_annotations.py .                                 [ 89%]
+2026-10-09T00:57:43.6910990Z tests/test_shacl_rules_shapes_graph.py ...                               [ 89%]
+2026-10-09T00:57:43.7037156Z tests/test_shacl_shapes_graph_iri.py ...                                 [ 89%]
+2026-10-09T00:57:43.7495031Z tests/test_shacl_shapes_graph_well_formed.py ...                         [ 89%]
+2026-10-09T00:57:43.7505257Z tests/test_shacl_subclass_of_in_shapes_graph.py ..                       [ 89%]
+2026-10-09T00:57:43.7993266Z tests/test_shacl_tools.py .........                                      [ 90%]
+2026-10-09T00:57:43.8046633Z tests/test_shapes_product_identity.py ..........                         [ 90%]
+2026-10-09T00:57:43.8069941Z tests/test_shex.py .......                                               [ 90%]
+2026-10-09T00:57:43.8079016Z tests/test_shex_exact_facets.py .                                        [ 90%]
+2026-10-09T00:57:43.8124139Z tests/test_solution_row_protocol.py .............                        [ 90%]
+2026-10-09T00:57:43.8199277Z tests/test_sparql_prefixes.py ....                                       [ 90%]
+2026-10-09T00:57:43.8658528Z tests/test_sparql_results.py ........................................... [ 91%]
+2026-10-09T00:57:43.8670230Z .                                                                        [ 91%]
+2026-10-09T00:57:43.8696925Z tests/test_sparqlprocessor.py .....                                      [ 92%]
+2026-10-09T00:57:43.8871769Z tests/test_term_model.py ............................................... [ 93%]
+2026-10-09T00:57:43.9583859Z ......................................x........                          [ 94%]
+2026-10-09T00:57:43.9643741Z tests/test_top_level_exports.py ............                             [ 94%]
+2026-10-09T00:57:44.0072347Z tests/test_xpath_regex_profiles.py ..................................... [ 95%]
+2026-10-09T00:57:44.2857391Z ........................................................................ [ 97%]
+2026-10-09T00:57:44.3664473Z ........................................................................ [ 98%]
+2026-10-09T00:57:47.6452771Z ......................................                                   [ 99%]
+2026-10-09T00:57:47.9209697Z tests/test_xsd_exact_numerics.py .........                               [100%]
+2026-10-09T00:57:47.9210026Z 
+2026-10-09T00:57:47.9210179Z =============================== warnings summary ===============================
+2026-10-09T00:57:47.9216075Z tests/test_contextual_mappings.py::test_python_contextual_dispatch[ConjunctiveGraph]
+2026-10-09T00:57:47.9216860Z   /home/runner/work/purrdf/purrdf/bindings/python/tests/test_contextual_mappings.py:41: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+2026-10-09T00:57:47.9217590Z     graph = getattr(compat, "Graph" if route == "processor" else route)()
+2026-10-09T00:57:47.9217853Z 
+2026-10-09T00:57:47.9218112Z tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[False-ConjunctiveGraph]
+2026-10-09T00:57:47.9218660Z tests/test_contextual_mappings.py::test_python_graph_scope_forwarding[True-ConjunctiveGraph]
+2026-10-09T00:57:47.9219658Z   /home/runner/work/purrdf/purrdf/bindings/python/tests/test_contextual_mappings.py:64: DeprecationWarning: ConjunctiveGraph is deprecated, use Dataset instead.
+2026-10-09T00:57:47.9220291Z     dataset = getattr(compat, kind)()
+2026-10-09T00:57:47.9220456Z 
+2026-10-09T00:57:47.9220596Z tests/test_dataset.py::test_named_graph_view_is_readable
+2026-10-09T00:57:47.9220911Z tests/test_dataset.py::test_default_graph_view
+2026-10-09T00:57:47.9221254Z tests/test_dataset.py::test_get_context_reads_without_registering
+2026-10-09T00:57:47.9221591Z tests/test_dataset.py::test_quads_parity
+2026-10-09T00:57:47.9222249Z tests/test_dataset.py::test_quads_restricted_to_named_graph
+2026-10-09T00:57:47.9222591Z tests/test_dataset.py::test_dataset_iter_yields_quads
+2026-10-09T00:57:47.9223384Z   /home/runner/work/purrdf/purrdf/bindings/python/.venv/lib/python3.14/site-packages/rdflib/graph.py:2228: DeprecationWarning: Dataset.default_context is deprecated, use Dataset.default_graph instead.
+2026-10-09T00:57:47.9224325Z     c = self.default_context if default else None
+2026-10-09T00:57:47.9224519Z 
+2026-10-09T00:57:47.9224693Z tests/test_term_model.py::test_ill_typed_matches_oracle[boolean-maybe]
+2026-10-09T00:57:47.9225450Z   /home/runner/work/purrdf/purrdf/bindings/python/.venv/lib/python3.14/site-packages/rdflib/term.py:1862: UserWarning: Parsing weird boolean, 'maybe' does not map to True or False
+2026-10-09T00:57:47.9226112Z     warnings.warn(
+2026-10-09T00:57:47.9226231Z 
+2026-10-09T00:57:47.9226441Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2026-10-09T00:57:47.9226879Z =========== 4192 passed, 1 skipped, 4 xfailed, 10 warnings in 57.28s ===========
+2026-10-09T00:57:48.1874159Z cd bindings/python && PURRDF_TEST_REQUIRE_EXACT=1 uv run --locked cargo test --manifest-path ../../Cargo.toml --locked -p purrdf-cli --test python_empty_graphs -- --ignored --exact installed_empty_graph_modes
+2026-10-09T00:57:48.2606554Z [1m[92m   Compiling[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+2026-10-09T00:57:48.2607493Z [1m[92m   Compiling[0m const-oid v0.10.2
+2026-10-09T00:57:48.2608249Z [1m[92m   Compiling[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+2026-10-09T00:57:48.2608828Z [1m[92m   Compiling[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+2026-10-09T00:57:48.3290289Z [1m[92m   Compiling[0m crossbeam-utils v0.8.21
+2026-10-09T00:57:48.4280345Z [1m[92m   Compiling[0m digest v0.11.3
+2026-10-09T00:57:48.5043077Z [1m[92m   Compiling[0m sha2 v0.11.0
+2026-10-09T00:57:49.0110599Z [1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+2026-10-09T00:57:49.2640300Z [1m[92m   Compiling[0m crossbeam-deque v0.8.6
+2026-10-09T00:57:49.2851829Z [1m[92m   Compiling[0m inout v0.2.2
+2026-10-09T00:57:49.3470455Z [1m[92m   Compiling[0m getrandom v0.3.4
+2026-10-09T00:57:49.3782725Z [1m[92m   Compiling[0m rayon-core v1.13.0
+2026-10-09T00:57:49.4538321Z [1m[92m   Compiling[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+2026-10-09T00:57:49.5600590Z [1m[92m   Compiling[0m universal-hash v0.6.1
+2026-10-09T00:57:49.5958389Z [1m[92m   Compiling[0m cipher v0.5.2
+2026-10-09T00:57:49.7282900Z [1m[92m   Compiling[0m rayon v1.12.0
+2026-10-09T00:57:49.7421376Z [1m[92m   Compiling[0m polyval v0.7.3
+2026-10-09T00:57:49.9000432Z [1m[92m   Compiling[0m twox-hash v2.1.2
+2026-10-09T00:57:49.9610465Z [1m[92m   Compiling[0m structured-zstd v0.0.49
+2026-10-09T00:57:50.6163137Z [1m[92m   Compiling[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+2026-10-09T00:57:51.6610703Z [1m[92m   Compiling[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+2026-10-09T00:57:53.1140620Z [1m[92m   Compiling[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+2026-10-09T00:57:54.5000982Z [1m[92m   Compiling[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+2026-10-09T00:57:55.9545916Z [1m[92m   Compiling[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+2026-10-09T00:58:01.8771222Z [1m[92m   Compiling[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+2026-10-09T00:58:02.5083391Z [1m[92m   Compiling[0m ghash v0.6.0
+2026-10-09T00:58:02.5482195Z [1m[92m   Compiling[0m ctr v0.10.1
+2026-10-09T00:58:02.6352948Z [1m[92m   Compiling[0m aes v0.9.3
+2026-10-09T00:58:02.9990387Z [1m[92m   Compiling[0m aead v0.6.1
+2026-10-09T00:58:03.0622279Z [1m[92m   Compiling[0m aes-gcm v0.11.1
+2026-10-09T00:58:03.1250418Z [1m[92m   Compiling[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+2026-10-09T00:58:03.7210364Z [1m[92m   Compiling[0m visual-hashing v1.0.0
+2026-10-09T00:58:04.0340916Z [1m[92m   Compiling[0m proc-macro2 v1.0.106
+2026-10-09T00:58:04.3300600Z [1m[92m   Compiling[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+2026-10-09T00:58:18.8031446Z [1m[92m   Compiling[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+2026-10-09T00:58:20.4540517Z [1m[92m   Compiling[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+2026-10-09T00:58:22.6440605Z [1m[92m   Compiling[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+2026-10-09T00:58:44.4040537Z [1m[92m   Compiling[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+2026-10-09T00:58:44.8950332Z [1m[92m   Compiling[0m quote v1.0.46
+2026-10-09T00:58:45.3560311Z [1m[92m   Compiling[0m syn v2.0.118
+2026-10-09T00:59:04.2770630Z [1m[92m   Compiling[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+2026-10-09T00:59:09.4230632Z [1m[92m   Compiling[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+2026-10-09T00:59:16.9801840Z [1m[92m   Compiling[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+2026-10-09T00:59:33.0080753Z [1m[92m   Compiling[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+2026-10-09T01:00:10.3540006Z [1m[92m   Compiling[0m clap_derive v4.6.1
+2026-10-09T01:00:13.0050702Z [1m[92m   Compiling[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+2026-10-09T01:00:20.5491372Z [1m[92m   Compiling[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+2026-10-09T01:00:27.0630428Z [1m[92m   Compiling[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+2026-10-09T01:00:33.3940907Z [1m[92m   Compiling[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+2026-10-09T01:00:35.4120565Z [1m[92m   Compiling[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+2026-10-09T01:00:38.1620539Z [1m[92m   Compiling[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+2026-10-09T01:00:38.4520163Z [1m[92m   Compiling[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+2026-10-09T01:00:41.9511921Z [1m[92m   Compiling[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+2026-10-09T01:00:43.2190791Z [1m[92m   Compiling[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+2026-10-09T01:00:46.0779824Z [1m[92m   Compiling[0m clap v4.6.1
+2026-10-09T01:00:46.1051079Z [1m[92m   Compiling[0m purrdf-cli v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cli)
+2026-10-09T01:00:47.2590858Z [1m[92m   Compiling[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+2026-10-09T01:00:48.0571873Z [1m[92m   Compiling[0m purrdf-alloc-probe v3.0.1 (/home/runner/work/purrdf/purrdf/crates/alloc-probe)
+2026-10-09T01:01:34.8790907Z [1m[92m    Finished[0m `test` profile [optimized] target(s) in 3m 46s
+2026-10-09T01:01:34.8838103Z [1m[92m     Running[0m tests/python_empty_graphs.rs (/home/runner/work/purrdf/purrdf/target/debug/build/purrdf-cli/796c836e25711eb1/out/python_empty_graphs-796c836e25711eb1)
+2026-10-09T01:01:34.8853083Z 
+2026-10-09T01:01:34.8853406Z running 1 test
+2026-10-09T01:01:34.9108701Z Installed native module: /home/runner/work/purrdf/purrdf/bindings/python/python/src/purrdf/purrdf_native.abi3.so
+2026-10-09T01:01:34.9109436Z test installed_empty_graph_modes ... ok
+2026-10-09T01:01:34.9109605Z 
+2026-10-09T01:01:34.9109743Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+2026-10-09T01:01:34.9109972Z 
+2026-10-09T01:01:34.9190294Z ##[group]Run make pydantic-oracle
+2026-10-09T01:01:34.9190511Z [36;1mmake pydantic-oracle[0m
+2026-10-09T01:01:34.9242796Z shell: /usr/bin/bash -e {0}
+2026-10-09T01:01:34.9243109Z env:
+2026-10-09T01:01:34.9243229Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T01:01:34.9243376Z   CARGO_INCREMENTAL: 0
+2026-10-09T01:01:34.9243506Z   CARGO_TERM_COLOR: always
+2026-10-09T01:01:34.9243637Z   CACHE_ON_FAILURE: false
+2026-10-09T01:01:34.9243765Z ##[endgroup]
+2026-10-09T01:01:34.9731666Z uv sync --project bindings/python --locked --no-install-project
+2026-10-09T01:01:34.9804376Z Resolved 107 packages in 0.85ms
+2026-10-09T01:01:34.9903512Z Uninstalled 1 package in 7ms
+2026-10-09T01:01:34.9903805Z  - purrdf==3.0.1 (from file:///home/runner/work/purrdf/purrdf/bindings/python)
+2026-10-09T01:01:34.9920497Z uv run --project bindings/python --no-sync python crates/shapes/tests/pydantic_oracle.py
+2026-10-09T01:04:35.6220489Z Pydantic oracle: 42 PEP 440 differential cases agree; flat 6-model and routed 8-model packages pass strict typing, live schemas, validation/alias probes, metadata/version linkage, and verified reverse SHACL import; 8 SHACL list-component probes agree; 12 temporal range-bound probes agree; 9 SHACL value-shape probes agree
+2026-10-09T01:04:35.6512876Z ##[group]Run make linkml-oracle
+2026-10-09T01:04:35.6513068Z [36;1mmake linkml-oracle[0m
+2026-10-09T01:04:35.6565393Z shell: /usr/bin/bash -e {0}
+2026-10-09T01:04:35.6565535Z env:
+2026-10-09T01:04:35.6565663Z   CARGO_HOME: /home/runner/.cargo
+2026-10-09T01:04:35.6565813Z   CARGO_INCREMENTAL: 0
+2026-10-09T01:04:35.6565943Z   CARGO_TERM_COLOR: always
+2026-10-09T01:04:35.6566079Z   CACHE_ON_FAILURE: false
+2026-10-09T01:04:35.6566215Z ##[endgroup]
+2026-10-09T01:04:35.7028998Z uv sync --project bindings/python --locked --no-install-project
+2026-10-09T01:04:35.7098159Z Resolved 107 packages in 0.84ms
+2026-10-09T01:04:35.7120553Z Checked 103 packages in 0.78ms
+2026-10-09T01:04:35.7133750Z uv run --project bindings/python --no-sync python crates/shapes/tests/linkml_oracle.py
+2026-10-09T01:04:38.7380325Z LinkML oracle: exact $defs and 16 instance probes agree; 18 located losses, 7 verified slot renames, reverse SHACL imports, and representable widening probes pass; 8 SHACL list-component probes agree; 12 temporal range-bound probes agree; 9 SHACL value-shape probes agree through has_member, whose non-scalar drop the generator alone makes on 1
+2026-10-09T01:04:39.1332978Z Post job cleanup.
+2026-10-09T01:04:39.3219390Z (node:6158) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-09T01:04:39.3326009Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-09T01:04:39.3376565Z Post job cleanup.
+2026-10-09T01:04:39.3933725Z [command]/usr/bin/git version
+2026-10-09T01:04:39.3963212Z git version 2.55.0
+2026-10-09T01:04:39.3983760Z Temporarily overriding HOME='/home/runner/work/_temp/28cac5f2-2920-4d73-b9e6-4325e5f581f6' before making global git config changes
+2026-10-09T01:04:39.3984432Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-09T01:04:39.3986878Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+2026-10-09T01:04:39.4012743Z Removing SSH command configuration
+2026-10-09T01:04:39.4016826Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-09T01:04:39.4043422Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-09T01:04:39.4223503Z Removing HTTP extra header
+2026-10-09T01:04:39.4227388Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-09T01:04:39.4253013Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-09T01:04:39.4430040Z Removing includeIf entries pointing to credentials config files
+2026-10-09T01:04:39.4435062Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-09T01:04:39.4460967Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-09T01:04:39.4747708Z Cleaning up orphan processes

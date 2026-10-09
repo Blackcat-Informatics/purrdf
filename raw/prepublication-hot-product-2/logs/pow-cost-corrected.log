@@ -1,0 +1,25 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 9.79s
+     Running tests/exact_tower.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-xsd/6d574a53f9baa031/out/exact_tower-6d574a53f9baa031)
+
+running 1 test
+test cost_estimates_bound_the_result ... FAILED
+
+failures:
+
+---- cost_estimates_bound_the_result stdout ----
+
+thread 'cost_estimates_bound_the_result' (1834042) panicked at crates/testkit/src/prop/runner.rs:398:9:
+property `exact_tower::cost_estimates_bound_the_result` failed after 260 passing case(s): assertion failed: q.heap_bytes() + r.heap_bytes() <= x.div_rem_cost(&y).bytes()
+minimal failing input: ("20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", "10000000000000000000000000000000010000000000000010000000000", 0)
+choice sequence (hex, for Choices::from_hex): 0008020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010001000100010001000000060101000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100010001000100010101000100010001000100010001000100010001000100010001000100010101000100010001000100010001000100010001000000
+seed: 0x5ee54421cbee6d96 (271 shrink(s)); rerun the same cases with PURRDF_PROP_SEED=0x5ee54421cbee6d96
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cost_estimates_bound_the_result
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p purrdf-xsd --test exact_tower`

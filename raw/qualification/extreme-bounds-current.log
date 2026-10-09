@@ -1,0 +1,9 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 15.75s
+     Running unittests src/lib.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-xsd/0386de0c7b24ad92/out/purrdf_xsd-0386de0c7b24ad92)
+
+running 1 test
+test exact::cost::comparison_bounds_tests::extreme_digit_and_scale_bounds_preserve_containment ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 311 filtered out; finished in 0.00s
+

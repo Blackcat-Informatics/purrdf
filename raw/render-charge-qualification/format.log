@@ -1,0 +1,12 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd/src/exact/cost.rs:133:
+     let words = limbs
+         .saturating_mul(3)
+         .saturating_add(groups.saturating_mul(3));
+-    Cost::new(work, limb_bytes(words).saturating_add(text.saturating_mul(6)))
++    Cost::new(
++        work,
++        limb_bytes(words).saturating_add(text.saturating_mul(6)),
++    )
+ }
+ 
+ /// Heap bytes of `limbs` binary `u64` limbs.

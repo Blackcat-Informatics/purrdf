@@ -1,0 +1,105 @@
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/shapes)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/geo)
+    Finished `test` profile [optimized] target(s) in 5m 50s
+     Running unittests src/lib.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-geo/9ff6a81dddb54d83/out/purrdf_geo-9ff6a81dddb54d83)
+
+running 87 tests
+test de9im::tests::every_slot_accepts_exactly_what_it_says ... ok
+test construct::tests::the_areal_centroid_is_exact_with_nothing_rounded ... ok
+test exact::tests::add_matches_the_i128_oracle ... ok
+test exact::tests::bit_len_shl_and_shr_agree_on_the_magnitude ... ok
+test exact::tests::arithmetic_crosses_the_limb_boundary_exactly ... ok
+test exact::tests::display_writes_a_sign_only_for_negatives ... ok
+test exact::tests::display_round_trips_through_from_decimal_digits ... ok
+test exact::tests::cancelling_limbs_leaves_no_trailing_zero_limb ... ok
+test exact::tests::div_rem_by_zero_is_none ... ok
+test exact::tests::div_rem_remainder_takes_the_sign_of_the_dividend ... ok
+test exact::tests::div_rem_handles_a_multi_limb_dividend ... ok
+test exact::tests::div_rem_truncates_toward_zero_like_rust ... ok
+test exact::tests::div_rem_satisfies_its_identity_across_the_table ... ok
+test exact::tests::equal_values_hash_and_compare_identically ... ok
+test exact::tests::from_decimal_digits_rejects_anything_but_a_digit_run ... ok
+test exact::tests::gcd_handles_a_multi_limb_pair ... ok
+test exact::tests::gcd_ignores_the_signs_of_its_operands ... ok
+test exact::tests::gcd_is_non_negative_and_absorbs_zero ... ok
+test exact::tests::mul_matches_the_i128_oracle ... ok
+test exact::tests::multiplying_by_zero_yields_canonical_zero ... ok
+test exact::tests::multi_limb_products_exceed_i128_and_still_render_exactly ... ok
+test exact::tests::ord_agrees_with_i128_on_representable_values ... ok
+test exact::tests::ord_is_the_numeric_order_across_signs_and_magnitudes ... ok
+test exact::tests::ord_puts_negatives_below_zero_below_positives_beyond_i128 ... ok
+test exact::tests::parse_decimal_accepts_the_whole_lexical_grammar ... ok
+test exact::tests::parse_decimal_is_bit_identical_across_lexical_spellings ... ok
+test exact::tests::parse_decimal_never_touches_a_float ... ok
+test exact::tests::parse_decimal_rejects_everything_outside_the_grammar ... ok
+test exact::tests::rat_from_decimal_is_the_exact_scaled_mantissa ... ok
+test exact::tests::rat_new_reduces_and_normalizes_the_sign ... ok
+test exact::tests::rat_predicates_report_the_normalized_form ... ok
+test exact::tests::round_to_scale_and_from_decimal_are_inverse_at_exact_scales ... ok
+test exact::tests::round_to_scale_rounds_half_to_even ... ok
+test exact::tests::rat_ordering_survives_arithmetic ... ok
+test exact::tests::shr_truncates_the_magnitude_toward_zero ... ok
+test exact::tests::sqrt_floor_is_exact_for_a_large_multi_limb_square ... ok
+test exact::tests::sqrt_floor_refuses_negatives_but_accepts_their_magnitudes ... ok
+test exact::tests::sub_matches_the_i128_oracle ... ok
+test exact::tests::rat_multiplication_and_division_are_inverses ... ok
+test exact::tests::every_operation_leaves_a_canonical_value ... ok
+test exact::tests::subtracting_a_value_from_itself_yields_canonical_zero ... ok
+test exact::tests::to_decimal_string_never_writes_a_negative_zero ... ok
+test exact::tests::rat_addition_and_subtraction_are_inverses ... ok
+test exact::tests::sqrt_floor_is_exact_around_every_small_perfect_square ... ok
+test exact::tests::to_decimal_string_rounds_half_to_even_at_the_boundary ... ok
+test exact::tests::to_decimal_string_suppresses_trailing_zeros_and_the_bare_point ... ok
+test exact::tests::to_f64_depends_only_on_the_value_not_on_how_it_was_built ... ok
+test exact::tests::to_f64_matches_the_rust_literal_for_inexact_values ... ok
+test exact::tests::to_f64_is_exact_on_powers_of_two ... ok
+test exact::tests::to_f64_rounds_ties_to_even_in_both_directions ... ok
+test exact::tests::to_f64_reaches_the_subnormal_range_exactly ... ok
+test exact::tests::to_i128_reports_the_representable_boundary ... ok
+test exact::tests::to_f64_underflows_to_positive_zero_and_overflows_to_infinity ... ok
+test exact::tests::zero_has_exactly_one_representation ... ok
+test functions::tests::the_topological_family_is_exactly_the_twenty_four_relations ... ok
+test geojson::tests::coordinates_are_exactly_the_decimals_that_were_written ... ok
+test geojson::tests::a_forty_significant_digit_coordinate_parses_exactly ... ok
+test measure::tests::a_collection_is_simple_exactly_when_every_member_is ... ok
+test measure::tests::distance_is_none_exactly_when_an_operand_is_empty ... ok
+test measure::tests::a_perfect_square_length_is_exact_at_the_internal_scale ... ok
+test geojson::tests::serialization_is_byte_exact_for_every_geometry_type ... ok
+test measure::tests::the_area_goldens_are_exact_rationals_not_approximations ... ok
+test measure::tests::the_bounding_box_is_the_exact_extreme_ordinates_and_is_none_for_an_empty_geometry ... ok
+test measure::tests::intersecting_geometries_are_at_distance_exactly_zero ... ok
+test measure::tests::the_distance_goldens_are_exact ... ok
+test relation::tests::the_legacy_default_geometry_alias_dereferences_exactly_as_the_current_one_does ... ok
+test relations::tests::each_family_holds_exactly_eight_relations ... ok
+test relations::tests::equals_is_exactly_within_and_contains ... ok
+test topology::locate::tests::a_ray_through_a_vertex_counts_it_exactly_once ... ok
+test topology::locate::tests::a_square_locates_its_interior_boundary_and_exterior_exactly ... ok
+test topology::locate::tests::the_horizontal_crossing_is_exact_and_strictly_straddling ... ok
+test topology::segment::tests::a_crossing_at_a_third_is_exact_rather_than_rounded ... ok
+test topology::segment::tests::a_proper_crossing_is_an_exact_rational_that_lies_on_both_segments ... ok
+test topology::segment::tests::midpoint_is_exact_and_planar ... ok
+test topology::segment::tests::orientation_is_the_exact_sign_of_the_cross_product ... ok
+test topology::segment::tests::the_internal_helpers_do_exactly_what_they_claim ... ok
+test exact::tests::to_f64_is_exact_on_small_integers_and_dyadic_fractions ... ok
+test wkt::tests::a_sixty_digit_coordinate_parses_exactly_and_is_not_refused ... ok
+test wkt::tests::coordinates_are_exactly_the_decimals_that_were_written ... ok
+test relation::tests::a_subject_with_two_satisfying_geometries_yields_exactly_one_row ... ok
+test wkt::tests::the_dimension_tag_and_empty_are_spaced_exactly ... ok
+test wkt::tests::the_round_trip_is_exact_for_numbers_a_float_would_lose ... ok
+test relation::tests::all_four_rewrite_branches_produce_rows_and_the_bag_is_exactly_complete ... ok
+test exact::tests::rat_arithmetic_is_associative_and_distributive ... ok
+test relation::tests::a_ceiling_yields_exactly_the_prefix_of_the_unbounded_answer ... ok
+test exact::tests::parse_decimal_caps_the_exponent_without_over_refusing ... ok
+test topology::relate::tests::the_exact_matrix_dominates_the_sampling_oracle_across_the_corpus ... ok
+
+test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 282 filtered out; finished in 0.13s
+

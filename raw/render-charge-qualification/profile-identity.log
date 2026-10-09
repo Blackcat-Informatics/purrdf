@@ -1,0 +1,9 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 43.78s
+     Running unittests src/lib.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-sparql-eval/0f1f025a3a622dc8/out/purrdf_sparql_eval-0f1f025a3a622dc8)
+
+running 1 test
+test governor::tests::profile_digest_changes_when_the_charge_schedule_changes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1420 filtered out; finished in 0.00s
+

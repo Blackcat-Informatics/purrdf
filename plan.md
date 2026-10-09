@@ -1,0 +1,10 @@
+# Shared binary integer delivery
+
+This resumes the accepted GREENFIELD portfolio contract and the complete issue intake. The source base is main `341ad5ae2cecc5de026047f86dcd1194aff25f10`. The existing geodesy u64 engine is reused in `purrdf_xsd::bigint::BigInt`; its source worktree and every staged/unstaged layer remain untouched.
+
+1. Replace the decimal-limb engine with the binary engine, preserving inline storage, reusable scratch and existing public BigInt API. Preserve numeric-tower inline i128 values and use one shared arithmetic/rounding home. Implement binary Karatsuba, including lopsided products, alongside the existing admitted schoolbook scratch path.
+2. Convert exact-tower resource accounting to binary limbs, with preallocation admission independent of decimal rendering. Advance the owning governor profile and regenerate its corpus through the existing generator. Preserve exact DivisionPolicy, F&O errors, deterministic answers and minimum answering ceilings.
+3. Qualify the actual caller closure: retained arithmetic/float oracle/inline/scratch and exact-tower tests, numeric aggregation/governor callers, native and wasm host answers, and matched existing small/large benchmark comparisons against main. Run required hygiene and normal hooks. Every failure is retained and fixed without weakening assertions.
+4. Obtain independent source/evidence review, publish the coherent change, qualify current hosted checks and integrate only through ghprsq. No separate binary engine, runtime dependency, giant geodesy merge, or partial completion claim is permitted.
+
+The ten-minute user priority request accelerated implementation; it does not authorize bypassing hooks or claiming unrun acceptance. The concrete initial blockers were missing public adapters, binary Karatsuba and binary resource accounting. The assigned implementer owns BigInt/storage/scratch/adapters; root owns cost/governor/corpus and final review/integration. One local build lane is used with eight jobs and private targets.

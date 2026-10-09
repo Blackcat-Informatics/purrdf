@@ -1,0 +1,17 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 2.98s
+     Running tests/exact_values.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-xsd/8e02a76dddb7a225/out/exact_values-8e02a76dddb7a225)
+
+running 9 tests
+test comparison_and_the_exact_order_see_every_digit ... ok
+test decimals_past_the_bounded_form_parse_exactly ... ok
+test data_ranges_and_value_identity_are_exact_at_any_size ... ok
+test cost_is_charged_for_every_tower_operation ... ok
+test integers_past_i128_parse_exactly_and_in_range_ones_stay_bounded ... ok
+test arithmetic_that_overflowed_now_returns_the_exact_value ... ok
+test rounding_functions_keep_the_family ... ok
+test derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not ... ok
+test division_follows_the_policy_and_refuses_only_what_it_must ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

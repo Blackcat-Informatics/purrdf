@@ -1,0 +1,48 @@
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 36.53s
+     Running tests/numeric_governance.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-sparql-eval/90722ac62c2f5320/out/numeric_governance-90722ac62c2f5320)
+
+running 11 tests
+test machine_word_numbers_charge_no_tower_work ... ok
+test a_non_default_division_policy_is_charged ... ok
+test a_products_growing_scale_is_charged_for_fuel ... ok
+test statistical_aggregates_are_charged ... ok
+test sum_and_avg_are_charged_for_their_chain ... ok
+test a_products_growing_scale_is_charged_for_memory_before_it_allocates ... ok
+test a_long_column_of_big_integers_sums_at_a_linear_cost ... ok
+test extremes_and_sorts_are_charged_for_their_comparisons ... ok
+test a_tower_operand_meeting_a_double_is_charged ... ok
+test unary_functions_and_casts_are_charged ... ok
+test a_comparison_that_aligns_is_charged ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s
+
+     Running tests/numeric_parallel_determinism.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-sparql-eval/a75bbcf70ed198f2/out/numeric_parallel_determinism-a75bbcf70ed198f2)
+
+running 10 tests
+test inclusive_fuel_boundary_keeps_full_values_and_all_dimensions ... ok
+test bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential ... ok
+test per_group_counts_trip_at_one_group ... ok
+test a_filter_over_exact_values_trips_at_one_row ... ok
+test a_scratch_ceiling_trips_at_one_row ... ok
+test an_optional_filter_over_exact_values_trips_at_one_row ... ok
+test a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip ... ok
+test per_group_statistical_aggregates_over_exact_values_trip_at_one_group ... ok
+test per_group_sums_over_exact_values_trip_at_one_group ... ok
+test a_projection_over_exact_values_trips_at_one_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+     Running tests/numeric_wasm_determinism.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-sparql-eval/644e325f5be3715b/out/numeric_wasm_determinism-644e325f5be3715b)
+
+running 2 tests
+test the_hand_answers_are_reproduced_on_this_target ... ok
+determinism-digest case=sparql-numeric-transcript digest=da3900a93723c4ac corpus_len=2727
+test the_numeric_transcript_digest_is_reproduced_on_this_target ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

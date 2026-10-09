@@ -1,0 +1,6 @@
+Running as unit: purrdf-477-xsd-check-retry-20261008.scope; invocation ID: 09d7cd2344a2438598e985286cff6b95
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.02s

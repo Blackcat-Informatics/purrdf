@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "fb827822265d431c9d7e8a48c8c272d79dc084ac",
+  "headRefName": "paudley/477-xsd-one-binary-arbitrary-precision",
+  "headRefOid": "a3eb972ad1313ff4b39fa080adb24ec00557ebe5",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 506,
+  "state": "OPEN",
+  "title": "Unify exact arithmetic on binary u64 limbs",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/506"
+}

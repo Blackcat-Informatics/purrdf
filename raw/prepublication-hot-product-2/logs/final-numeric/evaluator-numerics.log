@@ -1,0 +1,40 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 4.25s
+     Running tests/numeric_governance.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-sparql-eval/90722ac62c2f5320/out/numeric_governance-90722ac62c2f5320)
+
+running 11 tests
+test a_non_default_division_policy_is_charged ... ok
+test machine_word_numbers_charge_no_tower_work ... ok
+test a_products_growing_scale_is_charged_for_fuel ... ok
+test sum_and_avg_are_charged_for_their_chain ... ok
+test statistical_aggregates_are_charged ... ok
+test a_products_growing_scale_is_charged_for_memory_before_it_allocates ... ok
+test a_long_column_of_big_integers_sums_at_a_linear_cost ... ok
+test a_tower_operand_meeting_a_double_is_charged ... ok
+test unary_functions_and_casts_are_charged ... ok
+test extremes_and_sorts_are_charged_for_their_comparisons ... FAILED
+test a_comparison_that_aligns_is_charged ... FAILED
+
+failures:
+
+---- extremes_and_sorts_are_charged_for_their_comparisons stdout ----
+
+thread 'extremes_and_sorts_are_charged_for_their_comparisons' (1913734) panicked at crates/sparql-eval/tests/numeric_governance.rs:95:9:
+SELECT (STRLEN(STR(?v)) AS ?y) WHERE { VALUES ?v { "1.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+must be refused at 7708456417 Fuel, got Complete { result: Solutions { variables: ["y"], rows: [[Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })], [Some(Literal { lexical_form: "60003", datatype: "http://www.w3.org/2001/XMLSchema#integer", language: None, direction: None })]], aux: RdfDataset { arena: [], terms: [], quads: [], reifiers: [], annotations: [], locations: [], caps: RdfStoreCapabilities { named_graphs: false, quoted_triples: false, reifiers: false, annotations: false, source_locations: false, loss_records: false, lookaside: false }, term_index: {}, indexes: QuadIndexes { pos: OnceLock(<uninit>), osp: OnceLock(<uninit>), gspo: OnceLock(<uninit>), gpos: OnceLock(<uninit>), gosp: OnceLock(<uninit>) }, named_graphs: [], content_ids: {}, content_scheme: None, derivation_predicate: None, derivation_predicate_iri: None, predecessor_index: OnceLock(<uninit>), statement_graph_rows: OnceLock(<uninit>) } }, evidence: GovernorEvidence { consumed: ResourceVector([6990949345, 0, 0, 0, 0, 0, 0, 0]), limits: ResourceVector([7708456417, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 32, 18446744073709551615, 18446744073709551615]), tripped: None, silenced: [], expression_errors: [] }, relations: RelationIdentity { fingerprint: "", iris: [], witness: RelationWitness { entries: {} } } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_comparison_that_aligns_is_charged stdout ----
+
+thread 'a_comparison_that_aligns_is_charged' (1913728) panicked at crates/sparql-eval/tests/numeric_governance.rs:95:9:
+SELECT ("1.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+must be refused at 18108627577 Fuel, got Complete { result: Solutions { variables: ["y"], rows: [[Some(Literal { lexical_form: "true", datatype: "http://www.w3.org/2001/XMLSchema#boolean", language: None, direction: None })]], aux: RdfDataset { arena: [], terms: [], quads: [], reifiers: [], annotations: [], locations: [], caps: RdfStoreCapabilities { named_graphs: false, quoted_triples: false, reifiers: false, annotations: false, source_locations: false, loss_records: false, lookaside: false }, term_index: {}, indexes: QuadIndexes { pos: OnceLock(<uninit>), osp: OnceLock(<uninit>), gspo: OnceLock(<uninit>), gpos: OnceLock(<uninit>), gosp: OnceLock(<uninit>) }, named_graphs: [], content_ids: {}, content_scheme: None, derivation_predicate: None, derivation_predicate_iri: None, predecessor_index: OnceLock(<uninit>), statement_graph_rows: OnceLock(<uninit>) } }, evidence: GovernorEvidence { consumed: ResourceVector([17245758822, 0, 0, 0, 0, 0, 0, 0]), limits: ResourceVector([18108627577, 18446744073709551615, 18446744073709551615, 18446744073709551615, 18446744073709551615, 32, 18446744073709551615, 18446744073709551615]), tripped: None, silenced: [], expression_errors: [] }, relations: RelationIdentity { fingerprint: "", iris: [], witness: RelationWitness { entries: {} } } }
+
+
+failures:
+    a_comparison_that_aligns_is_charged
+    extremes_and_sorts_are_charged_for_their_comparisons
+
+test result: FAILED. 9 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.16s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test numeric_governance`

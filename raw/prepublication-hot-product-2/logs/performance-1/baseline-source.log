@@ -1,0 +1,131 @@
+tree 3ebb74dce49cac11b7945086c760dbc97bb62cca
+parent df2cec88b0f8e05e05ef3d01d14714474be6bbb1
+parent 8b1fdb1d51b6ae7c8f8fd668a2273b78f0e32c6f
+author Patrick Audley <paudley@blackcatinformatics.ca> 1791501808 -0600
+committer Patrick Audley <paudley@blackcatinformatics.ca> 1791501808 -0600
+gpgsig -----BEGIN PGP SIGNATURE-----
+ 
+ iHUEABYKAB0WIQSvXgAy90lM68qnu76bh8+7z9uvEQUCasgl8AAKCRCbh8+7z9uv
+ EfoBAQDZFAl0kINh+ikmEdka2ZjcOh0eVuj1YZU6fuQxGZiRLgEAunPlJVp8+4ln
+ eqw5gm4voW1CQmza/LPaOl2fhf1r2AI=
+ =mTnu
+ -----END PGP SIGNATURE-----
+
+Preserve RDFLib query context and Python row iteration (#504)
+
+Preserve RDFLib query context and Python row iteration
+
+Closes #454
+Closes #473
+
+## What changed
+
+RDFLib queries compile contextual mappings into native algebra, preserving graph scope, initial bindings, optional application and term identity. Python solution rows retain lazy iteration and positional cells while exposing the expected label protocol. Native callers share one evaluator.
+
+The final review fix canonicalizes selected graph values without resurrecting excluded physical roles, refuses contextual Apply through the on-demand cursor, carries supplied input certainty through projections while honoring alias shadowing, and keeps optional SERVICE summaries indirect. Compiler thaw preserves reachable-value semantics without weakening generic IF, ordinary Project, governors or property-function modes.
+
+The original published head passed hosted CI, documentation and CodeQL. Final review fixes passed 126 native controls, refreshed 24 graph/contextual callers, strict evaluator/Python all-target clippy, formatting and selected hygiene gates. Independent source/runtime review accepted all four fixes. Historical failed attempts remain preserved. Existing wheel protocol evidence covers unchanged Python transport and iteration; no new wheel run was made for this delta.
+
+Additional final-delta preparation cost/layout emission proof was not run and is not represented as passed. Patrick explicitly directed: "No checks, if the CI is green, merge it NOW", followed by "You'll publish that, push it then immediately ghprsq it." Invoke ghprsq immediately after publishing the locally qualified fixes, without further manual checks or waiting for new-head CI. Prior-head green CI does not qualify the new head.
+
+Main stays protected and final integration uses ghprsq with normal hooks and guards. All submissions to other repositories, including w3c-test, are excluded. The authoritative portfolio plan is .stage/portfolio-recovery-20261007/portfolio-execution.md. Selected evidence is .stage/rdflib-shim-algebra-level-reassignment; validation and settled remediation reports retain the exact scope of existing evidence. The commit/file inventory below is the seeded pre-review-fix snapshot; the final eight-file review fix is also included in this integration.
+
+## Commits squashed (5)
+
+- `08e7cd585` Align Python scoreboard with qualified conformance results
+- `239c3c1aa` Refresh generated conformance and SIMD measurements
+- `6ce3cc656` Complete contextual application policy fixtures
+- `56e636497` fix(rdflib): route graph queries through contextual algebra
+- `e72660e87` fix(sparql): compile contextual mappings through native algebra
+
+## Files
+
+```
+CHANGELOG.md                                       |    8 +
+ bindings/python/python/src/purrdf/__init__.pyi     |   31 +-
+ .../python/src/purrdf/compat/rdflib/graph.py       |   26 +-
+ .../python/src/purrdf/compat/rdflib/query.py       |   27 +-
+ bindings/python/src/py_store/quad_store.rs         |  243 ++-
+ bindings/python/src/py_store/query.rs              |  131 +-
+ bindings/python/tests/README.md                    |    3 +-
+ bindings/python/tests/test_contextual_mappings.py  |  227 +++
+ .../python/tests/test_solution_row_protocol.py     |  130 ++
+ crates/purrdf/src/reasoning.rs                     |   74 +
+ crates/rdf-core/src/small.rs                       |    4 +
+ crates/rdf/src/projections/dataset_description.rs  |   74 +
+ crates/shapes/src/prebinding.rs                    |   69 +
+ crates/shapes/src/profile.rs                       |    5 +
+ crates/shapes/src/shapes/parser/admission.rs       |   20 +-
+ crates/shapes/src/srl/reads.rs                     |   42 +
+ crates/slice/src/ownership.rs                      |   48 +-
+ crates/sparql-algebra/src/algebra.rs               |   40 +
+ crates/sparql-algebra/src/owned.rs                 |   51 +-
+ crates/sparql-algebra/src/parser.rs                |   60 +-
+ crates/sparql-algebra/src/parser/machine.rs        |  147 +-
+ crates/sparql-algebra/src/parser/triples.rs        |    2 +-
+ crates/sparql-algebra/src/retained_size.rs         |   31 +
+ crates/sparql-algebra/src/serialize.rs             |   20 +
+ crates/sparql-algebra/src/traits.rs                |   45 +-
+ crates/sparql-algebra/src/validate.rs              |  134 +-
+ crates/sparql-algebra/src/walk.rs                  |   83 +
+ crates/sparql-algebra/tests/iterative_traits.rs    |   71 +
+ .../tests/serializer_roundtrip_sweep.rs            |  102 ++
+ crates/sparql-eval/src/basic_profile.rs            |   16 +
+ crates/sparql-eval/src/bgp.rs                      |    8 +-
+ crates/sparql-eval/src/binop.rs                    |  648 +++++++-
+ crates/sparql-eval/src/blank_scope.rs              |   40 +-
+ crates/sparql-eval/src/cdt_agg.rs                  |    7 +
+ crates/sparql-eval/src/construct.rs                |    2 +
+ crates/sparql-eval/src/engine.rs                   |  213 ++-
+ crates/sparql-eval/src/eval.rs                     |  277 +++-
+ crates/sparql-eval/src/expr.rs                     |  302 +++-
+ crates/sparql-eval/src/governor/soundness.rs       |  144 +-
+ crates/sparql-eval/src/lib.rs                      |    3 +-
+ crates/sparql-eval/src/modifier.rs                 |  923 +++++++++++-
+ crates/sparql-eval/src/prebind_memo.rs             |    3 +
+ crates/sparql-eval/src/property_fn_eval.rs         |   27 +
+ crates/sparql-eval/src/property_fn_plan.rs         |  110 ++
+ crates/sparql-eval/src/rdflib.rs                   | 1263 ++++++++++++++++
+ crates/sparql-eval/src/remote.rs                   |   15 +
+ crates/sparql-eval/src/row_checkpoint.rs           |   74 +-
+ crates/sparql-eval/src/service_endpoints.rs        |   40 +-
+ crates/sparql-eval/src/substitute.rs               |   65 +-
+ .../tests/fixtures/contextual-mappings.json        |    1 +
+ crates/sparql-eval/tests/native_xpath.rs           |   53 +
+ crates/sparql-eval/tests/rdflib_contextual.rs      | 1585 ++++++++++++++++++++
+ crates/xsd/src/exact/cost.rs                       |   66 +-
+ docs/CONFORMANCE.md                                |   13 +-
+ docs/book/po/zh-Hans.po                            | 1180 ++++++++-------
+ docs/book/src/interop/rdflib.md                    |   15 +-
+ docs/book/src/sparql/querying.md                   |   14 +-
+ docs/design/purrdf-simd.md                         |    2 +-
+ 58 files changed, 8076 insertions(+), 981 deletions(-)
+```
+
+## Conflicts
+
+No new base synchronization or conflict resolution was performed for the final review fix. Previously qualified branch synchronization is recorded in the selected Stage reports.
+
+---
+
+Defect-Class: none
+
+
+parent_hashes: 8b1fdb1d51b6ae7c8f8fd668a2273b78f0e32c6f
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 504
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/504
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: df2cec88b0f8e05e05ef3d01d14714474be6bbb1
+GhpRsq-Head-Ref: paudley/454-rdflib-shim-algebra-level-reassignment
+GhpRsq-Head-OID: 8b1fdb1d51b6ae7c8f8fd668a2273b78f0e32c6f
+GhpRsq-Result-Tree: 3ebb74dce49cac11b7945086c760dbc97bb62cca
+GhpRsq-Parent-Hashes: 8b1fdb1d51b6ae7c8f8fd668a2273b78f0e32c6f
+GhpRsq-Squash-Notes-SHA256: dde90c8acfc53ff83d5cb2bb837ec800d33cb059eb949a2fc2e78eaf0596b0d6
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Tree: b154637734e250ba25519cb2fa9f9363e365dc96
+GhpRsq-Stage-Ref: refs/ghprsq/pr/504/stage
+GhpRsq-Stage-Files: 10803

@@ -1,0 +1,64 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/opt/purrdf-477-main-341ad/crates/hash)
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-alloc-probe v3.0.1 (/opt/purrdf-477-main-341ad/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/opt/purrdf-477-main-341ad/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/opt/purrdf-477-main-341ad/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/opt/purrdf-477-main-341ad/crates/xsd)
+    Finished `bench` profile [optimized] target(s) in 25.98s
+     Running benches/exact.rs (/opt/purrdf-477-qualification/baseline-build/release/build/purrdf-xsd/b197c7e7ec7c5883/out/exact-b197c7e7ec7c5883)
+xsd_exact_small/integer_add/exact time:   [7.817 µs 8.006 µs 8.349 µs]  mad: 286.1 ns  (10 samples × 12597 iterations)
+                         thrpt:  [122.6 Melem/s 127.9 Melem/s 131.0 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/integer_add/bounded time:   [16.08 µs 16.55 µs 16.94 µs]  mad: 241.5 ns  (10 samples × 6393 iterations)
+                         thrpt:  [60.45 Melem/s 61.88 Melem/s 63.69 Melem/s]
+xsd_exact_small/integer_mul/exact time:   [8.459 µs 8.518 µs 8.554 µs]  mad: 35.71 ns  (10 samples × 11888 iterations)
+                         thrpt:  [119.7 Melem/s 120.2 Melem/s 121.1 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/integer_mul/bounded time:   [16.13 µs 16.38 µs 16.96 µs]  mad: 354.5 ns  (10 samples × 6164 iterations)
+                         thrpt:  [60.39 Melem/s 62.50 Melem/s 63.50 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_add/exact time:   [10.51 µs 11.19 µs 11.81 µs]  mad: 647.4 ns  (10 samples × 8547 iterations)
+                         thrpt:  [86.73 Melem/s 91.50 Melem/s 97.41 Melem/s]
+xsd_exact_small/decimal_add/bounded time:   [16.96 µs 17.72 µs 19.25 µs]  mad: 810.0 ns  (10 samples × 4781 iterations)
+                         thrpt:  [53.20 Melem/s 57.79 Melem/s 60.38 Melem/s]
+xsd_exact_small/decimal_mul/exact time:   [6.674 µs 6.765 µs 7.845 µs]  mad: 110.2 ns  (10 samples × 12307 iterations)
+                         thrpt:  [130.5 Melem/s 151.4 Melem/s 153.4 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_mul/bounded time:   [16.91 µs 17.79 µs 18.87 µs]  mad: 736.8 ns  (10 samples × 5891 iterations)
+                         thrpt:  [54.27 Melem/s 57.57 Melem/s 60.54 Melem/s]
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+xsd_exact_small/decimal_div/exact time:   [27.44 µs 33.84 µs 37.04 µs]  mad: 3.371 µs  (10 samples × 2945 iterations)
+                         thrpt:  [27.65 Melem/s 30.26 Melem/s 37.32 Melem/s]
+xsd_exact_small/decimal_div/bounded time:   [24.40 µs 25.34 µs 27.56 µs]  mad: 1.076 µs  (10 samples × 3311 iterations)
+                         thrpt:  [37.15 Melem/s 40.41 Melem/s 41.96 Melem/s]
+xsd_exact_small/decimal_parse_canonical/exact time:   [95.13 µs 106.1 µs 133.4 µs]  mad: 11.57 µs  (10 samples × 990 iterations)
+                         thrpt:  [7.678 Melem/s 9.653 Melem/s 10.76 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_parse_canonical/bounded time:   [97.08 µs 102.5 µs 120.0 µs]  mad: 7.039 µs  (10 samples × 932 iterations)
+                         thrpt:  [8.535 Melem/s 9.991 Melem/s 10.55 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_to_f64/exact time:   [5.804 µs 6.539 µs 7.023 µs]  mad: 492.8 ns  (10 samples × 16113 iterations)
+                         thrpt:  [145.8 Melem/s 156.6 Melem/s 176.4 Melem/s]
+xsd_exact_small/decimal_to_f64/bounded time:   [6.179 µs 6.332 µs 6.629 µs]  mad: 185.2 ns  (10 samples × 15283 iterations)
+                         thrpt:  [154.5 Melem/s 161.7 Melem/s 165.7 Melem/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_growth/mul/40  time:   [64.81 ns 90.95 ns 134.8 ns]  mad: 28.54 ns  (10 samples × 1231224 iterations)
+                         thrpt:  [282.9 MiB/s 419.4 MiB/s 588.6 MiB/s]
+xsd_exact_growth/mul/400 time:   [3.655 µs 5.366 µs 8.490 µs]  mad: 1.743 µs  (10 samples × 11927 iterations)
+                         thrpt:  [44.93 MiB/s 71.09 MiB/s 104.4 MiB/s]
+xsd_exact_growth/mul/4000 time:   [170.1 µs 175.6 µs 179.1 µs]  mad: 4.301 µs  (10 samples × 484 iterations)
+                         thrpt:  [21.30 MiB/s 21.73 MiB/s 22.42 MiB/s]
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_growth/mul/40000 time:   [6.194 ms 6.262 ms 6.477 ms]  mad: 136.1 µs  (10 samples × 17 iterations)
+                         thrpt:  [5.889 MiB/s 6.091 MiB/s 6.159 MiB/s]
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 0 high mild, 1 high severe)
+
+18 benchmarks measured; 0 failed

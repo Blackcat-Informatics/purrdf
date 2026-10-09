@@ -1,0 +1,1345 @@
+00000000000a7ff0 d DW.ref.rust_eh_personality
+00000000000158d0 r GCC_except_table0
+00000000000159d4 r GCC_except_table0
+000000000001631c r GCC_except_table0
+00000000000182c4 r GCC_except_table0
+00000000000182d4 r GCC_except_table0
+00000000000158e0 r GCC_except_table1
+00000000000159e0 r GCC_except_table1
+0000000000016340 r GCC_except_table1
+0000000000015264 r GCC_except_table10
+000000000001595c r GCC_except_table10
+00000000000176dc r GCC_except_table10
+00000000000172cc r GCC_except_table100
+0000000000017908 r GCC_except_table102
+00000000000172f4 r GCC_except_table103
+0000000000017320 r GCC_except_table104
+000000000001734c r GCC_except_table105
+000000000001791c r GCC_except_table105
+000000000001596c r GCC_except_table11
+000000000001792c r GCC_except_table111
+000000000001738c r GCC_except_table112
+000000000001795c r GCC_except_table113
+00000000000173cc r GCC_except_table114
+0000000000017404 r GCC_except_table115
+000000000001798c r GCC_except_table116
+0000000000015274 r GCC_except_table12
+0000000000015a20 r GCC_except_table12
+00000000000176fc r GCC_except_table12
+00000000000179b0 r GCC_except_table120
+00000000000179c0 r GCC_except_table121
+00000000000179cc r GCC_except_table125
+00000000000179e0 r GCC_except_table128
+0000000000015290 r GCC_except_table13
+0000000000017a04 r GCC_except_table135
+00000000000151a0 r GCC_except_table14
+00000000000152ac r GCC_except_table14
+0000000000016668 r GCC_except_table14
+00000000000151b8 r GCC_except_table15
+0000000000015980 r GCC_except_table15
+0000000000017a10 r GCC_except_table150
+0000000000017a20 r GCC_except_table151
+0000000000017a58 r GCC_except_table152
+0000000000017aec r GCC_except_table153
+0000000000017b00 r GCC_except_table156
+000000000001598c r GCC_except_table16
+0000000000016674 r GCC_except_table16
+0000000000017b2c r GCC_except_table162
+0000000000017b44 r GCC_except_table165
+0000000000017b64 r GCC_except_table168
+00000000000166b8 r GCC_except_table17
+00000000000152c8 r GCC_except_table18
+00000000000166fc r GCC_except_table18
+0000000000017b98 r GCC_except_table186
+00000000000152e0 r GCC_except_table19
+00000000000159a4 r GCC_except_table19
+0000000000015a3c r GCC_except_table19
+000000000001673c r GCC_except_table19
+0000000000017c24 r GCC_except_table193
+0000000000017c74 r GCC_except_table196
+0000000000017d98 r GCC_except_table198
+0000000000015148 r GCC_except_table2
+00000000000151dc r GCC_except_table2
+00000000000158f0 r GCC_except_table2
+000000000001637c r GCC_except_table2
+000000000001742c r GCC_except_table2
+00000000000152f4 r GCC_except_table20
+000000000001676c r GCC_except_table20
+0000000000017dc4 r GCC_except_table200
+000000000001530c r GCC_except_table21
+0000000000015a5c r GCC_except_table21
+0000000000017724 r GCC_except_table21
+0000000000017de0 r GCC_except_table213
+0000000000017dfc r GCC_except_table215
+0000000000017e08 r GCC_except_table216
+0000000000017e14 r GCC_except_table219
+0000000000015320 r GCC_except_table22
+00000000000167b0 r GCC_except_table22
+0000000000017744 r GCC_except_table22
+0000000000017e28 r GCC_except_table220
+0000000000017e68 r GCC_except_table221
+0000000000017e80 r GCC_except_table222
+0000000000017e9c r GCC_except_table224
+0000000000017eb8 r GCC_except_table225
+0000000000015338 r GCC_except_table23
+00000000000159b8 r GCC_except_table23
+0000000000017754 r GCC_except_table23
+0000000000017ed0 r GCC_except_table230
+0000000000017ee8 r GCC_except_table232
+0000000000017f0c r GCC_except_table233
+0000000000017f1c r GCC_except_table234
+0000000000017f2c r GCC_except_table236
+000000000001534c r GCC_except_table24
+00000000000159c4 r GCC_except_table24
+0000000000017770 r GCC_except_table24
+0000000000017f50 r GCC_except_table243
+0000000000017f64 r GCC_except_table248
+000000000001536c r GCC_except_table25
+0000000000017f94 r GCC_except_table250
+0000000000017fbc r GCC_except_table251
+0000000000017fd8 r GCC_except_table256
+0000000000018038 r GCC_except_table257
+000000000001806c r GCC_except_table258
+0000000000015380 r GCC_except_table26
+00000000000167f4 r GCC_except_table26
+000000000001778c r GCC_except_table26
+0000000000018094 r GCC_except_table261
+00000000000180c0 r GCC_except_table262
+00000000000180dc r GCC_except_table264
+00000000000180f0 r GCC_except_table265
+0000000000018118 r GCC_except_table269
+0000000000015a70 r GCC_except_table27
+0000000000016818 r GCC_except_table27
+00000000000177a8 r GCC_except_table27
+0000000000018130 r GCC_except_table272
+0000000000018144 r GCC_except_table274
+0000000000018164 r GCC_except_table275
+00000000000153a0 r GCC_except_table28
+00000000000153e0 r GCC_except_table29
+0000000000016850 r GCC_except_table29
+0000000000018178 r GCC_except_table295
+0000000000015154 r GCC_except_table3
+0000000000015204 r GCC_except_table3
+000000000001590c r GCC_except_table3
+0000000000015a00 r GCC_except_table3
+00000000000164ec r GCC_except_table3
+0000000000017464 r GCC_except_table3
+0000000000015a84 r GCC_except_table30
+00000000000181a0 r GCC_except_table308
+00000000000181ac r GCC_except_table309
+0000000000016898 r GCC_except_table31
+00000000000181c0 r GCC_except_table310
+00000000000181d0 r GCC_except_table312
+00000000000181dc r GCC_except_table313
+0000000000018214 r GCC_except_table315
+000000000001823c r GCC_except_table318
+0000000000015aa4 r GCC_except_table32
+0000000000018260 r GCC_except_table323
+0000000000018274 r GCC_except_table329
+00000000000153f4 r GCC_except_table33
+00000000000177c4 r GCC_except_table33
+0000000000018288 r GCC_except_table334
+00000000000182ac r GCC_except_table339
+0000000000015428 r GCC_except_table34
+000000000001543c r GCC_except_table35
+0000000000016954 r GCC_except_table35
+0000000000015af0 r GCC_except_table36
+0000000000016988 r GCC_except_table36
+0000000000015b20 r GCC_except_table37
+00000000000177e0 r GCC_except_table37
+0000000000015474 r GCC_except_table38
+0000000000015c50 r GCC_except_table38
+00000000000169c0 r GCC_except_table38
+0000000000016a10 r GCC_except_table39
+000000000001522c r GCC_except_table4
+000000000001592c r GCC_except_table4
+0000000000016548 r GCC_except_table4
+00000000000174ac r GCC_except_table4
+0000000000016a20 r GCC_except_table40
+000000000001548c r GCC_except_table41
+0000000000015d20 r GCC_except_table41
+0000000000016b94 r GCC_except_table41
+00000000000177f0 r GCC_except_table41
+00000000000154b4 r GCC_except_table42
+0000000000015d50 r GCC_except_table42
+00000000000154c8 r GCC_except_table43
+0000000000015df8 r GCC_except_table43
+00000000000151cc r GCC_except_table44
+0000000000016bcc r GCC_except_table45
+0000000000016c00 r GCC_except_table47
+00000000000177fc r GCC_except_table47
+0000000000017810 r GCC_except_table48
+0000000000016c20 r GCC_except_table49
+0000000000015160 r GCC_except_table5
+0000000000015254 r GCC_except_table5
+000000000001593c r GCC_except_table5
+0000000000016618 r GCC_except_table5
+0000000000015e24 r GCC_except_table51
+0000000000016c6c r GCC_except_table51
+0000000000015e68 r GCC_except_table52
+0000000000016c94 r GCC_except_table52
+00000000000160c0 r GCC_except_table53
+0000000000016cdc r GCC_except_table53
+00000000000160e4 r GCC_except_table54
+0000000000016cec r GCC_except_table55
+0000000000016d14 r GCC_except_table56
+000000000001611c r GCC_except_table57
+0000000000016d3c r GCC_except_table57
+0000000000017834 r GCC_except_table57
+0000000000016130 r GCC_except_table58
+0000000000016ecc r GCC_except_table58
+0000000000016144 r GCC_except_table59
+0000000000015a14 r GCC_except_table6
+00000000000161b4 r GCC_except_table60
+0000000000017858 r GCC_except_table61
+00000000000161d0 r GCC_except_table62
+00000000000161fc r GCC_except_table63
+0000000000016218 r GCC_except_table64
+0000000000016234 r GCC_except_table65
+0000000000016244 r GCC_except_table66
+0000000000016ee4 r GCC_except_table66
+0000000000016254 r GCC_except_table67
+0000000000016ef8 r GCC_except_table67
+0000000000016270 r GCC_except_table68
+00000000000154dc r GCC_except_table69
+0000000000017528 r GCC_except_table7
+00000000000154f4 r GCC_except_table70
+0000000000016284 r GCC_except_table70
+00000000000162a0 r GCC_except_table71
+0000000000015524 r GCC_except_table72
+00000000000162b4 r GCC_except_table73
+0000000000016f0c r GCC_except_table73
+00000000000162c8 r GCC_except_table74
+0000000000016f34 r GCC_except_table75
+0000000000016f5c r GCC_except_table76
+0000000000017880 r GCC_except_table76
+0000000000017890 r GCC_except_table77
+000000000001630c r GCC_except_table78
+00000000000178a0 r GCC_except_table78
+0000000000016f80 r GCC_except_table79
+0000000000017554 r GCC_except_table8
+0000000000016fa8 r GCC_except_table80
+00000000000178b4 r GCC_except_table80
+0000000000017030 r GCC_except_table82
+0000000000017084 r GCC_except_table83
+00000000000170a8 r GCC_except_table84
+00000000000170e0 r GCC_except_table85
+0000000000017148 r GCC_except_table86
+0000000000017170 r GCC_except_table87
+00000000000178c8 r GCC_except_table87
+00000000000178d8 r GCC_except_table88
+00000000000171a4 r GCC_except_table89
+00000000000178e8 r GCC_except_table89
+0000000000015188 r GCC_except_table9
+00000000000176cc r GCC_except_table9
+00000000000178f8 r GCC_except_table90
+0000000000017210 r GCC_except_table94
+000000000001723c r GCC_except_table95
+0000000000017270 r GCC_except_table98
+00000000000a6248 d _DYNAMIC
+00000000000a6fc8 d _GLOBAL_OFFSET_TABLE_
+                 w _ITM_deregisterTMCloneTable
+                 w _ITM_registerTMCloneTable
+000000000006dbd3 T <str>::trim_start_matches::<&str>
+0000000000054680 t <core::option::Option<i128>>::map_or_else::<purrdf_xsd::exact::integer::Integer, <&purrdf_xsd::exact::integer::Integer as core::ops::arith::Neg>::neg::{closure#0}, <purrdf_xsd::exact::integer::Integer>::from_i128>
+0000000000054760 t <purrdf_xsd::bigint::BigInt>::combine_using::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000054fa0 t <purrdf_xsd::bigint::BigInt>::div_rem_using::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000056a90 t <purrdf_xsd::bigint::BigInt>::mul_power_using::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000056fc0 t <purrdf_xsd::bigint::BigInt>::strip_fives_wide_using::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000058080 t <purrdf_xsd::bigint::BigInt>::mul_using::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000058580 t <purrdf_xsd::bigint::BigInt>::shl_using::<purrdf_xsd::bigint::scratch::Unbounded>
+00000000000736e0 t <core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::get_or_init<<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::dwarf_and_unit::{closure#2}>::{closure#0}, !>
+0000000000073720 t <core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::get_or_init<<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::dwarf_and_unit::{closure#4}>::{closure#0}, !>
+0000000000073790 t <core::cell::once::OnceCell<core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::get_or_init<<addr2line::function::LazyFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::borrow::{closure#0}>::{closure#0}, !>
+0000000000073f70 t <core::cell::once::OnceCell<core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::get_or_init<<addr2line::function::LazyFunctions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::borrow::{closure#0}>::{closure#0}, !>
+0000000000075050 t <core::cell::once::OnceCell<core::result::Result<addr2line::line::Lines, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<addr2line::line::Lines, gimli::read::Error>>>::get_or_init<<addr2line::line::LazyLines>::borrow<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#0}>::{closure#0}, !>
+000000000003fd38 t <std::sync::once_lock::OnceLock<for<'a, 'b> fn(&'a [u8], &'b mut [u8], bool)>>::initialize::<<std::sync::once_lock::OnceLock<for<'a, 'b> fn(&'a [u8], &'b mut [u8], bool)>>::get_or_init<purrdf_hash::hex::selected_encode::{closure#0}>::{closure#0}, !>
+0000000000076f18 t <std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>
+0000000000076f6c t <std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::cleanup::{closure#0}>::{closure#0}, !>
+0000000000040ab4 t <std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::initialize::<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::get_or_init<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::try_insert::{closure#0}>::{closure#0}, !>
+0000000000040b0a t <std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::initialize::<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::get_or_init<purrdf_testkit::bench::global::{closure#0}>::{closure#0}, !>
+0000000000076fd0 T <core::io::error::Error>::new::<&str>
+00000000000770ec t <std::backtrace_rs::symbolize::gimli::Cache>::with_global::<std::backtrace_rs::symbolize::gimli::resolve::{closure#1}>
+000000000006dc49 t <rustc_demangle::v0::Printer>::print_backref::<<rustc_demangle::v0::Printer>::print_path::{closure#1}>
+000000000006dd37 t <rustc_demangle::v0::Printer>::print_backref::<<rustc_demangle::v0::Printer>::print_const::{closure#6}>
+000000000006de25 t <rustc_demangle::v0::Printer>::print_backref::<<rustc_demangle::v0::Printer>::print_type>
+000000000006df06 t <rustc_demangle::v0::Printer>::print_sep_list::<<rustc_demangle::v0::Printer>::print_const::{closure#2}>
+000000000006df9d t <rustc_demangle::v0::Printer>::print_sep_list::<<rustc_demangle::v0::Printer>::print_const::{closure#3}>
+000000000006e03f t <rustc_demangle::v0::Printer>::print_sep_list::<<rustc_demangle::v0::Printer>::print_const::{closure#5}>
+000000000006e218 t <rustc_demangle::v0::Printer>::print_sep_list::<<rustc_demangle::v0::Printer>::print_type>
+000000000006e2b5 t <rustc_demangle::v0::Printer>::print_sep_list::<<rustc_demangle::v0::Printer>::print_dyn_trait>
+000000000006e50f t <rustc_demangle::v0::Printer>::print_sep_list::<<rustc_demangle::v0::Printer>::print_generic_arg>
+000000000006e65b t <rustc_demangle::v0::Printer>::skipping_printing::<<rustc_demangle::v0::Printer>::print_path::{closure#0}>
+000000000006e6b1 t <rustc_demangle::v0::Printer>::print_quoted_escaped_chars::<core::iter::sources::once::Once<char>>
+000000000006e7af t <rustc_demangle::v0::Printer>::in_binder::<<rustc_demangle::v0::Printer>::print_type::{closure#0}>
+000000000006e935 t <rustc_demangle::v0::Printer>::in_binder::<<rustc_demangle::v0::Printer>::print_type::{closure#1}>
+000000000003bc27 T <alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Owned, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>>::new_internal::<alloc::alloc::Global>
+000000000003bca5 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert::<alloc::alloc::Global>
+000000000003be02 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::Edge>>::insert::<alloc::alloc::Global>
+000000000003bf4d T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u64, gimli::read::abbrev::Abbreviation>>::insert_entry::{closure#0}>
+000000000003c168 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::split::<alloc::alloc::Global>
+000000000003c1f9 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::KV>>::split::<alloc::alloc::Global>
+000000000007ad00 t <gimli::read::line::FileEntryFormat>::parse::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000003c372 T <alloc::collections::btree::map::BTreeMap<u64, gimli::read::abbrev::Abbreviation>>::get::<u64>
+000000000007afc0 t core::ptr::drop_glue::<addr2line::Context<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>
+000000000007b030 t core::ptr::drop_glue::<core::option::Option<gimli::read::line::IncompleteLineProgram<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>>
+0000000000040b60 t core::ptr::drop_glue::<core::option::Option<purrdf_testkit::bench::Global>>
+0000000000040c20 t core::ptr::drop_glue::<core::option::Option<(alloc::string::String, purrdf_testkit::bench::estimates::Estimates)>>
+000000000007b0b0 t core::ptr::drop_glue::<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>
+000000000007b1c0 t core::ptr::drop_glue::<core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>
+000000000007b260 t core::ptr::drop_glue::<core::result::Result<std::sync::poison::mutex::MutexGuard<()>, std::sync::poison::PoisonError<std::sync::poison::mutex::MutexGuard<()>>>>
+000000000007b2d0 t core::ptr::drop_glue::<core::result::Result<addr2line::line::Lines, gimli::read::Error>>
+0000000000058680 t core::ptr::drop_glue::<core::result::Result<purrdf_xsd::value::XsdValue, purrdf_xsd::value::XsdError>>
+000000000007b380 t core::ptr::drop_glue::<core::result::Result<&core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>, (&core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>, core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>)>>
+000000000007b390 t core::ptr::drop_glue::<core::result::Result<&core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>, (&core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>, core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>)>>
+000000000007b3e0 t core::ptr::drop_glue::<core::result::Result<&core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>, (&core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>, core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>)>>
+000000000007b4a0 t core::ptr::drop_glue::<core::result::Result<&core::result::Result<addr2line::line::Lines, gimli::read::Error>, (&core::result::Result<addr2line::line::Lines, gimli::read::Error>, core::result::Result<addr2line::line::Lines, gimli::read::Error>)>>
+000000000007b560 t core::ptr::drop_glue::<core::result::Result<(), core::io::error::Error>>
+000000000007b590 t core::ptr::drop_glue::<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>
+000000000007b820 t core::ptr::drop_glue::<addr2line::unit::SupUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>
+000000000007b8d0 t core::ptr::drop_glue::<addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>
+000000000007b990 t core::ptr::drop_glue::<addr2line::unit::SupUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>
+000000000007baf0 t core::ptr::drop_glue::<addr2line::function::LazyFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>
+000000000007bb40 t core::ptr::drop_glue::<alloc::vec::Vec<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>
+000000000007bc10 t core::ptr::drop_glue::<alloc::vec::Vec<addr2line::unit::SupUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>
+000000000007bda0 t core::ptr::drop_glue::<alloc::vec::Vec<addr2line::function::LazyFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>
+0000000000040c50 t core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+000000000007be40 t core::ptr::drop_glue::<alloc::vec::Vec<alloc::string::String>>
+0000000000040cc0 t core::ptr::drop_glue::<alloc::vec::Vec<purrdf_testkit::bench::Outcome>>
+0000000000031630 t core::ptr::drop_glue::<alloc::vec::Vec<purrdf_testkit::bench::Outcome>>
+000000000007bec0 t core::ptr::drop_glue::<alloc::vec::Vec<addr2line::line::LineSequence>>
+000000000007bf40 t core::ptr::drop_glue::<alloc::vec::Vec<std::ffi::os_str::OsString>>
+00000000000316e0 t core::ptr::drop_glue::<alloc::vec::Vec<(alloc::string::String, alloc::string::String)>>
+0000000000031760 t core::ptr::drop_glue::<alloc::vec::Vec<(purrdf_xsd::value::XsdValue, purrdf_xsd::value::XsdValue)>>
+0000000000031860 t core::ptr::drop_glue::<alloc::vec::Vec<(purrdf_xsd::exact::decimal::Decimal, purrdf_xsd::exact::decimal::Decimal)>>
+0000000000031960 t core::ptr::drop_glue::<alloc::vec::Vec<(purrdf_xsd::exact::integer::Integer, purrdf_xsd::exact::integer::Integer)>>
+000000000007bfc0 t core::ptr::drop_glue::<alloc::vec::Vec<u8>>
+000000000007bfe0 t core::ptr::drop_glue::<alloc::sync::ArcInner<gimli::read::dwarf::Dwarf<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>
+0000000000040d70 t core::ptr::drop_glue::<alloc::boxed::Box<dyn core::any::Any + core::marker::Send>>
+000000000007c040 t core::ptr::drop_glue::<alloc::boxed::Box<[addr2line::function::LazyFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>]>>
+000000000007c0d0 t core::ptr::drop_glue::<alloc::boxed::Box<[alloc::string::String]>>
+000000000007c140 t core::ptr::drop_glue::<gimli::read::line::LineRows<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, gimli::read::line::IncompleteLineProgram<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>, usize>>
+000000000007c1c0 t core::ptr::drop_glue::<gimli::read::dwarf::Unit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>
+000000000007c270 t core::ptr::drop_glue::<std::sync::reentrant_lock::ReentrantLockGuard<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>
+0000000000040dc0 t core::ptr::drop_glue::<alloc::collections::vec_deque::VecDeque<alloc::string::String>>
+0000000000040ed0 t core::ptr::drop_glue::<core::iter::adapters::skip::Skip<std::env::Args>>
+0000000000040f50 t core::ptr::drop_glue::<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::sources::once::Once<alloc::string::String>, core::option::IntoIter<alloc::string::String>>, core::option::IntoIter<alloc::string::String>>>
+000000000007c2b0 t core::ptr::drop_glue::<std::sync::poison::mutex::MutexGuard<alloc::vec::Vec<u8>>>
+0000000000040fa0 t core::ptr::drop_glue::<std::sync::poison::mutex::MutexGuard<purrdf_testkit::bench::Tally>>
+0000000000058780 t core::ptr::drop_glue::<std::sync::poison::mutex::MutexGuard<purrdf_xsd::bigint::scratch::FreeBuffers>>
+000000000007c320 t core::ptr::drop_glue::<std::sync::nonpoison::rwlock::RwLockReadGuard<std::panicking::Hook>>
+000000000007c350 t core::ptr::drop_glue::<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>
+000000000007c3c0 t core::ptr::drop_glue::<core::io::write::default_write_fmt::Adapter<std::sys::stdio::unix::Stderr>>
+000000000007c3f0 t core::ptr::drop_glue::<<alloc::collections::btree::map::IntoIter<_, _, _> as core::ops::drop::Drop>::drop::DropGuard<u64, core::result::Result<alloc::sync::Arc<gimli::read::abbrev::Abbreviations>, gimli::read::Error>, alloc::alloc::Global>>
+0000000000041000 t core::ptr::drop_glue::<<purrdf_testkit::bench::Bench>::record::{closure#0}>
+000000000007c480 t core::ptr::drop_glue::<std::sys::backtrace::_print_fmt::{closure#0}>
+000000000003fb80 t core::ptr::drop_glue::<panic_unwind::imp::Exception>
+0000000000041070 t core::ptr::drop_glue::<purrdf_testkit::bench::Sink>
+0000000000041410 t core::ptr::drop_glue::<purrdf_testkit::bench::Bench>
+0000000000031a60 t core::ptr::drop_glue::<purrdf_testkit::bench::Bench>
+0000000000031e60 t core::ptr::drop_glue::<purrdf_testkit::bench::FullId>
+00000000000414c0 t core::ptr::drop_glue::<purrdf_testkit::bench::Outcome>
+0000000000025050 t core::ptr::drop_glue::<alloc::string::String>
+0000000000041530 t core::ptr::drop_glue::<alloc::string::String>
+000000000007c4a0 t core::ptr::drop_glue::<alloc::string::String>
+0000000000031ed0 t core::ptr::drop_glue::<alloc::string::String>
+00000000000587e0 t core::ptr::drop_glue::<alloc::string::String>
+0000000000031ef0 t core::ptr::drop_glue::<purrdf_xsd::value::XsdError>
+0000000000031f30 t core::ptr::drop_glue::<purrdf_xsd::value::XsdValue>
+0000000000058800 t core::ptr::drop_glue::<purrdf_xsd::bigint::BigInt>
+0000000000031f80 t core::ptr::drop_glue::<purrdf_xsd::bigint::BigInt>
+000000000007c4c0 t core::ptr::drop_glue::<core::io::error::Error>
+000000000007c4e0 t core::ptr::drop_glue::<gimli::read::abbrev::Abbreviations>
+000000000007c8b0 t core::ptr::drop_glue::<gimli::read::abbrev::AbbreviationsCache>
+0000000000041550 t core::ptr::drop_glue::<purrdf_testkit::bench::args::Arguments>
+00000000000415f0 t core::ptr::drop_glue::<purrdf_testkit::bench::estimates::CountContext>
+000000000007c990 t core::ptr::drop_glue::<std::io::stdio::StderrLock>
+0000000000041620 t core::ptr::drop_glue::<std::io::stdio::StdoutLock>
+000000000007c9d0 t core::ptr::drop_glue::<std::ffi::os_str::OsString>
+000000000007c9f0 t core::ptr::drop_glue::<std::sys::backtrace::BacktraceLock>
+0000000000058850 t core::ptr::drop_glue::<purrdf_xsd::exact::error::ExactError>
+0000000000032060 t core::ptr::drop_glue::<purrdf_xsd::exact::error::ExactError>
+0000000000058870 t core::ptr::drop_glue::<purrdf_xsd::exact::decimal::Decimal>
+00000000000588c0 t core::ptr::drop_glue::<purrdf_xsd::exact::integer::Integer>
+0000000000058910 t core::ptr::drop_glue::<purrdf_xsd::bigint::scratch::Pooled>
+00000000000589a0 t core::ptr::drop_glue::<purrdf_xsd::bigint::storage::Mag>
+000000000007ca60 t core::ptr::drop_glue::<std::backtrace_rs::backtrace::libunwind::Bomb>
+000000000007ca80 t core::ptr::drop_glue::<std::backtrace_rs::symbolize::gimli::Library>
+000000000007cac0 t core::ptr::drop_glue::<std::backtrace_rs::symbolize::gimli::elf::Object>
+000000000007cad0 t core::ptr::drop_glue::<std::backtrace_rs::symbolize::gimli::stash::Stash>
+000000000007cba0 t core::ptr::drop_glue::<<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError>
+0000000000032080 t core::ptr::drop_glue::<(purrdf_xsd::value::XsdValue, purrdf_xsd::value::XsdValue)>
+00000000000320c0 t core::ptr::drop_glue::<(purrdf_xsd::exact::decimal::Decimal, purrdf_xsd::exact::decimal::Decimal)>
+0000000000032120 t core::ptr::drop_glue::<(purrdf_xsd::exact::integer::Integer, purrdf_xsd::exact::integer::Integer)>
+000000000007cbc0 t core::ptr::drop_glue::<(usize, std::backtrace_rs::symbolize::gimli::Mapping)>
+000000000007cca9 T core::panicking::assert_failed::<i32, i32>
+0000000000025b03 T core::panicking::assert_failed::<u64, u64>
+000000000007cce0 t std::rt::handle_rt_panic::<isize>
+000000000007cd10 t addr2line::line::render_file::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000007cfd0 t addr2line::function::name_entry::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000007d420 t addr2line::function::name_attr::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+0000000000041660 t alloc::str::join_generic_copy::<str, u8, alloc::string::String>
+00000000000589f0 t purrdf_xsd::bigint::mag_divmod_small::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000058c70 t purrdf_xsd::bigint::mag_mul_small_add::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000058f00 t purrdf_xsd::bigint::mag_shl::<purrdf_xsd::bigint::scratch::Unbounded>
+00000000000591f0 t purrdf_xsd::bigint::mag_shr::<purrdf_xsd::bigint::scratch::Unbounded>
+00000000000594d0 t purrdf_xsd::bigint::mag_sub::<purrdf_xsd::bigint::scratch::Unbounded>
+0000000000025b40 t core::fmt::float::float_to_decimal_common_exact::<f64>
+0000000000025f60 t core::fmt::float::float_to_decimal_common_shortest::<f64>
+000000000003d2ef T core::slice::index::range::<core::ops::range::RangeInclusive<usize>>
+000000000007d700 t gimli::read::line::parse_file_v5::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000007da10 t gimli::read::line::parse_attribute::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000007e2c0 t gimli::read::line::parse_directory_v5::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000007e3c0 t gimli::read::unit::skip_attributes::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>
+000000000007e960 T std::sys::backtrace::__rust_end_short_backtrace::<std::alloc::rust_oom::{closure#0}, !>
+000000000007e970 T std::sys::backtrace::__rust_end_short_backtrace::<std::panicking::panic_handler::{closure#0}, !>
+0000000000032180 t std::sys::backtrace::__rust_begin_short_backtrace::<fn() -> std::process::ExitCode, std::process::ExitCode>
+0000000000041870 t core::slice::sort::select::median_of_medians::<f64, <[f64]>::select_nth_unstable_by<<f64>::total_cmp>::{closure#0}>
+00000000000423b0 T core::slice::sort::stable::driftsort_main::<f64, <[f64]>::sort_by<<f64>::total_cmp>::{closure#0}, alloc::vec::Vec<f64>>
+000000000007e980 T core::slice::sort::unstable::ipnsort::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>
+000000000007ea80 T core::slice::sort::unstable::ipnsort::<addr2line::unit::UnitRange, <[addr2line::unit::UnitRange]>::sort_unstable_by_key<(u64, usize), <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#4}>::{closure#0}>
+000000000007ebc0 T core::slice::sort::unstable::ipnsort::<addr2line::function::FunctionAddress, <[addr2line::function::FunctionAddress]>::sort_unstable_by_key<u64, <addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#1}>::{closure#0}>
+000000000007ecc0 T core::slice::sort::unstable::ipnsort::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+000000000007ebc0 T core::slice::sort::unstable::ipnsort::<std::backtrace_rs::symbolize::gimli::elf::ParsedSym, <[std::backtrace_rs::symbolize::gimli::elf::ParsedSym]>::sort_unstable_by_key<u64, <std::backtrace_rs::symbolize::gimli::elf::Object>::parse::{closure#3}>::{closure#0}>
+000000000007ee00 T core::slice::sort::unstable::ipnsort::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+000000000007ef50 t std::sys::helpers::small_c_string::run_with_cstr_allocating::<core::option::Option<std::ffi::os_str::OsString>>
+000000000007eff0 t std::sys::helpers::small_c_string::run_with_cstr_allocating::<std::path::PathBuf>
+000000000007f090 t std::sys::helpers::small_c_string::run_with_cstr_allocating::<std::sys::fs::unix::File>
+000000000007f140 t std::sys::helpers::small_c_string::run_with_cstr_allocating::<std::sys::fs::unix::FileAttr>
+000000000007f2b0 t std::sys::helpers::small_c_string::run_with_cstr_allocating::<()>
+0000000000026280 t core::num::imp::dec2flt::lemire::compute_float::<f64>
+0000000000026400 t core::num::imp::dec2flt::lemire::compute_float::<f32>
+000000000007f350 t core::slice::sort::shared::pivot::median3_rec::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>
+000000000007f410 t core::slice::sort::shared::pivot::median3_rec::<addr2line::unit::UnitRange, <[addr2line::unit::UnitRange]>::sort_unstable_by_key<(u64, usize), <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#4}>::{closure#0}>
+000000000007f500 t core::slice::sort::shared::pivot::median3_rec::<addr2line::function::FunctionAddress, <[addr2line::function::FunctionAddress]>::sort_unstable_by_key<u64, <addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#1}>::{closure#0}>
+000000000007f5c0 t core::slice::sort::shared::pivot::median3_rec::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+000000000007f6b0 t core::slice::sort::shared::pivot::median3_rec::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+00000000000424b0 t core::slice::sort::shared::pivot::median3_rec::<f64, <[f64]>::select_nth_unstable_by<<f64>::total_cmp>::{closure#0}>
+0000000000042580 t core::slice::sort::shared::pivot::median3_rec::<f64, <[f64]>::sort_by<<f64>::total_cmp>::{closure#0}>
+000000000007f760 t core::slice::sort::shared::smallsort::sort8_stable::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+0000000000042650 t core::slice::sort::shared::smallsort::sort8_stable::<f64, <[f64]>::sort_by<<f64>::total_cmp>::{closure#0}>
+000000000007fae0 t core::slice::sort::shared::smallsort::small_sort_general::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>
+00000000000800d0 t core::slice::sort::shared::smallsort::small_sort_general::<addr2line::unit::UnitRange, <[addr2line::unit::UnitRange]>::sort_unstable_by_key<(u64, usize), <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#4}>::{closure#0}>
+0000000000080870 t core::slice::sort::shared::smallsort::small_sort_general::<addr2line::function::FunctionAddress, <[addr2line::function::FunctionAddress]>::sort_unstable_by_key<u64, <addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#1}>::{closure#0}>
+0000000000080de0 t core::slice::sort::shared::smallsort::small_sort_general::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+0000000000081560 t core::slice::sort::shared::smallsort::insertion_sort_shift_left::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>
+0000000000081620 t core::slice::sort::shared::smallsort::insertion_sort_shift_left::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+0000000000042b20 t core::slice::sort::shared::smallsort::insertion_sort_shift_left::<f64, <[f64]>::sort_by<<f64>::total_cmp>::{closure#0}>
+0000000000042bb0 t core::slice::sort::stable::drift::sort::<f64, <[f64]>::sort_by<<f64>::total_cmp>::{closure#0}>
+0000000000043290 T core::slice::sort::stable::quicksort::quicksort::<f64, <[f64]>::sort_by<<f64>::total_cmp>::{closure#0}>
+0000000000081710 T core::slice::sort::unstable::heapsort::heapsort::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>
+0000000000081820 T core::slice::sort::unstable::heapsort::heapsort::<addr2line::unit::UnitRange, <[addr2line::unit::UnitRange]>::sort_unstable_by_key<(u64, usize), <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#4}>::{closure#0}>
+00000000000819a0 T core::slice::sort::unstable::heapsort::heapsort::<addr2line::function::FunctionAddress, <[addr2line::function::FunctionAddress]>::sort_unstable_by_key<u64, <addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#1}>::{closure#0}>
+0000000000081aa0 T core::slice::sort::unstable::heapsort::heapsort::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+00000000000819a0 T core::slice::sort::unstable::heapsort::heapsort::<std::backtrace_rs::symbolize::gimli::elf::ParsedSym, <[std::backtrace_rs::symbolize::gimli::elf::ParsedSym]>::sort_unstable_by_key<u64, <std::backtrace_rs::symbolize::gimli::elf::Object>::parse::{closure#3}>::{closure#0}>
+0000000000081c10 T core::slice::sort::unstable::heapsort::heapsort::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+0000000000043eb0 t core::slice::sort::unstable::quicksort::partition::<f64, <[f64]>::select_nth_unstable_by<<f64>::total_cmp>::{closure#0}>
+0000000000081cf0 t core::slice::sort::unstable::quicksort::quicksort::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>
+0000000000082100 t core::slice::sort::unstable::quicksort::quicksort::<addr2line::unit::UnitRange, <[addr2line::unit::UnitRange]>::sort_unstable_by_key<(u64, usize), <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#4}>::{closure#0}>
+00000000000825f0 t core::slice::sort::unstable::quicksort::quicksort::<addr2line::function::FunctionAddress, <[addr2line::function::FunctionAddress]>::sort_unstable_by_key<u64, <addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#1}>::{closure#0}>
+0000000000082a00 t core::slice::sort::unstable::quicksort::quicksort::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+0000000000082ef0 t core::slice::sort::unstable::quicksort::quicksort::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>
+0000000000083770 t std::sys::thread_local::native::eager::destroy::<core::cell::Cell<core::option::Option<alloc::sync::Arc<std::sync::poison::mutex::Mutex<alloc::vec::Vec<u8>>>>>>
+0000000000025070 t <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+0000000000043ff0 t <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+0000000000083790 t <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+000000000002496d T <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+0000000000032190 t <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+00000000000596e0 t <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+000000000003fd90 t <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+0000000000083820 t std::panicking::catch_unwind::do_catch::<std::rt::lang_start_internal::{closure#0}::{closure#0}::{closure#0}, ()>
+00000000000838a0 t alloc::io::read::default_read_to_end::small_probe_read::<std::fs::File>
+00000000000839c0 t alloc::io::read::default_read_to_end::small_probe_read::<&std::fs::File>
+00000000000250f0 t alloc::io::error::custom_owner_from_box::drop_box_raw::<dyn core::error::Error + core::marker::Sync + core::marker::Send>
+0000000000025150 t alloc::io::error::custom_owner_from_box::drop_box_raw::<core::io::error::Custom>
+0000000000083ae0 t <u8 as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>
+000000000003fe00 t <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<for<'a, 'b> fn(&'a [u8], &'b mut [u8], bool)>>::initialize<<std::sync::once_lock::OnceLock<for<'a, 'b> fn(&'a [u8], &'b mut [u8], bool)>>::get_or_init<purrdf_hash::hex::selected_encode::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
+0000000000083b60 t <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
+0000000000083be0 t <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::cleanup::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
+0000000000044070 t <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::initialize<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::get_or_init<purrdf_testkit::bench::global::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
+0000000000044200 t <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::initialize<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::get_or_init<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::try_insert::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
+0000000000083c30 t <std::sync::once::Once>::call_once::<std::rt::cleanup::{closure#0}>::{closure#0}
+0000000000032200 t std::rt::lang_start::<std::process::ExitCode>::{closure#0}
+0000000000083e70 t std::thread::current::with_current_name::<std::panicking::default_hook::{closure#0}::{closure#0}, ()>::{closure#0}
+0000000000084150 t std::rt::lang_start_internal::{closure#0}::{closure#0}::{closure#1}
+0000000000084180 t std::sys::fs::rename::{closure#0}::{closure#0}
+00000000000841d0 t std::sys::backtrace::_print_fmt::{closure#1}::{closure#0}
+0000000000032210 t exact::bench_small::{closure#4}
+00000000000324d0 t exact::bench_small::{closure#5}
+0000000000032820 t exact::bench_small::{closure#6}
+0000000000032ae0 t exact::bench_small::{closure#7}
+0000000000032e30 t exact::bench_small::{closure#8}
+0000000000033110 t exact::bench_small::{closure#9}
+0000000000033460 t exact::bench_small::{closure#10}
+0000000000033a20 t exact::bench_small::{closure#11}
+0000000000033d70 t exact::bench_small::{closure#12}
+00000000000340f0 t exact::bench_small::{closure#13}
+0000000000034400 t exact::bench_small::{closure#14}
+0000000000034860 t exact::bench_small::{closure#15}
+0000000000034b20 t exact::bench_small::{closure#16}
+0000000000034d50 t exact::bench_small::{closure#17}
+0000000000034ed0 t exact::bench_growth::{closure#0}
+0000000000035050 t exact::bench_growth::{closure#2}
+0000000000035350 t exact::bench_growth::{closure#3}
+00000000000355d0 t exact::bench_growth::{closure#4}
+0000000000035900 t exact::bench_growth::{closure#5}
+0000000000035af0 t exact::bench_growth::{closure#1}
+0000000000035c70 t exact::small_decimals::{closure#0}
+0000000000035f00 t exact::bench_karatsuba::{closure#0}
+00000000000360d0 t exact::bench_karatsuba::{closure#1}
+0000000000036240 t exact::scaled_decimals::{closure#0}
+00000000000364f0 t exact::bench_fine_products::{closure#0}
+0000000000036840 t exact::bench_fine_products::{closure#1}
+0000000000084450 t <addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::find_function_or_location::{closure#0}
+0000000000059760 t <purrdf_xsd::bigint::BigInt>::mul_fast::{closure#0}
+000000000006eab1 t <rustc_demangle::v0::Printer>::print_type::{closure#0}
+00000000000442d0 t <purrdf_testkit::bench::Bench>::run::{closure#0}
+00000000000847a0 t <std::sys::fs::unix::DirBuilder>::mkdir::{closure#0}
+0000000000084800 t std::alloc::rust_oom::{closure#0}
+000000000008482c t std::panicking::default_hook::{closure#0}
+0000000000084960 t std::panicking::panic_handler::{closure#0}
+0000000000059aa0 t purrdf_xsd::numeric::parse_decimal::{closure#2}
+0000000000044e10 t core::str::pattern::simd_contains::{closure#2}
+00000000000849f0 t core::str::pattern::simd_contains::{closure#2}
+0000000000084ae0 t std::sys::fs::rename::{closure#0}
+0000000000084c90 t std::sys::backtrace::_print_fmt::{closure#0}
+0000000000084cb0 t std::sys::backtrace::_print_fmt::{closure#1}
+0000000000084e00 t std::sys::personality::gcc::find_eh_action::{closure#0}
+0000000000084e10 t std::sys::personality::gcc::find_eh_action::{closure#1}
+0000000000084e20 t std::sys::env::unix::getenv::{closure#0}
+0000000000084f50 t std::sys::thread_local::destructors::list::register::{closure#0}
+000000000003fe90 t <<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<for<'a, 'b> fn(&'a [u8], &'b mut [u8], bool)>>::initialize<<std::sync::once_lock::OnceLock<for<'a, 'b> fn(&'a [u8], &'b mut [u8], bool)>>::get_or_init<purrdf_hash::hex::selected_encode::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}
+0000000000084f80 t <<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}
+0000000000085000 t <<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::cleanup::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}
+0000000000044f00 t <<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::initialize<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::get_or_init<purrdf_testkit::bench::global::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}
+0000000000044f20 t <<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::initialize<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::get_or_init<<std::sync::once_lock::OnceLock<purrdf_testkit::bench::Global>>::try_insert::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}
+0000000000085050 t <<std::sync::once::Once>::call_once<std::rt::cleanup::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}
+0000000000036b90 t <std::rt::lang_start<std::process::ExitCode>::{closure#0} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+0000000000085070 t <std::sys::backtrace::_print_fmt::{closure#1}::{closure#0} as core::ops::function::FnOnce<(&std::backtrace_rs::symbolize::Symbol,)>>::call_once::{shim:vtable#0}
+0000000000036ba0 t <exact::bench_small::{closure#4} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036bc0 t <exact::bench_small::{closure#5} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036be0 t <exact::bench_small::{closure#6} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036c00 t <exact::bench_small::{closure#7} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036c20 t <exact::bench_small::{closure#8} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036c40 t <exact::bench_small::{closure#9} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036c60 t <exact::bench_small::{closure#10} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036c80 t <exact::bench_small::{closure#11} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036ca0 t <exact::bench_small::{closure#12} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036cc0 t <exact::bench_small::{closure#13} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036ce0 t <exact::bench_small::{closure#14} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036d00 t <exact::bench_small::{closure#15} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036d20 t <exact::bench_small::{closure#16} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000036f50 t <exact::bench_small::{closure#17} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+00000000000370d0 t <exact::bench_growth::{closure#0} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000037250 t <exact::bench_growth::{closure#2} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000037270 t <exact::bench_growth::{closure#3} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000037290 t <exact::bench_growth::{closure#4} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+00000000000372b0 t <exact::bench_growth::{closure#5} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+00000000000374a0 t <exact::bench_growth::{closure#1} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000037620 t <exact::bench_karatsuba::{closure#0} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+00000000000377f0 t <exact::bench_karatsuba::{closure#1} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000037960 t <exact::bench_fine_products::{closure#0} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000037980 t <exact::bench_fine_products::{closure#1} as core::ops::function::FnOnce<(&mut purrdf_testkit::bench::Bencher,)>>::call_once::{shim:vtable#0}
+0000000000085080 t <std::sys::backtrace::_print_fmt::{closure#0} as core::ops::function::FnOnce<(&mut core::fmt::Formatter, std::backtrace_rs::types::BytesOrWideString)>>::call_once::{shim:vtable#0}
+0000000000085100 t <std::sys::backtrace::_print_fmt::{closure#1} as core::ops::function::FnOnce<(&std::backtrace_rs::backtrace::Frame,)>>::call_once::{shim:vtable#0}
+0000000000085110 t <std::sys::personality::gcc::find_eh_action::{closure#0} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+0000000000085120 t <std::sys::personality::gcc::find_eh_action::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+0000000000085130 T __rustc::rust_panic
+0000000000024880 T __rustc::__rust_alloc
+00000000000248d0 T __rustc::__rust_realloc
+0000000000085180 T __rustc::__rust_drop_panic
+00000000000851b0 T __rustc::rust_begin_unwind
+000000000003fbe0 T __rustc::__rust_start_panic
+000000000003fc80 T __rustc::__rust_panic_cleanup
+00000000000851d0 T __rustc::__rust_foreign_exception
+0000000000085200 T __rustc::__rust_alloc_error_handler
+000000000006ef77 T rustc_demangle::demangle
+00000000000379a0 t exact::digit_string
+0000000000037b40 t exact::scaled_decimals
+0000000000037cf0 t exact::main
+0000000000037d10 t exact::benches
+0000000000024c80 T <adler2::Adler32>::write_slice
+0000000000085220 t <addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::find_function_or_location
+0000000000025190 T <alloc::string::String>::from_utf8_lossy
+0000000000059b40 T <purrdf_xsd::value::XsdValue>::to_exact_decimal
+0000000000059e40 T <purrdf_xsd::value::XsdValue>::to_exact_integer
+0000000000059fa0 T <purrdf_xsd::bigint::BigInt>::from_parts
+000000000005a0f0 T <purrdf_xsd::bigint::BigInt>::div_rem_u64
+000000000005a5b0 T <purrdf_xsd::bigint::BigInt>::trailing_zeros
+000000000005a6e0 T <purrdf_xsd::bigint::BigInt>::from_decimal_digits
+000000000005ac00 T <purrdf_xsd::bigint::BigInt>::gcd
+000000000005ba40 T <purrdf_xsd::bigint::BigInt>::neg
+000000000005bb70 T <purrdf_xsd::bigint::BigInt>::to_i128
+000000000005bc80 T <purrdf_xsd::bigint::BigInt>::mul_pow10
+000000000005be30 T <purrdf_xsd::numeric::Decimal>::canonical_lexical
+0000000000026570 t <char>::is_assigned
+000000000006f9ff t <char>::is_assigned
+00000000000265e0 t <char>::escape_debug_ext
+000000000006fa6e t <char>::escape_debug_ext
+0000000000044ff0 t <purrdf_testkit::bench::store::Store>::record_path
+0000000000045400 t <purrdf_testkit::bench::store::Store>::write
+00000000000468d0 T <purrdf_testkit::bench::estimates::Estimates>::from_json
+000000000005c260 t <purrdf_xsd::exact::decimal::Decimal>::ratio_bits
+000000000005c4f0 T <purrdf_xsd::exact::decimal::Decimal>::div
+000000000005e490 T <purrdf_xsd::exact::decimal::Decimal>::new
+000000000005e810 t <purrdf_xsd::exact::decimal::Decimal>::beyond
+000000000005ed40 T <purrdf_xsd::exact::decimal::Decimal>::to_f32
+000000000005ee30 t <purrdf_xsd::exact::decimal::Decimal>::aligned
+000000000005f470 T <purrdf_xsd::exact::decimal::Decimal>::try_mul
+000000000005f660 T <purrdf_xsd::exact::integer::Integer>::from_bigint
+000000000005f760 T <purrdf_xsd::exact::integer::Integer>::abs
+000000000005f8f0 T <purrdf_xsd::exact::integer::Integer>::div_rem
+000000000005fe80 T <purrdf_xsd::exact::integer::Integer>::to_bigint
+0000000000060010 T <purrdf_xsd::bigint::BigInt>::from_digits
+0000000000060190 T <purrdf_xsd::bigint::BigInt>::div_rem_pow10
+00000000000606a0 T <purrdf_xsd::bigint::BigInt>::decimal_digits
+0000000000060810 T <purrdf_xsd::bigint::BigInt>::trailing_decimal_zeros
+00000000000609d0 T <purrdf_xsd::bigint::BigInt>::to_f32
+0000000000060c50 T <purrdf_xsd::bigint::BigInt>::to_f64
+0000000000060ed0 T <purrdf_xsd::bigint::BigInt>::mul_fast
+00000000000633e0 t <purrdf_xsd::bigint::storage::Mag>::pop
+0000000000063730 T <purrdf_xsd::bigint::storage::Mag>::push
+0000000000063930 t <purrdf_xsd::bigint::storage::Mag>::resize
+0000000000085800 t <std::backtrace_rs::symbolize::gimli::Mapping>::load_dwarf_package
+0000000000085b50 t <std::backtrace_rs::symbolize::gimli::Mapping>::new_debug
+0000000000086850 t <std::backtrace_rs::symbolize::gimli::stash::Stash>::allocate
+0000000000086910 t <std::sys::thread_local::key::racy::LazyKey>::lazy_init
+00000000000869e0 t <std::sys::pal::unix::time::Timespec>::sub_timespec
+0000000000086aa0 t <std::sys::pal::unix::time::Timespec>::now
+0000000000086bb0 T <std::sys::sync::mutex::futex::Mutex>::lock_contended
+0000000000086ca0 T <std::sys::sync::rwlock::futex::RwLock>::read_contended
+0000000000086e40 T <std::sys::sync::rwlock::futex::RwLock>::wake_writer_or_readers
+0000000000026830 t <u128>::_fmt_inner
+0000000000086f20 t <gimli::read::dwarf::Dwarf<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::attr_string
+0000000000087130 T <std::sys::sync::once::futex::Once>::call
+0000000000087380 T <std::path::Path>::_strip_prefix
+0000000000087670 T <std::path::Path>::_join
+000000000006fc8c t <rustc_demangle::v0::HexNibbles>::try_parse_uint
+00000000000877f0 t <addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse_children
+000000000004a1c0 T <purrdf_testkit::bench::args::Arguments>::from_env
+000000000004bb90 T <purrdf_testkit::bench::FullId>::new
+000000000006fd7f t <rustc_demangle::v0::Parser>::integer_62
+000000000006fe34 t <rustc_demangle::v0::Parser>::hex_nibbles
+000000000006feec t <rustc_demangle::v0::Parser>::opt_integer_62
+000000000006ff5d t <rustc_demangle::v0::Parser>::ident
+0000000000070135 t <rustc_demangle::v0::Parser>::backref
+0000000000088a30 t <addr2line::lookup::LoopingLookup<core::result::Result<addr2line::frame::FrameIter<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>, addr2line::lookup::MappedLookup<core::result::Result<(core::option::Option<&addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>, core::option::Option<addr2line::frame::Location>), gimli::read::Error>, addr2line::lookup::SimpleLookup<core::result::Result<(addr2line::DebugFile, gimli::read::dwarf::UnitRef<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>), gimli::read::Error>, gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, <addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::dwarf_and_unit::{closure#6}>, <addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::find_function_or_location::{closure#0}>, <addr2line::Context<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::find_frames::{closure#0}>>::new_lookup
+0000000000026c60 T <core::fmt::builders::DebugStruct>::field
+0000000000026df0 T <core::num::imp::bignum::Big32x40>::mul_digits
+0000000000027140 T <core::num::imp::bignum::Big32x40>::mul_pow2
+000000000003c3e6 T <alloc::raw_vec::RawVecInner>::deallocate
+0000000000027340 T <core::ffi::c_str::CStr>::from_bytes_with_nul
+000000000004bec0 t <purrdf_testkit::bench::estimates::Reader>::float
+000000000004bfc0 t <purrdf_testkit::bench::estimates::Reader>::lexeme
+000000000004c1e0 t <purrdf_testkit::bench::estimates::Reader>::string
+000000000004c680 t <purrdf_testkit::bench::estimates::Reader>::integer
+00000000000701b0 t <rustc_demangle::v0::Printer>::print_path
+00000000000708b3 t <rustc_demangle::v0::Printer>::print_type
+0000000000070e14 t <rustc_demangle::v0::Printer>::print_const
+00000000000714a3 t <rustc_demangle::v0::Printer>::print_const_uint
+0000000000071600 t <rustc_demangle::v0::Printer>::print_const_str_literal
+0000000000071870 t <rustc_demangle::v0::Printer>::print_lifetime_from_index
+0000000000071961 t <rustc_demangle::v0::Printer>::print_path_maybe_open_generics
+0000000000071aac t <rustc_demangle::v0::Printer>::print_pat
+0000000000088fc0 T <alloc::raw_vec::RawVec<alloc::vec::Vec<u8>>>::grow_one
+0000000000063a40 T <alloc::raw_vec::RawVec<alloc::sync::Arc<alloc::vec::Vec<u64>>>>::grow_one
+0000000000089030 T <alloc::raw_vec::RawVec<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::grow_one
+00000000000890a0 T <alloc::raw_vec::RawVec<addr2line::unit::SupUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::grow_one
+0000000000089110 T <alloc::raw_vec::RawVec<addr2line::function::LazyFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::grow_one
+0000000000089180 T <alloc::raw_vec::RawVec<addr2line::function::InlinedFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::grow_one
+00000000000891f0 T <alloc::raw_vec::RawVec<gimli::read::line::FileEntry<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>>::grow_one
+0000000000089260 T <alloc::raw_vec::RawVec<gimli::read::unit::AttributeValue<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>>::grow_one
+00000000000892d0 T <alloc::raw_vec::RawVec<gimli::read::unit::Attribute<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::grow_one
+0000000000088fc0 T <alloc::raw_vec::RawVec<alloc::string::String>>::grow_one
+000000000004c820 T <alloc::raw_vec::RawVec<purrdf_testkit::bench::Outcome>>::grow_one
+0000000000089340 T <alloc::raw_vec::RawVec<addr2line::line::LineSequence>>::grow_one
+0000000000088fc0 T <alloc::raw_vec::RawVec<addr2line::line::LineRow>>::grow_one
+0000000000089340 T <alloc::raw_vec::RawVec<addr2line::unit::UnitRange>>::grow_one
+0000000000088fc0 T <alloc::raw_vec::RawVec<addr2line::function::FunctionAddress>>::grow_one
+0000000000089340 T <alloc::raw_vec::RawVec<addr2line::function::InlinedFunctionAddress>>::grow_one
+00000000000893b0 T <alloc::raw_vec::RawVec<gimli::read::line::FileEntryFormat>>::grow_one
+000000000003c428 T <alloc::raw_vec::RawVec<gimli::read::abbrev::Abbreviation>>::grow_one
+000000000003c459 T <alloc::raw_vec::RawVec<gimli::read::abbrev::AttributeSpecification>>::grow_one
+0000000000088fc0 T <alloc::raw_vec::RawVec<std::ffi::os_str::OsString>>::grow_one
+0000000000089420 T <alloc::raw_vec::RawVec<std::backtrace_rs::symbolize::gimli::Library>>::grow_one
+0000000000089180 T <alloc::raw_vec::RawVec<std::backtrace_rs::symbolize::gimli::parse_running_mmaps::MapsEntry>>::grow_one
+0000000000089490 T <alloc::raw_vec::RawVec<std::backtrace_rs::symbolize::gimli::mmap::Mmap>>::grow_one
+0000000000089500 T <alloc::raw_vec::RawVec<&addr2line::function::InlinedFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::grow_one
+0000000000089490 T <alloc::raw_vec::RawVec<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)>>::grow_one
+0000000000089570 T <alloc::raw_vec::RawVec<(*mut u8, unsafe extern "C" fn(*mut u8)), std::alloc::System>>::grow_one
+000000000004c890 T <alloc::raw_vec::RawVec<f64>>::grow_one
+000000000004c890 T <alloc::raw_vec::RawVec<i64>>::grow_one
+0000000000063a40 T <alloc::raw_vec::RawVec<u64>>::grow_one
+000000000003c48a T <gimli::read::abbrev::Abbreviations>::insert
+000000000003c584 T <alloc::collections::btree::map::entry::VacantEntry<u64, gimli::read::abbrev::Abbreviation>>::insert_entry
+0000000000089590 t <alloc::raw_vec::RawVecInner<std::alloc::System>>::finish_grow
+0000000000089610 t <alloc::raw_vec::RawVecInner<std::alloc::System>>::grow_amortized
+00000000000253c0 t <alloc::raw_vec::RawVecInner>::finish_grow
+000000000003c650 T <alloc::raw_vec::RawVecInner>::finish_grow
+000000000004c900 t <alloc::raw_vec::RawVecInner>::finish_grow
+0000000000089680 t <alloc::raw_vec::RawVecInner>::finish_grow
+000000000003b540 t <alloc::raw_vec::RawVecInner>::finish_grow
+0000000000063ab0 t <alloc::raw_vec::RawVecInner>::finish_grow
+000000000003ff20 t <alloc::raw_vec::RawVecInner>::finish_grow
+000000000003c72f T <alloc::raw_vec::RawVecInner>::grow_amortized
+00000000000897e0 t <gimli::read::dwarf::Unit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>::new
+000000000003c7bf T <gimli::read::abbrev::Abbreviation>::new
+000000000008bac0 t <gimli::read::aranges::ArangeHeader<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>::parse
+0000000000027460 T <core::fmt::builders::DebugList>::entry
+000000000003c841 T <gimli::read::abbrev::Attributes>::push
+000000000004ca40 T <purrdf_testkit::bench::Bench>::configure_from_args
+000000000004cf20 T <purrdf_testkit::bench::Bench>::run
+0000000000050d30 t <purrdf_testkit::bench::Bench>::fail
+0000000000050ee0 t <purrdf_testkit::bench::Bench>::record
+000000000008bd30 t <gimli::read::unit::DebugInfoUnitHeadersIter<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::next
+000000000008c340 t <std::path::Components>::parse_next_component_back
+000000000008c480 T <std::path::Components>::as_path
+000000000008c740 t <gimli::read::index::UnitIndex<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse
+000000000008cfc0 t <u64>::from_ascii_bytes_radix_impl
+000000000008d0e0 T <std::fs::DirBuilder>::_create
+000000000003c96f T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_fit
+000000000003ca75 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::Edge>>::insert_fit
+000000000003cbc9 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::KV>>::split_leaf_data
+000000000003cbc9 T <alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>, alloc::collections::btree::node::marker::KV>>::split_leaf_data
+000000000002498b T <addr2line::line::Lines>::find_location
+000000000003cce0 T <alloc::boxed::Box<alloc::collections::btree::node::InternalNode<u64, gimli::read::abbrev::Abbreviation>>>::new_uninit_in
+000000000003cd06 T <alloc::boxed::Box<alloc::collections::btree::node::LeafNode<u64, gimli::read::abbrev::Abbreviation>>>::new_uninit_in
+000000000008d730 t <std::backtrace_rs::print::BacktraceFrameFmt>::print_raw_with_column
+000000000008db30 T <std::backtrace_rs::symbolize::Symbol>::name
+0000000000025450 T <alloc::ffi::c_str::CString>::_from_vec_unchecked
+000000000008dc03 t <std::backtrace_rs::symbolize::gimli::Context>::new
+0000000000090da0 T <alloc::io::buffered::bufwriter::BufWriter<std::io::stdio::StdoutRaw>>::write_all_cold
+0000000000090f10 t <alloc::io::buffered::bufwriter::BufWriter<std::io::stdio::StdoutRaw>>::flush_buf
+0000000000027580 T <core::num::imp::dec2flt::decimal_seq::DecimalSeq>::left_shift
+00000000000277c0 T <core::num::imp::dec2flt::decimal_seq::DecimalSeq>::right_shift
+0000000000027a00 T <core::num::imp::dec2flt::decimal_seq::DecimalSeq>::round
+00000000000910c0 t <std::backtrace_rs::symbolize::gimli::elf::Object>::search_symtab
+00000000000911b0 t <std::backtrace_rs::symbolize::gimli::elf::Object>::parse
+0000000000091860 t <std::backtrace_rs::symbolize::gimli::elf::Object>::section
+0000000000091c40 t <std::backtrace_rs::symbolize::gimli::elf::Object>::build_id
+0000000000027b00 T <core::fmt::Formatter>::pad_integral
+0000000000028050 t <core::fmt::Formatter>::pad_formatted_parts
+00000000000282d0 t <core::fmt::Formatter>::write_formatted_parts
+0000000000028570 T <core::fmt::Formatter>::debug_struct_field1_finish
+0000000000028620 T <core::fmt::Formatter>::pad
+0000000000028a60 T <core::slice::index::RangeError>::report
+0000000000091df0 t <gimli::read::line::FileEntry<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>::parse
+0000000000091ec0 t <gimli::read::rnglists::RngListIter<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::next
+0000000000092af0 t <gimli::read::unit::Attribute<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::value
+00000000000930d0 t <gimli::read::unit::AttributeValue<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>::u8_value
+0000000000093120 t <gimli::read::unit::AttributeValue<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize>>::u16_value
+0000000000028a90 T <u64>::_fmt
+0000000000093170 T <gimli::read::unit::EntriesRaw<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::read_attribute
+00000000000942b0 t <gimli::read::unit::EntriesCursor<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::next_entry
+0000000000095a90 t <std::sys::fs::unix::File>::open_c
+000000000003cd2c T <alloc::collections::btree::map::BTreeMap<u64, gimli::read::abbrev::Abbreviation>>::entry
+0000000000095c60 t <std::sys::fs::unix::DirBuilder>::mkdir
+0000000000063c10 T <alloc::sync::Arc<alloc::vec::Vec<u64>>>::drop_slow
+0000000000095e10 T <alloc::sync::Arc<gimli::read::dwarf::Dwarf<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>::drop_slow
+0000000000095ea0 T <alloc::sync::Arc<std::sync::poison::mutex::Mutex<alloc::vec::Vec<u8>>>>::drop_slow
+0000000000063c40 T <alloc::sync::Arc<std::sync::poison::mutex::Mutex<purrdf_xsd::bigint::scratch::FreeBuffers>>>::drop_slow
+0000000000095ee0 T <alloc::sync::Arc<gimli::read::abbrev::Abbreviations>>::drop_slow
+0000000000095f40 T <alloc::sync::Arc<std::thread::thread::Inner, std::alloc::System>>::drop_slow
+0000000000095fe0 T <std::path::PathBuf>::_set_extension
+0000000000028b80 T <core::str::pattern::StrSearcher>::new
+000000000003cdcf T <alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>>::push_with_handle
+000000000003ce6d T <alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>>::push
+0000000000096380 t <alloc::collections::btree::map::IntoIter<u64, core::result::Result<alloc::sync::Arc<gimli::read::abbrev::Abbreviations>, gimli::read::Error>>>::dying_next
+0000000000000000 d std::io::stdio::OUTPUT_CAPTURE::{K#0}::{closure#0}::__RUST_STD_INTERNAL_VAL
+0000000000000030 b std::panicking::panic_count::LOCAL_PANIC_COUNT::{K#0}::{closure#1}::__RUST_STD_INTERNAL_VAL
+00000000000a80c8 d std::panicking::default_hook::{closure#0}::FIRST_PANIC
+0000000000029130 T core::fmt::write
+00000000000292f0 T core::str::slice_error_fail
+0000000000029300 T core::str::slice_error_fail_rt
+0000000000029680 T core::cell::panic_already_borrowed
+00000000000296b0 T core::option::expect_failed
+00000000000296f0 T core::option::unwrap_failed
+0000000000029710 T core::result::unwrap_failed
+0000000000029770 T core::panicking::panic_nounwind
+000000000002978b T core::panicking::panic_in_cleanup
+000000000002979f T core::panicking::panic_bounds_check
+00000000000297e0 T core::panicking::panic_nounwind_fmt
+0000000000029815 T core::panicking::assert_failed_inner
+0000000000029903 T core::panicking::panic_cannot_unwind
+0000000000029920 T core::panicking::panic_nounwind_nobacktrace
+0000000000029940 T core::panicking::panic
+0000000000029960 T core::panicking::panic_fmt
+000000000000ff9f r panic_unwind::imp::CANARY
+00000000000510a0 T purrdf_testkit::bench::format_rate
+0000000000051320 T purrdf_testkit::bench::format_time
+00000000000a8018 d purrdf_testkit::bench::GLOBAL_TALLY
+00000000000514b0 T purrdf_testkit::bench::main
+00000000000a8050 d purrdf_testkit::bench::GLOBAL
+00000000000966e0 T std::rt::lang_start_internal
+0000000000096d80 T std::env::current_dir
+0000000000096f40 T std::env::current_exe
+0000000000097160 T std::env::args_os
+0000000000097334 T std::alloc::default_alloc_error_hook
+00000000000a8b00 B std::alloc::HOOK
+0000000000097480 T std::alloc::rust_oom
+00000000000a8b08 b std::panic::SHOULD_CAPTURE
+00000000000974a0 T std::panic::get_backtrace_style
+00000000000975b0 T std::process::abort
+00000000000975b9 T std::panicking::default_hook
+0000000000097720 T std::panicking::payload_as_str
+00000000000977a6 T std::panicking::panic_with_hook
+00000000000a8b10 B std::panicking::HOOK
+0000000000071c8f t rustc_demangle::v0::basic_type
+0000000000024ac4 t addr2line::line::has_backward_slash_root
+0000000000024af5 T addr2line::line::path_push
+0000000000025530 T alloc::sync::panic_arc_overflow
+0000000000025549 T alloc::alloc::handle_alloc_error
+000000000002555c T alloc::raw_vec::handle_error
+0000000000025580 T alloc::raw_vec::capacity_overflow
+0000000000063cd0 t purrdf_xsd::decimal_float::exact_bits
+0000000000064260 t purrdf_xsd::decimal_float::decimal_to_f32
+00000000000643f0 t purrdf_xsd::decimal_float::decimal_to_f64
+0000000000064570 t purrdf_xsd::bigint::mag_shr_in_place
+0000000000064900 t purrdf_xsd::bigint::mag_sub_in_place
+0000000000064a90 t purrdf_xsd::bigint::divide_normalized
+0000000000064d50 T purrdf_xsd::bigint::mag_trim
+0000000000064e00 t purrdf_xsd::bigint::write_shl
+0000000000064f10 T purrdf_xsd::numeric::numeric_add
+0000000000065910 T purrdf_xsd::numeric::numeric_mul
+0000000000065ff0 T purrdf_xsd::numeric::parse_decimal
+00000000000667f0 t purrdf_xsd::numeric::decimal_div_raw
+0000000000066b80 T purrdf_xsd::numeric::is_decimal_lexical
+0000000000066e10 T purrdf_xsd::numeric::numeric_div_with_policy
+000000000003ff90 t purrdf_hash::hex::encode_portable
+0000000000040400 T purrdf_hash::hex::encode_upper_into
+0000000000029990 T core::str::count::do_count_chars
+0000000000029f60 T core::str::converts::from_utf8
+000000000002a160 T core::slice::index::slice_index_fail
+000000000002a230 T core::slice::memchr::memchr_aligned
+000000000002a310 T core::slice::memchr::memrchr_aligned
+000000000002a440 T core::panicking::panic_const::panic_const_div_by_zero
+000000000002a460 T core::panicking::panic_const::panic_const_rem_by_zero
+00000000000a0310 T std_detect::detect::cache::detect_and_initialize
+00000000000a8bd8 B std_detect::detect::cache::CACHE
+0000000000051f90 T purrdf_testkit::bench::args::baseline_name
+0000000000052210 t purrdf_testkit::bench::stats::median_in_place
+00000000000529d0 T purrdf_testkit::bench::stats::bootstrap_change
+0000000000052ec0 T purrdf_testkit::bench::stats::bootstrap_median
+0000000000053210 T purrdf_testkit::bench::stats::classify_outliers
+0000000000053560 t purrdf_testkit::bench::stats::percentile_interval
+0000000000053650 T purrdf_testkit::bench::stats::median
+00000000000537f0 T purrdf_testkit::bench::stats::quantile
+0000000000053950 T purrdf_testkit::bench::store::path_component
+0000000000053c70 t purrdf_testkit::bench::estimates::number
+0000000000053da0 t purrdf_testkit::bench::estimates::quoted
+0000000000053fb0 T purrdf_testkit::harness::platform::env_var
+0000000000054160 t purrdf_testkit::harness::platform::print_raw
+00000000000a8b28 b std::io::stdio::OUTPUT_CAPTURE_USED
+0000000000097970 T std::io::stdio::try_set_output_capture
+0000000000097a40 t std::io::stdio::print_to_buffer_if_capture_used
+00000000000a80d0 d std::io::stdio::STDOUT
+0000000000097c30 T std::io::stdio::_eprint
+0000000000097d10 T std::sys::fs::rename
+0000000000098020 T std::sys::fs::metadata
+0000000000098250 t std::sys::backtrace::output_filename
+0000000000098330 T std::sys::backtrace::lock
+00000000000a8b30 b std::thread::main_thread::MAIN
+0000000000000040 B std::thread::current::CURRENT
+00000000000983a0 T std::panicking::panic_count::is_zero_slow_path
+00000000000a8b38 B std::panicking::panic_count::GLOBAL_PANIC_COUNT
+00000000000983b0 T std::panicking::panic_count::increase
+000000000003d34b t miniz_oxide::inflate::core::apply_match
+000000000003d499 t miniz_oxide::inflate::core::decompress_fast
+000000000003d90d T miniz_oxide::inflate::core::decompress_with_limit
+000000000003f10f t miniz_oxide::inflate::core::transfer
+000000000003f52e t miniz_oxide::inflate::core::init_tree
+00000000000a0be0 t compiler_builtins::int::specialized_div_rem::u128_div_rem
+00000000000673f0 t purrdf_xsd::exact::binary::round_ratio
+0000000000068320 t purrdf_xsd::exact::decimal::strip_zeros
+00000000000686e0 t purrdf_xsd::exact::decimal::strip_factor
+0000000000068b30 t purrdf_xsd::exact::decimal::scale_up
+0000000000068df0 t purrdf_xsd::numeric::exact_path::div
+0000000000069150 t purrdf_xsd::numeric::exact_path::binop
+0000000000069880 t purrdf_xsd::numeric::exact_path::to_f32
+0000000000069a00 t purrdf_xsd::numeric::exact_path::to_f64
+0000000000040900 t purrdf_hash::arch::x86_64::hex_encode
+0000000000040910 t purrdf_hash::arch::x86_64::hex_kernel
+00000000000a7ff8 D core::io::error::os_functions::OS_FUNCTIONS
+000000000002a480 T core::num::imp::flt2dec::digits_to_dec_str
+000000000002a5f0 T core::num::imp::int_log10::panic_for_nonpositive_argument
+000000000000f3b2 R core::unicode::unicode_data::white_space::WHITESPACE_MAP
+000000000002a610 t core::unicode::unicode_data::white_space::lookup
+0000000000071cb7 t core::unicode::unicode_data::white_space::lookup
+000000000002a670 T core::unicode::unicode_data::cn_planes_0_3::lookup_slow
+000000000000b908 r core::unicode::unicode_data::cn_planes_0_3::SHORT_OFFSET_RUNS
+000000000000a880 r core::unicode::unicode_data::cn_planes_0_3::OFFSETS
+000000000002a770 T core::unicode::unicode_data::grapheme_extend::lookup_slow
+000000000000b9e0 r core::unicode::unicode_data::grapheme_extend::SHORT_OFFSET_RUNS
+000000000000ae35 r core::unicode::unicode_data::grapheme_extend::OFFSETS
+000000000002a870 T core::unicode::unicode_data::default_ignorable_code_point::lookup_slow
+000000000000ba64 r core::unicode::unicode_data::default_ignorable_code_point::SHORT_OFFSET_RUNS
+000000000000b134 r core::unicode::unicode_data::default_ignorable_code_point::OFFSETS
+000000000002a950 T core::unicode::unicode_data::cf::lookup_slow
+000000000000ba94 r core::unicode::unicode_data::cf::SHORT_OFFSET_RUNS
+000000000000b157 r core::unicode::unicode_data::cf::OFFSETS
+00000000000a0a00 t core::core_arch::x86::xsave::_xgetbv
+00000000000a13f0 t core::core_arch::x86::xsave::_xgetbv
+00000000000983f0 t std::backtrace_rs::symbolize::gimli::mmap
+0000000000098700 t std::sys::fs::unix::canonicalize
+00000000000987c0 t std::sys::fs::unix::try_statx
+00000000000a8b40 b std::sys::env::unix::ENV_LOCK
+0000000000098ad0 t std::sys::pal::unix::abort_internal
+0000000000000048 B std::thread::current::id::ID
+000000000002aa30 T core::num::imp::dec2flt::decimal_seq::parse_decimal_seq
+000000000002ae40 T core::num::imp::dec2flt::parse::parse_number
+000000000000c060 R core::num::imp::dec2flt::table::POWER_OF_FIVE_128
+000000000002b350 T core::slice::sort::shared::smallsort::panic_on_ord_violation
+0000000000098ae0 t std::backtrace_rs::symbolize::gimli::libs_dl_iterate_phdr::callback
+0000000000098e00 t std::backtrace_rs::symbolize::gimli::elf::decompress_zlib
+0000000000098eb0 t std::backtrace_rs::symbolize::gimli::elf::locate_build_id
+00000000000993b0 T std::sys::thread_local::destructors::linux_like::register
+0000000000000010 d std::sys::thread_local::destructors::list::DTORS
+0000000000099540 t std::sys::thread_local::key::unix::fail
+0000000000099570 T std::sys::io::error::unix::format_error
+0000000000099628 t std::sys::io::error::unix::is_interrupted
+0000000000099630 t std::sys::io::error::unix::decode_error_kind
+00000000000a26b8 D std::sys::args::unix::imp::ARGV_INIT_ARRAY
+00000000000a8b50 b std::sys::args::unix::imp::ARGC
+00000000000a8b58 b std::sys::args::unix::imp::ARGV
+000000000000e960 R core::num::imp::flt2dec::strategy::grisu::CACHED_POW10
+000000000002b370 T core::num::imp::flt2dec::strategy::grisu::format_exact_opt
+000000000002b770 T core::num::imp::flt2dec::strategy::grisu::format_shortest_opt
+000000000002be00 T core::num::imp::flt2dec::strategy::dragon::format_exact
+000000000002cde0 T core::num::imp::flt2dec::strategy::dragon::format_shortest
+000000000000ef84 r core::num::imp::flt2dec::strategy::dragon::POW10
+000000000000efac r core::num::imp::flt2dec::strategy::dragon::POW5TO16
+000000000000efb4 r core::num::imp::flt2dec::strategy::dragon::POW5TO32
+000000000000efc0 r core::num::imp::flt2dec::strategy::dragon::POW5TO64
+000000000000efd4 r core::num::imp::flt2dec::strategy::dragon::POW5TO128
+000000000000effc r core::num::imp::flt2dec::strategy::dragon::POW5TO256
+000000000002e0d0 T core::num::imp::flt2dec::strategy::dragon::mul_pow10
+00000000000a8b60 b std::sys::pal::unix::stack_overflow::thread_info::THREAD_INFO
+00000000000a8b68 b std::sys::pal::unix::stack_overflow::thread_info::THREAD_INFO
+00000000000a8b70 b std::sys::pal::unix::stack_overflow::thread_info::THREAD_INFO
+0000000000099650 t std::sys::pal::unix::stack_overflow::thread_info::set_current_info
+00000000000a8b78 b std::sys::pal::unix::stack_overflow::thread_info::LOCK
+00000000000a8b80 b std::sys::pal::unix::stack_overflow::thread_info::SPIN_LOCK
+000000000009a6d0 t std::sys::pal::unix::stack_overflow::imp::make_handler
+00000000000a8b88 b std::sys::pal::unix::stack_overflow::imp::NEED_ALTSTACK
+000000000009aa10 t std::sys::pal::unix::stack_overflow::imp::signal_handler
+00000000000a8b90 b std::sys::pal::unix::stack_overflow::imp::PAGE_SIZE
+00000000000a0f20 t compiler_builtins::math::libm_math::arch::x86::fma::fma_fallback
+00000000000a1370 t compiler_builtins::math::libm_math::arch::x86::fma::fma_with_fma
+00000000000a1378 t compiler_builtins::math::libm_math::arch::x86::fma::fma_with_fma4
+00000000000a1400 t compiler_builtins::math::libm_math::arch::x86::detect::load_x86_features
+00000000000a8b98 b <std::thread::id::ThreadId>::new::COUNTER
+000000000009adb0 t <std::thread::id::ThreadId>::new::exhausted
+00000000000a8118 d <std::backtrace_rs::symbolize::gimli::Cache>::with_global::MAPPINGS_CACHE
+000000000009add0 T <std::sys::os_str::bytes::Slice>::try_check_public_boundary::slow_path
+000000000002e540 t <core::fmt::Formatter>::pad_integral::write_prefix
+000000000002e5a0 T core::slice::copy_from_slice_impl::len_mismatch_fail
+000000000003fcd0 t panic_unwind::imp::panic::exception_cleanup
+000000000009ae90 T std::fs::read_to_string::inner
+000000000009b5b0 T std::fs::write::inner
+00000000000a8ad8 d std::rt::cleanup::CLEANUP
+00000000000a8ba0 b std::alloc::default_alloc_error_hook::PREV_ALLOC_FAILURE
+00000000000255a0 T alloc::fmt::format::format_inner
+00000000000a8008 d purrdf_hash::hex::selected_encode::SELECTED
+00000000000a8ba8 B std::io::stdio::stderr::INSTANCE
+00000000000a8bc0 b std::sys::exit::unique_thread_exit::EXITING_THREAD_ID
+00000000000a8bc8 b std::sys::backtrace::lock::LOCK
+000000000009b860 t std::backtrace_rs::backtrace::libunwind::trace::trace_fn
+00000000000a8bd0 b std::sys::fs::unix::try_statx::STATX_SAVED_STATE
+00000000000a8000 D memchr::arch::x86_64::memchr::memchr_raw::FN
+000000000003cf70 T memchr::arch::x86_64::memchr::memchr_raw::detect
+000000000003d140 t memchr::arch::x86_64::memchr::memchr_raw::find_sse2
+00000000000a8bd1 b std::backtrace_rs::symbolize::gimli::elf::debug_path_exists::DEBUG_PATH_EXISTS
+000000000009b8a0 t std::sys::thread_local::guard::key::enable::run
+00000000000a8ae0 d std::sys::thread_local::guard::key::enable::DTORS
+000000000009b9e0 T std::sys::args::unix::imp::ARGV_INIT_ARRAY::init_wrapper
+000000000002e5e0 t core::num::imp::flt2dec::strategy::grisu::format_exact_opt::possibly_round
+00000000000a1380 t compiler_builtins::math::libm_math::arch::x86::fma::fma::initializer
+00000000000a8af0 d compiler_builtins::math::libm_math::arch::x86::fma::fma::FUNC
+00000000000a8bf0 b compiler_builtins::math::libm_math::arch::x86::detect::get_cpu_features::CACHE
+000000000009ba00 t <alloc::string::String as core::any::Any>::type_id
+000000000009ba10 t <&str as core::any::Any>::type_id
+0000000000071d0c T <rustc_demangle::legacy::Demangle as core::fmt::Display>::fmt
+000000000003fb30 T <&[u8] as object::read::read_ref::ReadRef>::read_bytes_at_until
+000000000002e760 T <core::io::error::Error as core::fmt::Debug>::fmt
+0000000000072823 t <core::str::iter::Chars as core::iter::traits::iterator::Iterator>::count
+000000000002e770 T <u8 as core::fmt::Display>::fmt
+0000000000072856 t <core::iter::sources::from_fn::FromFn<<rustc_demangle::v0::HexNibbles>::try_parse_str_chars::{closure#2}> as core::iter::traits::iterator::Iterator>::next
+000000000009ba20 T <<std::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core::fmt::Display>::fmt
+000000000009bbf0 t <core::io::write::default_write_fmt::Adapter<core::io::cursor::Cursor<&mut [u8]>> as core::fmt::Write>::write_str
+000000000009bca0 t <core::io::write::default_write_fmt::Adapter<alloc::vec::Vec<u8>> as core::fmt::Write>::write_str
+000000000009bd10 t <core::io::write::default_write_fmt::Adapter<std::io::stdio::StderrLock> as core::fmt::Write>::write_str
+000000000009bec0 t <core::io::write::default_write_fmt::Adapter<std::sys::stdio::unix::Stderr> as core::fmt::Write>::write_str
+0000000000072b1e T <rustc_demangle::SizeLimitedFmtAdapter<&mut core::fmt::Formatter> as core::fmt::Write>::write_str
+0000000000072b49 T <rustc_demangle::v0::Ident as core::fmt::Display>::fmt
+000000000002e800 T <core::fmt::builders::PadAdapter as core::fmt::Write>::write_char
+000000000002e870 T <core::fmt::builders::PadAdapter as core::fmt::Write>::write_str
+000000000002eaf0 T <core::str::lossy::Debug as core::fmt::Debug>::fmt
+0000000000069cd0 T <purrdf_xsd::bigint::storage::Mag as core::ops::deref::DerefMut>::deref_mut
+000000000009c000 T <std::panicking::panic_handler::FormatStringPayload as core::fmt::Display>::fmt
+0000000000025730 T <<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::fmt::Debug>::fmt
+000000000009c040 t <std::path::Component as core::cmp::PartialEq>::eq
+0000000000072f59 T <rustc_demangle::Demangle as core::fmt::Display>::fmt
+0000000000069de0 T <purrdf_xsd::bigint::BigInt as core::fmt::Display>::fmt
+000000000002eee0 T <f32 as core::str::traits::FromStr>::from_str
+0000000000054380 T <purrdf_testkit::bench::estimates::EstimatesError as core::fmt::Display>::fmt
+000000000009c100 t <std::panicking::panic_handler::StaticStrPayload as alloc::panicking::PanicPayload>::get
+000000000009c110 t <std::panicking::panic_handler::StaticStrPayload as alloc::panicking::PanicPayload>::as_str
+000000000009c120 T <std::panicking::panic_handler::StaticStrPayload as alloc::panicking::PanicPayload>::take_box
+000000000009c170 T <std::path::Display as core::fmt::Display>::fmt
+000000000002f400 t <&dyn core::fmt::Debug as core::fmt::Debug>::fmt
+000000000003b5b0 t <&purrdf_xsd::datatype::XsdDatatype as core::fmt::Debug>::fmt
+0000000000073074 T <&core::num::error::IntErrorKind as core::fmt::Debug>::fmt
+000000000009c190 t <&std::ffi::os_str::OsStr as core::fmt::Debug>::fmt
+000000000003b5e0 t <&&str as core::fmt::Debug>::fmt
+000000000006a6f0 t <&&str as core::fmt::Debug>::fmt
+000000000002f410 t <&str as core::fmt::Debug>::fmt
+00000000000730a0 T <&str as core::fmt::Debug>::fmt
+00000000000730b3 T <&u8 as core::fmt::Debug>::fmt
+000000000006a710 t <&usize as core::fmt::Debug>::fmt
+000000000009c1b0 t <&i32 as core::fmt::Debug>::fmt
+000000000002f430 t <&u64 as core::fmt::Debug>::fmt
+00000000000730d7 T <&mut [u8] as core::fmt::Debug>::fmt
+00000000000730ea T <&rustc_demangle::DemangleStyle as core::fmt::Display>::fmt
+000000000009c260 t <&core::bstr::ByteStr as core::fmt::Display>::fmt
+00000000000543c0 t <&alloc::string::String as core::fmt::Display>::fmt
+000000000009c280 t <&core::panic::location::Location as core::fmt::Display>::fmt
+000000000002f5d0 t <&str as core::fmt::Display>::fmt
+00000000000543e0 t <&str as core::fmt::Display>::fmt
+000000000009c2f0 t <&str as core::fmt::Display>::fmt
+000000000003b600 t <&str as core::fmt::Display>::fmt
+000000000006a8c0 t <&str as core::fmt::Display>::fmt
+000000000006a8e0 t <&u64 as core::fmt::Display>::fmt
+000000000009c310 t <&mut dyn alloc::panicking::PanicPayload as core::fmt::Display>::fmt
+000000000002f5f0 T <core::io::error::repr::Repr as core::fmt::Debug>::fmt
+000000000002f8c0 T <f64 as core::str::traits::FromStr>::from_str
+000000000002fe40 T <core::str::lossy::Utf8Chunks as core::iter::traits::iterator::Iterator>::next
+000000000009c320 T <std::backtrace_rs::symbolize::SymbolName as core::fmt::Display>::fmt
+000000000006a9e0 T <purrdf_xsd::exact::decimal::Decimal as core::str::traits::FromStr>::from_str
+000000000006b250 T <purrdf_xsd::bigint::scratch::Pooled as core::ops::drop::Drop>::drop
+000000000006b4d0 T <purrdf_xsd::bigint::storage::Mag as core::cmp::PartialEq>::eq
+000000000009c400 T <std::panicking::panic_handler::StaticStrPayload as core::fmt::Display>::fmt
+000000000009c420 t <std::path::StripPrefixError as core::fmt::Debug>::fmt
+000000000002ffd0 T <core::bstr::ByteStr as core::fmt::Display>::fmt
+00000000000306f0 T <core::io::error::Error as core::fmt::Display>::fmt
+000000000003b620 t <purrdf_xsd::exact::error::ExactKind as core::fmt::Debug>::fmt
+000000000006b620 t <purrdf_xsd::exact::error::ExactKind as core::fmt::Debug>::fmt
+000000000006b650 T <purrdf_xsd::exact::decimal::Decimal as core::fmt::Display>::fmt
+000000000009c540 T <std::sys::stdio::unix::Stderr as core::io::write::Write>::write_vectored
+000000000009c5ac t <std::sys::stdio::unix::Stderr as core::io::write::Write>::is_write_vectored
+000000000009c5b0 t <std::sys::stdio::unix::Stderr as core::io::write::Write>::flush
+000000000009c5c0 T <std::sys::stdio::unix::Stderr as core::io::write::Write>::write
+000000000006ba60 T <purrdf_xsd::exact::integer::Integer as core::str::traits::FromStr>::from_str
+000000000006bef0 t <core::num::error::TryFromIntError as core::fmt::Debug>::fmt
+000000000006c010 t <purrdf_xsd::bigint::scratch::LimbScratchError as core::fmt::Debug>::fmt
+00000000000307c0 T <usize as core::fmt::LowerHex>::fmt
+000000000009c620 T <&std::fs::File as alloc::io::read::Read>::read_to_string
+0000000000030830 T <f64 as core::fmt::Display>::fmt
+000000000009cc80 T <std::ffi::os_str::OsString as core::fmt::Debug>::fmt
+000000000009cca0 t <alloc::vec::Vec<u8> as core::io::write::Write>::write_vectored
+000000000009ce3c t <alloc::vec::Vec<u8> as core::io::write::Write>::is_write_vectored
+000000000009ce40 t <alloc::vec::Vec<u8> as core::io::write::Write>::write_all_vectored
+000000000009cfbc t <alloc::vec::Vec<u8> as core::io::write::Write>::flush
+000000000009cfc0 t <alloc::vec::Vec<u8> as core::io::write::Write>::write
+000000000009d030 t <alloc::vec::Vec<u8> as core::io::write::Write>::write_all
+000000000006c1f0 T <&purrdf_xsd::exact::decimal::Decimal as core::ops::arith::Add>::add
+00000000000730f3 t <rustc_demangle::SizeLimitExhausted as core::fmt::Debug>::fmt
+0000000000030870 T <core::fmt::Arguments as core::fmt::Display>::fmt
+000000000003b650 t <purrdf_xsd::value::XsdError as core::fmt::Debug>::fmt
+0000000000030890 T <core::io::error::Custom as core::fmt::Debug>::fmt
+0000000000030960 t <core::fmt::builders::FromFn<<core::io::error::repr::Repr as core::fmt::Debug>::fmt::{closure#0}> as core::fmt::Debug>::fmt
+000000000006c5f0 T <&purrdf_xsd::exact::decimal::Decimal as core::ops::arith::Sub>::sub
+00000000000309a0 T <u32 as core::fmt::Display>::fmt
+0000000000030aa0 t <core::fmt::builders::FromFn<<core::io::error::repr::Repr as core::fmt::Debug>::fmt::{closure#0}::{closure#0}> as core::fmt::Display>::fmt
+000000000006c9f0 T <&purrdf_xsd::exact::integer::Integer as core::ops::arith::Add>::add
+0000000000030ac0 T <i32 as core::fmt::Display>::fmt
+00000000000307c0 T <u64 as core::fmt::LowerHex>::fmt
+0000000000025750 t <core::fmt::Error as core::fmt::Debug>::fmt
+0000000000054400 t <core::fmt::Error as core::fmt::Debug>::fmt
+0000000000073109 t <core::fmt::Error as core::fmt::Debug>::fmt
+000000000006cc60 t <core::fmt::Error as core::fmt::Debug>::fmt
+000000000009d0a0 t <gimli::read::unit::AttributeValue<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>, usize> as core::clone::Clone>::clone
+0000000000030be0 t <i32 as core::fmt::Debug>::fmt
+0000000000025770 t <alloc::string::String as core::fmt::Write>::write_char
+0000000000054420 t <alloc::string::String as core::fmt::Write>::write_char
+000000000009d100 t <alloc::string::String as core::fmt::Write>::write_char
+000000000006cc80 t <alloc::string::String as core::fmt::Write>::write_char
+0000000000025870 t <alloc::string::String as core::fmt::Write>::write_str
+0000000000054520 t <alloc::string::String as core::fmt::Write>::write_str
+000000000009d210 t <alloc::string::String as core::fmt::Write>::write_str
+000000000006cd80 t <alloc::string::String as core::fmt::Write>::write_str
+0000000000030c90 t <usize as core::fmt::Debug>::fmt
+000000000006cdf0 t <usize as core::fmt::Debug>::fmt
+000000000007311f T <rustc_demangle::DemangleStyle as core::fmt::Display>::fmt
+000000000006cfa0 T <purrdf_xsd::bigint::BigInt as core::cmp::Ord>::cmp
+000000000003b950 t <purrdf_xsd::datatype::XsdDatatype as core::fmt::Debug>::fmt
+0000000000030e30 T <i128 as core::fmt::Display>::fmt
+0000000000030eb0 t <core::ops::range::Range<usize> as core::fmt::Debug>::fmt
+0000000000054590 T <purrdf_testkit::bench::args::ArgumentError as core::fmt::Display>::fmt
+000000000006d260 T <purrdf_xsd::bigint::storage::Mag as core::ops::deref::Deref>::deref
+000000000003fa85 t <core::iter::adapters::enumerate::Enumerate<core::iter::adapters::zip::Zip<core::slice::iter::Iter<u16>, core::slice::iter::IterMut<u32>>> as core::iter::traits::iterator::Iterator>::nth
+000000000009d280 T <std::backtrace_rs::symbolize::gimli::parse_running_mmaps::MapsEntry as core::str::traits::FromStr>::from_str
+00000000000258e0 T <&[u8] as <alloc::ffi::c_str::CString>::new::SpecNewImpl>::spec_new_impl
+0000000000025a60 T <<alloc::io::buffered::bufwriter::BufWriter<_>>::flush_buf::BufGuard as core::ops::drop::Drop>::drop
+000000000009d850 T <std::panicking::panic_handler::FormatStringPayload as alloc::panicking::PanicPayload>::get
+000000000009d8e0 T <std::panicking::panic_handler::FormatStringPayload as alloc::panicking::PanicPayload>::take_box
+0000000000025ad0 T <<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::fmt::Display>::fmt
+000000000003cf32 T <gimli::read::abbrev::Attributes as core::ops::deref::Deref>::deref
+000000000006d2f0 T <&purrdf_xsd::exact::integer::Integer as core::ops::arith::Sub>::sub
+000000000003b980 t <purrdf_xsd::exact::error::BoundedTarget as core::fmt::Debug>::fmt
+000000000006d560 t <purrdf_xsd::exact::error::BoundedTarget as core::fmt::Debug>::fmt
+000000000006d590 T <&purrdf_xsd::exact::integer::Integer as core::ops::arith::Mul>::mul
+000000000009d9e0 T <std::env::Args as core::iter::traits::iterator::Iterator>::next
+0000000000073162 t <core::num::error::ParseIntError as core::fmt::Debug>::fmt
+000000000006d800 T <purrdf_xsd::exact::integer::Integer as core::ops::arith::Neg>::neg
+0000000000030f00 T <u64 as core::fmt::Display>::fmt
+0000000000031010 T <u8 as core::fmt::LowerHex>::fmt
+0000000000031070 T <u8 as core::fmt::UpperHex>::fmt
+00000000000310d0 T <str as core::fmt::Debug>::fmt
+000000000009daa0 T <std::path::Components as core::iter::traits::iterator::Iterator>::next
+000000000009de70 T <std::io::stdio::StdoutLock as core::io::write::Write>::write_all
+0000000000030f00 T <usize as core::fmt::Display>::fmt
+0000000000031450 T <char as core::fmt::Debug>::fmt
+000000000009e110 T <std::path::Components as core::iter::traits::double_ended::DoubleEndedIterator>::next_back
+000000000003b9b0 t <purrdf_xsd::exact::error::ExactError as core::fmt::Debug>::fmt
+000000000006d8f0 t <purrdf_xsd::exact::error::ExactError as core::fmt::Debug>::fmt
+00000000000314f0 T <char as core::fmt::Display>::fmt
+00000000000315b0 t <core::io::error::ErrorKind as core::fmt::Debug>::fmt
+000000000009e550 T <&std::io::stdio::Stderr as core::io::write::Write>::write_fmt
+000000000009e730 t <*mut core::ffi::c_void as core::fmt::Debug>::fmt
+000000000003bbc0 t <alloc::string::String as core::fmt::Display>::fmt
+00000000000545b0 t <alloc::string::String as core::fmt::Display>::fmt
+00000000000731a7 T <[u8] as core::fmt::Debug>::fmt
+00000000000315e0 T <core::cell::BorrowMutError as core::fmt::Display>::fmt
+000000000003bbe0 t <alloc::string::String as core::fmt::Debug>::fmt
+000000000006db00 t <alloc::string::String as core::fmt::Debug>::fmt
+000000000007324d t <() as core::fmt::Debug>::fmt
+000000000009e7e0 t <&str as core::str::pattern::Pattern>::is_contained_in
+0000000000073262 t <core::str::pattern::StrSearcher as core::str::pattern::Searcher>::next
+000000000007360a T <rustc_demangle::SizeLimitedFmtAdapter<&mut core::fmt::Formatter> as core::fmt::Write>::write_char
+00000000000736c8 T <rustc_demangle::SizeLimitedFmtAdapter<&mut core::fmt::Formatter> as core::fmt::Write>::write_fmt
+000000000009f000 t <alloc::vec::Vec<u8> as core::io::write::Write>::write_fmt
+000000000009f0c0 t <gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian> as gimli::read::reader::Reader>::read_offset
+000000000009f140 t <gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian> as gimli::read::reader::Reader>::read_uleb128
+000000000009f350 t <gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian> as gimli::read::reader::Reader>::read_sized_offset
+000000000009f45c t <std::panicking::begin_panic::Payload<&str> as alloc::panicking::PanicPayload>::as_str
+000000000009f460 t <core::io::write::default_write_fmt::Adapter<core::io::cursor::Cursor<&mut [u8]>> as core::fmt::Write>::write_char
+000000000009f5a0 t <core::io::write::default_write_fmt::Adapter<core::io::cursor::Cursor<&mut [u8]>> as core::fmt::Write>::write_fmt
+000000000009f5c0 t <core::io::write::default_write_fmt::Adapter<alloc::vec::Vec<u8>> as core::fmt::Write>::write_char
+000000000009f6b0 t <core::io::write::default_write_fmt::Adapter<alloc::vec::Vec<u8>> as core::fmt::Write>::write_fmt
+000000000009f6d0 t <core::io::write::default_write_fmt::Adapter<std::io::stdio::StderrLock> as core::fmt::Write>::write_char
+000000000009f770 t <core::io::write::default_write_fmt::Adapter<std::io::stdio::StderrLock> as core::fmt::Write>::write_fmt
+000000000009f790 t <core::io::write::default_write_fmt::Adapter<std::sys::stdio::unix::Stderr> as core::fmt::Write>::write_char
+000000000009f940 t <core::io::write::default_write_fmt::Adapter<std::sys::stdio::unix::Stderr> as core::fmt::Write>::write_fmt
+00000000000315f8 t <<core::io::error::OsFunctions>::DEFAULT::{closure#0} as core::ops::function::FnOnce<(i32, &mut core::fmt::Formatter)>>::call_once
+00000000000315fc t <<core::io::error::OsFunctions>::DEFAULT::{closure#2} as core::ops::function::FnOnce<(i32,)>>::call_once
+0000000000031600 t <<core::io::error::OsFunctions>::DEFAULT::{closure#1} as core::ops::function::FnOnce<(i32,)>>::call_once
+000000000006db20 t <purrdf_xsd::numeric::parse_decimal::{closure#2} as core::ops::function::FnOnce<()>>::call_once
+00000000000545d0 t <std::env::Args as core::iter::traits::iterator::Iterator>::nth
+0000000000025af0 t <alloc::string::String as core::fmt::Write>::write_fmt
+0000000000054660 t <alloc::string::String as core::fmt::Write>::write_fmt
+000000000009f960 t <alloc::string::String as core::fmt::Write>::write_fmt
+000000000006dbc0 t <alloc::string::String as core::fmt::Write>::write_fmt
+0000000000031610 t <core::fmt::builders::PadAdapter as core::fmt::Write>::write_fmt
+000000000009f980 t <std::sys::stdio::unix::Stderr as core::io::write::Write>::write_all_vectored
+000000000009fb50 t <std::sys::stdio::unix::Stderr as core::io::write::Write>::write_all
+000000000009fc20 t <std::sys::stdio::unix::Stderr as core::io::write::Write>::write_fmt
+000000000009fce0 t <<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::error::Error>::description
+000000000009fcf0 t <<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::error::Error>::cause
+000000000009fcf3 t <<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::error::Error>::provide
+000000000009fd00 t <<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::error::Error>::type_id
+                 U _Unwind_Backtrace
+                 U _Unwind_DeleteException
+                 U _Unwind_GetDataRelBase
+                 U _Unwind_GetIP
+                 U _Unwind_GetIPInfo
+                 U _Unwind_GetLanguageSpecificData
+                 U _Unwind_GetRegionStart
+                 U _Unwind_GetTextRelBase
+                 U _Unwind_RaiseException
+                 U _Unwind_Resume
+                 U _Unwind_SetGR
+                 U _Unwind_SetIP
+0000000000019d48 r __FRAME_END__
+00000000000a7fe8 d __TMC_END__
+00000000000a7fe8 d __TMC_LIST__
+00000000000002fc r __abi_tag
+                 w __cxa_finalize
+                 w __cxa_thread_atexit_impl
+00000000000a0b60 t __divti3
+0000000000024820 t __do_global_dtors_aux
+00000000000a26b0 d __do_global_dtors_aux_fini_array_entry
+00000000000a7fe8 d __dso_handle
+                 U __errno_location
+00000000000a0cd0 t __floattidf
+00000000000a0d80 t __floattisf
+00000000000a26c0 d __frame_dummy_init_array_entry
+                 w __gmon_start__
+                 U __libc_start_main
+00000000000a0a10 t __udivti3
+00000000000a0e30 t __umodti3
+                 U __xpg_strerror_r
+00000000000a1644 t _fini
+00000000000a1628 t _init
+00000000000a8110 d _rust_extern_with_linkage_552422bcccb5c833___dso_handle
+0000000000024760 T _start
+                 U abort
+00000000000102cb r anon.20b0b745e36801262aaeb6fd076fe9e4.226.llvm.7751211337018640271
+00000000000088a4 r anon.20b0b745e36801262aaeb6fd076fe9e4.228.llvm.7751211337018640271
+0000000000010419 r anon.20b0b745e36801262aaeb6fd076fe9e4.432.llvm.7751211337018640271
+00000000000a4460 d anon.20b0b745e36801262aaeb6fd076fe9e4.433.llvm.7751211337018640271
+0000000000010cc8 r anon.20b0b745e36801262aaeb6fd076fe9e4.719.llvm.7751211337018640271
+00000000000a3dc0 d anon.41e96ffa32ef0b5ef3fb47dfdb62df10.4.llvm.7739769283629143463
+00000000000089d3 r anon.41e96ffa32ef0b5ef3fb47dfdb62df10.5.llvm.7739769283629143463
+00000000000a3de8 d anon.41e96ffa32ef0b5ef3fb47dfdb62df10.6.llvm.7739769283629143463
+0000000000007ddd r anon.41e96ffa32ef0b5ef3fb47dfdb62df10.7.llvm.7739769283629143463
+00000000000a3e00 d anon.41e96ffa32ef0b5ef3fb47dfdb62df10.8.llvm.7739769283629143463
+0000000000008971 r anon.544799d83aded4a3c8e9d51f48a8ae0a.142.llvm.424815601038267714
+00000000000a53b8 d anon.544799d83aded4a3c8e9d51f48a8ae0a.143.llvm.424815601038267714
+0000000000012d41 r anon.544799d83aded4a3c8e9d51f48a8ae0a.144.llvm.424815601038267714
+0000000000012d47 r anon.544799d83aded4a3c8e9d51f48a8ae0a.145.llvm.424815601038267714
+0000000000012d5b r anon.544799d83aded4a3c8e9d51f48a8ae0a.146.llvm.424815601038267714
+00000000000a53e8 d anon.544799d83aded4a3c8e9d51f48a8ae0a.147.llvm.424815601038267714
+0000000000007d96 r anon.544799d83aded4a3c8e9d51f48a8ae0a.32.llvm.424815601038267714
+00000000000a50a8 d anon.544799d83aded4a3c8e9d51f48a8ae0a.38.llvm.424815601038267714
+000000000000f8d8 r anon.886c1caabaaea59b9677b076c74ddc9f.1546.llvm.14355606994395624983
+00000000000a3a00 d anon.886c1caabaaea59b9677b076c74ddc9f.1547.llvm.14355606994395624983
+00000000000a3a48 d anon.886c1caabaaea59b9677b076c74ddc9f.1812.llvm.14355606994395624983
+0000000000009f99 r anon.886c1caabaaea59b9677b076c74ddc9f.2.llvm.14355606994395624983
+000000000000a778 r anon.886c1caabaaea59b9677b076c74ddc9f.751.llvm.14355606994395624983
+0000000000008f33 r anon.886c1caabaaea59b9677b076c74ddc9f.752.llvm.14355606994395624983
+00000000000a39b8 d anon.886c1caabaaea59b9677b076c74ddc9f.753.llvm.14355606994395624983
+00000000000a39d0 d anon.886c1caabaaea59b9677b076c74ddc9f.770.llvm.14355606994395624983
+000000000000b67b r anon.a647af78948fdeb0321157bdb82ef7e0.194.llvm.9794848731438112354
+000000000000b744 r anon.a647af78948fdeb0321157bdb82ef7e0.198.llvm.9794848731438112354
+000000000000a3c0 r anon.a647af78948fdeb0321157bdb82ef7e0.2.llvm.9794848731438112354
+0000000000008d3a r anon.a647af78948fdeb0321157bdb82ef7e0.206.llvm.9794848731438112354
+00000000000a2978 d anon.a647af78948fdeb0321157bdb82ef7e0.207.llvm.9794848731438112354
+00000000000a2990 d anon.a647af78948fdeb0321157bdb82ef7e0.208.llvm.9794848731438112354
+000000000000b8d7 r anon.a647af78948fdeb0321157bdb82ef7e0.248.llvm.9794848731438112354
+000000000000b29a r anon.a647af78948fdeb0321157bdb82ef7e0.37.llvm.9794848731438112354
+000000000000b29e r anon.a647af78948fdeb0321157bdb82ef7e0.39.llvm.9794848731438112354
+000000000000f166 r anon.a647af78948fdeb0321157bdb82ef7e0.394.llvm.9794848731438112354
+000000000000a080 r anon.a647af78948fdeb0321157bdb82ef7e0.408.llvm.9794848731438112354
+000000000000b2a5 r anon.a647af78948fdeb0321157bdb82ef7e0.42.llvm.9794848731438112354
+000000000000b2a7 r anon.a647af78948fdeb0321157bdb82ef7e0.45.llvm.9794848731438112354
+000000000000b2a8 r anon.a647af78948fdeb0321157bdb82ef7e0.46.llvm.9794848731438112354
+000000000000b2a9 r anon.a647af78948fdeb0321157bdb82ef7e0.47.llvm.9794848731438112354
+000000000000b2ab r anon.a647af78948fdeb0321157bdb82ef7e0.49.llvm.9794848731438112354
+000000000000b2ac r anon.a647af78948fdeb0321157bdb82ef7e0.54.llvm.9794848731438112354
+000000000000b2e2 r anon.a647af78948fdeb0321157bdb82ef7e0.91.llvm.9794848731438112354
+00000000000a2828 d anon.a647af78948fdeb0321157bdb82ef7e0.96.llvm.9794848731438112354
+00000000000a4880 d anon.af229c1f87686ab4650211dfa9fdf975.162.llvm.17474999709255752076
+0000000000012540 r anon.af229c1f87686ab4650211dfa9fdf975.181.llvm.17474999709255752076
+00000000000a4910 d anon.af229c1f87686ab4650211dfa9fdf975.191.llvm.17474999709255752076
+00000000000a4928 d anon.af229c1f87686ab4650211dfa9fdf975.192.llvm.17474999709255752076
+0000000000008c11 r anon.af229c1f87686ab4650211dfa9fdf975.2.llvm.17474999709255752076
+00000000000121b8 r anon.af229c1f87686ab4650211dfa9fdf975.21.llvm.17474999709255752076
+0000000000009a89 r anon.af229c1f87686ab4650211dfa9fdf975.38.llvm.17474999709255752076
+00000000000129ef r anon.af229c1f87686ab4650211dfa9fdf975.632.llvm.17474999709255752076
+000000000000988f r anon.af229c1f87686ab4650211dfa9fdf975.633.llvm.17474999709255752076
+00000000000a4e90 d anon.af229c1f87686ab4650211dfa9fdf975.634.llvm.17474999709255752076
+00000000000a4728 d anon.af229c1f87686ab4650211dfa9fdf975.73.llvm.17474999709255752076
+00000000000a4788 d anon.af229c1f87686ab4650211dfa9fdf975.78.llvm.17474999709255752076
+00000000000a47d8 d anon.af229c1f87686ab4650211dfa9fdf975.87.llvm.17474999709255752076
+00000000000a2718 d anon.cf1786984c7fd69ab2ba2fbb81429368.10.llvm.6053114248238979605
+00000000000a2790 d anon.cf1786984c7fd69ab2ba2fbb81429368.61.llvm.6053114248238979605
+0000000000008250 r anon.cf1786984c7fd69ab2ba2fbb81429368.9.llvm.6053114248238979605
+0000000000008a20 r anon.f13bb3f258876cb12f4a84b0a5cdace5.141.llvm.11640361436736466388
+00000000000a59c8 d anon.f13bb3f258876cb12f4a84b0a5cdace5.144.llvm.11640361436736466388
+000000000001491c r anon.f13bb3f258876cb12f4a84b0a5cdace5.148.llvm.11640361436736466388
+0000000000014958 r anon.f13bb3f258876cb12f4a84b0a5cdace5.149.llvm.11640361436736466388
+000000000001499c r anon.f13bb3f258876cb12f4a84b0a5cdace5.150.llvm.11640361436736466388
+00000000000094a2 r anon.f13bb3f258876cb12f4a84b0a5cdace5.151.llvm.11640361436736466388
+00000000000a59e0 d anon.f13bb3f258876cb12f4a84b0a5cdace5.152.llvm.11640361436736466388
+00000000000149b5 r anon.f13bb3f258876cb12f4a84b0a5cdace5.154.llvm.11640361436736466388
+00000000000a59f8 d anon.f13bb3f258876cb12f4a84b0a5cdace5.157.llvm.11640361436736466388
+00000000000a5a18 d anon.f13bb3f258876cb12f4a84b0a5cdace5.158.llvm.11640361436736466388
+0000000000008e00 r anon.f13bb3f258876cb12f4a84b0a5cdace5.170.llvm.11640361436736466388
+0000000000014a69 r anon.f13bb3f258876cb12f4a84b0a5cdace5.188.llvm.11640361436736466388
+00000000000a5aa0 d anon.f13bb3f258876cb12f4a84b0a5cdace5.189.llvm.11640361436736466388
+0000000000008836 r anon.f13bb3f258876cb12f4a84b0a5cdace5.190.llvm.11640361436736466388
+00000000000a5ab8 d anon.f13bb3f258876cb12f4a84b0a5cdace5.191.llvm.11640361436736466388
+00000000000a5ad0 d anon.f13bb3f258876cb12f4a84b0a5cdace5.192.llvm.11640361436736466388
+000000000000841e r anon.f13bb3f258876cb12f4a84b0a5cdace5.194.llvm.11640361436736466388
+0000000000014a9e r anon.f13bb3f258876cb12f4a84b0a5cdace5.196.llvm.11640361436736466388
+00000000000a5b00 d anon.f13bb3f258876cb12f4a84b0a5cdace5.197.llvm.11640361436736466388
+0000000000014bbb r anon.f13bb3f258876cb12f4a84b0a5cdace5.289.llvm.11640361436736466388
+0000000000007ea2 r anon.f13bb3f258876cb12f4a84b0a5cdace5.290.llvm.11640361436736466388
+00000000000a5b78 d anon.f13bb3f258876cb12f4a84b0a5cdace5.291.llvm.11640361436736466388
+0000000000014da7 r anon.f13bb3f258876cb12f4a84b0a5cdace5.381.llvm.11640361436736466388
+00000000000a5538 d anon.f13bb3f258876cb12f4a84b0a5cdace5.5.llvm.11640361436736466388
+00000000000145a7 r anon.f13bb3f258876cb12f4a84b0a5cdace5.50.llvm.11640361436736466388
+00000000000083d1 r anon.f13bb3f258876cb12f4a84b0a5cdace5.51.llvm.11640361436736466388
+00000000000a56c0 d anon.f13bb3f258876cb12f4a84b0a5cdace5.52.llvm.11640361436736466388
+0000000000014fc8 r anon.f13bb3f258876cb12f4a84b0a5cdace5.527.llvm.11640361436736466388
+00000000000a6028 d anon.f13bb3f258876cb12f4a84b0a5cdace5.528.llvm.11640361436736466388
+00000000000a5738 d anon.f13bb3f258876cb12f4a84b0a5cdace5.56.llvm.11640361436736466388
+00000000000089d3 r anon.f13bb3f258876cb12f4a84b0a5cdace5.6.llvm.11640361436736466388
+0000000000008f19 r anon.f13bb3f258876cb12f4a84b0a5cdace5.62.llvm.11640361436736466388
+0000000000009cac r anon.f13bb3f258876cb12f4a84b0a5cdace5.63.llvm.11640361436736466388
+00000000000a57c0 d anon.f13bb3f258876cb12f4a84b0a5cdace5.64.llvm.11640361436736466388
+00000000000a5560 d anon.f13bb3f258876cb12f4a84b0a5cdace5.7.llvm.11640361436736466388
+00000000000a5808 d anon.f13bb3f258876cb12f4a84b0a5cdace5.73.llvm.11640361436736466388
+0000000000014647 r anon.f13bb3f258876cb12f4a84b0a5cdace5.75.llvm.11640361436736466388
+00000000000a5820 d anon.f13bb3f258876cb12f4a84b0a5cdace5.76.llvm.11640361436736466388
+00000000000a6170 d anon.f13bb3f258876cb12f4a84b0a5cdace5.792.llvm.11640361436736466388
+                 U bcmp
+                 U calloc
+00000000000a15b0 t ceil
+                 U clock_gettime
+                 U close
+00000000000a8af8 b completed.0
+0000000000024790 t deregister_tm_clones
+                 U dl_iterate_phdr
+                 U dup
+                 U fcntl
+00000000000a0ae0 t floor
+00000000000a0f00 t fma
+0000000000024870 t frame_dummy
+                 U free
+                 U fstat64
+                 U getauxval
+                 U getcwd
+                 U getenv
+                 U getpid
+                 w gettid
+                 U lseek64
+000000000003bc00 T main
+                 U malloc
+                 U memcmp
+                 U memcpy
+                 U memmove
+                 U memset
+                 U mkdir
+                 U mmap64
+                 U mprotect
+                 U munmap
+                 U open64
+                 U pause
+                 U poll
+                 U posix_memalign
+                 U pthread_attr_destroy
+                 U pthread_attr_getguardsize
+                 U pthread_attr_getstack
+                 U pthread_getattr_np
+                 U pthread_key_create
+                 U pthread_key_delete
+                 U pthread_self
+                 U pthread_setspecific
+                 U read
+                 U readlink
+                 U realloc
+                 U realpath
+00000000000247d0 t register_tm_clones
+                 U rename
+000000000009fd10 T rust_eh_personality
+                 U sigaction
+                 U sigaltstack
+                 U signal
+                 U stat64
+                 w statx
+                 U strlen
+                 U syscall
+                 U sysconf
+                 U write
+                 U writev

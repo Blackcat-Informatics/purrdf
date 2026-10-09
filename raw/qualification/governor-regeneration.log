@@ -1,0 +1,83 @@
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf-core)
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/deflate)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+   Compiling crossbeam-utils v0.8.21
+   Compiling digest v0.11.3
+   Compiling hashbrown v0.17.1
+   Compiling rayon-core v1.13.0
+   Compiling either v1.16.0
+   Compiling libc v0.2.186
+   Compiling crossbeam-epoch v0.9.18
+   Compiling sha2 v0.11.0
+   Compiling getrandom v0.3.4
+   Compiling inout v0.2.2
+   Compiling regex v1.12.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling cmov v0.5.4
+   Compiling cpubits v0.1.1
+   Compiling cipher v0.5.2
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling aead v0.6.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/ed25519)
+   Compiling ctutils v0.4.2
+   Compiling aes v0.9.3
+   Compiling structured-zstd v0.0.49
+   Compiling rayon v1.12.0
+   Compiling ctr v0.10.1
+   Compiling visual-hashing v1.0.0
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/testkit)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/stack)
+   Compiling polyval v0.7.3
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/gts)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/datalog)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/shex)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/json)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/markdown)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-eval)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/conformance-kit)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/entail)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/geo)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/purrdf)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/sparql-conformance)
+    Finished `test` profile [optimized] target(s) in 3m 57s
+     Running tests/governor_corpus.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-sparql-conformance/d8427bcfb3d3bbf9/out/governor_corpus-d8427bcfb3d3bbf9)
+
+running 16 tests
+test a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape ... ok
+test a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically ... ok
+test regenerate_fuel_sweep_trace ... ignored, regeneration path: writes the committed golden
+test a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation ... ok
+test every_boundary_is_derived_from_a_metered_run ... ok
+test every_governor_carries_a_zero_a_boundary_and_an_over_bound_case ... ok
+test a_transport_that_ignores_the_stop_signal_is_bounded_per_request ... ok
+test the_corpus_is_reproducible_within_a_run ... ok
+test the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state ... ok
+test the_fuel_sweep_over_the_corpus_matches_its_trace ... ok
+test the_parallel_drive_is_actually_above_the_fork_threshold ... ok
+test the_parallel_drive_spends_what_the_sequential_measurement_spent ... ok
+test the_rdf12_statement_layer_is_governed ... ok
+test the_two_aggregate_charge_points_are_banded_separately ... ok
+test the_two_property_function_charge_points_are_banded_separately ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+
+test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

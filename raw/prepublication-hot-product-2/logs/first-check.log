@@ -1,0 +1,38 @@
+Running as unit: purrdf-477-xsd-first-check-20261008.scope; invocation ID: de65ecc719e340a0834f3196bca5d0c8
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/lex)
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/testkit)
+error: methods `strip_fives_using`, `strip_fives_wide_using`, `abs_using`, and `has_unbounded_limb_storage` are never used
+    --> crates/xsd/src/bigint.rs:900:19
+     |
+ 600 | impl BigInt {
+     | ----------- methods in this implementation
+...
+ 900 |     pub(crate) fn strip_fives_using(
+     |                   ^^^^^^^^^^^^^^^^^
+...
+ 911 |     pub(crate) fn strip_fives_wide_using(
+     |                   ^^^^^^^^^^^^^^^^^^^^^^
+...
+1223 |     pub(crate) fn abs_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
+     |                   ^^^^^^^^^
+...
+1227 |     pub(crate) fn has_unbounded_limb_storage(&self) -> bool {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: could not compile `purrdf-xsd` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

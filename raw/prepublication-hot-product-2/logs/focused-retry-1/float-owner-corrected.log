@@ -1,0 +1,30 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `test` profile [optimized] target(s) in 11.22s
+     Running unittests src/lib.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-xsd/0386de0c7b24ad92/out/purrdf_xsd-0386de0c7b24ad92)
+
+running 22 tests
+test bigint::tower_tests::tests::float_conversions_overflow_exactly_at_the_rounding_boundary ... ok
+test decimal_float::tests::f32_rounds_once_where_narrowing_f64_rounds_twice ... ok
+test decimal_float::tests::pinned_two_rounding_witness_rounds_correctly ... ok
+test decimal_float::tests::zero_is_positive_zero_at_every_scale ... ok
+test decimal_float::tests::the_old_two_rounding_conversion_is_refused_and_the_new_one_matches ... ok
+test numeric::tests::a_float_operand_is_compared_as_the_dyadic_rational_it_is ... ok
+test numeric::tests::add_decimal_float_promotes_to_float ... ok
+test numeric::tests::decimal_promotion_rounds_once_to_double_and_to_float ... ok
+test numeric::tests::parse_float_still_accepts_plus_inf ... ok
+test numeric::tests::parse_float_xsd10_rejects_plus_inf ... ok
+test numeric::tests::parse_float_xsd10_accepts_xsd10_lexicals ... ok
+test numeric::tests::value_parse_xsd10_rejects_plus_inf_for_float_and_double ... ok
+test numeric::tests::value_parse_xsd10_unaffected_for_non_float_double_datatypes ... ok
+test numeric::tests::unary_minus_float ... ok
+test rational::tests::the_tower_nests_integers_and_excludes_floats ... ok
+test numeric::tests::decimal_add_exact_no_float_error ... ok
+test range::tests::the_two_zeros_of_a_float_space_share_one_ordered_point ... ok
+test bigint::tower_tests::tests::float_conversions_are_correctly_rounded_across_bit_lengths ... ok
+test decimal_float::tests::f32_subnormals_round_once ... ok
+test decimal_float::tests::random_decimals_match_the_oracle_across_mantissa_sizes_and_scales ... ok
+test decimal_float::tests::exact_ties_and_their_neighbours_round_to_even ... ok
+test bigint::tower_tests::tests::float_conversions_are_correctly_rounded_at_powers_of_two_and_ties ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 289 filtered out; finished in 0.24s
+

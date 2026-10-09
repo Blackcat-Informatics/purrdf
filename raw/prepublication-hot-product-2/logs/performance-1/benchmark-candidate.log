@@ -1,0 +1,78 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/alloc-probe)
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/lex)
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/477-xsd-one-binary-arbitrary-precision/crates/xsd)
+    Finished `bench` profile [optimized] target(s) in 10.65s
+     Running benches/exact.rs (/opt/purrdf-477-qualification/build/release/build/purrdf-xsd/b197c7e7ec7c5883/out/exact-b197c7e7ec7c5883)
+xsd_exact_small/integer_add/exact time:   [7.093 µs 7.763 µs 10.63 µs]  mad: 879.1 ns  (10 samples × 10673 iterations)
+                         thrpt:  [96.29 Melem/s 131.9 Melem/s 144.4 Melem/s]
+                         change: [-13.4738% -3.0322% +33.9990%] against `main341`: No change in performance detected.
+xsd_exact_small/integer_add/bounded time:   [15.55 µs 16.40 µs 16.67 µs]  mad: 185.5 ns  (10 samples × 6422 iterations)
+                         thrpt:  [61.44 Melem/s 62.42 Melem/s 65.86 Melem/s]
+                         change: [-5.5738% -0.8670% +1.7906%] against `main341`: No change in performance detected.
+                         outliers: 3 of 10 (2 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/integer_mul/exact time:   [8.973 µs 9.111 µs 9.268 µs]  mad: 133.4 ns  (10 samples × 11089 iterations)
+                         thrpt:  [110.5 Melem/s 112.4 Melem/s 114.1 Melem/s]
+                         change: [+5.3725% +6.9580% +8.8879%] against `main341`: Performance has regressed.
+xsd_exact_small/integer_mul/bounded time:   [16.02 µs 17.30 µs 21.76 µs]  mad: 1.580 µs  (10 samples × 5950 iterations)
+                         thrpt:  [47.07 Melem/s 59.18 Melem/s 63.91 Melem/s]
+                         change: [-2.2019% +5.6027% +30.1690%] against `main341`: No change in performance detected.
+                         outliers: 2 of 10 (0 low severe, 0 low mild, 2 high mild, 0 high severe)
+xsd_exact_small/decimal_add/exact time:   [9.355 µs 9.410 µs 9.651 µs]  mad: 112.8 ns  (10 samples × 9238 iterations)
+                         thrpt:  [106.1 Melem/s 108.8 Melem/s 109.5 Melem/s]
+                         change: [-20.3060% -15.9154% -9.8973%] against `main341`: Performance has improved.
+xsd_exact_small/decimal_add/bounded time:   [15.60 µs 16.39 µs 16.73 µs]  mad: 606.4 ns  (10 samples × 6118 iterations)
+                         thrpt:  [61.20 Melem/s 62.46 Melem/s 65.64 Melem/s]
+                         change: [-16.3764% -7.4795% -2.5638%] against `main341`: Performance has improved.
+xsd_exact_small/decimal_mul/exact time:   [11.12 µs 11.61 µs 11.82 µs]  mad: 374.6 ns  (10 samples × 8505 iterations)
+                         thrpt:  [86.61 Melem/s 88.23 Melem/s 92.05 Melem/s]
+                         change: [+44.3358% +71.5590% +74.3033%] against `main341`: Performance has regressed.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_mul/bounded time:   [16.77 µs 17.80 µs 19.27 µs]  mad: 1.087 µs  (10 samples × 6281 iterations)
+                         thrpt:  [53.13 Melem/s 57.52 Melem/s 61.07 Melem/s]
+                         change: [-7.0315% +0.0876% +10.5559%] against `main341`: No change in performance detected.
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_div/exact time:   [22.90 µs 23.22 µs 23.35 µs]  mad: 142.2 ns  (10 samples × 3979 iterations)
+                         thrpt:  [43.85 Melem/s 44.10 Melem/s 44.72 Melem/s]
+                         change: [-37.4287% -31.3750% -15.1006%] against `main341`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 1 high mild, 0 high severe)
+xsd_exact_small/decimal_div/bounded time:   [22.61 µs 25.65 µs 30.37 µs]  mad: 2.487 µs  (10 samples × 2839 iterations)
+                         thrpt:  [33.72 Melem/s 39.93 Melem/s 45.29 Melem/s]
+                         change: [-13.5034% +1.2097% +17.0530%] against `main341`: No change in performance detected.
+xsd_exact_small/decimal_parse_canonical/exact time:   [120.4 µs 122.0 µs 123.7 µs]  mad: 1.601 µs  (10 samples × 833 iterations)
+                         thrpt:  [8.280 Melem/s 8.391 Melem/s 8.502 Melem/s]
+                         change: [-7.3323% +15.0359% +28.3789%] against `main341`: No change in performance detected.
+xsd_exact_small/decimal_parse_canonical/bounded time:   [95.77 µs 98.93 µs 129.8 µs]  mad: 3.213 µs  (10 samples × 1005 iterations)
+                         thrpt:  [7.891 Melem/s 10.35 Melem/s 10.69 Melem/s]
+                         change: [-17.1843% -3.4729% +28.2768%] against `main341`: No change in performance detected.
+xsd_exact_small/decimal_to_f64/exact time:   [6.710 µs 6.956 µs 7.018 µs]  mad: 72.52 ns  (10 samples × 13863 iterations)
+                         thrpt:  [145.9 Melem/s 147.2 Melem/s 152.6 Melem/s]
+                         change: [-1.7937% +6.3810% +20.3344%] against `main341`: No change in performance detected.
+xsd_exact_small/decimal_to_f64/bounded time:   [6.953 µs 7.166 µs 7.412 µs]  mad: 222.0 ns  (10 samples × 14292 iterations)
+                         thrpt:  [138.2 Melem/s 142.9 Melem/s 147.3 Melem/s]
+                         change: [+7.4318% +13.1783% +18.4414%] against `main341`: Performance has regressed.
+xsd_exact_growth/mul/40  time:   [70.22 ns 70.49 ns 72.46 ns]  mad: 291.7 ps  (10 samples × 1333741 iterations)
+                         thrpt:  [526.5 MiB/s 541.2 MiB/s 543.3 MiB/s]
+                         change: [-47.7425% -22.4955% +9.8655%] against `main341`: No change in performance detected.
+xsd_exact_growth/mul/400 time:   [491.9 ns 497.2 ns 511.3 ns]  mad: 6.226 ns  (10 samples × 199665 iterations)
+                         thrpt:  [746.0 MiB/s 767.3 MiB/s 775.5 MiB/s]
+                         change: [-94.1766% -90.7347% -86.3307%] against `main341`: Performance has improved.
+xsd_exact_growth/mul/4000 time:   [78.42 µs 103.3 µs 126.1 µs]  mad: 18.77 µs  (10 samples × 1631 iterations)
+                         thrpt:  [30.26 MiB/s 36.93 MiB/s 48.64 MiB/s]
+                         change: [-54.9166% -41.1618% -27.6221%] against `main341`: Performance has improved.
+                         outliers: 2 of 10 (0 low severe, 2 low mild, 0 high mild, 0 high severe)
+xsd_exact_growth/mul/40000 time:   [2.687 ms 2.708 ms 2.726 ms]  mad: 19.26 µs  (10 samples × 35 iterations)
+                         thrpt:  [14.00 MiB/s 14.09 MiB/s 14.20 MiB/s]
+                         change: [-58.3259% -56.7603% -56.2982%] against `main341`: Performance has improved.
+
+18 benchmarks measured; 0 failed

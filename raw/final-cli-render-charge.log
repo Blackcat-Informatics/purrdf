@@ -1,0 +1,21 @@
+Actual current-source final CLI qualification, session55723.
+Command: cargo test -p purrdf-cli --test exact_numerics_cli --locked --jobs8
+Raw managed nightly, private /opt target/build, MemoryMax64GiB/Swap0.
+Earlier compile progress was streamed to tool output; this is the untruncated completion tail.
+Exit: 0
+    Finished `test` profile [optimized] target(s) in 1m 49s
+     Running tests/exact_numerics_cli.rs (/opt/purrdf-477-qualification/build/debug/build/purrdf-cli/1e4d92837d0d6cbb/out/exact_numerics_cli-1e4d92837d0d6cbb)
+
+running 8 tests
+test query_answers_past_machine_words_exactly ... ok
+test owl_dl_tells_two_sixty_digit_values_apart ... ok
+test a_governed_query_names_the_errors_it_absorbed ... ok
+test shacl_range_constraints_compare_every_digit ... ok
+test shex_numeric_facets_compare_every_digit ... ok
+test a_fuel_ceiling_refuses_a_squaring_blow_up_and_admits_its_neighbour ... ok
+test a_governed_update_divides_under_its_policy_and_names_what_it_absorbed ... ok
+test division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbound ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
