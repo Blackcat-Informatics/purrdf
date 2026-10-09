@@ -1,0 +1,618 @@
+diff --git crates/rdf-capi/tests/c_smoke.rs crates/rdf-capi/tests/c_smoke.rs
+index 14f6d5c44..21e66d155 100644
+--- crates/rdf-capi/tests/c_smoke.rs
++++ crates/rdf-capi/tests/c_smoke.rs
+@@ -107,7 +107,11 @@ fn c_abi_smoke() -> std::io::Result<()> {
+     cargo_build.current_dir(root);
+     let output = phases.run("cargo-cdylib-preparation", &mut cargo_build)?;
+     let artifact = phases.check("cargo-artifact-validation", || {
+-        phases::cdylib(&output.stdout, package_id, &lib_name)
++        phases::cdylib(
++            &phases::cargo_messages(&output.stdout, false)?,
++            package_id,
++            &lib_name,
++        )
+     })?;
+     phases.evidence("cargo_artifact", artifact.message)?;
+     let library = phases.check("library-identity", || phases::identity(&artifact.path))?;
+diff --git crates/rdf-capi/tests/support/phases.rs crates/rdf-capi/tests/support/phases.rs
+index cbd7839a3..1cd872ed1 100644
+--- crates/rdf-capi/tests/support/phases.rs
++++ crates/rdf-capi/tests/support/phases.rs
+@@ -20,18 +20,37 @@ pub(crate) struct Artifact {
+     pub(crate) message: Value,
+ }
+ 
+-pub(crate) fn cdylib(messages: &[u8], package_id: &str, filename: &str) -> IoResult<Artifact> {
++/// Parse admitted Cargo frames once. JSON-only callers set `with_harness` false;
++/// test children may additionally emit ordinary libtest/doc output.
++pub(crate) fn cargo_messages(messages: &[u8], with_harness: bool) -> IoResult<Vec<Value>> {
+     let text = std::str::from_utf8(messages).map_err(|error| invalid(error.to_string()))?;
++    text.lines()
++        .filter(|line| {
++            // Cargo frames begin at column zero; libtest/doc output is separate.
++            // Malformed admitted frames remain errors, never ignored failures.
++            if with_harness {
++                line.starts_with('{')
++            } else {
++                !line.trim().is_empty()
++            }
++        })
++        .map(|line| {
++            json::read_with(
++                line,
++                json::Limits {
++                    unique_members: true,
++                    ..json::Limits::DEFAULT
++                },
++            )
++            .map_err(|error| invalid(error.to_string()))
++        })
++        .collect()
++}
++
++/// Select from an already admitted complete invocation, never across children.
++pub(crate) fn cdylib(messages: &[Value], package_id: &str, filename: &str) -> IoResult<Artifact> {
+     let mut selected = None;
+-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+-        let message = json::read_with(
+-            line,
+-            json::Limits {
+-                unique_members: true,
+-                ..json::Limits::DEFAULT
+-            },
+-        )
+-        .map_err(|error| invalid(error.to_string()))?;
++    for message in messages {
+         if message.get("reason").and_then(Value::as_str) != Some("compiler-artifact")
+             || message.get("package_id").and_then(Value::as_str) != Some(package_id)
+         {
+@@ -423,7 +442,7 @@ pub(crate) fn context(root: &Path, cargo: &str, cc: &str) -> IoResult<Value> {
+ }
+ 
+ #[cfg(test)]
+-mod tests {
++pub(crate) mod tests {
+     use super::*;
+ 
+     #[test]
+@@ -468,7 +487,7 @@ mod tests {
+         assert_eq!(untracked_paths(b"").unwrap(), [] as [&str; 0]);
+     }
+ 
+-    fn artifact(package: &str, fresh: Value, filenames: Value) -> String {
++    pub(crate) fn artifact(package: &str, fresh: Value, filenames: Value) -> String {
+         json::write_compact(
+             &Object::new()
+                 .with("reason", "compiler-artifact")
+@@ -478,6 +497,7 @@ mod tests {
+                     Value::from(
+                         Object::new()
+                             .with("name", "purrdf")
++                            .with("src_path", "/fixture/lib.rs")
+                             .with("kind", vec!["cdylib", "rlib"]),
+                     ),
+                 )
+@@ -498,12 +518,38 @@ mod tests {
+         )
+     }
+ 
++    #[test]
++    fn mixed_harness_frames_preserve_strict_artifact_selection() {
++        let exact = artifact("capi", false.into(), vec!["/exact/libpurrdf.so"].into());
++        let mixed = format!(
++            "{{\"reason\":\"build-started\"}}\n{exact}\n{{\"reason\":\"build-finished\",\"success\":true}}\nrunning 5 tests\ntest example ... ok\ntest result: ok. 5 passed\n"
++        );
++        assert!(cargo_messages(mixed.as_bytes(), false).is_err());
++        let messages = cargo_messages(mixed.as_bytes(), true).unwrap();
++        assert_eq!(messages.len(), 3);
++        let selected = cdylib(&messages, "capi", "libpurrdf.so").unwrap();
++        assert_eq!(selected.message, json::read(&exact).unwrap());
++        assert_eq!(selected.path, Path::new("/exact/libpurrdf.so"));
++        for suffix in ["{malformed", "{\"reason\":1,\"reason\":2}"] {
++            assert!(cargo_messages(format!("{mixed}{suffix}\n").as_bytes(), true).is_err());
++        }
++        let duplicate = cargo_messages(format!("{mixed}{exact}\n").as_bytes(), true).unwrap();
++        assert!(cdylib(&duplicate, "capi", "libpurrdf.so").is_err());
++        assert!(cdylib(&messages, "unrelated", "libpurrdf.so").is_err());
++        assert!(cdylib(&messages, "capi", "wrong.so").is_err());
++    }
++
+     #[test]
+     fn selects_exact_package_and_retains_freshness_metadata() {
+         let unrelated = artifact("other", true.into(), vec!["/other/libpurrdf.so"].into());
+         let exact = artifact("capi", false.into(), vec!["/exact/libpurrdf.so"].into());
+         let messages = format!("{unrelated}\n{exact}\n");
+-        let selected = cdylib(messages.as_bytes(), "capi", "libpurrdf.so").unwrap();
++        let selected = cdylib(
++            &cargo_messages(messages.as_bytes(), false).unwrap(),
++            "capi",
++            "libpurrdf.so",
++        )
++        .unwrap();
+         assert_eq!(selected.path, Path::new("/exact/libpurrdf.so"));
+         assert_eq!(
+             selected.message.get("fresh").and_then(Value::as_bool),
+@@ -511,11 +557,15 @@ mod tests {
+         );
+         let warm = artifact("capi", true.into(), vec!["/exact/libpurrdf.so"].into());
+         assert_eq!(
+-            cdylib(warm.as_bytes(), "capi", "libpurrdf.so")
+-                .unwrap()
+-                .message
+-                .get("fresh")
+-                .and_then(Value::as_bool),
++            cdylib(
++                &cargo_messages(warm.as_bytes(), false).unwrap(),
++                "capi",
++                "libpurrdf.so",
++            )
++            .unwrap()
++            .message
++            .get("fresh")
++            .and_then(Value::as_bool),
+             Some(true)
+         );
+     }
+@@ -537,11 +587,13 @@ mod tests {
+             valid.replace("\"fresh\":true", "\"fresh\":true,\"fresh\":false"),
+         ] {
+             assert!(
+-                cdylib(input.as_bytes(), "capi", "libpurrdf.so").is_err(),
++                cargo_messages(input.as_bytes(), false)
++                    .and_then(|messages| cdylib(&messages, "capi", "libpurrdf.so"))
++                    .is_err(),
+                 "accepted {input}"
+             );
+         }
+-        assert!(cdylib(&[0xff], "capi", "libpurrdf.so").is_err());
++        assert!(cargo_messages(&[0xff], false).is_err());
+     }
+ 
+     #[test]
+diff --git crates/rdf-capi/tests/support/profile.rs crates/rdf-capi/tests/support/profile.rs
+index 65a02b28b..2b7a814ad 100644
+--- crates/rdf-capi/tests/support/profile.rs
++++ crates/rdf-capi/tests/support/profile.rs
+@@ -532,6 +532,18 @@ fn cargo_shim_at(cargo: &Path, directory: &Path, arguments: Vec<String>) -> IoRe
+         &mut command,
+     );
+     let receipt = read(&prefix.with_extension("json"))?;
++    if result.is_ok() {
++        // The caller may remove its private artifact directory as soon as this
++        // shim returns. Bind the selected library while this child still owns it.
++        let captured = recorder.check("selected-capi-artifact-identities", || {
++            let stdout = receipt
++                .pointer("/phases/0/command/stdout")
++                .and_then(Value::as_str)
++                .ok_or_else(|| invalid("Cargo child output missing"))?;
++            capture_capi_artifacts(&phases::cargo_messages(stdout.as_bytes(), true)?)
++        })?;
++        recorder.evidence("capi_artifacts", captured.into())?;
++    }
+     if let Some(target) = &target {
+         let stderr = receipt
+             .pointer("/phases/0/command/stderr")
+@@ -594,6 +606,107 @@ fn artifact_metadata(message: &Value) -> IoResult<()> {
+     Ok(())
+ }
+ 
++fn selected_capi_artifacts(messages: &[Value]) -> IoResult<Vec<phases::Artifact>> {
++    let mut selected = Vec::new();
++    for message in messages {
++        if message.get("reason").and_then(Value::as_str) == Some("compiler-artifact")
++            && message.pointer("/target/name").and_then(Value::as_str) == Some("purrdf")
++            && message
++                .pointer("/target/kind")
++                .and_then(Value::as_array)
++                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "cdylib"))
++        {
++            artifact_metadata(message)?;
++            let package = message
++                .get("package_id")
++                .and_then(Value::as_str)
++                .ok_or_else(|| invalid("artifact package ID malformed"))?;
++            let filename = format!(
++                "{}purrdf{}",
++                std::env::consts::DLL_PREFIX,
++                std::env::consts::DLL_SUFFIX
++            );
++            let artifact = phases::cdylib(messages, package, &filename)?;
++            if artifact.message != *message {
++                return Err(invalid("selected C library does not match its Cargo frame"));
++            }
++            selected.push(artifact);
++        }
++    }
++    Ok(selected)
++}
++
++fn capture_capi_artifacts(messages: &[Value]) -> IoResult<Vec<Value>> {
++    selected_capi_artifacts(messages)?
++        .into_iter()
++        .map(|artifact| {
++            Ok(Object::new()
++                .with("artifact", artifact.message)
++                .with("library", phases::identity(&artifact.path)?)
++                .into())
++        })
++        .collect()
++}
++
++fn validate_capi_artifacts<'a>(messages: &[Value], captured: &'a Value) -> IoResult<&'a [Value]> {
++    let captures = captured
++        .as_array()
++        .ok_or_else(|| invalid("child-time C library identity inventory missing"))?;
++    let selected = selected_capi_artifacts(messages)?;
++    if captures.len() != selected.len() {
++        return Err(invalid("child-time C library identity inventory differs"));
++    }
++    for artifact in selected {
++        let matching: Vec<_> = captures
++            .iter()
++            .filter(|capture| capture.get("artifact") == Some(&artifact.message))
++            .collect();
++        let [capture] = matching.as_slice() else {
++            return Err(invalid(
++                "missing or ambiguous child-time C library identity",
++            ));
++        };
++        let library = capture
++            .get("library")
++            .ok_or_else(|| invalid("child-time C library identity missing"))?;
++        if library.get("path").and_then(Value::as_str) != artifact.path.to_str()
++            || library.get("bytes").and_then(Value::as_u64).is_none()
++            || library
++                .get("blake3")
++                .and_then(Value::as_str)
++                .and_then(purrdf_hash::hex::decode_32_canonical)
++                .is_none()
++        {
++            return Err(invalid(
++                "child-time C library identity is malformed or mismatched",
++            ));
++        }
++    }
++    Ok(captures)
++}
++
++fn c_phase_binding(c: &Value, captures: &[Value]) -> IoResult<()> {
++    let artifact = c
++        .pointer("/context/cargo_artifact")
++        .ok_or_else(|| invalid("actual C smoke Cargo artifact missing"))?;
++    let library = c
++        .pointer("/context/library")
++        .ok_or_else(|| invalid("actual C smoke library identity missing"))?;
++    if captures
++        .iter()
++        .filter(|capture| {
++            capture.get("artifact") == Some(artifact) && capture.get("library") == Some(library)
++        })
++        .count()
++        != 1
++    {
++        return Err(invalid(
++            "C smoke library is not bound to one actual Cargo child",
++        ));
++    }
++    Ok(())
++}
++
+ fn timing_snapshot(target: &Path) -> IoResult<Vec<(PathBuf, String)>> {
+     let directory = target.join("cargo-timings");
+     let entries = match std::fs::read_dir(directory) {
+@@ -650,6 +763,7 @@ fn collect(directory: &Path, roots: &[(&str, &str)]) -> IoResult<Value> {
+     let mut receipts = Vec::new();
+     let mut artifacts = Vec::new();
+     let mut timings = Vec::new();
++    let mut captures = Vec::new();
+     let mut files = std::fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+     files.sort_by_key(std::fs::DirEntry::file_name);
+     for entry in files {
+@@ -667,15 +781,16 @@ fn collect(directory: &Path, roots: &[(&str, &str)]) -> IoResult<Value> {
+                 .pointer("/phases/0/command/stdout")
+                 .and_then(Value::as_str)
+                 .ok_or_else(|| invalid("Cargo child output missing"))?;
+-            for line in stdout.lines().filter(|line| line.starts_with('{')) {
+-                let message = json::read_with(
+-                    line,
+-                    json::Limits {
+-                        unique_members: true,
+-                        ..json::Limits::DEFAULT
+-                    },
+-                )
+-                .map_err(|error| invalid(error.to_string()))?;
++            let messages = phases::cargo_messages(stdout.as_bytes(), true)?;
++            let captured = receipt
++                .pointer("/context/capi_artifacts")
++                .ok_or_else(|| invalid("child-time C library identity inventory missing"))?;
++            captures.extend(
++                validate_capi_artifacts(&messages, captured)?
++                    .iter()
++                    .cloned(),
++            );
++            for message in &messages {
+                 if message.get("reason").and_then(Value::as_str) == Some("compiler-artifact") {
+                     artifact_metadata(&message)?;
+                     for key in [
+@@ -690,29 +805,7 @@ fn collect(directory: &Path, roots: &[(&str, &str)]) -> IoResult<Value> {
+                             return Err(invalid(format!("Cargo artifact {key} missing")));
+                         }
+                     }
+-                    if message.pointer("/target/name").and_then(Value::as_str) == Some("purrdf")
+-                        && message
+-                            .pointer("/target/kind")
+-                            .and_then(Value::as_array)
+-                            .is_some_and(|kinds| kinds.iter().any(|kind| kind == "cdylib"))
+-                    {
+-                        let package = message
+-                            .get("package_id")
+-                            .and_then(Value::as_str)
+-                            .ok_or_else(|| invalid("artifact package ID malformed"))?;
+-                        let filename = format!(
+-                            "{}purrdf{}",
+-                            std::env::consts::DLL_PREFIX,
+-                            std::env::consts::DLL_SUFFIX
+-                        );
+-                        let selected = phases::cdylib(stdout.as_bytes(), package, &filename)?;
+-                        if selected.message != message || !selected.path.is_file() {
+-                            return Err(invalid(
+-                                "actual selected C library is missing or ambiguous",
+-                            ));
+-                        }
+-                    }
+-                    artifacts.push(normalize(&message, roots));
++                    artifacts.push(normalize(message, roots));
+                 }
+             }
+             receipts.push(phases::identity(&entry.path())?);
+@@ -730,6 +823,7 @@ fn collect(directory: &Path, roots: &[(&str, &str)]) -> IoResult<Value> {
+         .with("timings", timings);
+     let c_receipt = directory.join("c-phases.json");
+     if c_receipt.exists() {
++        c_phase_binding(&read(&c_receipt)?, &captures)?;
+         collected.insert("c_phases", phases::identity(&c_receipt)?);
+     }
+     Ok(collected.into())
+@@ -789,6 +883,7 @@ fn valid_receipt(receipt: &Value) -> IoResult<u128> {
+     {
+         artifact_metadata(artifact)?;
+     }
++    let mut captures = Vec::new();
+     for key in ["receipts", "timings"] {
+         for identity in cargo
+             .get(key)
+@@ -804,9 +899,31 @@ fn valid_receipt(receipt: &Value) -> IoResult<u128> {
+             }
+             if key == "receipts" {
+                 let child = read(Path::new(path))?;
+-                if child.pointer("/phases/0/success").and_then(Value::as_bool) != Some(true) {
++                if child
++                    .get("phases")
++                    .and_then(Value::as_array)
++                    .is_none_or(|phases| {
++                        phases.is_empty()
++                            || phases.iter().any(|phase| {
++                                phase.get("success").and_then(Value::as_bool) != Some(true)
++                            })
++                    })
++                {
+                     return Err(invalid("failed Cargo child cannot qualify"));
+                 }
++                let stdout = child
++                    .pointer("/phases/0/command/stdout")
++                    .and_then(Value::as_str)
++                    .ok_or_else(|| invalid("Cargo child output missing"))?;
++                let messages = phases::cargo_messages(stdout.as_bytes(), true)?;
++                let captured = child
++                    .pointer("/context/capi_artifacts")
++                    .ok_or_else(|| invalid("child-time C library identity inventory missing"))?;
++                captures.extend(
++                    validate_capi_artifacts(&messages, captured)?
++                        .iter()
++                        .cloned(),
++                );
+             }
+         }
+     }
+@@ -827,6 +944,7 @@ fn valid_receipt(receipt: &Value) -> IoResult<u128> {
+             return Err(invalid("C phase evidence changed"));
+         }
+         let c = read(Path::new(path))?;
++        c_phase_binding(&c, &captures)?;
+         let phases = c
+             .get("phases")
+             .and_then(Value::as_array)
+@@ -1080,6 +1198,183 @@ pub(crate) fn compare(input: &Path) -> IoResult<()> {
+ mod tests {
+     use super::*;
+ 
++    fn collector_child(directory: &Path, name: &str, stdout: &str, captures: &[Value]) -> PathBuf {
++        let timing = directory.join(format!("cargo-{name}-timing.html"));
++        std::fs::write(&timing, "fixture invocation-attributed timing report").unwrap();
++        let child = directory.join(format!("cargo-{name}.json"));
++        let document: Value = Object::new()
++            .with("schema", "purrdf-process-phases-v1")
++            .with(
++                "context",
++                Value::from(
++                    Object::new()
++                        .with("capi_artifacts", captures.to_vec())
++                        .with("timings", vec![phases::identity(&timing).unwrap()]),
++                ),
++            )
++            .with(
++                "phases",
++                vec![Value::from(Object::new().with("success", true).with(
++                    "command",
++                    Value::from(Object::new().with("stdout", stdout)),
++                ))],
++            )
++            .into();
++        std::fs::write(&child, json::write_pretty(&document)).unwrap();
++        child
++    }
++
++    #[test]
++    fn mixed_children_bind_libraries_before_cleanup_and_match_actual_c_smoke() {
++        let holder = purrdf_testkit::temp_dir!().unwrap();
++        let root = holder.path();
++        let mut runtime = None;
++        let mut children = Vec::new();
++        for name in ["header", "parent", "runtime"] {
++            let directory = root.join(name);
++            std::fs::create_dir(&directory).unwrap();
++            let library = directory.join(format!(
++                "{}purrdf{}",
++                std::env::consts::DLL_PREFIX,
++                std::env::consts::DLL_SUFFIX
++            ));
++            std::fs::write(&library, name).unwrap();
++            let frame = phases::tests::artifact(
++                "capi",
++                (name == "runtime").into(),
++                vec![library.to_str().unwrap()].into(),
++            );
++            let stdout = format!(
++                "{{\"reason\":\"build-started\"}}\n{frame}\n{{\"reason\":\"build-finished\",\"success\":true}}\nrunning 5 tests\ntest original_c_smoke ... ok\ntest result: ok. 5 passed\n"
++            );
++            let messages = phases::cargo_messages(stdout.as_bytes(), true).unwrap();
++            let captures = capture_capi_artifacts(&messages).unwrap();
++            children.push((collector_child(root, name, &stdout, &captures), stdout));
++            if name == "header" {
++                std::fs::remove_file(&library).unwrap();
++                assert!(capture_capi_artifacts(&messages).is_err());
++                assert!(validate_capi_artifacts(&messages, &captures.clone().into()).is_ok());
++            }
++            if name == "runtime" {
++                runtime = Some(captures[0].clone());
++            }
++        }
++        let selected = runtime.unwrap();
++        let c: Value = Object::new()
++            .with(
++                "context",
++                Value::from(
++                    Object::new()
++                        .with("cargo_artifact", selected.get("artifact").unwrap().clone())
++                        .with("library", selected.get("library").unwrap().clone()),
++                ),
++            )
++            .with(
++                "phases",
++                vec![Value::from(Object::new().with("success", true)); 16],
++            )
++            .into();
++        let c_path = root.join("c-phases.json");
++        std::fs::write(&c_path, json::write_pretty(&c)).unwrap();
++        let collected = collect(root, &[]).unwrap();
++        assert_eq!(
++            collected
++                .get("compiler_artifacts")
++                .unwrap()
++                .as_array()
++                .unwrap()
++                .len(),
++            3
++        );
++        assert_eq!(
++            collected.get("receipts").unwrap().as_array().unwrap().len(),
++            3
++        );
++        for (child, stdout) in &children {
++            assert_eq!(
++                read(child)
++                    .unwrap()
++                    .pointer("/phases/0/command/stdout")
++                    .and_then(Value::as_str),
++                Some(stdout.as_str())
++            );
++        }
++        let mut outer = receipt(root);
++        *outer.pointer_mut("/context/request/lane").unwrap() = "capi".into();
++        *outer.pointer_mut("/context/cargo").unwrap() = collected;
++        assert!(valid_receipt(&outer).is_ok());
++        let mut wrong = c.clone();
++        *wrong.pointer_mut("/context/library/blake3").unwrap() = "00".repeat(32).into();
++        std::fs::write(&c_path, json::write_pretty(&wrong)).unwrap();
++        assert!(collect(root, &[]).is_err());
++        assert!(valid_receipt(&outer).is_err());
++        let mut rebound = outer.clone();
++        *rebound.pointer_mut("/context/cargo/c_phases").unwrap() =
++            phases::identity(&c_path).unwrap();
++        assert!(valid_receipt(&rebound).is_err());
++        let mut incomplete = c.clone();
++        let _removed = incomplete
++            .get_mut("phases")
++            .unwrap()
++            .as_array_mut()
++            .unwrap()
++            .pop()
++            .unwrap();
++        std::fs::write(&c_path, json::write_pretty(&incomplete)).unwrap();
++        *rebound.pointer_mut("/context/cargo/c_phases").unwrap() =
++            phases::identity(&c_path).unwrap();
++        assert!(valid_receipt(&rebound).is_err());
++        std::fs::write(&c_path, json::write_pretty(&c)).unwrap();
++        let child = &children[0].0;
++        let mut changed = read(child).unwrap();
++        *changed
++            .pointer_mut("/context/capi_artifacts/0/library/path")
++            .unwrap() = "/wrong/library".into();
++        std::fs::write(child, json::write_pretty(&changed)).unwrap();
++        assert!(collect(root, &[]).is_err());
++        assert!(valid_receipt(&outer).is_err());
++    }
++
++    #[test]
++    fn missing_malformed_ambiguous_and_tampered_child_bindings_refuse() {
++        let holder = purrdf_testkit::temp_dir!().unwrap();
++        let library = holder.path().join(format!(
++            "{}purrdf{}",
++            std::env::consts::DLL_PREFIX,
++            std::env::consts::DLL_SUFFIX
++        ));
++        std::fs::write(&library, "actual fixture library bytes").unwrap();
++        let frame =
++            phases::tests::artifact("capi", false.into(), vec![library.to_str().unwrap()].into());
++        let messages = phases::cargo_messages(frame.as_bytes(), true).unwrap();
++        let captures = capture_capi_artifacts(&messages).unwrap();
++        assert!(validate_capi_artifacts(&messages, &Value::Null).is_err());
++        assert!(validate_capi_artifacts(&messages, &Vec::<Value>::new().into()).is_err());
++        let duplicate = vec![captures[0].clone(), captures[0].clone()];
++        assert!(validate_capi_artifacts(&messages, &duplicate.into()).is_err());
++        let duplicate_frames = vec![messages[0].clone(), messages[0].clone()];
++        assert!(capture_capi_artifacts(&duplicate_frames).is_err());
++        for (pointer, replacement) in [
++            ("/artifact/fresh", true.into()),
++            ("/library/path", "/wrong/libpurrdf.so".into()),
++            ("/library/bytes", "not a byte count".into()),
++            ("/library/blake3", "not a digest".into()),
++        ] {
++            let mut wrong = captures[0].clone();
++            *wrong.pointer_mut(pointer).unwrap() = replacement;
++            assert!(validate_capi_artifacts(&messages, &vec![wrong].into()).is_err());
++        }
++        let broken = format!("{frame}\n{{broken\nrunning 1 test\n");
++        assert!(phases::cargo_messages(broken.as_bytes(), true).is_err());
++        let child = collector_child(holder.path(), "valid", &frame, &captures);
++        let mut changed = read(&child).unwrap();
++        *changed.pointer_mut("/phases/0/command/stdout").unwrap() = broken.into();
++        std::fs::write(&child, json::write_pretty(&changed)).unwrap();
++        assert!(collect(holder.path(), &[]).is_err());
++        std::fs::remove_file(library).unwrap();
++        assert!(capture_capi_artifacts(&messages).is_err());
++    }
++
+     #[test]
+     fn cargo_configuration_absence_is_bound_and_private_values_are_excluded() {
+         let absent = configuration_projection(b"{}").unwrap();
+@@ -1183,7 +1478,7 @@ mod tests {
+     fn receipt(root: &Path) -> Value {
+         let child = root.join("cargo-child.json");
+         let timing = root.join("cargo-timing.html");
+-        std::fs::write(&child, r#"{"phases":[{"success":true}]}"#).unwrap();
++        std::fs::write(&child, r#"{"context":{"capi_artifacts":[]},"phases":[{"success":true,"command":{"stdout":""}}]}"#).unwrap();
+         std::fs::write(&timing, "fixture Cargo timing report").unwrap();
+         let cargo: Value = Object::new()
+             .with("receipts", vec![phases::identity(&child).unwrap()])

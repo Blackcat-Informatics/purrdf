@@ -1,0 +1,204 @@
+{
+  "request": {
+    "root": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c",
+    "directory": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2",
+    "cargo": "/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo",
+    "lane": "integration-2",
+    "warmth": "cold",
+    "previous": null,
+    "jobs": 8,
+    "test_threads": 8,
+    "runner_class": "local owning production collector seam; no hosted or performance acceptance",
+    "dependency_cache": "existing registry/download cache unchanged; no flush",
+    "compiler_cache": "inherited compiler configuration captured, no override or flush",
+    "page_cache": "uncontrolled local OS cache; cold means empty owned Cargo target AND build"
+  },
+  "phases": [
+    {
+      "name": "arm-preparation",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "effective-build-configuration",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "configuration-identity",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "tool-source-configuration-identity",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "logical-source-identity",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "complete-target-inventory",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "unchanged-warm-arm",
+      "success": true,
+      "error": null,
+      "exit": null
+    },
+    {
+      "name": "actual-native-command",
+      "success": true,
+      "error": null,
+      "exit": 0
+    },
+    {
+      "name": "cargo-telemetry-inventory",
+      "success": true,
+      "error": null,
+      "exit": null
+    }
+  ],
+  "children": [
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4158175-1791481781352639047.json",
+      "bytes": 557909,
+      "blake3": "bba71bfb81712e7c17c6d5451b5d9ef0395cc6d195fddf03306ae84dc87d4615"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4176862-1791481902802052104.json",
+      "bytes": 70090,
+      "blake3": "0960be1f4a6a2f1d5d78ee0c338ac4cce7bd2325488b755d3ce784819bba96b5"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4176947-1791481902836193790.json",
+      "bytes": 66753,
+      "blake3": "c39ba971a20741c9136bd1a4cccdb0bb99b28c957b5bf9e17edfc5bcb44754b3"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4176967-1791481902838532089.json",
+      "bytes": 66806,
+      "blake3": "0c505c6152f223f366d63bfe1186a228cfef0365afe8926977995a221c59c40c"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4176992-1791481902854562689.json",
+      "bytes": 66753,
+      "blake3": "bce8c79659873ee7a2add8793bfdfad5a93075c614c0b54716c80a5865b66151"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4177000-1791481902855774312.json",
+      "bytes": 66806,
+      "blake3": "3edc36518accae55c53f0814599fff2ef5562d217562bcb7df9f723408cd6281"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4177002-1791481902856036355.json",
+      "bytes": 66775,
+      "blake3": "d439a1b0bb4578d6c7a74261b9713bdb652e661776995beb1b50bd3b57811d97"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4177346-1791481902963013976.json",
+      "bytes": 66594,
+      "blake3": "d3122d7d5f867e17243147890287bb5aa460a2ce83e7b1a8f35e387c19ee8a0c"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179441-1791482022695286478.json",
+      "bytes": 66316,
+      "blake3": "accaeec4ecb7b8198c8087839006d41f459ddfb6642a200467a710864aa0a717"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179444-1791482022698989487.json",
+      "bytes": 66424,
+      "blake3": "6a1163d4bb1ef8f5f5ce24d89e7da98df8fc6e083b425ffcc0402de79023a17c"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179447-1791482022704560640.json",
+      "bytes": 66369,
+      "blake3": "f36c37b7afd5215b9e81376d0ba3cc1bf2887efd574f5cee9699391c71cfde01"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179451-1791482022709946549.json",
+      "bytes": 66423,
+      "blake3": "2a411af3e646929b553bfa7452cad09bdfb3341b16b9861bc5cb7427969dfec8"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179458-1791482022716222150.json",
+      "bytes": 66424,
+      "blake3": "81bcf3b8cdcd8d9219c17a7bcbbfa6f92b658175f8041714a10c34530ecf3282"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179467-1791482022721534741.json",
+      "bytes": 66424,
+      "blake3": "6fa3bcc551c66d098d4ac1b311208a843e34ffdd6b8b573fa75ee15cc6951716"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179475-1791482022726784204.json",
+      "bytes": 66371,
+      "blake3": "9de2b9cdcf44a5647889e594ccb2cfe725a63e62704f963788f98be9b7944e50"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179574-1791482022852372287.json",
+      "bytes": 66551,
+      "blake3": "e47a8d1e5708e3938f8ebdcb972b55f409e95e9ff1ae4c8606cf25a5dcc91231"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179636-1791482022893848933.json",
+      "bytes": 66534,
+      "blake3": "76dde3eda28b9bf2dde9e95d82bf6775af83cbf6252811e42e40d06f42b1154d"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179666-1791482022925008629.json",
+      "bytes": 66156,
+      "blake3": "65b9abfdb1ad1e082ced002a244c211e66391e281e4c849c84287ede2d2048e8"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179686-1791482022965644090.json",
+      "bytes": 66155,
+      "blake3": "6b3cc162ca67f92c8c66508b7d0232912391a131d16cb41a30fd872b492d4737"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179717-1791482023018219644.json",
+      "bytes": 67205,
+      "blake3": "8a37aa911cef51391fc102fe85114a6f7fb88766ac7eb9c76bd23064e97ac831"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179742-1791482023053411288.json",
+      "bytes": 66535,
+      "blake3": "635de04e5d687b07be177f09c86d30542a8174000d7762b7fc7fda871085df2f"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179773-1791482023106617923.json",
+      "bytes": 67249,
+      "blake3": "35a58a1befcaf107f70ba851f176377787a00d123ca263e2d302d00d4e57da65"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179776-1791482023120072909.json",
+      "bytes": 66155,
+      "blake3": "95091d10678ecaee342621bc33c3d7ccf49a1de3898838610c733ff872230559"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179826-1791482023194447209.json",
+      "bytes": 67214,
+      "blake3": "48c4cf994ac53651674a1f721f15400b7aa19f9f8c035eeb3322fb7057e7ad68"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179830-1791482023205443759.json",
+      "bytes": 66642,
+      "blake3": "d2cf5604de01116349c612b6e126cad381992a38b7982b3522403cdba4a371a3"
+    },
+    {
+      "path": "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-cargo/cargo-4179863-1791482023271007513.json",
+      "bytes": 66155,
+      "blake3": "6da75691406d311267c6b76ecf844d25e953e89810d6ceb866450ec5916fbd42"
+    }
+  ]
+}

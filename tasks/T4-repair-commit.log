@@ -1,0 +1,4 @@
+Running as unit: purrdf-308-telemetry-commit-20261008.scope; invocation ID: ede0403fd0724de09c6b5af7ff7af312
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 5384882d6575 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/rdf-capi/Cargo.toml'.
+[paudley/308-reduce-native-ci-test-compilation-and-c ca713d3fe] fix(ci): preserve child-time artifact evidence and admitted metadata

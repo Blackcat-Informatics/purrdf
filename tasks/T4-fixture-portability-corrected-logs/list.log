@@ -1,0 +1,40 @@
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 1.54s
+     Running tests/native_profile.rs (/home/paudley/Active/.purrdf-308-fixture-portability-20261008/build/debug/build/purrdf-capi/06bef51ce427b051/out/native_profile-06bef51ce427b051)
+hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads: test
+hosted::tests::cargo_c_identity_refuses_successful_generic_help_and_wrong_release: test
+hosted::tests::execution_windows_refuse_missing_and_reversed_clocks: test
+hosted::tests::hosted_inventory_and_exact_counterfactual_are_closed: test
+hosted::tests::incomplete_or_changed_case_refuses_before_reclaiming_any_cache: test
+hosted::tests::physical_runner_identity_ignores_frequency_but_refuses_missing_observations: test
+hosted::tests::private_cache_boundaries_and_upload_outputs_are_mandatory: test
+hosted::tests::restoration_never_follows_an_alias_to_prior_evidence: test
+hosted::tests::restored_destinations_are_never_overwritten: test
+hosted::tests::restores_only_complete_current_attempt_and_preserves_prior_evidence: test
+hosted::tests::shared_setup_requires_ordered_endpoints_and_all_owned_source_records: test
+hosted::tests::stale_wrong_prefix_wrong_case_and_partial_attempt_refuse_before_any_move: test
+hosted::tests::symlinked_case_or_cache_never_reclaims_foreign_bytes: test
+hosted::tests::uploaded_case_reclamation_preserves_proof_and_all_siblings: test
+phases::tests::child_and_validation_failures_are_recorded_and_receipt_failures_are_hard: test
+phases::tests::mixed_harness_frames_preserve_strict_artifact_selection: test
+phases::tests::nul_inventory_preserves_literal_paths_and_refuses_lossy_decoding: test
+phases::tests::rejects_malformed_missing_unrelated_and_ambiguous_artifacts: test
+phases::tests::selects_exact_package_and_retains_freshness_metadata: test
+profile::tests::actual_delegate_failures_and_missing_requests_are_hard_and_retained: test
+profile::tests::admits_exact_nested_profile_delta_and_refuses_extra_source_changes: test
+profile::tests::cargo_configuration_absence_is_bound_and_private_values_are_excluded: test
+profile::tests::cargo_configuration_malformed_responses_never_become_absence: test
+profile::tests::cold_build_and_target_are_independent_and_warm_admission_is_explicit: test
+profile::tests::complete_comparison_records_aggregate_cost_but_never_invents_runner_wall_time: test
+profile::tests::libtest_frames_preserve_inventory_without_inventing_c_libraries: test
+profile::tests::lost_or_changed_compiler_receipts_cannot_qualify_observed_reduction: test
+profile::tests::missing_malformed_ambiguous_and_tampered_child_bindings_refuse: test
+profile::tests::mixed_children_bind_libraries_before_cleanup_and_match_actual_c_smoke: test
+profile::tests::physical_roots_normalize_without_losing_package_or_target_identity: test
+profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors: test
+profile::tests::real_sdk_metadata_uses_admitted_arm_directories_and_preserves_inventory: test
+profile::tests::rejects_missing_failed_mismatched_tools_config_concurrency_cache_and_coverage: test
+profile::tests::telemetry_preserves_selection_and_harness_arguments_and_nonbuild_commands: test
+profile::tests::warm_arm_retains_old_reports_but_attributes_only_new_or_changed_reports: test
+
+35 tests, 0 benchmarks

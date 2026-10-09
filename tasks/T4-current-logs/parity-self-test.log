@@ -1,0 +1,20 @@
+OK: self-test — the tree as committed has no divergence (the valid neighbour)
+OK: self-test — a `make check` gate absent from every workflow is refused
+OK: self-test — a ci.yaml gate absent from `make check` is refused
+OK: self-test — an exemption whose gate is now in `make check` is refused
+OK: self-test — all 7 exemptions are refused when nothing runs them, so a registration cannot hide a gate that runs nowhere
+OK: self-test — every registered exemption still describes a real divergence
+OK: self-test — a `make` in prose is not a step, and a real step still is
+OK: self-test — every target is taken and no flag argument is
+OK: self-test — all 8 `on:` spellings are judged correctly, including the two that must NOT be merge-blocking
+OK: self-test — a commented-out gate counts on neither side, an active one does
+OK: self-test — four spellings of one invocation normalise to one identity
+OK: self-test — none of 4 prose shapes reads as an invocation
+OK: self-test — all 5 real invocation spellings are seen
+OK: self-test — a comment inside the `check` recipe does not end it
+OK: self-test — a quoted `#` hides nothing and a real comment still strips
+OK: self-test — a continuation joins its own line only
+OK: self-test — the same gate with different arguments is refused
+OK: self-test — a gate paired in both lists with both argument forms is accepted
+OK: self-test — excluded consumer omissions and quoted prose are refused
+SELF-TEST PASS

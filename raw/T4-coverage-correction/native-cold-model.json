@@ -1,0 +1,8 @@
+{
+  "warmth": "cold",
+  "monolithic_ns": 2782905780387,
+  "six_native_sum_ns": 4283567720323,
+  "modeled_six_runner_max_ns": 1136295371216,
+  "modeled_reduction_percent": 59.16874443884396,
+  "interpretation": "idealized native-only six-runner model from same-runner serial costs; not observed parallel causal reduction; C/downstream excluded and separately measured"
+}

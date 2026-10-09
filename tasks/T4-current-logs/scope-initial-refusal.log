@@ -1,0 +1,1 @@
+Initial systemd-run --user --scope --quiet --pipe invocation exited1 before child start: --pty/--pty-late/--pipe is not compatible in trigger (path/socket/timer units) or --scope mode. Corrected scope invocation omits --pipe; actual resource limits readback64GiB/Swap0 retained.

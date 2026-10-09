@@ -1,0 +1,31 @@
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi)
+    Finished `test` profile [optimized] target(s) in 1.33s
+     Running tests/native_profile.rs (/opt/.cargo/slots/95be0b9034a0e1f3/0/build/debug/build/purrdf-capi/f1ab7ad3295d0770/out/native_profile-f1ab7ad3295d0770)
+
+running 22 tests
+test hosted::tests::cargo_c_identity_refuses_successful_generic_help_and_wrong_release ... ok
+test hosted::tests::hosted_inventory_and_exact_counterfactual_are_closed ... ok
+test hosted::tests::physical_runner_identity_ignores_frequency_but_refuses_missing_observations ... ok
+test phases::tests::selects_exact_package_and_retains_freshness_metadata ... ok
+test phases::tests::rejects_malformed_missing_unrelated_and_ambiguous_artifacts ... ok
+test profile::tests::physical_roots_normalize_without_losing_package_or_target_identity ... ok
+test profile::tests::telemetry_preserves_selection_and_harness_arguments_and_nonbuild_commands ... ok
+test hosted::tests::execution_windows_refuse_missing_and_reversed_clocks ... ok
+test profile::tests::cold_build_and_target_are_independent_and_warm_admission_is_explicit ... ok
+test profile::tests::admits_exact_nested_profile_delta_and_refuses_extra_source_changes ... ok
+test phases::tests::nul_inventory_preserves_literal_paths_and_refuses_lossy_decoding ... ok
+test profile::tests::lost_or_changed_compiler_receipts_cannot_qualify_observed_reduction ... ok
+test profile::tests::rejects_missing_failed_mismatched_tools_config_concurrency_cache_and_coverage ... ok
+test profile::tests::complete_comparison_records_aggregate_cost_but_never_invents_runner_wall_time ... ok
+test profile::tests::warm_arm_retains_old_reports_but_attributes_only_new_or_changed_reports ... ok
+test hosted::tests::restored_destinations_are_never_overwritten ... ok
+test hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads ... ok
+test hosted::tests::restoration_never_follows_an_alias_to_prior_evidence ... ok
+test hosted::tests::restores_only_complete_current_attempt_and_preserves_prior_evidence ... ok
+cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+test profile::tests::actual_delegate_failures_and_missing_requests_are_hard_and_retained ... ok
+test hosted::tests::stale_wrong_prefix_wrong_case_and_partial_attempt_refuse_before_any_move ... ok
+test phases::tests::child_and_validation_failures_are_recorded_and_receipt_failures_are_hard ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

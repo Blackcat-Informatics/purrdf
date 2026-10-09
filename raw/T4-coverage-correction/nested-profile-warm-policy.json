@@ -1,0 +1,10 @@
+{
+  "before": [
+    "/opt/purrdf-native-profile/37822266421-1/profile-before-capi/capi-warm-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-native-profile/37822266421-1/after-capi/capi-warm-receipt.json"
+  ],
+  "change": "nested-profile",
+  "output": "/opt/purrdf-native-profile/37822266421-1/nested-profile-warm-comparison.json"
+}

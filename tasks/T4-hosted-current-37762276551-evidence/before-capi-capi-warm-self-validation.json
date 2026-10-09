@@ -1,0 +1,15 @@
+{
+  "schema": "purrdf-native-comparison-v1",
+  "change": "none",
+  "before": [
+    "/opt/purrdf-native-profile/37762276551-1/before-capi/capi-warm-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-native-profile/37762276551-1/before-capi/capi-warm-receipt.json"
+  ],
+  "before_aggregate_command_ns": "15788721515",
+  "after_aggregate_command_ns": "15788721515",
+  "aggregate_reduction_observed": false,
+  "critical_path": "NOT MEASURED: aggregate durations do not establish hosted six-runner wall time",
+  "rust_cost": "combined preparation/code generation/linking and test execution; see Cargo timing reports, never subtraction-derived pure link time"
+}

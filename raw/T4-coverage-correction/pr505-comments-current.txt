@@ -1,0 +1,194 @@
+# PR #505: Capture and validate native CI and C phase costs
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Comments (1)
+
+### coderabbitai — 2026-10-08T23:38:11Z
+
+<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- review_stack_entry_start -->
+
+<a href="https://app.coderabbit.ai/change-stack/Blackcat-Informatics/purrdf/pull/505?scope=ghh_OusAJGA4HG8ljoOV0wJvVx8NmnZIjc2DdjmxOu0xZWA&amp;cs_source=review_comment"><img src="https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui-dark.svg?v=2" alt="Review in Change Stack →" width="220" height="32"></a>
+
+<!-- review_stack_entry_end -->
+<!-- recent_review_start -->
+
+No actionable comments were generated in the recent review. 🎉
+
+<details>
+<summary>ℹ️ Recent review info</summary>
+
+<details>
+<summary>⚙️ Run configuration</summary>
+
+- **Configuration used**: defaults
+- **Review profile**: CHILL
+- **Plan**: Team
+- **Run ID**: `cc61c3f2-58c4-41ea-a37b-a0f924254f01`
+
+</details>
+
+<details>
+<summary>📥 Commits</summary>
+
+Reviewing files that changed from the base of the PR and between 341ad5ae2cecc5de026047f86dcd1194aff25f10 and 17b22bfdb78c97400d6efbb05b8c46902a090e13.
+
+</details>
+
+<details>
+<summary>📒 Files selected for processing (9)</summary>
+
+* `.github/workflows/ci.yaml`
+* `CONTRIBUTING.md`
+* `crates/rdf-capi/Cargo.toml`
+* `crates/rdf-capi/examples/native_ci_profile.rs`
+* `crates/rdf-capi/tests/c_smoke.rs`
+* `crates/rdf-capi/tests/native_profile.rs`
+* `crates/rdf-capi/tests/support/hosted.rs`
+* `crates/rdf-capi/tests/support/phases.rs`
+* `crates/rdf-capi/tests/support/profile.rs`
+
+</details>
+
+**Included review availability:** This review used your included allowance. 0 included reviews remain after this review. Your included PR review attempts over the past 7 days set your current allowance at 1 review per hour.
+
+</details>
+
+---
+
+
+
+<!-- recent_review_end -->
+<!-- walkthrough_start -->
+
+<details>
+<summary>📝 Walkthrough</summary>
+
+## Walkthrough
+
+The change adds phase receipts for native C smoke tests and an opt-in CI workflow for cold and warm profiling. The workflow records compiler identities, retains per-case evidence, validates artifacts before reclaiming build trees, and compares the current attempt’s profiles.
+
+### Changes
+
+**Native profiling and CI**
+
+|Layer / File(s)|Summary|
+|:---|:---|
+|**Phase receipts and artifact validation** <br> `crates/rdf-capi/tests/support/phases.rs`|The shared recorder captures command results and build context. It validates Cargo output, selects the matching cdylib, and records file identities. Tests cover parsing, context collection, and receipt failures.|
+|**C smoke-test phase recording** <br> `crates/rdf-capi/tests/c_smoke.rs`|The C smoke test records build, compile, link, runtime, and cleanup phases. It validates and identifies generated artifacts, including the projection archive.|
+|**Hosted cases, evidence, and reclamation** <br> `crates/rdf-capi/tests/support/hosted.rs`|Hosted support validates case admission and workflow constraints, records case evidence, compares profiles, and guards artifact restoration and build-tree reclamation. Tests exercise these checks.|
+|**Profiling command and host prerequisites** <br> `crates/rdf-capi/Cargo.toml`, `crates/rdf-capi/examples/native_ci_profile.rs`, `crates/rdf-capi/tests/native_profile.rs`, `CONTRIBUTING.md`, `.github/workflows/ci.yaml`|The example target dispatches profiling operations to support code. Contributor instructions and CI setup specify the writable host directory required by profiling tests.|
+|**Opt-in workflow and compiler admission** <br> `.github/workflows/ci.yaml`|The workflow adds a disabled-by-default manual input and records run-attempt-specific Rust and Cargo identities. Profiling requires matching identities and runner setup.|
+|**Profile cases and retained evidence** <br> `.github/workflows/ci.yaml`|The workflow runs the before and after cases, uploads their reports, and revalidates each upload before reclaiming private build trees.|
+|**Current-attempt profile comparison** <br> `.github/workflows/ci.yaml`|The comparison job restores current-attempt artifacts, validates their inventory and coverage, retains comparison outputs, and requires successful admission and profiling.|
+
+<!-- change_assessment_start -->
+**Priority:** ➖ Normal
+
+**Estimated code review effort:** 4 (Complex) | ~60 minutes
+
+<!-- change_assessment_commit:"17b22bfdb78c97400d6efbb05b8c46902a090e13" -->
+**Change:** Feature
+<!-- change_assessment_end -->
+
+### Sequence Diagram(s)
+
+```mermaid
+sequenceDiagram
+  participant GitHubActions
+  participant native_ci_profile
+  participant hosted_run
+  participant ArtifactStore
+  GitHubActions->>native_ci_profile: invoke a hosted case
+  native_ci_profile->>hosted_run: run(case)
+  hosted_run-->>native_ci_profile: return case receipts and evidence
+  GitHubActions->>ArtifactStore: upload case evidence
+  GitHubActions->>native_ci_profile: invoke reclamation with upload identity and digest
+```
+
+</details>
+
+<!-- walkthrough_end -->
+<!-- final_review_risk_start -->
+**Merge Risk:** **⚪ Minimal** · up to `17b22`
+<!-- final_review_risk_coverage:{"sourceCommitId":"17b22bfdb78c97400d6efbb05b8c46902a090e13","coveredCommitId":"17b22bfdb78c97400d6efbb05b8c46902a090e13","kind":"reviewed"} -->
+
+This change adds native CI phase receipts and an opt-in profiling workflow. The profiling workflow is off unless manually enabled. The regular test shard that runs the new host-only tests creates the directory those tests need first. No concrete merge-blocking risk was found.
+<!-- final_review_risk_end -->
+<!-- pre_merge_checks_walkthrough_start -->
+
+<details>
+<summary>🚥 Pre-merge checks | ✅ 4 | ❌ 1</summary>
+
+### ❌ Failed checks (1 warning)
+
+|     Check name     |                                              Status                                              | Explanation                                                                                                                                                                                               | Resolution                                                                         |
+| :---------------- | :---------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
+| Docstring Coverage | ![Warning](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-warning.svg) | Docstring coverage is 37.31% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 67 functions across 5 files. (3 skipped: … | Write docstrings for the functions missing them to satisfy the coverage threshold. |
+
+<details>
+<summary>✅ Passed checks (4 passed)</summary>
+
+|         Check name         |                                             Status                                             | Explanation                                                                                                                                                                                               |
+| :------------------------ | :-------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|      Description Check     | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | Check skipped - CodeRabbit’s high-level summary is enabled.                                                                                                                                               |
+|         Title check        | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The title clearly and concisely describes the primary change: capturing and validating native CI and C phase costs.                                                                                       |
+|     Linked Issues check    | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | Issue `#308` requires comparable cold and unchanged-warm timings, phase profiling, safe artifact reuse, and preservation of all native gates. The workflow adds admitted before/after profiling cases with… |
+| Out of Scope Changes check | ![Passed](https://storage.googleapis.com/coderabbit_public_assets/pre-merge-checks-passed.svg) | The changes remain within issue `#308`. The shared receipt tooling, hosted campaign, workflow admission and comparison, C smoke phase separation, artifact validation, and prerequisite documentation dire… |
+
+</details>
+
+<details>
+<summary>Full details: Docstring Coverage</summary>
+
+**Explanation**
+
+Docstring coverage is 37.31% which is insufficient. The required threshold is 80.00%. Docstring coverage is scoped to functions touched by this diff. Analyzed 67 functions across 5 files. (3 skipped: 3 unsupported.)
+
+</details>
+
+</details>
+
+<!-- pre_merge_checks_walkthrough_end -->
+
+- [ ] <!-- {"checkboxId":"585bb3f6-faf5-4dbf-96d2-74e382adf19a"} --> Fix all pre-merge checks with AI
+<!-- finishing_touch_checkbox_start -->
+
+<details>
+<summary>✨ Finishing Touches 💡 1</summary>
+
+<!-- finishing_touch_suggestion:docstrings -->
+<details open>
+<summary>📝 Generate docstrings 💡</summary>
+
+- [ ] <!-- {"checkboxId":"3e1879ae-f29b-4d0d-8e06-d12b7ba33d98"} --> Commit to this branch
+- [ ] <!-- {"checkboxId":"7962f53c-55bc-4827-bfbf-6a18da830691"} --> Create a new PR
+
+</details>
+<details open>
+<summary>🧪 Generate unit tests (beta)</summary>
+
+- [ ] <!-- {"checkboxId": "6ba7b810-9dad-11d1-80b4-00c04fd430c8", "radioGroupId": "utg-output-choice-group-unknown_comment_id"} --> Commit to this branch
+- [ ] <!-- {"checkboxId": "f47ac10b-58cc-4372-a567-0e02b2c3d479", "radioGroupId": "utg-output-choice-group-unknown_comment_id"} --> Create a new PR
+
+</details>
+
+</details>
+
+<!-- finishing_touch_checkbox_end -->
+
+<!-- autopilot:start -->
+- [ ] <!-- {"checkboxId":"2708ad07-9f24-4260-9c11-7dc76a49f2e3"} --> <strong title="Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts">Autopilot</strong> · Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts
+<!-- autopilot:end -->
+<!-- tips_start -->
+
+---
+
+
+
+
+<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>
+
+<!-- tips_end -->
+

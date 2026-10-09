@@ -1,0 +1,5 @@
+shipping	0
+shipping-self	0
+dev	0
+dev-self	0
+nested-profile-pair	0

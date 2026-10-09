@@ -1,0 +1,56 @@
+[
+  {
+    "path": "/opt/.cargo/target/308-reduce-native-ci-test-compilation-and-c-95be0b90/debug/examples/native_ci_profile",
+    "symlink": false,
+    "resolved": "/opt/.cargo/target/308-reduce-native-ci-test-compilation-and-c-95be0b90/debug/examples/native_ci_profile",
+    "bytes": 1595200,
+    "mtime": "2026-10-08T04:18:54.052906+00:00",
+    "dev": 62,
+    "ino": 616809052
+  },
+  {
+    "path": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/controller-build.log",
+    "symlink": false,
+    "resolved": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/controller-build.log",
+    "bytes": 69865,
+    "mtime": "2026-10-08T14:07:12.642610+00:00",
+    "dev": 91,
+    "ino": 953446696
+  },
+  {
+    "path": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/controller-artifact.json",
+    "symlink": false,
+    "resolved": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/controller-artifact.json",
+    "bytes": 1106,
+    "mtime": "2026-10-08T14:08:26.510745+00:00",
+    "dev": 91,
+    "ino": 953446719
+  },
+  {
+    "path": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/controller-blake3.txt",
+    "symlink": false,
+    "resolved": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/controller-blake3.txt",
+    "bytes": 171,
+    "mtime": "2026-10-08T14:08:26.514247+00:00",
+    "dev": 91,
+    "ino": 953446720
+  },
+  {
+    "path": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/generated.log",
+    "symlink": false,
+    "resolved": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/generated.log",
+    "bytes": 7602,
+    "mtime": "2026-10-08T14:11:17.661523+00:00",
+    "dev": 91,
+    "ino": 953446742
+  },
+  {
+    "path": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/source-refs.txt",
+    "symlink": false,
+    "resolved": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-serial-corrected-logs/source-refs.txt",
+    "bytes": 123,
+    "mtime": "2026-10-08T14:10:41.207108+00:00",
+    "dev": 91,
+    "ino": 953446754
+  }
+]

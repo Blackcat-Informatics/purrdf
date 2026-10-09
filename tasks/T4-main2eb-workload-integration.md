@@ -1,0 +1,15 @@
+# Current workload integration assessment
+
+Source/read-only assessment before repair. Shipping HEAD f83095460c81d7cfbd93adfb2966098b4118da4c, current origin/main2eb04d61f3d65f34ec77b396b5d03c05c23fd5ee, merge-base5384882d65750ee22bddfeeac473095ab9c3db03. Worktree has no tracked dirty source; existing Stage directory remains untracked and preserved. No Cargo/build/test ran. Read current AGENTS and root .baseline/.goals. Memory registry is absent; no memory facts used.
+
+## Actual merged benchmark workload requires synchronization
+
+Main2eb changes27paths,2901insertions/934deletions. This is not merely prose: purrdf-bench adds normal RDF/lex/SPARQL Results edges, lubm-corpus/lubm-check binary targets, native library implementation, two new CLI test targets, an auto-discovered fault-driver example, and changed existing lane test behavior. Cargo.lock gains the Results edge; layers/Make workload laws change accordingly. Native lib/bin/doc/example/integration partitions and their combined complete target coverage therefore change. The failed f830 campaign cannot qualify compilation cost/coverage for the integrated target graph.
+
+Read-only git merge-tree --write-tree HEAD2eb returned0 with predicted tree e654f7eb488601b0d7c71255867b24b78400f31e and no conflicts. Incoming changes do not overlap the four proposed profiling repair paths (.github/workflows/ci.yaml, capi support hosted/profile, controller example). Ordinary no-commit base synchronization is necessary before implementation, under root's explicit authority; it must stop before committing/hooks/builds while454 owns the lane. Preserve both sides and the original measured source/receipts.
+
+## Upcoming candidate changes the workload again
+
+The actual402 worktree HEAD44dbf5cea is not main and is not imported here. Against its accepted538 base it adds workspace member purrdf-conformance-kit (library plus grading target), adds a community-conformance binary/test and new normal dependencies in sparql-conformance, adds dated/profile/complete-report SHACL tests, and changes SHACL/SPARQL evaluator/shared validate/WASM implementation. These are genuine target/dependency/codegen/test-workload changes, including compilation beneath CAPI, not an inventory-neutral doc update. No overlap with the profiling repair homes was found. Its timing/CI/qualification remains separately owned; no speculative branch merge is authorized or needed.
+
+Once402 is actually integrated, a final campaign intended to qualify that new main composition must synchronize/recapture source and dynamic Cargo target inventory. Existing217.24minute durations are observed feasibility provenance for f830/538 only, not qualified timings or a guaranteed360-minute fit for benchmark/402-expanded source. Fresh exact compiler/source/config/coverage receipts remain mandatory; a new main commit must never be relabeled as the old measured candidate. Source-only repair can proceed now; root coordinates the final main synchronization and campaign admission after402/454 terminals.

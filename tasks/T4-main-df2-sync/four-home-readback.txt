@@ -1,0 +1,1 @@
+PASS: every preserved working preimage byte-identical after ordinary merge and patch reapplication; no unmerged entries; only original four homes unstaged. Initial default git apply refused because repository diff.noprefix=true; actual supported git apply -p0 exited0, retained first failure.

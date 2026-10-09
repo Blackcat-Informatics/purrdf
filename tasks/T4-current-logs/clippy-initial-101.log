@@ -1,0 +1,52 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/deflate)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/ed25519)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/testkit)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/datalog)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/markdown)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/shex)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/columnar)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/retrieval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/entail)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/purrdf)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi)
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-capi/examples/../tests/support/profile.rs:795:39
+    |
+795 |                     artifact_metadata(&message)?;
+    |                                       ^^^^^^^^ help: change this to: `message`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: could not compile `purrdf-capi` (example "native_ci_profile") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/rdf-capi/tests/support/profile.rs:795:39
+    |
+795 |                     artifact_metadata(&message)?;
+    |                                       ^^^^^^^^ help: change this to: `message`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: could not compile `purrdf-capi` (test "native_profile") due to 1 previous error

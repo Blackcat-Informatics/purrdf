@@ -1,0 +1,1 @@
+Error: Custom { kind: Other, error: "actual-native-command: exit status: 2\nError: Custom { kind: Other, error: \"selected C library does not match its Cargo frame\" }\nmake: *** [Makefile:273: test] Error 1\n" }

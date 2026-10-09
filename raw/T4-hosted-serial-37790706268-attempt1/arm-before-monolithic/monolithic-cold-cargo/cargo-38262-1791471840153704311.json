@@ -1,0 +1,82 @@
+{
+  "schema": "purrdf-process-phases-v1",
+  "context": {
+    "original_argv": [
+      "run",
+      "--manifest-path",
+      "/home/runner/work/purrdf/purrdf/Cargo.toml",
+      "--locked",
+      "--release",
+      "--jobs",
+      "8",
+      "-p",
+      "purrdf-bench",
+      "--bin",
+      "lubm-check",
+      "--",
+      "config",
+      "0",
+      "18446744073709551615",
+      "1",
+      "http://swat.cse.lehigh.edu/onto/univ-bench.owl",
+      "http://example.org/lubm/"
+    ],
+    "delegated_argv": [
+      "run",
+      "--manifest-path",
+      "/home/runner/work/purrdf/purrdf/Cargo.toml",
+      "--locked",
+      "--release",
+      "--jobs",
+      "8",
+      "-p",
+      "purrdf-bench",
+      "--bin",
+      "lubm-check",
+      "--",
+      "config",
+      "0",
+      "18446744073709551615",
+      "1",
+      "http://swat.cse.lehigh.edu/onto/univ-bench.owl",
+      "http://example.org/lubm/"
+    ]
+  },
+  "phases": [
+    {
+      "name": "rust-preparation-codegen-link-and-test-command",
+      "elapsed_ns": "106083288",
+      "command": {
+        "program": "/home/runner/.cargo/bin/cargo",
+        "argv": [
+          "run",
+          "--manifest-path",
+          "/home/runner/work/purrdf/purrdf/Cargo.toml",
+          "--locked",
+          "--release",
+          "--jobs",
+          "8",
+          "-p",
+          "purrdf-bench",
+          "--bin",
+          "lubm-check",
+          "--",
+          "config",
+          "0",
+          "18446744073709551615",
+          "1",
+          "http://swat.cse.lehigh.edu/onto/univ-bench.owl",
+          "http://example.org/lubm/"
+        ],
+        "env": [],
+        "cwd": "/home/runner/work/purrdf/purrdf",
+        "exit_code": 1,
+        "exit_status": "exit status: 1",
+        "stdout": "",
+        "stderr": "\u001b[1m\u001b[92m    Blocking\u001b[0m waiting for file lock on package cache\n\u001b[1m\u001b[92m    Blocking\u001b[0m waiting for file lock on package cache\n\u001b[1m\u001b[92m    Blocking\u001b[0m waiting for file lock on build directory\n\u001b[1m\u001b[92m    Finished\u001b[0m `release` profile [optimized] target(s) in 0.08s\n\u001b[1m\u001b[92m     Running\u001b[0m `/opt/purrdf-native-profile/37790706268-1/before-monolithic/target/release/lubm-check config 0 18446744073709551615 1 'http://swat.cse.lehigh.edu/onto/univ-bench.owl' 'http://example.org/lubm/'`\nuniversity count must be positive and the exclusive range end must fit u64\n"
+      },
+      "success": false,
+      "error": "rust-preparation-codegen-link-and-test-command: exit status: 1\n\u001b[1m\u001b[92m    Blocking\u001b[0m waiting for file lock on package cache\n\u001b[1m\u001b[92m    Blocking\u001b[0m waiting for file lock on package cache\n\u001b[1m\u001b[92m    Blocking\u001b[0m waiting for file lock on build directory\n\u001b[1m\u001b[92m    Finished\u001b[0m `release` profile [optimized] target(s) in 0.08s\n\u001b[1m\u001b[92m     Running\u001b[0m `/opt/purrdf-native-profile/37790706268-1/before-monolithic/target/release/lubm-check config 0 18446744073709551615 1 'http://swat.cse.lehigh.edu/onto/univ-bench.owl' 'http://example.org/lubm/'`\nuniversity count must be positive and the exclusive range end must fit u64\n"
+    }
+  ]
+}

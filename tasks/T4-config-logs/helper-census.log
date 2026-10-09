@@ -1,0 +1,41 @@
+helper-census: give a mode
+
+Usage: helper-census [--root DIR] [--ledger FILE] <mode>
+       helper-census [--root DIR] --non-rust-ratchet
+                     (--base REV | --merge-base-with REF)
+                     --target (index | worktree | rev:REV)
+
+Modes:
+  --baseline [PATH]  write every isomorphic group, shim group, hex table and
+                     cross-package constant as JSON (default PATH:
+                     target/helper-census/clone-baseline.json under the root)
+  --census JOB       list the units matching JOB's forbidden set
+  --count JOB        print copies=<n>: matches outside JOB's home that are not
+                     ledger variants
+  --check            fail on any unsanctioned isomorphic group and on any
+                     forbidden match outside its home
+  --index            print the JSON index scripts/check-shared-helpers.py reads
+  --dump-ledger      print the parsed ledger as JSON
+  --self-test        run the seeded fixtures and exit
+  --no-features      refuse Cargo features except the empty cargo-c marker,
+                     and feature predicates in Rust cfg invocations
+  --python-binding-tests
+                     refuse Rust tests that the PyO3 extension never runs
+  --non-rust-ratchet fail when TARGET adds a non-Rust file without a
+                     `Why not Rust:` explanation, or grows a legacy one under
+                     a ratcheted root, compared with BASE (see AGENTS.md)
+  --help, -h         print this text
+
+Non-Rust ratchet options:
+  --base REV            BASE is this commit
+  --merge-base-with REF BASE is the merge-base of REF with the target (with
+                        HEAD and any MERGE_HEAD for index and worktree)
+  --target index        TARGET is the staged index (GIT_INDEX_FILE honoured)
+  --target worktree     TARGET is the working tree: tracked and untracked,
+                        unignored files
+  --target rev:REV      TARGET is this commit
+
+--root defaults to the workspace this binary was built from (for the ratchet,
+the git work tree to read); --ledger defaults to helpers-ledger.toml under the
+root.
+

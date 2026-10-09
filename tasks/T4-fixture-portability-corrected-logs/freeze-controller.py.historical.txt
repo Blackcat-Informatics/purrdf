@@ -1,0 +1,19 @@
+import json, pathlib, shutil, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+frames = [json.loads(line) for line in (root / 'controller-build.log').read_text().splitlines() if line.startswith('{')]
+frames = [f for f in frames if f.get('reason') == 'compiler-artifact' and f['target']['name'] == 'native_ci_profile' and f['target']['kind'] == ['example'] and f.get('executable')]
+assert len(frames) == 1, 'controller artifact must be unique'
+f = frames[0]
+assert f['manifest_path'].endswith('/crates/rdf-capi/Cargo.toml')
+assert f['profile']['opt_level'] == '3' and f['profile']['debug_assertions'] and f['profile']['overflow_checks'] and not f['profile']['test']
+source = pathlib.Path(f['executable'])
+assert source.is_file() and not source.is_symlink()
+assert not source.resolve().is_relative_to('/opt'), 'controller Cargo scratch must actually be outside /opt'
+(root / 'controller-artifact.json').write_text(json.dumps(f, indent=2) + '\n')
+shutil.copy2(source, root / 'native_ci_profile.frozen')
+with (root / 'frozen-controller-blake3.txt').open('w') as out:
+    subprocess.run(['b3sum', str(root / 'native_ci_profile.frozen')], stdout=out, check=True)
+for label in ['target', 'build']:
+    path = pathlib.Path('/home/paudley/Active/.purrdf-308-fixture-portability-20261008') / label
+    assert not path.resolve().is_relative_to('/opt') and (path / 'CACHEDIR.TAG').is_file()
+(root / 'cargo-scratch-proof.json').write_text(json.dumps({'target': str((pathlib.Path('/home/paudley/Active/.purrdf-308-fixture-portability-20261008/target')).resolve()), 'build': str((pathlib.Path('/home/paudley/Active/.purrdf-308-fixture-portability-20261008/build')).resolve()), 'fixture_parent': str(pathlib.Path('/opt/purrdf-native-profile-tests').resolve())}, indent=2) + '\n')

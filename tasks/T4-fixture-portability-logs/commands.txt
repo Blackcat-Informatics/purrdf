@@ -1,0 +1,2 @@
+cargo test --locked --jobs 8 -p purrdf-capi --test native_profile -- --list 
+cargo test --locked --jobs 8 -p purrdf-capi --test native_profile 

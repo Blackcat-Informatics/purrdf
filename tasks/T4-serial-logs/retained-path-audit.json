@@ -1,0 +1,128 @@
+{
+  "actual_receipts": 24,
+  "retained_fs_read_identities": 106,
+  "embedded_child_library_snapshots": 32,
+  "rows": [
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-capi/capi-cold-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-capi/capi-warm-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-doc/doc-cold-receipt.json",
+      "read_paths": 6,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-doc/doc-warm-receipt.json",
+      "read_paths": 6,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-downstream/downstream-cold-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-downstream/downstream-warm-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-1/integration-1-cold-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-1/integration-1-warm-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-2/integration-2-cold-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-2/integration-2-warm-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-3/integration-3-cold-receipt.json",
+      "read_paths": 3,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-3/integration-3-warm-receipt.json",
+      "read_paths": 3,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-4/integration-4-cold-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-4/integration-4-warm-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-lib/lib-cold-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-lib/lib-warm-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-capi/capi-cold-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-capi/capi-warm-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-downstream/downstream-cold-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-downstream/downstream-warm-receipt.json",
+      "read_paths": 2,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-monolithic/monolithic-cold-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-monolithic/monolithic-warm-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/profile-before-capi/capi-cold-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    },
+    {
+      "receipt": ".stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/profile-before-capi/capi-warm-receipt.json",
+      "read_paths": 8,
+      "all_paths_retained_outside_target_build": true
+    }
+  ],
+  "source_path_authority": "valid_receipt rereads only context.cargo.receipts/timings/c_phases identities; library snapshots are typed compared, not file-existence rereads. current_timings copies Cargo target reports into retained telemetry before capture; collect records telemetry file identities. phases::cdylib selects metadata without filesystem I/O."
+}

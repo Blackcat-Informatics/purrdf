@@ -1,0 +1,10 @@
+{
+  "before": [
+    "/opt/purrdf-native-profile/37768038171-1/profile-before-capi/capi-cold-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-native-profile/37768038171-1/profile-before-capi/capi-cold-receipt.json"
+  ],
+  "change": "none",
+  "output": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/profile-before-capi-capi-cold-self-validation.json"
+}

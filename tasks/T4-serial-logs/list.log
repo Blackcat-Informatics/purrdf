@@ -1,0 +1,54 @@
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/datalog)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/markdown)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/shex)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/json)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-eval)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/entail)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/hnsw)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/geo)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/purrdf)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi)
+error[E0283]: type annotations needed
+    --> crates/rdf-capi/tests/support/hosted.rs:1111:18
+     |
+1105 |         request.insert(
+     |                 ------ required by a bound introduced by this call
+...
+1111 |                 .into(),
+     |                  ^^^^
+     |
+     = note: the type must implement `Into<purrdf_lex::json::Value>`
+note: required by a bound in `purrdf_lex::json::Object::insert`
+    --> crates/lex/src/json/value.rs:136:67
+     |
+ 136 |     pub fn insert(&mut self, name: impl Into<String>, value: impl Into<Value>) -> Option<Value> {
+     |                                                                   ^^^^^^^^^^^ required by this bound in `Object::insert`
+help: try using a fully qualified path to specify the expected types
+     |
+1107 ~             <std::string::String as Into<T>>::into(directory
+1108 |                 .with_file_name("source")
+1109 |                 .display()
+1110 ~                 .to_string()),
+     |
+help: consider removing this method call, as the receiver has type `std::string::String` and `std::string::String: Into<purrdf_lex::json::Value>` trivially holds
+     |
+1110 -                 .to_string()
+1111 -                 .into(),
+1110 +                 .to_string(),
+     |
+
+For more information about this error, try `rustc --explain E0283`.
+error: could not compile `purrdf-capi` (test "native_profile") due to 1 previous error

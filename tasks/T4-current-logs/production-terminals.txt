@@ -1,0 +1,7 @@
+doc	0
+doc-self-validation	0
+capi-test	0
+capi-test-self-validation	0
+capi-dev	0
+capi-dev-self-validation	0
+nested-profile-validation	1

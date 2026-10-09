@@ -1,0 +1,69 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-events)
+    Checking regex-syntax v0.8.11
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-core)
+    Checking hashbrown v0.17.1
+    Checking crossbeam-utils v0.8.21
+    Checking either v1.16.0
+    Checking libc v0.2.186
+    Checking cmov v0.5.4
+    Checking cpubits v0.1.1
+    Checking ctutils v0.4.2
+    Checking fastrand v2.4.1
+    Checking crossbeam-epoch v0.9.18
+    Checking twox-hash v2.1.2
+    Checking regex-automata v0.4.14
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/deflate)
+    Checking structured-zstd v0.0.49
+    Checking crossbeam-deque v0.8.6
+    Checking visual-hashing v1.0.0
+    Checking hybrid-array v0.4.15
+    Checking getrandom v0.3.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/stack)
+    Checking rayon-core v1.13.0
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking inout v0.2.2
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/xsd)
+    Checking regex v1.12.4
+    Checking digest v0.11.3
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking rayon v1.12.0
+    Checking polyval v0.7.3
+    Checking aes v0.9.3
+    Checking sha2 v0.11.0
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/cdt)
+    Checking ghash v0.6.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-algebra)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/ed25519)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/testkit)
+    Checking aes-gcm v0.11.1
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/gts)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/columnar)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/entail)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/purrdf)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2.67s

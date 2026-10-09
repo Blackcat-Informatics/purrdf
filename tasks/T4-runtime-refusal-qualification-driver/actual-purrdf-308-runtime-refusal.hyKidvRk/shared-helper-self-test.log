@@ -1,0 +1,101 @@
+PASS: a ledger that holds passes
+PASS: a home that does not resolve fails
+PASS: an undocumented anchor fails
+PASS: a variant defined outside its file fails
+PASS: a site measuring another crate fails
+PASS: a site measuring the home crate passes
+PASS: an unbanned replaces_external fails
+PASS: a missing vectors file fails
+PASS: an unknown bench id fails
+PASS: a forbidden variant that matches nothing is STALE
+PASS: a forbidden match outside the home of an enforced job fails
+PASS: the same match in an unenforced job is reported only by --census
+PASS: an unenforced job with no copies left is STALE
+PASS: a body fingerprint that matches nothing is STALE
+PASS: an isomorphic variant in a group passes
+PASS: an isomorphic variant in no group is STALE
+PASS: an IRI-gate variant the gate still matches passes
+PASS: an IRI-gate variant the gate no longer matches is STALE
+PASS: an unknown detector fails
+PASS: a #[path] include of another crate's file is a finding
+PASS: a #[path] include inside its own crate, in a comment or in a string passes
+PASS: a #[path] include that climbs above the repository is a finding
+PASS: a delegated rule's hit fails the enforced job naming it
+PASS: the same job with no delegated hit passes
+PASS: a delegated hit in an unenforced job is reported only by --census
+PASS: a declared shared-domain exception passes
+PASS: an undeclared shared domain fails the job
+PASS: a declared shared-domain exception the gate no longer matches is STALE
+PASS: a declared undomained digest the gate still matches passes
+PASS: a declared undomained digest that now opens under a Domain is STALE
+PASS: every rule check-hash-domains.py reports is a delegated rule id
+PASS: a declared exception whose anchor carries no documentation fails
+PASS: a [[distinct]] row naming exactly its group's members sanctions it
+PASS: a group that gains a member its [[distinct]] row does not name fails, and the row is STALE
+PASS: a [[distinct]] row that equals no current group is STALE, and the group still fails
+PASS: a [[distinct]] row naming a member that no longer exists is STALE
+PASS: a [[distinct]] row whose anchor carries no documentation fails
+PASS: every seeded std-default-hasher spelling is reported
+PASS: a named hasher, a hasher alias, an annotated let and a foreign map are not reported
+PASS: each hit is a copy of the enforced job
+PASS: every seeded vocabulary literal (a retyped term, a namespace, a format string, a raw string) is reported
+PASS: a bracketed term, a sibling namespace, an embedded document and test-only code are not vocabulary hits
+PASS: a token the home spells is reported outside it, and a longer word is not
+PASS: a vocabulary job whose modules declare no namespace constant is itself a copy
+PASS: each literal hit is a copy of its enforced job
+PASS: every seeded two-digit hex format inside a loop or closure is reported
+PASS: a pair formatted once, a pair in an assertion message, an escaped brace and a wider spec are not
+PASS: every seeded base16 copy (loop, pair parse, table) is reported
+PASS: a u32 code-point parse and a near-miss table are not reported
+PASS: the home's own digit table is the home's, not a copy
+PASS: each base16 hit is a copy of the enforced job
+PASS: every seeded grammar-ws spelling in shipping code is reported
+PASS: the grammar-ws neighbours (the shared spelling, test code, the home) are not reported
+PASS: each grammar-ws hit is a copy of the enforced job
+PASS: every seeded json-pointer spelling in shipping code is reported
+PASS: the json-pointer neighbours (the shared spelling, test code, the home) are not reported
+PASS: each json-pointer hit is a copy of the enforced job
+PASS: every seeded escape-decode spelling in shipping code is reported
+PASS: the escape-decode neighbours (the shared spelling, test code, the home) are not reported
+PASS: each escape-decode hit is a copy of the enforced job
+PASS: the pointer escape inside its home is the home's, not a copy
+PASS: every seeded reifier-rows spelling is reported
+PASS: the reifier-rows neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each reifier-rows hit is a copy of the enforced job
+PASS: every seeded fixed-hasher-everywhere spelling is reported
+PASS: the fixed-hasher-everywhere neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each fixed-hasher-everywhere hit is a copy of the enforced job
+PASS: every seeded rdf-collection spelling is reported
+PASS: the rdf-collection neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each rdf-collection hit is a copy of the enforced job
+PASS: every seeded wasm-host-clock spelling is reported
+PASS: the wasm-host-clock neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each wasm-host-clock hit is a copy of the enforced job
+PASS: every seeded wasm-host-reflect-get spelling is reported
+PASS: the wasm-host-reflect-get neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each wasm-host-reflect-get hit is a copy of the enforced job
+PASS: every seeded framing, slice-indexed integer, alignment mask and hand ceiling division is reported
+PASS: a count before a loop, a varint, a hasher's integer, a first_chunk read, a flag mask, std div_ceil and test code are not
+PASS: the framing inside the home package is the home's
+PASS: a forbidden variant row sanctions its rule hit
+PASS: every seeded normalization copy and second Unicode-version authority is reported
+PASS: a longer name, a plural and a constant are not; a copy in a tests/ file is
+PASS: the pinned Unicode version is the sanctioned variant, not a copy
+PASS: the home's own entry points are the home's
+PASS: each copy counts against the enforced job
+PASS: every hand-written first-mismatch word loop, in place or through bound loads, is reported
+PASS: a word mix with no zero count, a one-load byte scan, a CRC step and test code are not
+PASS: the word loop inside the home package is the home's
+PASS: each hand-written loop is a copy of the enforced job
+PASS: every seeded term-conversion copy, in shipping code and in a tests/ file, is reported
+PASS: the term-conversion neighbours (shims, longer names, #[cfg(test)] items) are not reported
+PASS: each term-conversion hit is a copy of the enforced job
+PASS: the term-conversion names inside the home crate are the home's
+PASS: every seeded term-constructor copy, in shipping code and in a tests/ file, is reported
+PASS: the term-constructor neighbours (shims, longer names, #[cfg(test)] items) are not reported
+PASS: each term-constructor hit is a copy of the enforced job
+PASS: the term-constructor names inside the home crate are the home's
+PASS: the datalog pair, a test helper copied between tests/ files and a sub-30-token copy are each one group
+PASS: each seeded near-miss group fails the gate
+PASS: the same small shape over another constant, and accessors of different fields, are not grouped
+OK: check-shared-helpers self-test

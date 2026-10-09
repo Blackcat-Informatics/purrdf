@@ -1,0 +1,4 @@
+ActiveState=active
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/run-p2100191-i115315742.scope
+MemoryMax=68719476736
+MemorySwapMax=0

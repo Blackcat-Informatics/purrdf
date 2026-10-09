@@ -1,0 +1,18 @@
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi)
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-capi/tests/support/profile.rs:1397:9
+     |
+1397 |         assert!(captures.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+     |
+1397 -         assert!(captures.is_empty());
+1397 +         assert_eq!(captures, [] as [purrdf_lex::json::Value; 0]);
+     |
+
+error: could not compile `purrdf-capi` (test "native_profile") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

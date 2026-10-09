@@ -1,0 +1,320 @@
+{
+  "receipt": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/capi-cold-receipt.json",
+  "child_receipts": 5,
+  "compiler_artifacts": 218,
+  "timings": 2,
+  "Cphases": [
+    [
+      "host-input-identities",
+      true
+    ],
+    [
+      "cargo-package-identity",
+      true
+    ],
+    [
+      "header-identity",
+      true
+    ],
+    [
+      "cargo-cdylib-preparation",
+      true
+    ],
+    [
+      "cargo-artifact-validation",
+      true
+    ],
+    [
+      "library-identity",
+      true
+    ],
+    [
+      "c-smoke-object-compile",
+      true
+    ],
+    [
+      "c-smoke-link",
+      true
+    ],
+    [
+      "c-smoke-runtime",
+      true
+    ],
+    [
+      "projection-output-preparation",
+      true
+    ],
+    [
+      "c-projection-object-compile",
+      true
+    ],
+    [
+      "c-projection-link",
+      true
+    ],
+    [
+      "c-projection-runtime",
+      true
+    ],
+    [
+      "c-projection-output-validation",
+      true
+    ],
+    [
+      "projection-output-identity",
+      true
+    ],
+    [
+      "projection-output-cleanup",
+      true
+    ]
+  ],
+  "runtime_library": {
+    "path": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.so",
+    "bytes": 387251712,
+    "blake3": "4376c978bad70fbd27366a90559c44f55c32125dfc89029c67fa472cba463d88"
+  },
+  "runtime_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi#purrdf-capi@3.0.1",
+    "manifest_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/Cargo.toml",
+    "target": {
+      "kind": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "crate_types": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "name": "purrdf",
+      "src_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/src/lib.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 1,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.a",
+      "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.so",
+      "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.rlib",
+      "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/36bb9846c7ce6676/out/libpurrdf.rmeta"
+    ],
+    "executable": null,
+    "fresh": false
+  },
+  "children": [
+    {
+      "receipt": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/capi-cold-cargo/cargo-3971482-1791451826763222229.json",
+      "argv": [
+        "capi",
+        "build",
+        "-p",
+        "purrdf-capi",
+        "--target-dir",
+        "/tmp/purrdf-header-lvuc_wqn/build",
+        "--message-format=json"
+      ],
+      "captures": [
+        {
+          "library": {
+            "path": "/tmp/purrdf-header-lvuc_wqn/build/x86_64-unknown-linux-gnu/debug/libpurrdf.so",
+            "bytes": 376753328,
+            "blake3": "1da2e7ee9d3088864286bac479ac50e159ec3c94891127ae3098f4da47e07c6f"
+          },
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi#purrdf-capi@3.0.1",
+            "manifest_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/Cargo.toml",
+            "target": {
+              "kind": [
+                "staticlib",
+                "cdylib"
+              ],
+              "crate_types": [
+                "staticlib",
+                "cdylib"
+              ],
+              "name": "purrdf",
+              "src_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 1,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [
+              "capi"
+            ],
+            "filenames": [
+              "/tmp/purrdf-header-lvuc_wqn/build/x86_64-unknown-linux-gnu/debug/libpurrdf.a",
+              "/tmp/purrdf-header-lvuc_wqn/build/x86_64-unknown-linux-gnu/debug/libpurrdf.so"
+            ],
+            "executable": null,
+            "fresh": false
+          },
+          "exists_at_readback": false
+        }
+      ]
+    },
+    {
+      "receipt": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/capi-cold-cargo/cargo-3973526-1791451896514806766.json",
+      "argv": [
+        "test",
+        "-p",
+        "purrdf-capi",
+        "--test",
+        "c_smoke",
+        "--locked",
+        "--color=never",
+        "--message-format=json-render-diagnostics",
+        "--timings"
+      ],
+      "captures": [
+        {
+          "library": {
+            "path": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/0be671391f62edd5/out/libpurrdf.so",
+            "bytes": 46079880,
+            "blake3": "0d0c709ee1cc63fc53b92e41d9d4e48bf019ef65a7dc077d5ab2dc6c4155bf80"
+          },
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi#purrdf-capi@3.0.1",
+            "manifest_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/Cargo.toml",
+            "target": {
+              "kind": [
+                "staticlib",
+                "cdylib",
+                "rlib"
+              ],
+              "crate_types": [
+                "staticlib",
+                "cdylib",
+                "rlib"
+              ],
+              "name": "purrdf",
+              "src_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 0,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [],
+            "filenames": [
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/0be671391f62edd5/out/libpurrdf.a",
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/0be671391f62edd5/out/libpurrdf.so",
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/0be671391f62edd5/out/libpurrdf.rlib",
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/0be671391f62edd5/out/libpurrdf.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          },
+          "exists_at_readback": true
+        }
+      ]
+    },
+    {
+      "receipt": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/capi-cold-cargo/cargo-3975662-1791451962257798815.json",
+      "argv": [
+        "--version"
+      ],
+      "captures": []
+    },
+    {
+      "receipt": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/capi-cold-cargo/cargo-3975695-1791451962792623295.json",
+      "argv": [
+        "pkgid",
+        "-p",
+        "purrdf-capi",
+        "--locked"
+      ],
+      "captures": []
+    },
+    {
+      "receipt": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/capi-cold-cargo/cargo-3975697-1791451962829408916.json",
+      "argv": [
+        "build",
+        "--locked",
+        "-p",
+        "purrdf-capi",
+        "--profile",
+        "dev",
+        "--message-format=json-render-diagnostics",
+        "--color=never",
+        "--timings"
+      ],
+      "captures": [
+        {
+          "library": {
+            "path": "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.so",
+            "bytes": 387251712,
+            "blake3": "4376c978bad70fbd27366a90559c44f55c32125dfc89029c67fa472cba463d88"
+          },
+          "artifact": {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi#purrdf-capi@3.0.1",
+            "manifest_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/Cargo.toml",
+            "target": {
+              "kind": [
+                "staticlib",
+                "cdylib",
+                "rlib"
+              ],
+              "crate_types": [
+                "staticlib",
+                "cdylib",
+                "rlib"
+              ],
+              "name": "purrdf",
+              "src_path": "/opt/purrdf-308-current-telemetry.591np1/nested-dev-source/crates/rdf-capi/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "3",
+              "debuginfo": 1,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [],
+            "filenames": [
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.a",
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.so",
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/target/debug/libpurrdf.rlib",
+              "/opt/purrdf-308-current-telemetry.591np1/capi-dev/build/debug/build/purrdf-capi/36bb9846c7ce6676/out/libpurrdf.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          },
+          "exists_at_readback": true
+        }
+      ]
+    }
+  ]
+}

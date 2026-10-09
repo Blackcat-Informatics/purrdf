@@ -1,0 +1,4 @@
+{
+  "xmlconf_present_before": true,
+  "scope": "the existing native XML fixture owns corpus acquisition/cache outside Cargo artifact directories; cold/warm never substitutes corpus existence for its verified acquisition"
+}

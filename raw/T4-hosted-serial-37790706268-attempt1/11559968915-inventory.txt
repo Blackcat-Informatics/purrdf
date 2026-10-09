@@ -1,0 +1,6 @@
+actual-cargo.txt
+setup-disk-after.txt
+actual-rustc.txt
+setup-disk-before.txt
+setup-finished.txt
+setup-start.txt

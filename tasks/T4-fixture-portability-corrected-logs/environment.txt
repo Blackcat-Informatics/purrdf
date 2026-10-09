@@ -1,0 +1,4 @@
+RUSTC_WRAPPER=kache
+RUSTC_WORKSPACE_WRAPPER=
+TARGET=/home/paudley/Active/.purrdf-308-fixture-portability-20261008/target
+BUILD=/home/paudley/Active/.purrdf-308-fixture-portability-20261008/build

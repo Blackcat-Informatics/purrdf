@@ -1,0 +1,7 @@
+Committed and pushed `639a72740`: the profiling campaign now executes all twelve cold/warm cases on one admitted runner, uploads each case's retained proof before reclaiming only its private build caches, and preserves the strict comparison contract. The ordinary six native jobs and C/downstream coverage remain intact.
+
+Focused qualification passed all 35 controller fixtures, strict CAPI all-target clippy, the controller build, workflow/shard/profile/toolchain/parity/helper/glossary checks, the non-Rust ratchet and generated-artifact verification. Normal commit hooks passed. The initial fixture compilation failure is retained alongside the corrected pass. Independent source review found no blocking defect.
+
+The fresh [same-runner campaign](https://github.com/Blackcat-Informatics/purrdf/actions/runs/37790706268) is running on this commit. Compiler admission passed; the complete twelve cases, 24 receipts, actual uploads/reclamations, strict comparisons and attributable numerical reduction remain pending. The earlier heterogeneous-runner campaign remains failed.
+
+Settled full local qualification and qualifying hosted gates remain required before a PR. No performance or completion claim is made from these focused passes. The qualification controller's managed output later changed; its original build receipt is historical, and the fresh hosted campaign builds its own source-bound controller.

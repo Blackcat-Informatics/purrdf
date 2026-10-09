@@ -1,0 +1,193 @@
+{
+  "schema": "purrdf-process-phases-v1",
+  "context": {
+    "case": "after-downstream",
+    "setup_started_unix_ns": "1791454566280798589",
+    "image_os": "ubuntu24",
+    "image_version": "20261004.327.1",
+    "runner_os": "Linux",
+    "runner_arch": "X64",
+    "observed_hardware": {
+      "cpu_identity": [
+        "cache size:512 KB",
+        "cpu cores:2",
+        "cpu family:25",
+        "flags:fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl tsc_reliable nonstop_tsc cpuid extd_apicid aperfmperf tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves user_shstk clzero xsaveerptr rdpru arat npt nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload umip vaes vpclmulqdq rdpid fsrm",
+        "model name:AMD EPYC 7763 64-Core Processor",
+        "model:1",
+        "siblings:4",
+        "stepping:1",
+        "vendor_id:AuthenticAMD"
+      ],
+      "logical_processors": 4,
+      "physical_memory": "MemTotal:       16373452 kB"
+    },
+    "dependency_cache": "no artifact cache restored; registry/download cache may exist",
+    "compiler_cache": "no compiler cache requested; wrappers/configuration captured by controller",
+    "page_cache": "uncontrolled hosted OS page cache; cold refers ONLY to empty Cargo target/build directories",
+    "python-executable": {
+      "path": "/usr/bin/python3",
+      "bytes": 8020928,
+      "blake3": "f858b7960cc5f75d1da571b29d149f8a2f64fbcf451170ab31ec909c0993a719"
+    },
+    "node-executable": {
+      "path": "/opt/hostedtoolcache/node/24.21.0/x64/bin/node",
+      "bytes": 126595440,
+      "blake3": "d29bdd8b7049b49aa1e03132bf437be658a13f69d46e59f507164456ed04f16b"
+    },
+    "binaryen-executable": {
+      "path": "/tmp/binaryen/bin/wasm-opt",
+      "bytes": 18133984,
+      "blake3": "fac6c18c3905f40deee6b0f10ee7b0d75150a6e3c70c4d7bd7ba2ecdd4c6914b"
+    },
+    "cargo-c-executable": {
+      "path": "/home/runner/.cargo/bin/cargo-capi",
+      "bytes": 39139432,
+      "blake3": "9fd0f39a725a1a759f657f805ac25a4818c0da2523ac65f2a1d8e2063d86f720"
+    },
+    "observed_prerequisite_tools": [
+      {
+        "name": "python",
+        "stdout": "Python 3.12.3\n",
+        "stderr": ""
+      },
+      {
+        "name": "node",
+        "stdout": "v24.21.0\n",
+        "stderr": ""
+      },
+      {
+        "name": "binaryen",
+        "stdout": "wasm-opt version 130 (version_130)\n",
+        "stderr": ""
+      },
+      {
+        "name": "cargo-c",
+        "stdout": "cargo-c 0.10.23+cargo-0.97.1\n",
+        "stderr": ""
+      }
+    ],
+    "concurrency": {
+      "observed_available_parallelism": 4,
+      "effective_cargo_jobs": 4,
+      "effective_libtest_threads": 4
+    },
+    "setup_completed_unix_ns": "1791455309296657284"
+  },
+  "phases": [
+    {
+      "name": "arm-filesystem",
+      "elapsed_ns": "1155462",
+      "command": {
+        "program": "stat",
+        "argv": [
+          "-f",
+          "-c",
+          "%T",
+          "/opt/purrdf-native-profile/37762276551-1/after-downstream"
+        ],
+        "env": [],
+        "cwd": null,
+        "exit_code": 0,
+        "exit_status": "exit status: 0",
+        "stdout": "ext2/ext3\n",
+        "stderr": ""
+      },
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "disk-backed-arm",
+      "elapsed_ns": "270",
+      "command": null,
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "admitted-compiler",
+      "elapsed_ns": "29326576",
+      "command": null,
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "python",
+      "elapsed_ns": "1171041",
+      "command": {
+        "program": "/usr/bin/python3",
+        "argv": [
+          "--version"
+        ],
+        "env": [],
+        "cwd": null,
+        "exit_code": 0,
+        "exit_status": "exit status: 0",
+        "stdout": "Python 3.12.3\n",
+        "stderr": ""
+      },
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "node",
+      "elapsed_ns": "4454197",
+      "command": {
+        "program": "/opt/hostedtoolcache/node/24.21.0/x64/bin/node",
+        "argv": [
+          "--version"
+        ],
+        "env": [],
+        "cwd": null,
+        "exit_code": 0,
+        "exit_status": "exit status: 0",
+        "stdout": "v24.21.0\n",
+        "stderr": ""
+      },
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "binaryen",
+      "elapsed_ns": "1823376",
+      "command": {
+        "program": "/tmp/binaryen/bin/wasm-opt",
+        "argv": [
+          "--version"
+        ],
+        "env": [],
+        "cwd": null,
+        "exit_code": 0,
+        "exit_status": "exit status: 0",
+        "stdout": "wasm-opt version 130 (version_130)\n",
+        "stderr": ""
+      },
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "cargo-c",
+      "elapsed_ns": "331341228",
+      "command": {
+        "program": "/home/runner/.cargo/bin/cargo-capi",
+        "argv": [
+          "--version"
+        ],
+        "env": [],
+        "cwd": null,
+        "exit_code": 0,
+        "exit_status": "exit status: 0",
+        "stdout": "cargo-c 0.10.23+cargo-0.97.1\n",
+        "stderr": ""
+      },
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "pinned-cargo-c-version",
+      "elapsed_ns": "571",
+      "command": null,
+      "success": true,
+      "error": null
+    }
+  ]
+}

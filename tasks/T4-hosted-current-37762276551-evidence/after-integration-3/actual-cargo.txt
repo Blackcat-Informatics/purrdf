@@ -1,0 +1,9 @@
+cargo 1.101.0-nightly (f3865b2a4 2026-09-29)
+release: 1.101.0-nightly
+commit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928
+commit-date: 2026-09-29
+host: x86_64-unknown-linux-gnu
+libgit2: 1.9.6 (sys:0.21.0 vendored)
+libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)
+ssl: OpenSSL 3.6.3 9 Jun 2026
+os: Ubuntu 24.4.0 (noble) [64-bit]

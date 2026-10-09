@@ -1,0 +1,30 @@
+{
+  "before": {
+    "lanes": [
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/profile-before-capi/capi-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791494542946489228",
+          "finished_unix_ns": "1791494559105286821",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      }
+    ],
+    "observed_wall_window_ns": "16158797593",
+    "interpretation": "observed serial first-start to last-finish window includes intervening cases, validation, upload and reclamation; it is not an observed six-runner critical path and establishes no parallel speedup"
+  },
+  "after": {
+    "lanes": [
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-capi/capi-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791493750648589879",
+          "finished_unix_ns": "1791493762895589108",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      }
+    ],
+    "observed_wall_window_ns": "12246999229",
+    "interpretation": "observed serial first-start to last-finish window includes intervening cases, validation, upload and reclamation; it is not an observed six-runner critical path and establishes no parallel speedup"
+  }
+}

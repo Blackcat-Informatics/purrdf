@@ -1,0 +1,6 @@
+ABSENT /opt/purrdf-native-profile-tests/.cargo/config
+ABSENT /opt/purrdf-native-profile-tests/.cargo/config.toml
+ABSENT /opt/.cargo/config
+ABSENT /opt/.cargo/config.toml
+ABSENT /.cargo/config
+ABSENT /.cargo/config.toml

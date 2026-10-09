@@ -1,0 +1,10 @@
+{
+  "before": [
+    "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-308-runtime-refusal.hyKidvRk/integration-2/integration-2-cold-receipt.json"
+  ],
+  "change": "none",
+  "output": "/opt/purrdf-308-runtime-refusal.hyKidvRk/continuation.srPmXowr/integration-2-self-validation.json"
+}

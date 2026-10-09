@@ -1,0 +1,1 @@
+/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-libtest-logs/production-bin/cargo test --locked --jobs 8 -p purrdf-capi --lib 

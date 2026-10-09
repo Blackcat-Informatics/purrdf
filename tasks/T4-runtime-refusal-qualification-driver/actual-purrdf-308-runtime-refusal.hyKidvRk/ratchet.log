@@ -1,0 +1,10 @@
+helper-census --non-rust-ratchet: 1 refusal(s) in the working tree against df2cec88b0f8 (merge-base with origin/main).
+Repository tooling and tests are written in Rust (see AGENTS.md, Hard constraints).
+
+New non-Rust code without an explanation of why it cannot be Rust:
+  .stage/reduce-native-ci-test-compilation-and-c/tasks/T4-fixture-portability-corrected-logs/freeze-controller.py: new Python file, 19 line(s), no explanation in its first 40 lines
+  Write it in Rust (helper-census, an xtask, or a Rust test). If it truly cannot be,
+  add within its first 40 lines a comment whose reason has at least 30 characters:
+    # Why not Rust: <the concrete reason>     (Python, shell)
+    // Why not Rust: <the concrete reason>    (JavaScript/TypeScript)
+  A moved or copied file is a new path: git rename detection is not consulted.

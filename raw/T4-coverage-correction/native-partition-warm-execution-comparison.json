@@ -1,0 +1,102 @@
+{
+  "before": {
+    "lanes": [
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/before-monolithic/monolithic-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791486492948214514",
+          "finished_unix_ns": "1791487427225510535",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/before-capi/capi-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791487956476959590",
+          "finished_unix_ns": "1791487969179192389",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/before-downstream/downstream-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791487981598686178",
+          "finished_unix_ns": "1791487981681973718",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      }
+    ],
+    "observed_wall_window_ns": "1488733759204",
+    "interpretation": "observed serial first-start to last-finish window includes intervening cases, validation, upload and reclamation; it is not an observed six-runner critical path and establishes no parallel speedup"
+  },
+  "after": {
+    "lanes": [
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-lib/lib-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791488928687338164",
+          "finished_unix_ns": "1791489098030505134",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-doc/doc-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791489536543190741",
+          "finished_unix_ns": "1791489577730296186",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-integration-1/integration-1-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791490200016838411",
+          "finished_unix_ns": "1791490354844060228",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-integration-2/integration-2-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791491495522165362",
+          "finished_unix_ns": "1791491921856071141",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-integration-3/integration-3-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791492537310105219",
+          "finished_unix_ns": "1791492611948721029",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-integration-4/integration-4-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791493157989854672",
+          "finished_unix_ns": "1791493235244675383",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-capi/capi-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791493750648589879",
+          "finished_unix_ns": "1791493762895589108",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      },
+      {
+        "receipt": "/opt/purrdf-native-profile/37822266421-1/after-downstream/downstream-warm-receipt.json",
+        "interval": {
+          "started_unix_ns": "1791493774668207702",
+          "finished_unix_ns": "1791493774749097380",
+          "clock": "host wall clock; cross-runner synchronization is not independently certified"
+        }
+      }
+    ],
+    "observed_wall_window_ns": "4846061759216",
+    "interpretation": "observed serial first-start to last-finish window includes intervening cases, validation, upload and reclamation; it is not an observed six-runner critical path and establishes no parallel speedup"
+  }
+}

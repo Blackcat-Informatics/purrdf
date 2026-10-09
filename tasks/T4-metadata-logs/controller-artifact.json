@@ -1,0 +1,39 @@
+{
+  "frame": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi#purrdf-capi@3.0.1",
+    "manifest_path": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi/Cargo.toml",
+    "target": {
+      "kind": [
+        "example"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "native_ci_profile",
+      "src_path": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi/examples/native_ci_profile.rs",
+      "edition": "2024",
+      "doc": false,
+      "doctest": false,
+      "test": false
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "features": [],
+    "filenames": [
+      "/opt/.cargo/target/308-reduce-native-ci-test-compilation-and-c-95be0b90/debug/examples/native_ci_profile"
+    ],
+    "executable": "/opt/.cargo/target/308-reduce-native-ci-test-compilation-and-c-95be0b90/debug/examples/native_ci_profile",
+    "fresh": false
+  },
+  "identity": {
+    "path": "/opt/.cargo/target/308-reduce-native-ci-test-compilation-and-c-95be0b90/debug/examples/native_ci_profile",
+    "bytes": 1610400,
+    "blake3": "bbce03510c8bc4685979680e99e2ff905d91a3a37f8849a457c3db4f12dcf836"
+  }
+}

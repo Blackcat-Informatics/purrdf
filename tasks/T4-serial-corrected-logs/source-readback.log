@@ -1,0 +1,7 @@
+.github/workflows/ci.yaml: OK
+crates/rdf-capi/examples/native_ci_profile.rs: OK
+crates/rdf-capi/tests/support/hosted.rs: OK
+crates/rdf-capi/tests/support/profile.rs: OK
+Cargo.toml: OK
+Cargo.lock: OK
+Makefile: OK

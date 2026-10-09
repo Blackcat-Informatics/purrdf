@@ -1,0 +1,32 @@
+[
+  {
+    "label": "after-integration-3-integration-3-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-integration-3-integration-3-warm",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "profile-before-capi-capi-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "profile-before-capi-capi-warm",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-integration-1-integration-1-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-integration-1-integration-1-warm",
+    "phases": 9,
+    "exit": 0
+  }
+]

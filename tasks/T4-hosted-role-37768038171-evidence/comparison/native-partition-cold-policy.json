@@ -1,0 +1,19 @@
+{
+  "before": [
+    "/opt/purrdf-native-profile/37768038171-1/before-monolithic/monolithic-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/before-capi/capi-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/before-downstream/downstream-cold-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-native-profile/37768038171-1/after-lib/lib-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-doc/doc-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-integration-1/integration-1-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-integration-2/integration-2-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-integration-3/integration-3-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-integration-4/integration-4-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-capi/capi-cold-receipt.json",
+    "/opt/purrdf-native-profile/37768038171-1/after-downstream/downstream-cold-receipt.json"
+  ],
+  "change": "native-partition",
+  "output": "/opt/purrdf-native-profile/37768038171-1/native-partition-cold-comparison.json"
+}

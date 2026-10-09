@@ -1,0 +1,7 @@
+# Current integration applicability
+
+PR505 head17b22bfdb and current main341ad5ae2 produce clean merge-tree178eee36057e19592841a0aa5a97b6f27daf9581. GitHub reports the same current base/head and a mergeable PR. Main's intervening58-file delta is the independently qualified and landed contextual evaluator/Python row work plus generated conformance/SIMD/documentation projections. It changes no308 workflow, collector, comparator, C smoke gate, manifest or contributor instructions; the nine308 paths do not overlap it.
+
+The main evaluator work can affect compiled workload identities and costs, so the historical47c9 same-runner measurements remain scoped to that source and are not relabeled as timings of341ad+17b22. Existing normal current-head PR CI exercises the integrated evaluator and complete unchanged native shard/C/downstream callers. The comparison-only fix does not change those workloads, compiler inputs or shipping semantics. Root independently accepted its coverage contract; actual36 focused checks and full retained-cohort replay qualify the comparator. No sync commit, new measurement or duplicate local full gate is required solely for this clean integration.
+
+Current-head CI run37860472053 is actually SUCCESS; watcher79068 returned0 and the final supported brief reports state=pass. This completes integrated mandatory qualification without relabeling historical measurement source identities.

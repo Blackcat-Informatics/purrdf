@@ -1,0 +1,11815 @@
+
+<html>
+<head>
+  <title>Cargo Build Timings — purrdf 3.0.1, purrdf-alloc-probe 3.0.1, purrdf-bench 3.0.1, purrdf-capi 3.0.1, purrdf-cdt 3.0.1, purrdf-cli 3.0.1, purrdf-columnar 3.0.1, purrdf-core 3.0.1, purrdf-datalog 3.0.1, purrdf-deflate 3.0.1, purrdf-ed25519 3.0.1, purrdf-entail 3.0.1, purrdf-envelope-probe 3.0.1, purrdf-events 3.0.1, purrdf-geo 3.0.1, purrdf-gts 3.0.1, purrdf-hash 3.0.1, purrdf-hash-conformance 3.0.1, purrdf-hnsw 3.0.1, purrdf-iri 3.0.1, purrdf-json 3.0.1, purrdf-jsonschema 3.0.1, purrdf-lex 3.0.1, purrdf-markdown 3.0.1, purrdf-python 3.0.1, purrdf-rdf 3.0.1, purrdf-retrieval 3.0.1, purrdf-shapes 3.0.1, purrdf-shex 3.0.1, purrdf-slice 3.0.1, purrdf-sparql-algebra 3.0.1, purrdf-sparql-conformance 3.0.1, purrdf-sparql-eval 3.0.1, purrdf-sparql-results 3.0.1, purrdf-stack 3.0.1, purrdf-testkit 3.0.1, purrdf-text 3.0.1, purrdf-validate 3.0.1, purrdf-wasm 3.0.1, purrdf-xsd 3.0.1, wasm-link 3.0.1</title>
+  <meta charset="utf-8">
+<style type="text/css">
+:root {
+  --error-text: #e80000;
+  --text: #000;
+  --background: #fff;
+  --h1-border-bottom: #c0c0c0;
+  --table-box-shadow: rgba(0, 0, 0, 0.1);
+  --table-th: #d5dde5;
+  --table-th-background: #1b1e24;
+  --table-th-border-bottom: #9ea7af;
+  --table-th-border-right: #343a45;
+  --table-tr-border-top: #c1c3d1;
+  --table-tr-border-bottom: #c1c3d1;
+  --table-tr-odd-background: #ebebeb;
+  --table-td-background: #ffffff;
+  --table-td-border-right: #C1C3D1;
+  --canvas-background: #f7f7f7;
+  --canvas-axes: #303030;
+  --canvas-grid: #e6e6e6;
+  --canvas-codegen: #aa95e8;
+  --canvas-link: #95e8aa;
+  --canvas-other: #e895aa;
+  --canvas-custom-build: #f0b165;
+  --canvas-not-custom-build: #95cce8;
+  --canvas-dep-line: #ddd;
+  --canvas-dep-line-highlighted: #000;
+  --canvas-cpu: rgba(250, 119, 0, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --error-text: #e80000;
+    --text: #fff;
+    --background: #121212;
+    --h1-border-bottom: #444;
+    --table-box-shadow: rgba(255, 255, 255, 0.1);
+    --table-th: #a0a0a0;
+    --table-th-background: #2c2c2c;
+    --table-th-border-bottom: #555;
+    --table-th-border-right: #444;
+    --table-tr-border-top: #333;
+    --table-tr-border-bottom: #333;
+    --table-tr-odd-background: #1e1e1e;
+    --table-td-background: #262626;
+    --table-td-border-right: #333;
+    --canvas-background: #1a1a1a;
+    --canvas-axes: #b0b0b0;
+    --canvas-grid: #333;
+    --canvas-block: #aa95e8;
+    --canvas-custom-build: #f0b165;
+    --canvas-not-custom-build: #95cce8;
+    --canvas-dep-line: #444;
+    --canvas-dep-line-highlighted: #fff;
+    --canvas-cpu: rgba(250, 119, 0, 0.2);
+  }
+}
+
+html {
+  font-family: sans-serif;
+  color: var(--text);
+  background: var(--background);
+}
+
+.canvas-container {
+  position: relative;
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+.canvas-container.hidden {
+  display: none;
+}
+
+h1 {
+  border-bottom: 1px solid var(--h1-border-bottom);
+}
+
+.graph {
+  display: block;
+}
+
+.my-table {
+  margin-top: 20px;
+  margin-bottom: 20px;
+  border-collapse: collapse;
+  box-shadow: 0 5px 10px var(--table-box-shadow);
+}
+
+.my-table th {
+  color: var(--table-th);
+  background: var(--table-th-background);
+  border-bottom: 4px solid var(--table-th-border-bottom);
+  border-right: 1px solid var(--table-th-border-right);
+  font-size: 18px;
+  font-weight: 100;
+  padding: 12px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.my-table th:first-child {
+  border-top-left-radius: 3px;
+}
+
+.my-table th:last-child {
+  border-top-right-radius: 3px;
+  border-right:none;
+}
+
+.my-table tr {
+  border-top: 1px solid var(--table-tr-border-top);
+  border-bottom: 1px solid var(--table-tr-border-bottom);
+  font-size: 16px;
+  font-weight: normal;
+}
+
+.my-table tr:first-child {
+  border-top:none;
+}
+
+.my-table tr:last-child {
+  border-bottom:none;
+}
+
+.my-table tr:nth-child(odd) td {
+  background: var(--table-tr-odd-background);
+}
+
+.my-table tr:last-child td:first-child {
+  border-bottom-left-radius:3px;
+}
+
+.my-table tr:last-child td:last-child {
+  border-bottom-right-radius:3px;
+}
+
+.my-table td {
+  background: var(--table-td-background);
+  padding: 10px;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 300;
+  font-size: 14px;
+  border-right: 1px solid var(--table-td-border-right);
+}
+
+.my-table td:last-child {
+  border-right: 0px;
+}
+
+.summary-table td:first-child {
+  vertical-align: top;
+  text-align: right;
+}
+
+.input-table td {
+  text-align: center;
+}
+
+.error-text {
+  color: var(--error-text);
+}
+
+</style>
+</head>
+<body>
+
+<h1>Cargo Build Timings</h1>
+See <a href="https://doc.rust-lang.org/nightly/cargo/reference/timings.html">Documentation</a>
+
+<table class="my-table summary-table">
+<tr>
+<td>Targets:</td><td>purrdf 3.0.1 (lib)<br>purrdf-alloc-probe 3.0.1 (lib)<br>purrdf-bench 3.0.1 (lib)<br>purrdf-capi 3.0.1 (lib)<br>purrdf-cdt 3.0.1 (lib)<br>purrdf-cli 3.0.1 (lib)<br>purrdf-columnar 3.0.1 (lib)<br>purrdf-core 3.0.1 (lib)<br>purrdf-datalog 3.0.1 (lib)<br>purrdf-deflate 3.0.1 (lib)<br>purrdf-ed25519 3.0.1 (lib)<br>purrdf-entail 3.0.1 (lib)<br>purrdf-envelope-probe 3.0.1 (lib)<br>purrdf-events 3.0.1 (lib)<br>purrdf-geo 3.0.1 (lib)<br>purrdf-gts 3.0.1 (lib)<br>purrdf-hash 3.0.1 (lib)<br>purrdf-hash-conformance 3.0.1 (lib)<br>purrdf-hnsw 3.0.1 (lib)<br>purrdf-iri 3.0.1 (lib)<br>purrdf-json 3.0.1 (lib)<br>purrdf-jsonschema 3.0.1 (lib)<br>purrdf-lex 3.0.1 (lib)<br>purrdf-markdown 3.0.1 (lib)<br>purrdf-python 3.0.1 (lib)<br>purrdf-rdf 3.0.1 (lib)<br>purrdf-retrieval 3.0.1 (lib)<br>purrdf-shapes 3.0.1 (lib)<br>purrdf-shex 3.0.1 (lib)<br>purrdf-slice 3.0.1 (lib)<br>purrdf-sparql-algebra 3.0.1 (lib)<br>purrdf-sparql-conformance 3.0.1 (lib)<br>purrdf-sparql-eval 3.0.1 (lib)<br>purrdf-sparql-results 3.0.1 (lib)<br>purrdf-stack 3.0.1 (lib)<br>purrdf-testkit 3.0.1 (lib)<br>purrdf-text 3.0.1 (lib)<br>purrdf-validate 3.0.1 (lib)<br>purrdf-wasm 3.0.1 (lib)<br>purrdf-xsd 3.0.1 (lib)<br>wasm-link 3.0.1 (lib)</td>
+</tr>
+<tr>
+<td>Profile:</td><td>test</td>
+</tr>
+<tr>
+<td>Fresh units:</td><td>0</td>
+</tr>
+<tr>
+<td>Dirty units:</td><td>143</td>
+</tr>
+<tr>
+<td>Total units:</td><td>143</td>
+</tr>
+<tr>
+<td>Max concurrency:</td><td>5 (jobs=4 ncpu=4)</td>
+</tr>
+<tr>
+<td>Build start:</td><td>2026-10-08T10:28:06.34371295Z</td>
+</tr>
+<tr>
+<td>Total time:</td><td>463.3s (7m 43.3s)</td>
+</tr>
+<tr>
+<td>rustc:</td><td>rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)<br>Host: x86_64-unknown-linux-gnu<br>Target: x86_64-unknown-linux-gnu</td>
+</tr>
+
+</table>
+
+<table class="input-table">
+  <tr>
+    <td><label for="min-unit-time">Min unit time:</label></td>
+    <td title="Scale corresponds to a number of pixels per second. It is automatically initialized based on your viewport width.">
+      <label for="scale">Scale:</label>
+    </td>
+  </tr>
+  <tr>
+    <td><input type="range" min="0" max="30" step="0.1" value="0" id="min-unit-time"></td>
+    <!--
+        The scale corresponds to some number of "pixels per second".
+        Its min, max, and initial values are automatically set by JavaScript on page load,
+        based on the client viewport.
+    -->
+    <td><input type="range" min="1" max="100" value="50" id="scale"></td>
+  </tr>
+  <tr>
+    <td><output for="min-unit-time" id="min-unit-time-output"></output></td>
+    <td><output for="scale" id="scale-output"></output></td>
+    <td></td>
+  </tr>
+</table>
+
+<div id="pipeline-container" class="canvas-container"></div>
+<div id="timing-container" class="canvas-container"></div>
+
+<table class="my-table">
+<thead>
+<tr>
+  <th></th>
+  <th>Unit</th>
+  <th>Total</th>
+  <th>Frontend</th>
+<th>Codegen</th>
+  <th>Features</th>
+</tr>
+</thead>
+<tbody>
+
+<tr>
+<td>1.</td>
+<td>purrdf-shapes v3.0.1</td>
+<td>235.3s</td>
+<td>23.9s (10%)</td>
+<td>211.4s (90%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>2.</td>
+<td>purrdf-rdf v3.0.1</td>
+<td>186.0s</td>
+<td>18.4s (10%)</td>
+<td>167.6s (90%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>3.</td>
+<td>purrdf-sparql-eval v3.0.1</td>
+<td>140.1s</td>
+<td>14.4s (10%)</td>
+<td>125.7s (90%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>4.</td>
+<td>purrdf-core v3.0.1</td>
+<td>110.7s</td>
+<td>16.5s (15%)</td>
+<td>94.1s (85%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>5.</td>
+<td>purrdf-cli v3.0.1</td>
+<td>91.2s</td>
+<td>5.3s (6%)</td>
+<td>86.0s (94%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>6.</td>
+<td>purrdf-envelope-probe v3.0.1</td>
+<td>72.8s</td>
+<td>2.8s (4%)</td>
+<td>70.0s (96%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>7.</td>
+<td>purrdf-gts v3.0.1</td>
+<td>66.0s</td>
+<td>5.1s (8%)</td>
+<td>60.9s (92%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>8.</td>
+<td>purrdf-entail v3.0.1</td>
+<td>59.6s</td>
+<td>6.1s (10%)</td>
+<td>53.6s (90%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>9.</td>
+<td>structured-zstd v0.0.49</td>
+<td>49.0s</td>
+<td>4.7s (10%)</td>
+<td>44.3s (90%)</td>
+<td>default, dict_builder, hash, kernel_avx2, kernel_bmi2, kernel_neon, kernel_scalar, kernel_simd128, kernel_sse2, kernel_sve, std</td>
+</tr>
+
+<tr>
+<td>10.</td>
+<td>purrdf-python v3.0.1</td>
+<td>43.8s</td>
+<td>9.2s (21%)</td>
+<td>34.6s (79%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>11.</td>
+<td>wasm-bindgen-macro-support v0.2.125</td>
+<td>38.8s</td>
+<td>3.0s (8%)</td>
+<td>35.8s (92%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>12.</td>
+<td>purrdf-capi v3.0.1</td>
+<td>37.2s</td>
+<td>2.0s (5%)</td>
+<td>35.2s (95%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>13.</td>
+<td>purrdf-datalog v3.0.1</td>
+<td>36.5s</td>
+<td>3.1s (9%)</td>
+<td>33.4s (91%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>14.</td>
+<td>syn v2.0.118</td>
+<td>34.6s</td>
+<td>4.8s (14%)</td>
+<td>29.8s (86%)</td>
+<td>clone-impls, default, derive, extra-traits, full, parsing, printing, proc-macro, visit, visit-mut</td>
+</tr>
+
+<tr>
+<td>15.</td>
+<td>purrdf-wasm v3.0.1</td>
+<td>33.9s</td>
+<td>5.2s (15%)</td>
+<td>28.7s (85%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>16.</td>
+<td>pyo3-macros-backend v0.29.0</td>
+<td>32.4s</td>
+<td>3.6s (11%)</td>
+<td>28.8s (89%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>17.</td>
+<td>syn v2.0.118</td>
+<td>31.2s</td>
+<td>3.4s (11%)</td>
+<td>27.8s (89%)</td>
+<td>clone-impls, default, derive, full, parsing, printing, proc-macro, visit</td>
+</tr>
+
+<tr>
+<td>18.</td>
+<td>purrdf-sparql-conformance v3.0.1</td>
+<td>27.2s</td>
+<td>1.8s (7%)</td>
+<td>25.4s (93%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>19.</td>
+<td>purrdf-text v3.0.1</td>
+<td>24.5s</td>
+<td>2.8s (12%)</td>
+<td>21.7s (88%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>20.</td>
+<td>purrdf-sparql-algebra v3.0.1</td>
+<td>23.5s</td>
+<td>2.8s (12%)</td>
+<td>20.7s (88%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>21.</td>
+<td>purrdf-lex v3.0.1</td>
+<td>20.0s</td>
+<td>3.4s (17%)</td>
+<td>16.6s (83%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>22.</td>
+<td>purrdf-validate v3.0.1</td>
+<td>19.8s</td>
+<td>1.8s (9%)</td>
+<td>18.0s (91%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>23.</td>
+<td>purrdf-retrieval v3.0.1</td>
+<td>19.5s</td>
+<td>2.7s (14%)</td>
+<td>16.7s (86%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>24.</td>
+<td>purrdf-slice v3.0.1</td>
+<td>19.4s</td>
+<td>1.6s (8%)</td>
+<td>17.8s (92%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>25.</td>
+<td>clap_derive v4.6.1</td>
+<td>16.1s</td>
+<td></td>
+<td></td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>26.</td>
+<td>purrdf-shex v3.0.1</td>
+<td>14.9s</td>
+<td>1.7s (12%)</td>
+<td>13.2s (88%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>27.</td>
+<td>clap_builder v4.6.0</td>
+<td>14.4s</td>
+<td>2.8s (19%)</td>
+<td>11.7s (81%)</td>
+<td>color, error-context, help, std, suggestions, usage</td>
+</tr>
+
+<tr>
+<td>28.</td>
+<td>regex-automata v0.4.14</td>
+<td>13.4s</td>
+<td>2.9s (22%)</td>
+<td>10.5s (78%)</td>
+<td>alloc, dfa-onepass, hybrid, meta, nfa-backtrack, nfa-pikevm, nfa-thompson, perf-inline, std, syntax, unicode, unicode-age, unicode-bool, unicode-case, unicode-gencat, unicode-perl, unicode-script, unicode-segment, unicode-word-boundary</td>
+</tr>
+
+<tr>
+<td>29.</td>
+<td>purrdf-geo v3.0.1</td>
+<td>12.5s</td>
+<td>1.5s (12%)</td>
+<td>11.0s (88%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>30.</td>
+<td>pyo3-macros v0.29.0</td>
+<td>11.9s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>31.</td>
+<td>purrdf-jsonschema v3.0.1</td>
+<td>11.6s</td>
+<td>1.6s (14%)</td>
+<td>10.0s (86%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>32.</td>
+<td>purrdf-testkit v3.0.1</td>
+<td>11.4s</td>
+<td>1.9s (17%)</td>
+<td>9.5s (83%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>33.</td>
+<td>purrdf-hash v3.0.1</td>
+<td>11.3s</td>
+<td>3.7s (33%)</td>
+<td>7.6s (67%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>34.</td>
+<td>purrdf-xsd v3.0.1</td>
+<td>10.8s</td>
+<td>1.7s (16%)</td>
+<td>9.1s (84%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>35.</td>
+<td>regex-syntax v0.8.11</td>
+<td>9.3s</td>
+<td>2.0s (21%)</td>
+<td>7.3s (79%)</td>
+<td>default, std, unicode, unicode-age, unicode-bool, unicode-case, unicode-gencat, unicode-perl, unicode-script, unicode-segment</td>
+</tr>
+
+<tr>
+<td>36.</td>
+<td>pyo3 v0.29.0</td>
+<td>8.9s</td>
+<td>4.2s (48%)</td>
+<td>4.7s (52%)</td>
+<td>abi3, abi3-py313, abi3-py314, abi3-py315, default, extension-module, macros, pyo3-macros</td>
+</tr>
+
+<tr>
+<td>37.</td>
+<td>purrdf-hnsw v3.0.1</td>
+<td>7.5s</td>
+<td>0.9s (12%)</td>
+<td>6.6s (88%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>38.</td>
+<td>purrdf-sparql-results v3.0.1</td>
+<td>6.5s</td>
+<td>0.6s (9%)</td>
+<td>5.9s (91%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>39.</td>
+<td>purrdf-columnar v3.0.1</td>
+<td>6.0s</td>
+<td>0.8s (14%)</td>
+<td>5.2s (86%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>40.</td>
+<td>purrdf-cdt v3.0.1</td>
+<td>5.0s</td>
+<td>0.7s (13%)</td>
+<td>4.4s (87%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>41.</td>
+<td>purrdf-markdown v3.0.1</td>
+<td>4.8s</td>
+<td>0.6s (12%)</td>
+<td>4.2s (88%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>42.</td>
+<td>purrdf-iri v3.0.1</td>
+<td>4.7s</td>
+<td>1.4s (29%)</td>
+<td>3.3s (71%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>43.</td>
+<td>pyo3-build-config v0.29.0</td>
+<td>4.5s</td>
+<td>0.6s (13%)</td>
+<td>3.9s (87%)</td>
+<td>default, extension-module</td>
+</tr>
+
+<tr>
+<td>44.</td>
+<td>purrdf v3.0.1</td>
+<td>4.4s</td>
+<td>0.5s (10%)</td>
+<td>3.9s (90%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>45.</td>
+<td>wasm-link v3.0.1</td>
+<td>4.0s</td>
+<td>0.6s (15%)</td>
+<td>3.4s (85%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>46.</td>
+<td>rayon v1.12.0</td>
+<td>3.4s</td>
+<td>3.1s (92%)</td>
+<td>0.3s (8%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>47.</td>
+<td>proc-macro2 v1.0.106</td>
+<td>3.0s</td>
+<td>0.5s (18%)</td>
+<td>2.4s (82%)</td>
+<td>default, proc-macro, span-locations</td>
+</tr>
+
+<tr>
+<td>48.</td>
+<td>wasm-encoder v0.259.0</td>
+<td>2.8s</td>
+<td>0.9s (33%)</td>
+<td>1.9s (67%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>49.</td>
+<td>purrdf-deflate v3.0.1</td>
+<td>2.5s</td>
+<td>0.5s (22%)</td>
+<td>1.9s (78%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>50.</td>
+<td>proc-macro2 v1.0.106</td>
+<td>2.3s</td>
+<td>0.5s (20%)</td>
+<td>1.9s (80%)</td>
+<td>default, proc-macro</td>
+</tr>
+
+<tr>
+<td>51.</td>
+<td>sha2 v0.11.0</td>
+<td>2.2s</td>
+<td>0.7s (33%)</td>
+<td>1.5s (67%)</td>
+<td>alloc, default, oid</td>
+</tr>
+
+<tr>
+<td>52.</td>
+<td>purrdf-json v3.0.1</td>
+<td>2.0s</td>
+<td>0.3s (17%)</td>
+<td>1.7s (83%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>53.</td>
+<td>rayon-core v1.13.0</td>
+<td>2.0s</td>
+<td>0.6s (29%)</td>
+<td>1.4s (71%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>54.</td>
+<td>regex v1.12.4</td>
+<td>1.7s</td>
+<td>0.4s (24%)</td>
+<td>1.3s (76%)</td>
+<td>perf-backtrack, perf-cache, perf-dfa, perf-inline, perf-onepass, std, unicode, unicode-age, unicode-bool, unicode-case, unicode-gencat, unicode-perl, unicode-script, unicode-segment</td>
+</tr>
+
+<tr>
+<td>55.</td>
+<td>crypto-common v0.2.2</td>
+<td>1.6s</td>
+<td>0.7s (44%)</td>
+<td>0.9s (56%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>56.</td>
+<td>wasm-bindgen v0.2.125</td>
+<td>1.6s</td>
+<td>1.4s (85%)</td>
+<td>0.2s (15%)</td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>57.</td>
+<td>purrdf-core v3.0.1 build-script</td>
+<td>1.6s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>58.</td>
+<td>typenum v1.20.1</td>
+<td>1.6s</td>
+<td>1.6s (99%)</td>
+<td>0.0s (1%)</td>
+<td>const-generics</td>
+</tr>
+
+<tr>
+<td>59.</td>
+<td>rustversion v1.0.22</td>
+<td>1.4s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>60.</td>
+<td>libc v0.2.186</td>
+<td>1.0s</td>
+<td>0.9s (96%)</td>
+<td>0.0s (4%)</td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>61.</td>
+<td>purrdf-ed25519 v3.0.1</td>
+<td>1.0s</td>
+<td>0.2s (22%)</td>
+<td>0.8s (78%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>62.</td>
+<td>heck v0.5.0</td>
+<td>0.9s</td>
+<td>0.1s (10%)</td>
+<td>0.8s (90%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>63.</td>
+<td>hashbrown v0.17.1</td>
+<td>0.9s</td>
+<td>0.8s (94%)</td>
+<td>0.1s (6%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>64.</td>
+<td>strsim v0.11.1</td>
+<td>0.9s</td>
+<td>0.2s (19%)</td>
+<td>0.7s (81%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>65.</td>
+<td>target-lexicon v0.13.5 build-script</td>
+<td>0.8s</td>
+<td></td>
+<td></td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>66.</td>
+<td>libc v0.2.186 build-script</td>
+<td>0.8s</td>
+<td></td>
+<td></td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>67.</td>
+<td>quote v1.0.46</td>
+<td>0.7s</td>
+<td>0.2s (23%)</td>
+<td>0.6s (77%)</td>
+<td>default, proc-macro</td>
+</tr>
+
+<tr>
+<td>68.</td>
+<td>hybrid-array v0.4.15</td>
+<td>0.7s</td>
+<td>0.7s (97%)</td>
+<td>0.0s (3%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>69.</td>
+<td>crossbeam-utils v0.8.21</td>
+<td>0.7s</td>
+<td>0.5s (65%)</td>
+<td>0.2s (35%)</td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>70.</td>
+<td>quote v1.0.46</td>
+<td>0.7s</td>
+<td>0.1s (22%)</td>
+<td>0.5s (78%)</td>
+<td>proc-macro</td>
+</tr>
+
+<tr>
+<td>71.</td>
+<td>wasm-bindgen-shared v0.2.125</td>
+<td>0.7s</td>
+<td>0.1s (18%)</td>
+<td>0.5s (82%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>72.</td>
+<td>aes v0.9.3</td>
+<td>0.7s</td>
+<td>0.5s (74%)</td>
+<td>0.2s (26%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>73.</td>
+<td>target-lexicon v0.13.5</td>
+<td>0.6s</td>
+<td>0.2s (40%)</td>
+<td>0.3s (60%)</td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>74.</td>
+<td>rustversion v1.0.22 build-script</td>
+<td>0.6s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>75.</td>
+<td>visual-hashing v1.0.0</td>
+<td>0.5s</td>
+<td>0.1s (20%)</td>
+<td>0.4s (80%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>76.</td>
+<td>anstream v1.0.0</td>
+<td>0.5s</td>
+<td>0.2s (42%)</td>
+<td>0.3s (58%)</td>
+<td>auto, default, wincon</td>
+</tr>
+
+<tr>
+<td>77.</td>
+<td>getrandom v0.3.4 build-script</td>
+<td>0.4s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>78.</td>
+<td>proc-macro2 v1.0.106 build-script</td>
+<td>0.4s</td>
+<td></td>
+<td></td>
+<td>default, proc-macro</td>
+</tr>
+
+<tr>
+<td>79.</td>
+<td>crossbeam-epoch v0.9.18</td>
+<td>0.4s</td>
+<td>0.2s (57%)</td>
+<td>0.2s (43%)</td>
+<td>alloc, std</td>
+</tr>
+
+<tr>
+<td>80.</td>
+<td>proc-macro2 v1.0.106 build-script</td>
+<td>0.4s</td>
+<td></td>
+<td></td>
+<td>default, proc-macro, span-locations</td>
+</tr>
+
+<tr>
+<td>81.</td>
+<td>wasm-bindgen-macro v0.2.125</td>
+<td>0.4s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>82.</td>
+<td>crossbeam-utils v0.8.21 build-script</td>
+<td>0.4s</td>
+<td></td>
+<td></td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>83.</td>
+<td>pyo3-ffi v0.29.0 build-script</td>
+<td>0.4s</td>
+<td></td>
+<td></td>
+<td>abi3, abi3-py313, abi3-py314, abi3-py315, default, extension-module</td>
+</tr>
+
+<tr>
+<td>84.</td>
+<td>wasm-bindgen-shared v0.2.125 build-script</td>
+<td>0.3s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>85.</td>
+<td>pyo3-ffi v0.29.0</td>
+<td>0.3s</td>
+<td>0.3s (90%)</td>
+<td>0.0s (10%)</td>
+<td>abi3, abi3-py313, abi3-py314, abi3-py315, default, extension-module</td>
+</tr>
+
+<tr>
+<td>86.</td>
+<td>quote v1.0.46 build-script</td>
+<td>0.3s</td>
+<td></td>
+<td></td>
+<td>default, proc-macro</td>
+</tr>
+
+<tr>
+<td>87.</td>
+<td>clap_lex v1.1.0</td>
+<td>0.3s</td>
+<td>0.1s (37%)</td>
+<td>0.2s (63%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>88.</td>
+<td>fastrand v2.4.1</td>
+<td>0.3s</td>
+<td>0.2s (67%)</td>
+<td>0.1s (33%)</td>
+<td>alloc, default, std</td>
+</tr>
+
+<tr>
+<td>89.</td>
+<td>purrdf-bench v3.0.1</td>
+<td>0.3s</td>
+<td>0.1s (37%)</td>
+<td>0.2s (63%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>90.</td>
+<td>cipher v0.5.2</td>
+<td>0.3s</td>
+<td>0.2s (92%)</td>
+<td>0.0s (8%)</td>
+<td>block-buffer, stream-wrapper</td>
+</tr>
+
+<tr>
+<td>91.</td>
+<td>quote v1.0.46 build-script</td>
+<td>0.3s</td>
+<td></td>
+<td></td>
+<td>proc-macro</td>
+</tr>
+
+<tr>
+<td>92.</td>
+<td>const-oid v0.10.2</td>
+<td>0.2s</td>
+<td>0.1s (52%)</td>
+<td>0.1s (48%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>93.</td>
+<td>polyval v0.7.3</td>
+<td>0.2s</td>
+<td>0.1s (40%)</td>
+<td>0.1s (60%)</td>
+<td>hazmat</td>
+</tr>
+
+<tr>
+<td>94.</td>
+<td>bumpalo v3.20.3</td>
+<td>0.2s</td>
+<td>0.2s (84%)</td>
+<td>0.0s (16%)</td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>95.</td>
+<td>purrdf-alloc-probe v3.0.1</td>
+<td>0.2s</td>
+<td>0.1s (42%)</td>
+<td>0.1s (58%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>96.</td>
+<td>wasm-bindgen v0.2.125 build-script</td>
+<td>0.2s</td>
+<td></td>
+<td></td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>97.</td>
+<td>ctutils v0.4.2</td>
+<td>0.2s</td>
+<td>0.2s (91%)</td>
+<td>0.0s (9%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>98.</td>
+<td>cmov v0.5.4</td>
+<td>0.2s</td>
+<td>0.2s (95%)</td>
+<td>0.0s (5%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>99.</td>
+<td>anstyle v1.0.14</td>
+<td>0.2s</td>
+<td>0.1s (63%)</td>
+<td>0.1s (37%)</td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>100.</td>
+<td>once_cell v1.21.4</td>
+<td>0.2s</td>
+<td>0.1s (78%)</td>
+<td>0.0s (22%)</td>
+<td>alloc, default, race, std</td>
+</tr>
+
+<tr>
+<td>101.</td>
+<td>pyo3 v0.29.0 build-script</td>
+<td>0.2s</td>
+<td></td>
+<td></td>
+<td>abi3, abi3-py313, abi3-py314, abi3-py315, default, extension-module, macros, pyo3-macros</td>
+</tr>
+
+<tr>
+<td>102.</td>
+<td>crossbeam-deque v0.8.6</td>
+<td>0.2s</td>
+<td>0.1s (88%)</td>
+<td>0.0s (12%)</td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>103.</td>
+<td>either v1.16.0</td>
+<td>0.2s</td>
+<td>0.2s (100%)</td>
+<td>0.0s (0%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>104.</td>
+<td>purrdf-stack v3.0.1</td>
+<td>0.1s</td>
+<td>0.1s (60%)</td>
+<td>0.1s (40%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>105.</td>
+<td>getrandom v0.3.4</td>
+<td>0.1s</td>
+<td>0.1s (64%)</td>
+<td>0.1s (36%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>106.</td>
+<td>ctr v0.10.1</td>
+<td>0.1s</td>
+<td>0.1s (93%)</td>
+<td>0.0s (7%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>107.</td>
+<td>anstyle-parse v1.0.0</td>
+<td>0.1s</td>
+<td>0.1s (71%)</td>
+<td>0.0s (29%)</td>
+<td>default, utf8</td>
+</tr>
+
+<tr>
+<td>108.</td>
+<td>digest v0.11.3</td>
+<td>0.1s</td>
+<td>0.1s (85%)</td>
+<td>0.0s (15%)</td>
+<td>alloc, block-api, default, oid</td>
+</tr>
+
+<tr>
+<td>109.</td>
+<td>purrdf-hash-conformance v3.0.1</td>
+<td>0.1s</td>
+<td>0.0s (31%)</td>
+<td>0.1s (69%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>110.</td>
+<td>block-buffer v0.12.1</td>
+<td>0.1s</td>
+<td>0.1s (92%)</td>
+<td>0.0s (8%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>111.</td>
+<td>leb128fmt v0.1.0</td>
+<td>0.1s</td>
+<td>0.1s (82%)</td>
+<td>0.0s (18%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>112.</td>
+<td>purrdf-events v3.0.1</td>
+<td>0.1s</td>
+<td>0.1s (80%)</td>
+<td>0.0s (20%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>113.</td>
+<td>aes-gcm v0.11.1</td>
+<td>0.1s</td>
+<td>0.1s (90%)</td>
+<td>0.0s (10%)</td>
+<td>aes, alloc</td>
+</tr>
+
+<tr>
+<td>114.</td>
+<td>rayon-core v1.13.0 build-script</td>
+<td>0.1s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>115.</td>
+<td>aead v0.6.1</td>
+<td>0.1s</td>
+<td>0.1s (67%)</td>
+<td>0.0s (33%)</td>
+<td>alloc</td>
+</tr>
+
+<tr>
+<td>116.</td>
+<td>inout v0.2.2</td>
+<td>0.1s</td>
+<td>0.1s (88%)</td>
+<td>0.0s (12%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>117.</td>
+<td>twox-hash v2.1.2</td>
+<td>0.1s</td>
+<td>0.1s (75%)</td>
+<td>0.0s (25%)</td>
+<td>xxhash64</td>
+</tr>
+
+<tr>
+<td>118.</td>
+<td>unicode-ident v1.0.24</td>
+<td>0.1s</td>
+<td>0.1s (75%)</td>
+<td>0.0s (25%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>119.</td>
+<td>pyo3-ffi v0.29.0 build-script (run)</td>
+<td>0.1s</td>
+<td></td>
+<td></td>
+<td>abi3, abi3-py313, abi3-py314, abi3-py315, default, extension-module</td>
+</tr>
+
+<tr>
+<td>120.</td>
+<td>universal-hash v0.6.1</td>
+<td>0.1s</td>
+<td>0.1s (83%)</td>
+<td>0.0s (17%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>121.</td>
+<td>ghash v0.6.0</td>
+<td>0.1s</td>
+<td>0.0s (67%)</td>
+<td>0.0s (33%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>122.</td>
+<td>colorchoice v1.0.5</td>
+<td>0.1s</td>
+<td>0.0s (60%)</td>
+<td>0.0s (40%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>123.</td>
+<td>proc-macro2 v1.0.106 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default, proc-macro</td>
+</tr>
+
+<tr>
+<td>124.</td>
+<td>proc-macro2 v1.0.106 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default, proc-macro, span-locations</td>
+</tr>
+
+<tr>
+<td>125.</td>
+<td>clap v4.6.1</td>
+<td>0.0s</td>
+<td>0.0s (50%)</td>
+<td>0.0s (50%)</td>
+<td>color, default, derive, error-context, help, std, suggestions, usage</td>
+</tr>
+
+<tr>
+<td>126.</td>
+<td>anstyle-query v1.1.5</td>
+<td>0.0s</td>
+<td>0.0s (75%)</td>
+<td>0.0s (25%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>127.</td>
+<td>utf8parse v0.2.2</td>
+<td>0.0s</td>
+<td>0.0s (75%)</td>
+<td>0.0s (25%)</td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>128.</td>
+<td>purrdf-core v3.0.1 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>129.</td>
+<td>cfg-if v1.0.4</td>
+<td>0.0s</td>
+<td>0.0s (100%)</td>
+<td>0.0s (0%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>130.</td>
+<td>cpufeatures v0.3.0</td>
+<td>0.0s</td>
+<td>0.0s (67%)</td>
+<td>0.0s (33%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>131.</td>
+<td>cpubits v0.1.1</td>
+<td>0.0s</td>
+<td>0.0s (67%)</td>
+<td>0.0s (33%)</td>
+<td></td>
+</tr>
+
+<tr>
+<td>132.</td>
+<td>is_terminal_polyfill v1.70.2</td>
+<td>0.0s</td>
+<td>0.0s (100%)</td>
+<td>0.0s (0%)</td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>133.</td>
+<td>rustversion v1.0.22 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>134.</td>
+<td>libc v0.2.186 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>135.</td>
+<td>wasm-bindgen-shared v0.2.125 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>136.</td>
+<td>quote v1.0.46 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default, proc-macro</td>
+</tr>
+
+<tr>
+<td>137.</td>
+<td>target-lexicon v0.13.5 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default</td>
+</tr>
+
+<tr>
+<td>138.</td>
+<td>quote v1.0.46 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>proc-macro</td>
+</tr>
+
+<tr>
+<td>139.</td>
+<td>pyo3 v0.29.0 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>abi3, abi3-py313, abi3-py314, abi3-py315, default, extension-module, macros, pyo3-macros</td>
+</tr>
+
+<tr>
+<td>140.</td>
+<td>getrandom v0.3.4 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>141.</td>
+<td>wasm-bindgen v0.2.125 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default, std</td>
+</tr>
+
+<tr>
+<td>142.</td>
+<td>rayon-core v1.13.0 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+
+<tr>
+<td>143.</td>
+<td>crossbeam-utils v0.8.21 build-script (run)</td>
+<td>0.0s</td>
+<td></td>
+<td></td>
+<td>default, std</td>
+</tr>
+</tbody>
+</table>
+<script>
+DURATION = 464;
+const UNIT_DATA = [
+  {
+    "i": 168,
+    "name": "typenum",
+    "version": "1.20.1",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "const-generics"
+    ],
+    "start": 0.31,
+    "duration": 1.57,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      37
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.55
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.55,
+          "end": 1.57
+        }
+      ]
+    ]
+  },
+  {
+    "i": 19,
+    "name": "cpufeatures",
+    "version": "0.3.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 0.31,
+    "duration": 0.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.02
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.02,
+          "end": 0.03
+        }
+      ]
+    ]
+  },
+  {
+    "i": 86,
+    "name": "purrdf-hash",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 0.31,
+    "duration": 11.34,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      72,
+      98
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.71
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.71,
+          "end": 11.34
+        }
+      ]
+    ]
+  },
+  {
+    "i": 9,
+    "name": "cfg-if",
+    "version": "1.0.4",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 0.31,
+    "duration": 0.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.03
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.03,
+          "end": 0.03
+        }
+      ]
+    ]
+  },
+  {
+    "i": 17,
+    "name": "const-oid",
+    "version": "0.10.2",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 0.34,
+    "duration": 0.25,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.13
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.13,
+          "end": 0.25
+        }
+      ]
+    ]
+  },
+  {
+    "i": 155,
+    "name": "regex-syntax",
+    "version": "0.8.11",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "std",
+      "unicode",
+      "unicode-age",
+      "unicode-bool",
+      "unicode-case",
+      "unicode-gencat",
+      "unicode-perl",
+      "unicode-script",
+      "unicode-segment"
+    ],
+    "start": 0.34,
+    "duration": 9.3,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      154
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.99
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.99,
+          "end": 9.3
+        }
+      ]
+    ]
+  },
+  {
+    "i": 80,
+    "name": "purrdf-events",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 0.59,
+    "duration": 0.1,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.08
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.08,
+          "end": 0.1
+        }
+      ]
+    ]
+  },
+  {
+    "i": 43,
+    "name": "libc",
+    "version": "0.2.186",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 0.69,
+    "duration": 0.79,
+    "unblocked_units": [
+      42
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 42,
+    "name": "libc",
+    "version": "0.2.186",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 1.49,
+    "duration": 0.02,
+    "unblocked_units": [
+      41
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 41,
+    "name": "libc",
+    "version": "0.2.186",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 1.5,
+    "duration": 0.99,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      122
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.95
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.95,
+          "end": 0.99
+        }
+      ]
+    ]
+  },
+  {
+    "i": 37,
+    "name": "hybrid-array",
+    "version": "0.4.15",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 1.88,
+    "duration": 0.72,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      25,
+      7,
+      38
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.7
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.7,
+          "end": 0.72
+        }
+      ]
+    ]
+  },
+  {
+    "i": 154,
+    "name": "regex-automata",
+    "version": "0.4.14",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc",
+      "dfa-onepass",
+      "hybrid",
+      "meta",
+      "nfa-backtrack",
+      "nfa-pikevm",
+      "nfa-thompson",
+      "perf-inline",
+      "std",
+      "syntax",
+      "unicode",
+      "unicode-age",
+      "unicode-bool",
+      "unicode-case",
+      "unicode-gencat",
+      "unicode-perl",
+      "unicode-script",
+      "unicode-segment",
+      "unicode-word-boundary"
+    ],
+    "start": 2.49,
+    "duration": 13.42,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      153
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 2.89
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 2.89,
+          "end": 13.42
+        }
+      ]
+    ]
+  },
+  {
+    "i": 25,
+    "name": "crypto-common",
+    "version": "0.2.2",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 2.6,
+    "duration": 1.65,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.73
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.73,
+          "end": 1.65
+        }
+      ]
+    ]
+  },
+  {
+    "i": 7,
+    "name": "block-buffer",
+    "version": "0.12.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 4.26,
+    "duration": 0.12,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      28
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.11
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.11,
+          "end": 0.12
+        }
+      ]
+    ]
+  },
+  {
+    "i": 28,
+    "name": "digest",
+    "version": "0.11.3",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc",
+      "block-api",
+      "default",
+      "oid"
+    ],
+    "start": 4.38,
+    "duration": 0.13,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      159
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.11
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.11,
+          "end": 0.13
+        }
+      ]
+    ]
+  },
+  {
+    "i": 159,
+    "name": "sha2",
+    "version": "0.11.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc",
+      "default",
+      "oid"
+    ],
+    "start": 4.51,
+    "duration": 2.24,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      124,
+      74
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.73
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.73,
+          "end": 2.24
+        }
+      ]
+    ]
+  },
+  {
+    "i": 98,
+    "name": "purrdf-lex",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 6.75,
+    "duration": 20.0,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      132,
+      92
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.41
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.41,
+          "end": 20.0
+        }
+      ]
+    ]
+  },
+  {
+    "i": 153,
+    "name": "regex",
+    "version": "1.12.4",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "perf-backtrack",
+      "perf-cache",
+      "perf-dfa",
+      "perf-inline",
+      "perf-onepass",
+      "std",
+      "unicode",
+      "unicode-age",
+      "unicode-bool",
+      "unicode-case",
+      "unicode-gencat",
+      "unicode-perl",
+      "unicode-script",
+      "unicode-segment"
+    ],
+    "start": 9.65,
+    "duration": 1.7,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.41
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.41,
+          "end": 1.7
+        }
+      ]
+    ]
+  },
+  {
+    "i": 92,
+    "name": "purrdf-iri",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 11.35,
+    "duration": 4.71,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.37
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.37,
+          "end": 4.71
+        }
+      ]
+    ]
+  },
+  {
+    "i": 132,
+    "name": "purrdf-xsd",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 11.65,
+    "duration": 10.84,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      96,
+      60,
+      56
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.74
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.74,
+          "end": 10.84
+        }
+      ]
+    ]
+  },
+  {
+    "i": 60,
+    "name": "purrdf-cdt",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 15.91,
+    "duration": 5.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      114
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.67
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.67,
+          "end": 5.03
+        }
+      ]
+    ]
+  },
+  {
+    "i": 72,
+    "name": "purrdf-deflate",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 16.06,
+    "duration": 2.46,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.53
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.53,
+          "end": 2.46
+        }
+      ]
+    ]
+  },
+  {
+    "i": 69,
+    "name": "purrdf-core",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [],
+    "start": 18.52,
+    "duration": 1.59,
+    "unblocked_units": [
+      68
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 68,
+    "name": "purrdf-core",
+    "version": "3.0.1",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [],
+    "start": 20.1,
+    "duration": 0.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 35,
+    "name": "hashbrown",
+    "version": "0.17.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 20.13,
+    "duration": 0.88,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      66
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.83
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.83,
+          "end": 0.88
+        }
+      ]
+    ]
+  },
+  {
+    "i": 24,
+    "name": "crossbeam-utils",
+    "version": "0.8.21",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 20.94,
+    "duration": 0.37,
+    "unblocked_units": [
+      23
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 66,
+    "name": "purrdf-core",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 21.02,
+    "duration": 110.65,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      70,
+      100,
+      120,
+      64,
+      110,
+      94
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 16.51
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 16.51,
+          "end": 110.65
+        }
+      ]
+    ]
+  },
+  {
+    "i": 23,
+    "name": "crossbeam-utils",
+    "version": "0.8.21",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 21.31,
+    "duration": 0.0,
+    "unblocked_units": [
+      22
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 22,
+    "name": "crossbeam-utils",
+    "version": "0.8.21",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 21.32,
+    "duration": 0.69,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      21
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.45
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.45,
+          "end": 0.69
+        }
+      ]
+    ]
+  },
+  {
+    "i": 122,
+    "name": "purrdf-stack",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 22.0,
+    "duration": 0.15,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.09
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.09,
+          "end": 0.15
+        }
+      ]
+    ]
+  },
+  {
+    "i": 21,
+    "name": "crossbeam-epoch",
+    "version": "0.9.18",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc",
+      "std"
+    ],
+    "start": 22.15,
+    "duration": 0.42,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      20
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.24
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.24,
+          "end": 0.42
+        }
+      ]
+    ]
+  },
+  {
+    "i": 152,
+    "name": "rayon-core",
+    "version": "1.13.0",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [],
+    "start": 22.49,
+    "duration": 0.09,
+    "unblocked_units": [
+      151
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 20,
+    "name": "crossbeam-deque",
+    "version": "0.8.6",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 22.57,
+    "duration": 0.17,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      150
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.15
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.15,
+          "end": 0.17
+        }
+      ]
+    ]
+  },
+  {
+    "i": 29,
+    "name": "either",
+    "version": "1.16.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 22.58,
+    "duration": 0.16,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.16
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.16,
+          "end": 0.16
+        }
+      ]
+    ]
+  },
+  {
+    "i": 151,
+    "name": "rayon-core",
+    "version": "1.13.0",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [],
+    "start": 22.58,
+    "duration": 0.0,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 150,
+    "name": "rayon-core",
+    "version": "1.13.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 22.74,
+    "duration": 2.02,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      149
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.58
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.58,
+          "end": 2.02
+        }
+      ]
+    ]
+  },
+  {
+    "i": 33,
+    "name": "getrandom",
+    "version": "0.3.4",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [],
+    "start": 22.75,
+    "duration": 0.44,
+    "unblocked_units": [
+      32
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 32,
+    "name": "getrandom",
+    "version": "0.3.4",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [],
+    "start": 23.19,
+    "duration": 0.01,
+    "unblocked_units": [
+      31
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 31,
+    "name": "getrandom",
+    "version": "0.3.4",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 23.2,
+    "duration": 0.14,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.09
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.09,
+          "end": 0.14
+        }
+      ]
+    ]
+  },
+  {
+    "i": 149,
+    "name": "rayon",
+    "version": "1.12.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 23.35,
+    "duration": 3.35,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.09
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.09,
+          "end": 3.35
+        }
+      ]
+    ]
+  },
+  {
+    "i": 114,
+    "name": "purrdf-sparql-algebra",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 24.76,
+    "duration": 23.52,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 2.81
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 2.81,
+          "end": 23.52
+        }
+      ]
+    ]
+  },
+  {
+    "i": 124,
+    "name": "purrdf-testkit",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 26.7,
+    "duration": 11.37,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      88
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.89
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.89,
+          "end": 11.37
+        }
+      ]
+    ]
+  },
+  {
+    "i": 38,
+    "name": "inout",
+    "version": "0.2.2",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 26.76,
+    "duration": 0.08,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      0,
+      10
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.07
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.07,
+          "end": 0.08
+        }
+      ]
+    ]
+  },
+  {
+    "i": 15,
+    "name": "cmov",
+    "version": "0.5.4",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 26.84,
+    "duration": 0.2,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      27
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.19
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.19,
+          "end": 0.2
+        }
+      ]
+    ]
+  },
+  {
+    "i": 27,
+    "name": "ctutils",
+    "version": "0.4.2",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 27.04,
+    "duration": 0.23,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      170
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.21
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.21,
+          "end": 0.23
+        }
+      ]
+    ]
+  },
+  {
+    "i": 18,
+    "name": "cpubits",
+    "version": "0.1.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 27.27,
+    "duration": 0.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.02
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.02,
+          "end": 0.03
+        }
+      ]
+    ]
+  },
+  {
+    "i": 170,
+    "name": "universal-hash",
+    "version": "0.6.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 27.3,
+    "duration": 0.06,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      45
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.05
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.05,
+          "end": 0.06
+        }
+      ]
+    ]
+  },
+  {
+    "i": 10,
+    "name": "cipher",
+    "version": "0.5.2",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "block-buffer",
+      "stream-wrapper"
+    ],
+    "start": 27.36,
+    "duration": 0.26,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      1,
+      26
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.24
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.24,
+          "end": 0.26
+        }
+      ]
+    ]
+  },
+  {
+    "i": 30,
+    "name": "fastrand",
+    "version": "2.4.1",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc",
+      "default",
+      "std"
+    ],
+    "start": 27.62,
+    "duration": 0.27,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.18
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.18,
+          "end": 0.27
+        }
+      ]
+    ]
+  },
+  {
+    "i": 167,
+    "name": "twox-hash",
+    "version": "2.1.2",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "xxhash64"
+    ],
+    "start": 27.89,
+    "duration": 0.08,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      161
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.06
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.06,
+          "end": 0.08
+        }
+      ]
+    ]
+  },
+  {
+    "i": 161,
+    "name": "structured-zstd",
+    "version": "0.0.49",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "dict_builder",
+      "hash",
+      "kernel_avx2",
+      "kernel_bmi2",
+      "kernel_neon",
+      "kernel_scalar",
+      "kernel_simd128",
+      "kernel_sse2",
+      "kernel_sve",
+      "std"
+    ],
+    "start": 27.97,
+    "duration": 49.0,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 4.7
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 4.7,
+          "end": 49.0
+        }
+      ]
+    ]
+  },
+  {
+    "i": 120,
+    "name": "purrdf-sparql-results",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 38.07,
+    "duration": 6.45,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      118
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.56
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.56,
+          "end": 6.45
+        }
+      ]
+    ]
+  },
+  {
+    "i": 118,
+    "name": "purrdf-sparql-eval",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 44.53,
+    "duration": 140.14,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      104,
+      126,
+      90,
+      82
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 14.41
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 14.41,
+          "end": 140.14
+        }
+      ]
+    ]
+  },
+  {
+    "i": 45,
+    "name": "polyval",
+    "version": "0.7.3",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "hazmat"
+    ],
+    "start": 48.28,
+    "duration": 0.25,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      34
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.1
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.1,
+          "end": 0.25
+        }
+      ]
+    ]
+  },
+  {
+    "i": 34,
+    "name": "ghash",
+    "version": "0.6.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 48.53,
+    "duration": 0.06,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.04
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.04,
+          "end": 0.06
+        }
+      ]
+    ]
+  },
+  {
+    "i": 1,
+    "name": "aes",
+    "version": "0.9.3",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 48.59,
+    "duration": 0.66,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.49
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.49,
+          "end": 0.66
+        }
+      ]
+    ]
+  },
+  {
+    "i": 26,
+    "name": "ctr",
+    "version": "0.10.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 49.25,
+    "duration": 0.14,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.13
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.13,
+          "end": 0.14
+        }
+      ]
+    ]
+  },
+  {
+    "i": 0,
+    "name": "aead",
+    "version": "0.6.1",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc"
+    ],
+    "start": 49.39,
+    "duration": 0.09,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      2
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.06
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.06,
+          "end": 0.09
+        }
+      ]
+    ]
+  },
+  {
+    "i": 74,
+    "name": "purrdf-ed25519",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 49.48,
+    "duration": 0.98,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.22
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.22,
+          "end": 0.98
+        }
+      ]
+    ]
+  },
+  {
+    "i": 2,
+    "name": "aes-gcm",
+    "version": "0.11.1",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "aes",
+      "alloc"
+    ],
+    "start": 50.46,
+    "duration": 0.1,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.09
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.09,
+          "end": 0.1
+        }
+      ]
+    ]
+  },
+  {
+    "i": 172,
+    "name": "visual-hashing",
+    "version": "1.0.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 50.56,
+    "duration": 0.51,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      84
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.1
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.1,
+          "end": 0.51
+        }
+      ]
+    ]
+  },
+  {
+    "i": 84,
+    "name": "purrdf-gts",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 51.07,
+    "duration": 66.0,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 5.08
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 5.08,
+          "end": 66.0
+        }
+      ]
+    ]
+  },
+  {
+    "i": 104,
+    "name": "purrdf-rdf",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 76.97,
+    "duration": 186.02,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      112
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 18.42
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 18.42,
+          "end": 186.02
+        }
+      ]
+    ]
+  },
+  {
+    "i": 169,
+    "name": "unicode-ident",
+    "version": "1.0.24",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 117.07,
+    "duration": 0.08,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.06
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.06,
+          "end": 0.08
+        }
+      ]
+    ]
+  },
+  {
+    "i": 70,
+    "name": "purrdf-datalog",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 117.16,
+    "duration": 36.49,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      76
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.13
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.13,
+          "end": 36.49
+        }
+      ]
+    ]
+  },
+  {
+    "i": 112,
+    "name": "purrdf-slice",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 131.67,
+    "duration": 19.4,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      108
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.63
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.63,
+          "end": 19.4
+        }
+      ]
+    ]
+  },
+  {
+    "i": 54,
+    "name": "purrdf-alloc-probe",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 151.06,
+    "duration": 0.24,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.1
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.1,
+          "end": 0.24
+        }
+      ]
+    ]
+  },
+  {
+    "i": 50,
+    "name": "proc-macro2",
+    "version": "1.0.106",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default",
+      "proc-macro"
+    ],
+    "start": 151.3,
+    "duration": 0.44,
+    "unblocked_units": [
+      48
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 48,
+    "name": "proc-macro2",
+    "version": "1.0.106",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default",
+      "proc-macro"
+    ],
+    "start": 151.75,
+    "duration": 0.04,
+    "unblocked_units": [
+      46
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 108,
+    "name": "purrdf-shapes",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 151.79,
+    "duration": 235.27,
+    "unblocked_units": [
+      58,
+      130,
+      102
+    ],
+    "unblocked_rmeta_units": [
+      78
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 23.87
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 23.87,
+          "end": 235.27
+        }
+      ]
+    ]
+  },
+  {
+    "i": 147,
+    "name": "quote",
+    "version": "1.0.46",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default",
+      "proc-macro"
+    ],
+    "start": 153.64,
+    "duration": 0.29,
+    "unblocked_units": [
+      145
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 145,
+    "name": "quote",
+    "version": "1.0.46",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default",
+      "proc-macro"
+    ],
+    "start": 153.94,
+    "duration": 0.01,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 46,
+    "name": "proc-macro2",
+    "version": "1.0.106",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "proc-macro"
+    ],
+    "start": 153.95,
+    "duration": 2.32,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      143
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.46
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.46,
+          "end": 2.32
+        }
+      ]
+    ]
+  },
+  {
+    "i": 143,
+    "name": "quote",
+    "version": "1.0.46",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "proc-macro"
+    ],
+    "start": 156.27,
+    "duration": 0.73,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      162
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.17
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.17,
+          "end": 0.73
+        }
+      ]
+    ]
+  },
+  {
+    "i": 162,
+    "name": "syn",
+    "version": "2.0.118",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "clone-impls",
+      "default",
+      "derive",
+      "extra-traits",
+      "full",
+      "parsing",
+      "printing",
+      "proc-macro",
+      "visit",
+      "visit-mut"
+    ],
+    "start": 157.0,
+    "duration": 34.6,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 4.82
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 4.82,
+          "end": 34.6
+        }
+      ]
+    ]
+  },
+  {
+    "i": 76,
+    "name": "purrdf-entail",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 184.67,
+    "duration": 59.65,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      128
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 6.06
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 6.06,
+          "end": 59.65
+        }
+      ]
+    ]
+  },
+  {
+    "i": 126,
+    "name": "purrdf-text",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 191.6,
+    "duration": 24.52,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      106
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 2.84
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 2.84,
+          "end": 24.52
+        }
+      ]
+    ]
+  },
+  {
+    "i": 106,
+    "name": "purrdf-retrieval",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 216.12,
+    "duration": 19.47,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 2.73
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 2.73,
+          "end": 19.47
+        }
+      ]
+    ]
+  },
+  {
+    "i": 128,
+    "name": "purrdf-validate",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 235.59,
+    "duration": 19.84,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.81
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.81,
+          "end": 19.84
+        }
+      ]
+    ]
+  },
+  {
+    "i": 82,
+    "name": "purrdf-geo",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 244.32,
+    "duration": 12.49,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.46
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.46,
+          "end": 12.49
+        }
+      ]
+    ]
+  },
+  {
+    "i": 90,
+    "name": "purrdf-hnsw",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 255.43,
+    "duration": 7.53,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.89
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.89,
+          "end": 7.53
+        }
+      ]
+    ]
+  },
+  {
+    "i": 100,
+    "name": "purrdf-markdown",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 256.81,
+    "duration": 4.82,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.6
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.6,
+          "end": 4.82
+        }
+      ]
+    ]
+  },
+  {
+    "i": 64,
+    "name": "purrdf-columnar",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 261.63,
+    "duration": 6.01,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.83
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.83,
+          "end": 6.01
+        }
+      ]
+    ]
+  },
+  {
+    "i": 94,
+    "name": "purrdf-json",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 262.96,
+    "duration": 2.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.34
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.34,
+          "end": 2.03
+        }
+      ]
+    ]
+  },
+  {
+    "i": 110,
+    "name": "purrdf-shex",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 262.99,
+    "duration": 14.9,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      52
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.73
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.73,
+          "end": 14.9
+        }
+      ]
+    ]
+  },
+  {
+    "i": 52,
+    "name": "purrdf",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 264.99,
+    "duration": 4.37,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      116
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.45
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.45,
+          "end": 4.37
+        }
+      ]
+    ]
+  },
+  {
+    "i": 166,
+    "name": "target-lexicon",
+    "version": "0.13.5",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default"
+    ],
+    "start": 267.64,
+    "duration": 0.83,
+    "unblocked_units": [
+      165
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 165,
+    "name": "target-lexicon",
+    "version": "0.13.5",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default"
+    ],
+    "start": 268.47,
+    "duration": 0.01,
+    "unblocked_units": [
+      164
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 164,
+    "name": "target-lexicon",
+    "version": "0.13.5",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default"
+    ],
+    "start": 268.49,
+    "duration": 0.58,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      137
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.23
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.23,
+          "end": 0.58
+        }
+      ]
+    ]
+  },
+  {
+    "i": 36,
+    "name": "heck",
+    "version": "0.5.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 269.07,
+    "duration": 0.92,
+    "unblocked_units": [
+      13
+    ],
+    "unblocked_rmeta_units": [
+      142
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.09
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.09,
+          "end": 0.92
+        }
+      ]
+    ]
+  },
+  {
+    "i": 180,
+    "name": "wasm-bindgen-shared",
+    "version": "0.2.125",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [],
+    "start": 269.36,
+    "duration": 0.29,
+    "unblocked_units": [
+      179
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 179,
+    "name": "wasm-bindgen-shared",
+    "version": "0.2.125",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [],
+    "start": 269.65,
+    "duration": 0.01,
+    "unblocked_units": [
+      178
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 137,
+    "name": "pyo3-build-config",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "extension-module"
+    ],
+    "start": 269.66,
+    "duration": 4.45,
+    "unblocked_units": [
+      136,
+      140
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.57
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.57,
+          "end": 4.45
+        }
+      ]
+    ]
+  },
+  {
+    "i": 158,
+    "name": "rustversion",
+    "version": "1.0.22",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [],
+    "start": 269.99,
+    "duration": 0.57,
+    "unblocked_units": [
+      157
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 157,
+    "name": "rustversion",
+    "version": "1.0.22",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [],
+    "start": 270.56,
+    "duration": 0.02,
+    "unblocked_units": [
+      156
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 44,
+    "name": "once_cell",
+    "version": "1.21.4",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "alloc",
+      "default",
+      "race",
+      "std"
+    ],
+    "start": 270.58,
+    "duration": 0.18,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.14
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.14,
+          "end": 0.18
+        }
+      ]
+    ]
+  },
+  {
+    "i": 156,
+    "name": "rustversion",
+    "version": "1.0.22",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 270.76,
+    "duration": 1.36,
+    "unblocked_units": [
+      175
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 178,
+    "name": "wasm-bindgen-shared",
+    "version": "0.2.125",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 272.12,
+    "duration": 0.66,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.12
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.12,
+          "end": 0.66
+        }
+      ]
+    ]
+  },
+  {
+    "i": 171,
+    "name": "utf8parse",
+    "version": "0.2.2",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default"
+    ],
+    "start": 272.78,
+    "duration": 0.04,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      5
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.03
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.03,
+          "end": 0.04
+        }
+      ]
+    ]
+  },
+  {
+    "i": 8,
+    "name": "bumpalo",
+    "version": "3.20.3",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default"
+    ],
+    "start": 272.83,
+    "duration": 0.25,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      177
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.21
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.21,
+          "end": 0.25
+        }
+      ]
+    ]
+  },
+  {
+    "i": 51,
+    "name": "proc-macro2",
+    "version": "1.0.106",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default",
+      "proc-macro",
+      "span-locations"
+    ],
+    "start": 273.08,
+    "duration": 0.42,
+    "unblocked_units": [
+      49
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 49,
+    "name": "proc-macro2",
+    "version": "1.0.106",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default",
+      "proc-macro",
+      "span-locations"
+    ],
+    "start": 273.5,
+    "duration": 0.04,
+    "unblocked_units": [
+      47
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 177,
+    "name": "wasm-bindgen-macro-support",
+    "version": "0.2.125",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 273.54,
+    "duration": 38.83,
+    "unblocked_units": [
+      176
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.05
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.05,
+          "end": 38.83
+        }
+      ]
+    ]
+  },
+  {
+    "i": 140,
+    "name": "pyo3-ffi",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "abi3",
+      "abi3-py313",
+      "abi3-py314",
+      "abi3-py315",
+      "default",
+      "extension-module"
+    ],
+    "start": 274.12,
+    "duration": 0.36,
+    "unblocked_units": [
+      139
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 139,
+    "name": "pyo3-ffi",
+    "version": "0.29.0",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "abi3",
+      "abi3-py313",
+      "abi3-py314",
+      "abi3-py315",
+      "default",
+      "extension-module"
+    ],
+    "start": 274.48,
+    "duration": 0.06,
+    "unblocked_units": [
+      138
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 5,
+    "name": "anstyle-parse",
+    "version": "1.0.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "utf8"
+    ],
+    "start": 274.54,
+    "duration": 0.14,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.1
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.1,
+          "end": 0.14
+        }
+      ]
+    ]
+  },
+  {
+    "i": 175,
+    "name": "wasm-bindgen",
+    "version": "0.2.125",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 274.69,
+    "duration": 0.23,
+    "unblocked_units": [
+      174
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 4,
+    "name": "anstyle",
+    "version": "1.0.14",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 274.92,
+    "duration": 0.19,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.12
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.12,
+          "end": 0.19
+        }
+      ]
+    ]
+  },
+  {
+    "i": 6,
+    "name": "anstyle-query",
+    "version": "1.1.5",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 275.11,
+    "duration": 0.04,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.03
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.03,
+          "end": 0.04
+        }
+      ]
+    ]
+  },
+  {
+    "i": 148,
+    "name": "quote",
+    "version": "1.0.46",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "proc-macro"
+    ],
+    "start": 275.15,
+    "duration": 0.26,
+    "unblocked_units": [
+      146
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 16,
+    "name": "colorchoice",
+    "version": "1.0.5",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 275.41,
+    "duration": 0.05,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.03
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.03,
+          "end": 0.05
+        }
+      ]
+    ]
+  },
+  {
+    "i": 39,
+    "name": "is_terminal_polyfill",
+    "version": "1.70.2",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default"
+    ],
+    "start": 275.46,
+    "duration": 0.03,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      3
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.03
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.03,
+          "end": 0.03
+        }
+      ]
+    ]
+  },
+  {
+    "i": 3,
+    "name": "anstream",
+    "version": "1.0.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "auto",
+      "default",
+      "wincon"
+    ],
+    "start": 275.5,
+    "duration": 0.45,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.19
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.19,
+          "end": 0.45
+        }
+      ]
+    ]
+  },
+  {
+    "i": 146,
+    "name": "quote",
+    "version": "1.0.46",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "proc-macro"
+    ],
+    "start": 275.94,
+    "duration": 0.01,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 174,
+    "name": "wasm-bindgen",
+    "version": "0.2.125",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 275.96,
+    "duration": 0.0,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 136,
+    "name": "pyo3",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": " build-script",
+    "features": [
+      "abi3",
+      "abi3-py313",
+      "abi3-py314",
+      "abi3-py315",
+      "default",
+      "extension-module",
+      "macros",
+      "pyo3-macros"
+    ],
+    "start": 275.96,
+    "duration": 0.17,
+    "unblocked_units": [
+      135
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 47,
+    "name": "proc-macro2",
+    "version": "1.0.106",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "proc-macro",
+      "span-locations"
+    ],
+    "start": 276.13,
+    "duration": 2.95,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      144
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.52
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.52,
+          "end": 2.95
+        }
+      ]
+    ]
+  },
+  {
+    "i": 142,
+    "name": "pyo3-macros-backend",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 277.89,
+    "duration": 32.4,
+    "unblocked_units": [
+      141
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.61
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.61,
+          "end": 32.4
+        }
+      ]
+    ]
+  },
+  {
+    "i": 14,
+    "name": "clap_lex",
+    "version": "1.1.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 279.08,
+    "duration": 0.27,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.1
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.1,
+          "end": 0.27
+        }
+      ]
+    ]
+  },
+  {
+    "i": 160,
+    "name": "strsim",
+    "version": "0.11.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 279.36,
+    "duration": 0.86,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      12
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.16
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.16,
+          "end": 0.86
+        }
+      ]
+    ]
+  },
+  {
+    "i": 12,
+    "name": "clap_builder",
+    "version": "4.6.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "color",
+      "error-context",
+      "help",
+      "std",
+      "suggestions",
+      "usage"
+    ],
+    "start": 280.21,
+    "duration": 14.42,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 2.75
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 2.75,
+          "end": 14.42
+        }
+      ]
+    ]
+  },
+  {
+    "i": 144,
+    "name": "quote",
+    "version": "1.0.46",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "proc-macro"
+    ],
+    "start": 294.64,
+    "duration": 0.68,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      163
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.15
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.15,
+          "end": 0.68
+        }
+      ]
+    ]
+  },
+  {
+    "i": 135,
+    "name": "pyo3",
+    "version": "0.29.0",
+    "mode": "run-custom-build",
+    "target": " build-script (run)",
+    "features": [
+      "abi3",
+      "abi3-py313",
+      "abi3-py314",
+      "abi3-py315",
+      "default",
+      "extension-module",
+      "macros",
+      "pyo3-macros"
+    ],
+    "start": 295.32,
+    "duration": 0.01,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 138,
+    "name": "pyo3-ffi",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "abi3",
+      "abi3-py313",
+      "abi3-py314",
+      "abi3-py315",
+      "default",
+      "extension-module"
+    ],
+    "start": 295.33,
+    "duration": 0.29,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.26
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.26,
+          "end": 0.29
+        }
+      ]
+    ]
+  },
+  {
+    "i": 13,
+    "name": "clap_derive",
+    "version": "4.6.1",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default"
+    ],
+    "start": 295.62,
+    "duration": 16.15,
+    "unblocked_units": [
+      11
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 141,
+    "name": "pyo3-macros",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 310.29,
+    "duration": 11.89,
+    "unblocked_units": [
+      134
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 96,
+    "name": "purrdf-jsonschema",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 311.78,
+    "duration": 11.62,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.59
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.59,
+          "end": 11.62
+        }
+      ]
+    ]
+  },
+  {
+    "i": 176,
+    "name": "wasm-bindgen-macro",
+    "version": "0.2.125",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 312.38,
+    "duration": 0.37,
+    "unblocked_units": [
+      173
+    ],
+    "unblocked_rmeta_units": [],
+    "sections": null
+  },
+  {
+    "i": 173,
+    "name": "wasm-bindgen",
+    "version": "0.2.125",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "default",
+      "std"
+    ],
+    "start": 312.74,
+    "duration": 1.63,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.39
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.39,
+          "end": 1.63
+        }
+      ]
+    ]
+  },
+  {
+    "i": 40,
+    "name": "leb128fmt",
+    "version": "0.1.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 314.37,
+    "duration": 0.11,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      181
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.09
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.09,
+          "end": 0.11
+        }
+      ]
+    ]
+  },
+  {
+    "i": 181,
+    "name": "wasm-encoder",
+    "version": "0.259.0",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 314.48,
+    "duration": 2.79,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      182
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.93
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.93,
+          "end": 2.79
+        }
+      ]
+    ]
+  },
+  {
+    "i": 11,
+    "name": "clap",
+    "version": "4.6.1",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "color",
+      "default",
+      "derive",
+      "error-context",
+      "help",
+      "std",
+      "suggestions",
+      "usage"
+    ],
+    "start": 317.27,
+    "duration": 0.04,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [
+      62
+    ],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.02
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.02,
+          "end": 0.04
+        }
+      ]
+    ]
+  },
+  {
+    "i": 163,
+    "name": "syn",
+    "version": "2.0.118",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "clone-impls",
+      "default",
+      "derive",
+      "full",
+      "parsing",
+      "printing",
+      "proc-macro",
+      "visit"
+    ],
+    "start": 317.3,
+    "duration": 31.16,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 3.4
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 3.4,
+          "end": 31.16
+        }
+      ]
+    ]
+  },
+  {
+    "i": 134,
+    "name": "pyo3",
+    "version": "0.29.0",
+    "mode": "todo",
+    "target": "",
+    "features": [
+      "abi3",
+      "abi3-py313",
+      "abi3-py314",
+      "abi3-py315",
+      "default",
+      "extension-module",
+      "macros",
+      "pyo3-macros"
+    ],
+    "start": 322.18,
+    "duration": 8.9,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 4.24
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 4.24,
+          "end": 8.9
+        }
+      ]
+    ]
+  },
+  {
+    "i": 62,
+    "name": "purrdf-cli",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 323.4,
+    "duration": 91.25,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 5.26
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 5.26,
+          "end": 91.25
+        }
+      ]
+    ]
+  },
+  {
+    "i": 182,
+    "name": "wasm-link",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 331.08,
+    "duration": 3.96,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.58
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.58,
+          "end": 3.96
+        }
+      ]
+    ]
+  },
+  {
+    "i": 116,
+    "name": "purrdf-sparql-conformance",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 335.05,
+    "duration": 27.24,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.8
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.8,
+          "end": 27.24
+        }
+      ]
+    ]
+  },
+  {
+    "i": 78,
+    "name": "purrdf-envelope-probe",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 348.46,
+    "duration": 72.81,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 2.83
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 2.83,
+          "end": 72.81
+        }
+      ]
+    ]
+  },
+  {
+    "i": 88,
+    "name": "purrdf-hash-conformance",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 362.28,
+    "duration": 0.13,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.04
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.04,
+          "end": 0.13
+        }
+      ]
+    ]
+  },
+  {
+    "i": 56,
+    "name": "purrdf-bench",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 362.41,
+    "duration": 0.27,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 0.1
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 0.1,
+          "end": 0.27
+        }
+      ]
+    ]
+  },
+  {
+    "i": 58,
+    "name": "purrdf-capi",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 387.05,
+    "duration": 37.2,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 1.97
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 1.97,
+          "end": 37.2
+        }
+      ]
+    ]
+  },
+  {
+    "i": 130,
+    "name": "purrdf-wasm",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 414.65,
+    "duration": 33.88,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 5.2
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 5.2,
+          "end": 33.88
+        }
+      ]
+    ]
+  },
+  {
+    "i": 102,
+    "name": "purrdf-python",
+    "version": "3.0.1",
+    "mode": "todo",
+    "target": "",
+    "features": [],
+    "start": 419.5,
+    "duration": 43.77,
+    "unblocked_units": [],
+    "unblocked_rmeta_units": [],
+    "sections": [
+      [
+        "frontend",
+        {
+          "start": 0.0,
+          "end": 9.16
+        }
+      ],
+      [
+        "codegen",
+        {
+          "start": 9.16,
+          "end": 43.77
+        }
+      ]
+    ]
+  }
+];
+const CONCURRENCY_DATA = [
+  {
+    "t": 0.31,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 139
+  },
+  {
+    "t": 0.33999999999999997,
+    "active": 2,
+    "waiting": 0,
+    "inactive": 139
+  },
+  {
+    "t": 0.34,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 137
+  },
+  {
+    "t": 0.59,
+    "active": 5,
+    "waiting": 0,
+    "inactive": 136
+  },
+  {
+    "t": 0.5900000000000001,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 136
+  },
+  {
+    "t": 0.69,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 135
+  },
+  {
+    "t": 1.48,
+    "active": 3,
+    "waiting": 1,
+    "inactive": 134
+  },
+  {
+    "t": 1.49,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 134
+  },
+  {
+    "t": 1.5,
+    "active": 5,
+    "waiting": 0,
+    "inactive": 133
+  },
+  {
+    "t": 1.51,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 133
+  },
+  {
+    "t": 1.86,
+    "active": 4,
+    "waiting": 1,
+    "inactive": 132
+  },
+  {
+    "t": 1.88,
+    "active": 5,
+    "waiting": 0,
+    "inactive": 132
+  },
+  {
+    "t": 1.8800000000000001,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 132
+  },
+  {
+    "t": 2.33,
+    "active": 4,
+    "waiting": 1,
+    "inactive": 131
+  },
+  {
+    "t": 2.45,
+    "active": 4,
+    "waiting": 2,
+    "inactive": 130
+  },
+  {
+    "t": 2.49,
+    "active": 4,
+    "waiting": 1,
+    "inactive": 130
+  },
+  {
+    "t": 2.58,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 127
+  },
+  {
+    "t": 2.5999999999999996,
+    "active": 3,
+    "waiting": 4,
+    "inactive": 127
+  },
+  {
+    "t": 2.6,
+    "active": 4,
+    "waiting": 3,
+    "inactive": 127
+  },
+  {
+    "t": 4.02,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 125
+  },
+  {
+    "t": 4.25,
+    "active": 3,
+    "waiting": 5,
+    "inactive": 125
+  },
+  {
+    "t": 4.26,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 125
+  },
+  {
+    "t": 4.37,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 124
+  },
+  {
+    "t": 4.38,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 124
+  },
+  {
+    "t": 4.49,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 123
+  },
+  {
+    "t": 4.51,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 123
+  },
+  {
+    "t": 5.24,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 121
+  },
+  {
+    "t": 5.380000000000001,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 120
+  },
+  {
+    "t": 6.75,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 120
+  },
+  {
+    "t": 9.64,
+    "active": 3,
+    "waiting": 6,
+    "inactive": 120
+  },
+  {
+    "t": 9.65,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 120
+  },
+  {
+    "t": 10.16,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 118
+  },
+  {
+    "t": 11.35,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 118
+  },
+  {
+    "t": 11.65,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 118
+  },
+  {
+    "t": 13.39,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 115
+  },
+  {
+    "t": 15.91,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 115
+  },
+  {
+    "t": 16.06,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 115
+  },
+  {
+    "t": 16.580000000000002,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 114
+  },
+  {
+    "t": 18.52,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 113
+  },
+  {
+    "t": 20.1,
+    "active": 5,
+    "waiting": 7,
+    "inactive": 112
+  },
+  {
+    "t": 20.11,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 112
+  },
+  {
+    "t": 20.13,
+    "active": 5,
+    "waiting": 7,
+    "inactive": 111
+  },
+  {
+    "t": 20.130000000000003,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 111
+  },
+  {
+    "t": 20.94,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 110
+  },
+  {
+    "t": 20.959999999999997,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 109
+  },
+  {
+    "t": 21.009999999999998,
+    "active": 3,
+    "waiting": 8,
+    "inactive": 109
+  },
+  {
+    "t": 21.02,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 109
+  },
+  {
+    "t": 21.31,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 107
+  },
+  {
+    "t": 21.310000000000002,
+    "active": 3,
+    "waiting": 8,
+    "inactive": 107
+  },
+  {
+    "t": 21.32,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 107
+  },
+  {
+    "t": 21.77,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 106
+  },
+  {
+    "t": 22.0,
+    "active": 5,
+    "waiting": 7,
+    "inactive": 106
+  },
+  {
+    "t": 22.01,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 106
+  },
+  {
+    "t": 22.15,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 106
+  },
+  {
+    "t": 22.389999999999997,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 105
+  },
+  {
+    "t": 22.49,
+    "active": 5,
+    "waiting": 7,
+    "inactive": 104
+  },
+  {
+    "t": 22.490000000000002,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 104
+  },
+  {
+    "t": 22.57,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 104
+  },
+  {
+    "t": 22.58,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 102
+  },
+  {
+    "t": 22.72,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 101
+  },
+  {
+    "t": 22.74,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 101
+  },
+  {
+    "t": 22.740000000000002,
+    "active": 3,
+    "waiting": 6,
+    "inactive": 101
+  },
+  {
+    "t": 22.75,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 100
+  },
+  {
+    "t": 23.19,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 99
+  },
+  {
+    "t": 23.2,
+    "active": 5,
+    "waiting": 6,
+    "inactive": 98
+  },
+  {
+    "t": 23.200000000000003,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 98
+  },
+  {
+    "t": 23.319999999999997,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 97
+  },
+  {
+    "t": 23.34,
+    "active": 3,
+    "waiting": 7,
+    "inactive": 97
+  },
+  {
+    "t": 23.35,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 97
+  },
+  {
+    "t": 24.759999999999998,
+    "active": 3,
+    "waiting": 6,
+    "inactive": 97
+  },
+  {
+    "t": 24.76,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 97
+  },
+  {
+    "t": 26.7,
+    "active": 5,
+    "waiting": 4,
+    "inactive": 97
+  },
+  {
+    "t": 26.700000000000003,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 97
+  },
+  {
+    "t": 26.75,
+    "active": 3,
+    "waiting": 4,
+    "inactive": 97
+  },
+  {
+    "t": 26.76,
+    "active": 4,
+    "waiting": 3,
+    "inactive": 97
+  },
+  {
+    "t": 26.830000000000002,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 95
+  },
+  {
+    "t": 26.84,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 94
+  },
+  {
+    "t": 27.03,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 93
+  },
+  {
+    "t": 27.04,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 93
+  },
+  {
+    "t": 27.25,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 92
+  },
+  {
+    "t": 27.27,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 91
+  },
+  {
+    "t": 27.3,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 91
+  },
+  {
+    "t": 27.35,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 90
+  },
+  {
+    "t": 27.36,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 90
+  },
+  {
+    "t": 27.599999999999998,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 88
+  },
+  {
+    "t": 27.62,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 87
+  },
+  {
+    "t": 27.89,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 86
+  },
+  {
+    "t": 27.95,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 85
+  },
+  {
+    "t": 27.97,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 85
+  },
+  {
+    "t": 28.59,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 84
+  },
+  {
+    "t": 37.53,
+    "active": 4,
+    "waiting": 14,
+    "inactive": 78
+  },
+  {
+    "t": 38.07,
+    "active": 4,
+    "waiting": 13,
+    "inactive": 78
+  },
+  {
+    "t": 38.63,
+    "active": 4,
+    "waiting": 14,
+    "inactive": 77
+  },
+  {
+    "t": 44.52,
+    "active": 3,
+    "waiting": 14,
+    "inactive": 77
+  },
+  {
+    "t": 44.53,
+    "active": 4,
+    "waiting": 13,
+    "inactive": 77
+  },
+  {
+    "t": 48.28,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 77
+  },
+  {
+    "t": 48.38,
+    "active": 4,
+    "waiting": 13,
+    "inactive": 76
+  },
+  {
+    "t": 48.53,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 76
+  },
+  {
+    "t": 48.59,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 76
+  },
+  {
+    "t": 49.25,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 76
+  },
+  {
+    "t": 49.39,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 76
+  },
+  {
+    "t": 49.45,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 75
+  },
+  {
+    "t": 49.48,
+    "active": 5,
+    "waiting": 9,
+    "inactive": 75
+  },
+  {
+    "t": 49.480000000000004,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 75
+  },
+  {
+    "t": 50.459999999999994,
+    "active": 3,
+    "waiting": 9,
+    "inactive": 75
+  },
+  {
+    "t": 50.46,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 75
+  },
+  {
+    "t": 50.56,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 74
+  },
+  {
+    "t": 50.660000000000004,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 73
+  },
+  {
+    "t": 51.07,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 73
+  },
+  {
+    "t": 58.94,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 69
+  },
+  {
+    "t": 76.97,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 69
+  },
+  {
+    "t": 95.39,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 68
+  },
+  {
+    "t": 117.07,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 67
+  },
+  {
+    "t": 117.14999999999999,
+    "active": 3,
+    "waiting": 12,
+    "inactive": 67
+  },
+  {
+    "t": 117.16,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 67
+  },
+  {
+    "t": 120.28999999999999,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 66
+  },
+  {
+    "t": 131.67,
+    "active": 5,
+    "waiting": 11,
+    "inactive": 66
+  },
+  {
+    "t": 131.67000000000002,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 66
+  },
+  {
+    "t": 133.29999999999998,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 65
+  },
+  {
+    "t": 151.06,
+    "active": 5,
+    "waiting": 12,
+    "inactive": 64
+  },
+  {
+    "t": 151.07,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 64
+  },
+  {
+    "t": 151.3,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 63
+  },
+  {
+    "t": 151.74,
+    "active": 3,
+    "waiting": 13,
+    "inactive": 62
+  },
+  {
+    "t": 151.75,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 62
+  },
+  {
+    "t": 151.79,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 61
+  },
+  {
+    "t": 153.64,
+    "active": 5,
+    "waiting": 12,
+    "inactive": 60
+  },
+  {
+    "t": 153.65,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 60
+  },
+  {
+    "t": 153.92999999999998,
+    "active": 3,
+    "waiting": 13,
+    "inactive": 59
+  },
+  {
+    "t": 153.94,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 59
+  },
+  {
+    "t": 153.95,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 59
+  },
+  {
+    "t": 154.41,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 58
+  },
+  {
+    "t": 156.26999999999998,
+    "active": 3,
+    "waiting": 12,
+    "inactive": 58
+  },
+  {
+    "t": 156.27,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 58
+  },
+  {
+    "t": 156.44,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 57
+  },
+  {
+    "t": 157.0,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 57
+  },
+  {
+    "t": 175.66,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 56
+  },
+  {
+    "t": 184.67,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 56
+  },
+  {
+    "t": 190.73,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 55
+  },
+  {
+    "t": 191.6,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 55
+  },
+  {
+    "t": 194.44,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 54
+  },
+  {
+    "t": 216.12,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 54
+  },
+  {
+    "t": 235.59,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 54
+  },
+  {
+    "t": 244.32,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 54
+  },
+  {
+    "t": 255.43,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 54
+  },
+  {
+    "t": 256.81,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 54
+  },
+  {
+    "t": 261.63,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 54
+  },
+  {
+    "t": 262.96,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 54
+  },
+  {
+    "t": 262.99,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 54
+  },
+  {
+    "t": 264.72,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 53
+  },
+  {
+    "t": 264.98999999999995,
+    "active": 3,
+    "waiting": 5,
+    "inactive": 53
+  },
+  {
+    "t": 264.99,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 53
+  },
+  {
+    "t": 265.44,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 52
+  },
+  {
+    "t": 267.64,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 51
+  },
+  {
+    "t": 268.46999999999997,
+    "active": 3,
+    "waiting": 6,
+    "inactive": 50
+  },
+  {
+    "t": 268.47,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 50
+  },
+  {
+    "t": 268.48,
+    "active": 3,
+    "waiting": 6,
+    "inactive": 49
+  },
+  {
+    "t": 268.49,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 49
+  },
+  {
+    "t": 268.72,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 48
+  },
+  {
+    "t": 269.07,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 47
+  },
+  {
+    "t": 269.15999999999997,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 46
+  },
+  {
+    "t": 269.36,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 45
+  },
+  {
+    "t": 269.65,
+    "active": 5,
+    "waiting": 7,
+    "inactive": 44
+  },
+  {
+    "t": 269.65000000000003,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 44
+  },
+  {
+    "t": 269.65999999999997,
+    "active": 3,
+    "waiting": 8,
+    "inactive": 43
+  },
+  {
+    "t": 269.66,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 43
+  },
+  {
+    "t": 269.99,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 41
+  },
+  {
+    "t": 270.56,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 40
+  },
+  {
+    "t": 270.58,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 38
+  },
+  {
+    "t": 270.76,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 38
+  },
+  {
+    "t": 272.12,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 37
+  },
+  {
+    "t": 272.78,
+    "active": 5,
+    "waiting": 8,
+    "inactive": 36
+  },
+  {
+    "t": 272.78000000000003,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 36
+  },
+  {
+    "t": 272.80999999999995,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 35
+  },
+  {
+    "t": 272.82,
+    "active": 3,
+    "waiting": 9,
+    "inactive": 35
+  },
+  {
+    "t": 272.83,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 34
+  },
+  {
+    "t": 273.03999999999996,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 33
+  },
+  {
+    "t": 273.08,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 32
+  },
+  {
+    "t": 273.5,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 31
+  },
+  {
+    "t": 273.54,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 30
+  },
+  {
+    "t": 274.11,
+    "active": 3,
+    "waiting": 12,
+    "inactive": 28
+  },
+  {
+    "t": 274.12,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 28
+  },
+  {
+    "t": 274.48,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 27
+  },
+  {
+    "t": 274.54,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 26
+  },
+  {
+    "t": 274.68,
+    "active": 3,
+    "waiting": 11,
+    "inactive": 26
+  },
+  {
+    "t": 274.69,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 26
+  },
+  {
+    "t": 274.92,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 24
+  },
+  {
+    "t": 275.11,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 23
+  },
+  {
+    "t": 275.15,
+    "active": 5,
+    "waiting": 11,
+    "inactive": 22
+  },
+  {
+    "t": 275.15000000000003,
+    "active": 4,
+    "waiting": 11,
+    "inactive": 22
+  },
+  {
+    "t": 275.40999999999997,
+    "active": 3,
+    "waiting": 12,
+    "inactive": 21
+  },
+  {
+    "t": 275.41,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 20
+  },
+  {
+    "t": 275.46,
+    "active": 5,
+    "waiting": 12,
+    "inactive": 19
+  },
+  {
+    "t": 275.46000000000004,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 19
+  },
+  {
+    "t": 275.48999999999995,
+    "active": 3,
+    "waiting": 13,
+    "inactive": 18
+  },
+  {
+    "t": 275.5,
+    "active": 4,
+    "waiting": 12,
+    "inactive": 18
+  },
+  {
+    "t": 275.94,
+    "active": 5,
+    "waiting": 11,
+    "inactive": 18
+  },
+  {
+    "t": 275.95,
+    "active": 3,
+    "waiting": 11,
+    "inactive": 18
+  },
+  {
+    "t": 275.96,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 18
+  },
+  {
+    "t": 276.13,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 17
+  },
+  {
+    "t": 276.65,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 16
+  },
+  {
+    "t": 277.89,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 16
+  },
+  {
+    "t": 279.08,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 15
+  },
+  {
+    "t": 279.34999999999997,
+    "active": 3,
+    "waiting": 9,
+    "inactive": 15
+  },
+  {
+    "t": 279.36,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 14
+  },
+  {
+    "t": 279.52000000000004,
+    "active": 4,
+    "waiting": 10,
+    "inactive": 13
+  },
+  {
+    "t": 280.21,
+    "active": 5,
+    "waiting": 9,
+    "inactive": 13
+  },
+  {
+    "t": 280.22,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 13
+  },
+  {
+    "t": 294.63,
+    "active": 3,
+    "waiting": 9,
+    "inactive": 13
+  },
+  {
+    "t": 294.64,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 13
+  },
+  {
+    "t": 294.78999999999996,
+    "active": 4,
+    "waiting": 9,
+    "inactive": 12
+  },
+  {
+    "t": 295.32,
+    "active": 4,
+    "waiting": 8,
+    "inactive": 12
+  },
+  {
+    "t": 295.33,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 12
+  },
+  {
+    "t": 295.62,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 12
+  },
+  {
+    "t": 310.28999999999996,
+    "active": 3,
+    "waiting": 7,
+    "inactive": 11
+  },
+  {
+    "t": 310.29,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 11
+  },
+  {
+    "t": 311.77,
+    "active": 3,
+    "waiting": 7,
+    "inactive": 10
+  },
+  {
+    "t": 311.78,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 10
+  },
+  {
+    "t": 312.37,
+    "active": 3,
+    "waiting": 7,
+    "inactive": 9
+  },
+  {
+    "t": 312.38,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 9
+  },
+  {
+    "t": 312.74,
+    "active": 5,
+    "waiting": 6,
+    "inactive": 8
+  },
+  {
+    "t": 312.75,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 8
+  },
+  {
+    "t": 314.37,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 7
+  },
+  {
+    "t": 314.46,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 6
+  },
+  {
+    "t": 314.48,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 6
+  },
+  {
+    "t": 315.41,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 5
+  },
+  {
+    "t": 317.27,
+    "active": 5,
+    "waiting": 6,
+    "inactive": 5
+  },
+  {
+    "t": 317.27000000000004,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 5
+  },
+  {
+    "t": 317.28999999999996,
+    "active": 4,
+    "waiting": 7,
+    "inactive": 4
+  },
+  {
+    "t": 317.3,
+    "active": 5,
+    "waiting": 6,
+    "inactive": 4
+  },
+  {
+    "t": 317.31,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 4
+  },
+  {
+    "t": 322.18,
+    "active": 4,
+    "waiting": 6,
+    "inactive": 3
+  },
+  {
+    "t": 323.4,
+    "active": 4,
+    "waiting": 5,
+    "inactive": 3
+  },
+  {
+    "t": 331.08,
+    "active": 4,
+    "waiting": 4,
+    "inactive": 3
+  },
+  {
+    "t": 335.03999999999996,
+    "active": 3,
+    "waiting": 4,
+    "inactive": 3
+  },
+  {
+    "t": 335.05,
+    "active": 4,
+    "waiting": 3,
+    "inactive": 3
+  },
+  {
+    "t": 348.46,
+    "active": 5,
+    "waiting": 2,
+    "inactive": 3
+  },
+  {
+    "t": 348.46000000000004,
+    "active": 4,
+    "waiting": 2,
+    "inactive": 3
+  },
+  {
+    "t": 362.28,
+    "active": 5,
+    "waiting": 1,
+    "inactive": 3
+  },
+  {
+    "t": 362.29,
+    "active": 4,
+    "waiting": 1,
+    "inactive": 3
+  },
+  {
+    "t": 362.40999999999997,
+    "active": 3,
+    "waiting": 1,
+    "inactive": 3
+  },
+  {
+    "t": 362.41,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 3
+  },
+  {
+    "t": 362.68,
+    "active": 3,
+    "waiting": 0,
+    "inactive": 3
+  },
+  {
+    "t": 387.05,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 2
+  },
+  {
+    "t": 387.06,
+    "active": 3,
+    "waiting": 2,
+    "inactive": 0
+  },
+  {
+    "t": 414.65,
+    "active": 3,
+    "waiting": 1,
+    "inactive": 0
+  },
+  {
+    "t": 419.5,
+    "active": 4,
+    "waiting": 0,
+    "inactive": 0
+  },
+  {
+    "t": 421.27,
+    "active": 3,
+    "waiting": 0,
+    "inactive": 0
+  },
+  {
+    "t": 424.25,
+    "active": 2,
+    "waiting": 0,
+    "inactive": 0
+  },
+  {
+    "t": 448.53,
+    "active": 1,
+    "waiting": 0,
+    "inactive": 0
+  },
+  {
+    "t": 463.27,
+    "active": 0,
+    "waiting": 0,
+    "inactive": 0
+  }
+];
+const CPU_USAGE = [
+  [
+    0.376269602,
+    65.21739130434783
+  ],
+  [
+    0.579770283,
+    98.76543209876543
+  ],
+  [
+    0.692565069,
+    100.0
+  ],
+  [
+    1.216611361,
+    99.52380952380952
+  ],
+  [
+    1.487781343,
+    97.22222222222223
+  ],
+  [
+    1.7849280749999998,
+    100.0
+  ],
+  [
+    1.939719904,
+    100.0
+  ],
+  [
+    2.334907367,
+    100.0
+  ],
+  [
+    2.4538028880000002,
+    100.0
+  ],
+  [
+    2.582738119,
+    98.03921568627452
+  ],
+  [
+    2.794486714,
+    97.6470588235294
+  ],
+  [
+    3.29469273,
+    98.0
+  ],
+  [
+    3.8343514340000002,
+    98.14814814814815
+  ],
+  [
+    4.018892258,
+    100.0
+  ],
+  [
+    4.254086847,
+    100.0
+  ],
+  [
+    4.368155121,
+    100.0
+  ],
+  [
+    4.493794282,
+    98.07692307692308
+  ],
+  [
+    4.61263413,
+    100.0
+  ],
+  [
+    5.112828805,
+    99.5
+  ],
+  [
+    5.235049202,
+    97.95918367346938
+  ],
+  [
+    5.375900248,
+    100.0
+  ],
+  [
+    5.876063875,
+    97.97979797979798
+  ],
+  [
+    6.376246447,
+    99.0
+  ],
+  [
+    6.7531823509999995,
+    98.01324503311258
+  ],
+  [
+    7.085590766,
+    99.24812030075188
+  ],
+  [
+    7.585769882,
+    99.0
+  ],
+  [
+    8.085961431,
+    98.5
+  ],
+  [
+    8.586122522,
+    99.4949494949495
+  ],
+  [
+    9.086297873,
+    99.0049751243781
+  ],
+  [
+    9.586533034,
+    99.5
+  ],
+  [
+    9.705316286,
+    100.0
+  ],
+  [
+    10.057197918,
+    100.0
+  ],
+  [
+    10.162760037,
+    100.0
+  ],
+  [
+    10.662931691,
+    100.0
+  ],
+  [
+    11.163131186,
+    99.0
+  ],
+  [
+    11.347531989,
+    97.33333333333333
+  ],
+  [
+    11.495686168,
+    98.24561403508773
+  ],
+  [
+    11.648650131,
+    98.38709677419355
+  ],
+  [
+    11.851479204,
+    98.76543209876543
+  ],
+  [
+    12.351654434,
+    98.5
+  ],
+  [
+    12.717235474,
+    99.31506849315069
+  ],
+  [
+    13.217404122,
+    99.5
+  ],
+  [
+    13.388976242,
+    97.05882352941177
+  ],
+  [
+    13.889146213,
+    100.0
+  ],
+  [
+    14.389348924,
+    98.5
+  ],
+  [
+    14.889557556,
+    98.0
+  ],
+  [
+    15.38974553,
+    99.0
+  ],
+  [
+    15.88993131,
+    99.49748743718592
+  ],
+  [
+    16.058033495,
+    100.0
+  ],
+  [
+    16.582441262,
+    99.04761904761905
+  ],
+  [
+    17.092372108,
+    99.01960784313725
+  ],
+  [
+    17.592529199,
+    98.99497487437186
+  ],
+  [
+    18.092724621,
+    100.0
+  ],
+  [
+    18.515827133,
+    98.82352941176471
+  ],
+  [
+    19.040771189,
+    99.52153110047847
+  ],
+  [
+    19.540996356,
+    99.49748743718592
+  ],
+  [
+    20.041218547,
+    98.50746268656717
+  ],
+  [
+    20.228718049,
+    98.64864864864865
+  ],
+  [
+    20.728916647,
+    99.50248756218906
+  ],
+  [
+    20.936619493,
+    98.79518072289157
+  ],
+  [
+    21.308911999,
+    98.64864864864865
+  ],
+  [
+    21.763790069,
+    100.0
+  ],
+  [
+    22.002099407,
+    97.91666666666667
+  ],
+  [
+    22.14676129,
+    100.0
+  ],
+  [
+    22.397253181,
+    99.0
+  ],
+  [
+    22.516165432,
+    97.87234042553192
+  ],
+  [
+    22.725553354,
+    97.61904761904762
+  ],
+  [
+    23.192771978,
+    97.29729729729729
+  ],
+  [
+    23.32913035,
+    98.21428571428571
+  ],
+  [
+    23.643313983,
+    96.7741935483871
+  ],
+  [
+    24.14354466,
+    98.5
+  ],
+  [
+    24.643749712,
+    98.5
+  ],
+  [
+    24.761018516,
+    100.0
+  ],
+  [
+    24.981733909,
+    100.0
+  ],
+  [
+    25.481918947,
+    100.0
+  ],
+  [
+    25.982111178,
+    100.0
+  ],
+  [
+    26.430809797,
+    100.0
+  ],
+  [
+    26.700136469,
+    94.44444444444444
+  ],
+  [
+    26.827772944,
+    98.07692307692308
+  ],
+  [
+    27.0304839,
+    100.0
+  ],
+  [
+    27.251464516,
+    100.0
+  ],
+  [
+    27.358271446,
+    95.23809523809524
+  ],
+  [
+    27.568552516,
+    100.0
+  ],
+  [
+    27.800416375,
+    97.8021978021978
+  ],
+  [
+    27.914172756,
+    97.77777777777777
+  ],
+  [
+    28.474572487,
+    99.55357142857143
+  ],
+  [
+    28.594772709,
+    100.0
+  ],
+  [
+    29.094935565,
+    98.5
+  ],
+  [
+    29.595130521,
+    100.0
+  ],
+  [
+    30.095335436,
+    99.5
+  ],
+  [
+    30.595558033,
+    100.0
+  ],
+  [
+    31.095759441,
+    99.49748743718592
+  ],
+  [
+    31.595962823,
+    100.0
+  ],
+  [
+    32.096156427,
+    100.0
+  ],
+  [
+    32.596347882,
+    100.0
+  ],
+  [
+    33.169287511,
+    99.56521739130434
+  ],
+  [
+    33.669532188,
+    100.0
+  ],
+  [
+    34.169726753,
+    99.0
+  ],
+  [
+    34.669921617,
+    99.49748743718592
+  ],
+  [
+    35.171411027,
+    99.5049504950495
+  ],
+  [
+    35.671611192,
+    100.0
+  ],
+  [
+    36.171812679,
+    100.0
+  ],
+  [
+    36.672040836,
+    99.0049751243781
+  ],
+  [
+    37.172225211,
+    100.0
+  ],
+  [
+    37.532340358,
+    100.0
+  ],
+  [
+    38.032527649,
+    100.0
+  ],
+  [
+    38.62953002,
+    99.5798319327731
+  ],
+  [
+    39.137354129,
+    99.50980392156863
+  ],
+  [
+    39.637561938,
+    100.0
+  ],
+  [
+    40.137753346,
+    100.0
+  ],
+  [
+    40.638416874,
+    100.0
+  ],
+  [
+    41.138616976,
+    99.5
+  ],
+  [
+    41.641407501,
+    99.50248756218906
+  ],
+  [
+    42.141608255,
+    100.0
+  ],
+  [
+    42.64180462,
+    99.5
+  ],
+  [
+    43.142032865,
+    99.0
+  ],
+  [
+    43.642230173,
+    99.0
+  ],
+  [
+    44.142418183,
+    99.5
+  ],
+  [
+    44.525296914,
+    99.34210526315789
+  ],
+  [
+    45.028421289,
+    100.0
+  ],
+  [
+    45.363128255,
+    100.0
+  ],
+  [
+    45.86330822,
+    99.5
+  ],
+  [
+    46.363532127,
+    99.50248756218906
+  ],
+  [
+    46.863738431,
+    100.0
+  ],
+  [
+    47.363942361,
+    100.0
+  ],
+  [
+    47.864131052,
+    100.0
+  ],
+  [
+    48.27715254,
+    98.78787878787878
+  ],
+  [
+    48.382737269,
+    100.0
+  ],
+  [
+    48.526446499,
+    100.0
+  ],
+  [
+    48.671691816,
+    98.27586206896552
+  ],
+  [
+    49.077909132,
+    100.0
+  ],
+  [
+    49.248830428,
+    100.0
+  ],
+  [
+    49.375971698,
+    98.03921568627452
+  ],
+  [
+    49.480473659,
+    97.61904761904762
+  ],
+  [
+    49.700849735,
+    100.0
+  ],
+  [
+    50.201036481,
+    99.49748743718592
+  ],
+  [
+    50.458361388,
+    100.0
+  ],
+  [
+    50.55853142,
+    97.5
+  ],
+  [
+    51.066111304,
+    100.0
+  ],
+  [
+    51.368681407,
+    100.0
+  ],
+  [
+    51.868887329,
+    100.0
+  ],
+  [
+    52.369105663,
+    99.50248756218906
+  ],
+  [
+    52.869332383,
+    100.0
+  ],
+  [
+    53.369570665,
+    100.0
+  ],
+  [
+    53.869790552,
+    100.0
+  ],
+  [
+    54.369991996,
+    99.5
+  ],
+  [
+    54.870191632,
+    100.0
+  ],
+  [
+    55.370421904,
+    100.0
+  ],
+  [
+    55.873408397,
+    100.0
+  ],
+  [
+    56.150345062,
+    99.11504424778761
+  ],
+  [
+    56.650541249,
+    100.0
+  ],
+  [
+    57.150735404,
+    100.0
+  ],
+  [
+    57.650943816,
+    99.5
+  ],
+  [
+    58.15113779,
+    99.0
+  ],
+  [
+    58.651342274,
+    100.0
+  ],
+  [
+    58.937233876,
+    100.0
+  ],
+  [
+    59.437404568,
+    99.50248756218906
+  ],
+  [
+    59.937603482,
+    100.0
+  ],
+  [
+    60.437792457,
+    100.0
+  ],
+  [
+    60.937979879,
+    100.0
+  ],
+  [
+    61.438195013,
+    100.0
+  ],
+  [
+    61.938409705,
+    99.5
+  ],
+  [
+    62.438601505,
+    100.0
+  ],
+  [
+    62.938787214,
+    99.5
+  ],
+  [
+    63.438968985,
+    99.5
+  ],
+  [
+    63.939171205,
+    100.0
+  ],
+  [
+    64.43939788,
+    99.5
+  ],
+  [
+    64.939610175,
+    99.5
+  ],
+  [
+    65.439784369,
+    99.5
+  ],
+  [
+    65.939975164,
+    100.0
+  ],
+  [
+    66.44017215,
+    100.0
+  ],
+  [
+    66.940373114,
+    100.0
+  ],
+  [
+    67.443407832,
+    99.5049504950495
+  ],
+  [
+    67.943597636,
+    99.49748743718592
+  ],
+  [
+    68.443786206,
+    99.5
+  ],
+  [
+    68.943984134,
+    99.5
+  ],
+  [
+    69.444187653,
+    100.0
+  ],
+  [
+    69.944371144,
+    100.0
+  ],
+  [
+    70.444583309,
+    100.0
+  ],
+  [
+    70.944778292,
+    100.0
+  ],
+  [
+    71.444969757,
+    99.5
+  ],
+  [
+    71.945168086,
+    100.0
+  ],
+  [
+    72.445366966,
+    100.0
+  ],
+  [
+    72.945581329,
+    99.49748743718592
+  ],
+  [
+    73.445779444,
+    99.50248756218906
+  ],
+  [
+    73.945974145,
+    99.5
+  ],
+  [
+    74.446414279,
+    99.0
+  ],
+  [
+    74.946597125,
+    100.0
+  ],
+  [
+    75.446788196,
+    100.0
+  ],
+  [
+    75.946995037,
+    99.50248756218906
+  ],
+  [
+    76.447192591,
+    100.0
+  ],
+  [
+    76.947376248,
+    100.0
+  ],
+  [
+    77.476417063,
+    99.52830188679245
+  ],
+  [
+    77.976662956,
+    100.0
+  ],
+  [
+    78.491922752,
+    100.0
+  ],
+  [
+    78.992119575,
+    99.5
+  ],
+  [
+    79.492319382,
+    100.0
+  ],
+  [
+    79.992553474,
+    100.0
+  ],
+  [
+    80.494410941,
+    100.0
+  ],
+  [
+    80.997409486,
+    100.0
+  ],
+  [
+    81.497610551,
+    99.5
+  ],
+  [
+    81.997794984,
+    100.0
+  ],
+  [
+    82.498000286,
+    100.0
+  ],
+  [
+    82.998194838,
+    100.0
+  ],
+  [
+    83.49840017,
+    100.0
+  ],
+  [
+    83.99859845,
+    99.50248756218906
+  ],
+  [
+    84.498785919,
+    100.0
+  ],
+  [
+    84.998973839,
+    100.0
+  ],
+  [
+    85.499175354,
+    100.0
+  ],
+  [
+    85.99937729,
+    100.0
+  ],
+  [
+    86.499596377,
+    100.0
+  ],
+  [
+    86.999791321,
+    99.5049504950495
+  ],
+  [
+    87.50240677,
+    100.0
+  ],
+  [
+    88.002598517,
+    99.5
+  ],
+  [
+    88.502791497,
+    100.0
+  ],
+  [
+    89.002989487,
+    100.0
+  ],
+  [
+    89.503184794,
+    100.0
+  ],
+  [
+    90.003378329,
+    100.0
+  ],
+  [
+    90.503595056,
+    100.0
+  ],
+  [
+    91.00378789,
+    99.5
+  ],
+  [
+    91.503988738,
+    99.5
+  ],
+  [
+    92.004191489,
+    100.0
+  ],
+  [
+    92.504411493,
+    100.0
+  ],
+  [
+    93.00461152,
+    100.0
+  ],
+  [
+    93.504812818,
+    100.0
+  ],
+  [
+    94.005025799,
+    100.0
+  ],
+  [
+    94.505236385,
+    100.0
+  ],
+  [
+    95.005416384,
+    99.50248756218906
+  ],
+  [
+    95.394175029,
+    99.35897435897436
+  ],
+  [
+    95.894340922,
+    100.0
+  ],
+  [
+    96.394554053,
+    100.0
+  ],
+  [
+    96.894741793,
+    99.5
+  ],
+  [
+    97.394948978,
+    100.0
+  ],
+  [
+    97.897409618,
+    100.0
+  ],
+  [
+    98.397623274,
+    100.0
+  ],
+  [
+    98.897821252,
+    100.0
+  ],
+  [
+    99.398025661,
+    99.50248756218906
+  ],
+  [
+    99.898229859,
+    100.0
+  ],
+  [
+    100.39841897,
+    100.0
+  ],
+  [
+    100.898612388,
+    99.50248756218906
+  ],
+  [
+    101.398804384,
+    100.0
+  ],
+  [
+    101.899016107,
+    100.0
+  ],
+  [
+    102.399216068,
+    100.0
+  ],
+  [
+    102.900399025,
+    100.0
+  ],
+  [
+    103.400585751,
+    98.0
+  ],
+  [
+    103.900778589,
+    100.0
+  ],
+  [
+    104.40099479,
+    100.0
+  ],
+  [
+    104.901213588,
+    100.0
+  ],
+  [
+    105.40141657,
+    100.0
+  ],
+  [
+    105.901625132,
+    100.0
+  ],
+  [
+    106.401821471,
+    100.0
+  ],
+  [
+    106.902008373,
+    100.0
+  ],
+  [
+    107.40240303,
+    99.0049751243781
+  ],
+  [
+    107.902601554,
+    100.0
+  ],
+  [
+    108.402790038,
+    100.0
+  ],
+  [
+    108.90340788,
+    100.0
+  ],
+  [
+    109.403594451,
+    100.0
+  ],
+  [
+    109.903793205,
+    100.0
+  ],
+  [
+    110.40399294,
+    99.5
+  ],
+  [
+    110.905407804,
+    100.0
+  ],
+  [
+    111.405605164,
+    99.5
+  ],
+  [
+    111.905805892,
+    100.0
+  ],
+  [
+    112.406008282,
+    100.0
+  ],
+  [
+    112.906218105,
+    100.0
+  ],
+  [
+    113.406429676,
+    100.0
+  ],
+  [
+    113.906632721,
+    100.0
+  ],
+  [
+    114.409407427,
+    99.5049504950495
+  ],
+  [
+    114.909601735,
+    100.0
+  ],
+  [
+    115.409801364,
+    100.0
+  ],
+  [
+    115.910005541,
+    100.0
+  ],
+  [
+    116.410214928,
+    100.0
+  ],
+  [
+    116.910420829,
+    100.0
+  ],
+  [
+    117.070730626,
+    98.4375
+  ],
+  [
+    117.385471981,
+    96.85039370078741
+  ],
+  [
+    117.885698132,
+    100.0
+  ],
+  [
+    118.385883886,
+    99.49748743718592
+  ],
+  [
+    118.886090989,
+    100.0
+  ],
+  [
+    119.386280741,
+    100.0
+  ],
+  [
+    119.886532367,
+    100.0
+  ],
+  [
+    120.288053253,
+    100.0
+  ],
+  [
+    120.788221072,
+    100.0
+  ],
+  [
+    121.288409524,
+    99.50248756218906
+  ],
+  [
+    121.788606262,
+    100.0
+  ],
+  [
+    122.288816804,
+    100.0
+  ],
+  [
+    122.789022138,
+    100.0
+  ],
+  [
+    123.289222431,
+    99.5
+  ],
+  [
+    123.78940943,
+    99.5
+  ],
+  [
+    124.290412916,
+    100.0
+  ],
+  [
+    124.790603692,
+    99.0049751243781
+  ],
+  [
+    125.29080051,
+    99.49748743718592
+  ],
+  [
+    125.79098804,
+    100.0
+  ],
+  [
+    126.291176712,
+    99.49748743718592
+  ],
+  [
+    126.791383748,
+    100.0
+  ],
+  [
+    127.291607205,
+    99.5
+  ],
+  [
+    127.79180783,
+    100.0
+  ],
+  [
+    128.291988998,
+    99.0049751243781
+  ],
+  [
+    128.792180382,
+    100.0
+  ],
+  [
+    129.2923816,
+    100.0
+  ],
+  [
+    129.792603276,
+    99.5
+  ],
+  [
+    130.292813159,
+    99.49748743718592
+  ],
+  [
+    130.793035116,
+    99.50248756218906
+  ],
+  [
+    131.293236364,
+    100.0
+  ],
+  [
+    131.667814525,
+    99.33333333333333
+  ],
+  [
+    132.259823101,
+    100.0
+  ],
+  [
+    132.760092145,
+    100.0
+  ],
+  [
+    133.260322427,
+    100.0
+  ],
+  [
+    133.798109926,
+    99.53488372093024
+  ],
+  [
+    134.298312807,
+    100.0
+  ],
+  [
+    134.798531658,
+    99.50248756218906
+  ],
+  [
+    135.29873544,
+    99.49748743718592
+  ],
+  [
+    135.798932861,
+    100.0
+  ],
+  [
+    136.300409418,
+    99.50248756218906
+  ],
+  [
+    136.800607376,
+    99.50248756218906
+  ],
+  [
+    137.302413016,
+    100.0
+  ],
+  [
+    137.802608463,
+    98.00995024875621
+  ],
+  [
+    138.302815532,
+    99.5
+  ],
+  [
+    138.803047307,
+    99.4949494949495
+  ],
+  [
+    139.303238846,
+    100.0
+  ],
+  [
+    139.803409387,
+    99.5
+  ],
+  [
+    140.303593162,
+    100.0
+  ],
+  [
+    140.803788149,
+    100.0
+  ],
+  [
+    141.303982794,
+    99.5
+  ],
+  [
+    141.804182774,
+    99.49748743718592
+  ],
+  [
+    142.304394938,
+    99.50248756218906
+  ],
+  [
+    142.804595701,
+    100.0
+  ],
+  [
+    143.307408286,
+    99.5049504950495
+  ],
+  [
+    143.807595734,
+    99.5
+  ],
+  [
+    144.307790185,
+    100.0
+  ],
+  [
+    144.808010536,
+    100.0
+  ],
+  [
+    145.308228183,
+    99.50248756218906
+  ],
+  [
+    145.808412798,
+    100.0
+  ],
+  [
+    146.311408425,
+    100.0
+  ],
+  [
+    146.811607526,
+    99.50248756218906
+  ],
+  [
+    147.311799255,
+    99.49748743718592
+  ],
+  [
+    147.812007383,
+    99.0
+  ],
+  [
+    148.31220408,
+    99.5
+  ],
+  [
+    148.812405095,
+    100.0
+  ],
+  [
+    149.312594439,
+    100.0
+  ],
+  [
+    149.812789393,
+    99.5
+  ],
+  [
+    150.31298073,
+    100.0
+  ],
+  [
+    150.813166217,
+    100.0
+  ],
+  [
+    151.064018331,
+    100.0
+  ],
+  [
+    151.16785121,
+    100.0
+  ],
+  [
+    151.303565074,
+    100.0
+  ],
+  [
+    151.747124476,
+    99.43502824858757
+  ],
+  [
+    152.287587894,
+    100.0
+  ],
+  [
+    152.78784671,
+    100.0
+  ],
+  [
+    152.976833197,
+    98.66666666666667
+  ],
+  [
+    153.47700905,
+    100.0
+  ],
+  [
+    153.641361916,
+    98.48484848484848
+  ],
+  [
+    153.936080228,
+    98.30508474576271
+  ],
+  [
+    154.413318493,
+    100.0
+  ],
+  [
+    154.913580966,
+    99.0049751243781
+  ],
+  [
+    155.413804437,
+    99.49748743718592
+  ],
+  [
+    155.914005376,
+    99.50248756218906
+  ],
+  [
+    156.268569949,
+    98.58156028368795
+  ],
+  [
+    156.443430732,
+    100.0
+  ],
+  [
+    156.944409336,
+    99.50248756218906
+  ],
+  [
+    157.495706328,
+    100.0
+  ],
+  [
+    158.001656238,
+    100.0
+  ],
+  [
+    158.503421193,
+    100.0
+  ],
+  [
+    159.003627301,
+    100.0
+  ],
+  [
+    159.50383336,
+    99.50248756218906
+  ],
+  [
+    160.004043165,
+    100.0
+  ],
+  [
+    160.504257158,
+    100.0
+  ],
+  [
+    161.004525566,
+    99.50248756218906
+  ],
+  [
+    161.504720894,
+    100.0
+  ],
+  [
+    161.817719251,
+    100.0
+  ],
+  [
+    162.31789393,
+    99.49748743718592
+  ],
+  [
+    162.818091222,
+    99.5
+  ],
+  [
+    163.3182868,
+    99.5
+  ],
+  [
+    163.818539645,
+    100.0
+  ],
+  [
+    164.318750041,
+    100.0
+  ],
+  [
+    164.818961308,
+    99.5
+  ],
+  [
+    165.321404533,
+    100.0
+  ],
+  [
+    165.821591305,
+    99.0
+  ],
+  [
+    166.321772436,
+    99.0
+  ],
+  [
+    166.821961582,
+    100.0
+  ],
+  [
+    167.322142313,
+    100.0
+  ],
+  [
+    167.822340386,
+    99.50248756218906
+  ],
+  [
+    168.322565439,
+    100.0
+  ],
+  [
+    168.822788298,
+    100.0
+  ],
+  [
+    169.322998667,
+    100.0
+  ],
+  [
+    169.823208705,
+    100.0
+  ],
+  [
+    170.323425205,
+    100.0
+  ],
+  [
+    170.823624753,
+    100.0
+  ],
+  [
+    171.323830954,
+    100.0
+  ],
+  [
+    171.824053495,
+    99.5
+  ],
+  [
+    172.324261889,
+    100.0
+  ],
+  [
+    172.824413989,
+    100.0
+  ],
+  [
+    173.324602707,
+    100.0
+  ],
+  [
+    173.824801274,
+    100.0
+  ],
+  [
+    174.32501041,
+    100.0
+  ],
+  [
+    174.825219346,
+    100.0
+  ],
+  [
+    175.327414622,
+    100.0
+  ],
+  [
+    175.657986643,
+    100.0
+  ],
+  [
+    176.158175932,
+    99.50248756218906
+  ],
+  [
+    176.658368638,
+    100.0
+  ],
+  [
+    177.158601253,
+    100.0
+  ],
+  [
+    177.6587939,
+    100.0
+  ],
+  [
+    178.158997718,
+    99.0
+  ],
+  [
+    178.65919282,
+    100.0
+  ],
+  [
+    179.159408861,
+    100.0
+  ],
+  [
+    179.659605597,
+    100.0
+  ],
+  [
+    180.159827879,
+    100.0
+  ],
+  [
+    180.660022059,
+    99.49748743718592
+  ],
+  [
+    181.160227912,
+    100.0
+  ],
+  [
+    181.662415035,
+    100.0
+  ],
+  [
+    182.162632318,
+    100.0
+  ],
+  [
+    182.662839703,
+    99.5
+  ],
+  [
+    183.163056786,
+    100.0
+  ],
+  [
+    183.663262477,
+    100.0
+  ],
+  [
+    184.163523572,
+    100.0
+  ],
+  [
+    184.663710419,
+    100.0
+  ],
+  [
+    185.108484561,
+    98.87640449438203
+  ],
+  [
+    185.608667836,
+    99.50248756218906
+  ],
+  [
+    186.108908326,
+    100.0
+  ],
+  [
+    186.609114524,
+    100.0
+  ],
+  [
+    187.109311956,
+    100.0
+  ],
+  [
+    187.612405939,
+    100.0
+  ],
+  [
+    188.11540777,
+    99.5049504950495
+  ],
+  [
+    188.615611082,
+    100.0
+  ],
+  [
+    189.115800669,
+    99.5
+  ],
+  [
+    189.615993922,
+    100.0
+  ],
+  [
+    190.116196302,
+    100.0
+  ],
+  [
+    190.616402329,
+    100.0
+  ],
+  [
+    190.725553067,
+    100.0
+  ],
+  [
+    191.225712728,
+    100.0
+  ],
+  [
+    191.595085258,
+    100.0
+  ],
+  [
+    191.867122269,
+    100.0
+  ],
+  [
+    192.367326543,
+    100.0
+  ],
+  [
+    192.867550003,
+    100.0
+  ],
+  [
+    193.367750653,
+    100.0
+  ],
+  [
+    193.867956673,
+    99.5
+  ],
+  [
+    194.368149539,
+    100.0
+  ],
+  [
+    194.933536218,
+    100.0
+  ],
+  [
+    195.433738722,
+    99.5
+  ],
+  [
+    195.933937578,
+    100.0
+  ],
+  [
+    196.434135393,
+    100.0
+  ],
+  [
+    196.934338358,
+    99.50248756218906
+  ],
+  [
+    197.434556531,
+    100.0
+  ],
+  [
+    197.934757211,
+    99.49748743718592
+  ],
+  [
+    198.434990822,
+    100.0
+  ],
+  [
+    198.935189339,
+    100.0
+  ],
+  [
+    199.435380718,
+    100.0
+  ],
+  [
+    199.935620557,
+    99.5
+  ],
+  [
+    200.435827645,
+    99.5
+  ],
+  [
+    200.936032392,
+    99.0
+  ],
+  [
+    201.436242282,
+    99.0
+  ],
+  [
+    201.936419571,
+    100.0
+  ],
+  [
+    202.439405067,
+    99.00990099009901
+  ],
+  [
+    202.939587778,
+    99.5
+  ],
+  [
+    203.439772782,
+    100.0
+  ],
+  [
+    203.939973876,
+    100.0
+  ],
+  [
+    204.44017481,
+    98.99497487437186
+  ],
+  [
+    204.940385202,
+    100.0
+  ],
+  [
+    205.440601845,
+    99.50248756218906
+  ],
+  [
+    205.940794784,
+    100.0
+  ],
+  [
+    206.440977013,
+    99.5
+  ],
+  [
+    206.941161687,
+    100.0
+  ],
+  [
+    207.441353794,
+    100.0
+  ],
+  [
+    207.941570377,
+    98.50746268656717
+  ],
+  [
+    208.441763476,
+    100.0
+  ],
+  [
+    208.941950139,
+    100.0
+  ],
+  [
+    209.444431879,
+    100.0
+  ],
+  [
+    209.94463151,
+    100.0
+  ],
+  [
+    210.444831832,
+    100.0
+  ],
+  [
+    210.945033086,
+    99.5
+  ],
+  [
+    211.445225723,
+    100.0
+  ],
+  [
+    211.945415265,
+    100.0
+  ],
+  [
+    212.445600128,
+    100.0
+  ],
+  [
+    212.945801883,
+    100.0
+  ],
+  [
+    213.448410098,
+    100.0
+  ],
+  [
+    213.948598047,
+    100.0
+  ],
+  [
+    214.448783281,
+    100.0
+  ],
+  [
+    214.948975448,
+    99.0049751243781
+  ],
+  [
+    215.449185247,
+    99.49748743718592
+  ],
+  [
+    215.949403553,
+    100.0
+  ],
+  [
+    216.1189402,
+    100.0
+  ],
+  [
+    216.327982634,
+    100.0
+  ],
+  [
+    216.828161456,
+    99.5
+  ],
+  [
+    217.329403392,
+    100.0
+  ],
+  [
+    217.829594546,
+    100.0
+  ],
+  [
+    218.329781702,
+    100.0
+  ],
+  [
+    218.829977885,
+    100.0
+  ],
+  [
+    219.347909369,
+    99.51923076923077
+  ],
+  [
+    219.848105412,
+    100.0
+  ],
+  [
+    220.348305072,
+    99.5
+  ],
+  [
+    220.848535879,
+    99.50248756218906
+  ],
+  [
+    221.34873616,
+    99.49748743718592
+  ],
+  [
+    221.848941941,
+    99.0
+  ],
+  [
+    222.34914683,
+    99.5
+  ],
+  [
+    222.849351289,
+    100.0
+  ],
+  [
+    223.351407337,
+    99.0049751243781
+  ],
+  [
+    223.851598662,
+    100.0
+  ],
+  [
+    224.351783474,
+    99.5
+  ],
+  [
+    224.851998142,
+    99.49748743718592
+  ],
+  [
+    225.352202605,
+    98.50746268656717
+  ],
+  [
+    225.852416035,
+    99.50248756218906
+  ],
+  [
+    226.354406386,
+    100.0
+  ],
+  [
+    226.854598326,
+    100.0
+  ],
+  [
+    227.354789915,
+    100.0
+  ],
+  [
+    227.854982006,
+    100.0
+  ],
+  [
+    228.35518178,
+    100.0
+  ],
+  [
+    228.855374642,
+    99.5
+  ],
+  [
+    229.355594434,
+    100.0
+  ],
+  [
+    229.855782015,
+    99.5
+  ],
+  [
+    230.355962564,
+    100.0
+  ],
+  [
+    230.856163551,
+    99.49748743718592
+  ],
+  [
+    231.356362424,
+    100.0
+  ],
+  [
+    231.856580282,
+    99.0
+  ],
+  [
+    232.356776821,
+    99.5
+  ],
+  [
+    232.856967509,
+    100.0
+  ],
+  [
+    233.357165052,
+    100.0
+  ],
+  [
+    233.857348429,
+    100.0
+  ],
+  [
+    234.357566871,
+    99.0049751243781
+  ],
+  [
+    234.85775139,
+    99.5
+  ],
+  [
+    235.357950586,
+    99.5
+  ],
+  [
+    235.5862291,
+    100.0
+  ],
+  [
+    235.710213014,
+    100.0
+  ],
+  [
+    236.210403534,
+    99.50248756218906
+  ],
+  [
+    236.712421649,
+    100.0
+  ],
+  [
+    237.212633108,
+    100.0
+  ],
+  [
+    237.39564175,
+    100.0
+  ],
+  [
+    237.895823685,
+    100.0
+  ],
+  [
+    238.396007011,
+    99.50248756218906
+  ],
+  [
+    238.896202751,
+    99.5
+  ],
+  [
+    239.39641428,
+    100.0
+  ],
+  [
+    239.896603047,
+    98.0
+  ],
+  [
+    240.396796002,
+    100.0
+  ],
+  [
+    240.896995736,
+    98.99497487437186
+  ],
+  [
+    241.397186965,
+    100.0
+  ],
+  [
+    241.897380539,
+    99.50248756218906
+  ],
+  [
+    242.397594201,
+    100.0
+  ],
+  [
+    242.897788827,
+    99.5
+  ],
+  [
+    243.397986128,
+    100.0
+  ],
+  [
+    243.898194259,
+    100.0
+  ],
+  [
+    244.317124179,
+    99.40119760479043
+  ],
+  [
+    244.449113828,
+    100.0
+  ],
+  [
+    244.949334853,
+    100.0
+  ],
+  [
+    245.451405595,
+    99.50248756218906
+  ],
+  [
+    245.779704681,
+    100.0
+  ],
+  [
+    246.279859984,
+    100.0
+  ],
+  [
+    246.780063837,
+    100.0
+  ],
+  [
+    247.282410481,
+    97.52475247524752
+  ],
+  [
+    247.782609726,
+    99.5
+  ],
+  [
+    248.282812717,
+    99.5
+  ],
+  [
+    248.783007814,
+    98.0
+  ],
+  [
+    249.283201829,
+    100.0
+  ],
+  [
+    249.783402907,
+    100.0
+  ],
+  [
+    250.283601699,
+    99.5
+  ],
+  [
+    250.784405647,
+    99.5
+  ],
+  [
+    251.28640738,
+    100.0
+  ],
+  [
+    251.786599631,
+    99.5
+  ],
+  [
+    252.287417707,
+    100.0
+  ],
+  [
+    252.790407616,
+    99.5049504950495
+  ],
+  [
+    253.290592775,
+    99.49748743718592
+  ],
+  [
+    253.790789985,
+    99.5
+  ],
+  [
+    254.290986024,
+    100.0
+  ],
+  [
+    254.791173757,
+    100.0
+  ],
+  [
+    255.291352854,
+    100.0
+  ],
+  [
+    255.428575872,
+    98.18181818181819
+  ],
+  [
+    256.006375383,
+    100.0
+  ],
+  [
+    256.323069267,
+    100.0
+  ],
+  [
+    256.810432946,
+    98.96907216494846
+  ],
+  [
+    257.3719009,
+    99.11111111111111
+  ],
+  [
+    257.911883864,
+    100.0
+  ],
+  [
+    258.412087302,
+    99.5049504950495
+  ],
+  [
+    258.914005857,
+    100.0
+  ],
+  [
+    259.414196792,
+    100.0
+  ],
+  [
+    259.914408606,
+    99.5
+  ],
+  [
+    260.417407969,
+    99.0
+  ],
+  [
+    260.917595027,
+    99.50248756218906
+  ],
+  [
+    261.417780672,
+    98.5
+  ],
+  [
+    261.631521409,
+    98.82352941176471
+  ],
+  [
+    262.206142206,
+    99.56521739130434
+  ],
+  [
+    262.458019449,
+    96.96969696969697
+  ],
+  [
+    262.954975865,
+    99.49748743718592
+  ],
+  [
+    263.114210466,
+    98.4375
+  ],
+  [
+    263.290642855,
+    98.59154929577464
+  ],
+  [
+    263.793408723,
+    100.0
+  ],
+  [
+    264.293596773,
+    100.0
+  ],
+  [
+    264.72419774,
+    100.0
+  ],
+  [
+    264.9882709,
+    99.04761904761905
+  ],
+  [
+    265.435367836,
+    100.0
+  ],
+  [
+    265.935595091,
+    98.49246231155779
+  ],
+  [
+    266.435805676,
+    99.0
+  ],
+  [
+    266.935998999,
+    99.0
+  ],
+  [
+    267.436195708,
+    99.49748743718592
+  ],
+  [
+    267.640951147,
+    97.5609756097561
+  ],
+  [
+    268.188210393,
+    98.63013698630137
+  ],
+  [
+    268.471167155,
+    99.10714285714286
+  ],
+  [
+    268.718749863,
+    98.98989898989899
+  ],
+  [
+    269.07111034,
+    97.87234042553192
+  ],
+  [
+    269.358018484,
+    98.26086956521739
+  ],
+  [
+    269.649080334,
+    100.0
+  ],
+  [
+    269.992863252,
+    99.27007299270073
+  ],
+  [
+    270.236743358,
+    100.0
+  ],
+  [
+    270.563621551,
+    99.23076923076923
+  ],
+  [
+    270.718659134,
+    98.38709677419355
+  ],
+  [
+    271.293293128,
+    98.6842105263158
+  ],
+  [
+    271.793552905,
+    98.00995024875621
+  ],
+  [
+    272.120981437,
+    96.15384615384616
+  ],
+  [
+    272.244595137,
+    100.0
+  ],
+  [
+    272.744797436,
+    99.50248756218906
+  ],
+  [
+    272.864534254,
+    97.91666666666667
+  ],
+  [
+    273.038408014,
+    100.0
+  ],
+  [
+    273.502839424,
+    98.37837837837837
+  ],
+  [
+    273.991641507,
+    99.48717948717949
+  ],
+  [
+    274.114676491,
+    100.0
+  ],
+  [
+    274.481803519,
+    98.64864864864865
+  ],
+  [
+    274.641710067,
+    100.0
+  ],
+  [
+    274.920825815,
+    97.29729729729729
+  ],
+  [
+    275.04167446,
+    100.0
+  ],
+  [
+    275.149684805,
+    97.67441860465117
+  ],
+  [
+    275.412448674,
+    100.0
+  ],
+  [
+    275.53285203,
+    97.91666666666667
+  ],
+  [
+    275.690161153,
+    100.0
+  ],
+  [
+    275.944032116,
+    99.00990099009901
+  ],
+  [
+    276.131763362,
+    94.66666666666667
+  ],
+  [
+    276.595531192,
+    100.0
+  ],
+  [
+    277.15192851,
+    99.09909909909909
+  ],
+  [
+    277.652136168,
+    99.49748743718592
+  ],
+  [
+    277.890148485,
+    98.95833333333333
+  ],
+  [
+    278.390779369,
+    99.5
+  ],
+  [
+    278.507092999,
+    100.0
+  ],
+  [
+    279.007270441,
+    99.49748743718592
+  ],
+  [
+    279.108479864,
+    97.5609756097561
+  ],
+  [
+    279.354121863,
+    98.9795918367347
+  ],
+  [
+    279.520333873,
+    98.50746268656717
+  ],
+  [
+    280.020595291,
+    99.5
+  ],
+  [
+    280.21178488,
+    98.6842105263158
+  ],
+  [
+    280.408663827,
+    98.73417721518987
+  ],
+  [
+    280.910418737,
+    99.0049751243781
+  ],
+  [
+    281.410613942,
+    100.0
+  ],
+  [
+    281.998411896,
+    100.0
+  ],
+  [
+    282.498613251,
+    100.0
+  ],
+  [
+    282.964467709,
+    100.0
+  ],
+  [
+    283.46462966,
+    100.0
+  ],
+  [
+    283.964829101,
+    99.49748743718592
+  ],
+  [
+    284.465037468,
+    100.0
+  ],
+  [
+    284.965234304,
+    99.0049751243781
+  ],
+  [
+    285.465411433,
+    100.0
+  ],
+  [
+    285.965606124,
+    99.0049751243781
+  ],
+  [
+    286.465800546,
+    99.49748743718592
+  ],
+  [
+    286.966425056,
+    99.5
+  ],
+  [
+    287.469407595,
+    100.0
+  ],
+  [
+    287.969599172,
+    100.0
+  ],
+  [
+    288.469785268,
+    99.5
+  ],
+  [
+    288.969980909,
+    100.0
+  ],
+  [
+    289.470180161,
+    100.0
+  ],
+  [
+    289.970368803,
+    100.0
+  ],
+  [
+    290.470571501,
+    100.0
+  ],
+  [
+    290.97076965,
+    100.0
+  ],
+  [
+    291.470963872,
+    100.0
+  ],
+  [
+    291.971169345,
+    99.5
+  ],
+  [
+    292.471498559,
+    100.0
+  ],
+  [
+    292.971688764,
+    100.0
+  ],
+  [
+    293.471882144,
+    99.5
+  ],
+  [
+    293.972067209,
+    100.0
+  ],
+  [
+    294.472264097,
+    99.49748743718592
+  ],
+  [
+    294.633532781,
+    100.0
+  ],
+  [
+    294.780964937,
+    100.0
+  ],
+  [
+    295.281160011,
+    99.5
+  ],
+  [
+    295.508727245,
+    100.0
+  ],
+  [
+    295.623138659,
+    97.77777777777777
+  ],
+  [
+    295.862601654,
+    100.0
+  ],
+  [
+    296.362836772,
+    100.0
+  ],
+  [
+    296.863049799,
+    99.50248756218906
+  ],
+  [
+    297.363252317,
+    100.0
+  ],
+  [
+    297.863526406,
+    99.5
+  ],
+  [
+    298.363721707,
+    100.0
+  ],
+  [
+    298.866409266,
+    98.5
+  ],
+  [
+    299.366610617,
+    99.5
+  ],
+  [
+    299.8668086,
+    100.0
+  ],
+  [
+    300.36699882,
+    99.5
+  ],
+  [
+    300.867196994,
+    99.5
+  ],
+  [
+    301.367399787,
+    100.0
+  ],
+  [
+    301.867596448,
+    100.0
+  ],
+  [
+    302.367781518,
+    100.0
+  ],
+  [
+    302.867982568,
+    100.0
+  ],
+  [
+    303.368180442,
+    100.0
+  ],
+  [
+    303.868410064,
+    100.0
+  ],
+  [
+    304.368598139,
+    99.50248756218906
+  ],
+  [
+    304.868800832,
+    99.49748743718592
+  ],
+  [
+    305.36897593,
+    100.0
+  ],
+  [
+    305.869166004,
+    99.50248756218906
+  ],
+  [
+    306.369353263,
+    100.0
+  ],
+  [
+    306.869574886,
+    99.0
+  ],
+  [
+    307.372406787,
+    100.0
+  ],
+  [
+    307.872602782,
+    99.5
+  ],
+  [
+    308.372777498,
+    100.0
+  ],
+  [
+    308.87297709,
+    99.50248756218906
+  ],
+  [
+    309.373172794,
+    100.0
+  ],
+  [
+    309.87337476,
+    99.5
+  ],
+  [
+    310.290144635,
+    100.0
+  ],
+  [
+    310.821112213,
+    99.05660377358491
+  ],
+  [
+    311.321340899,
+    100.0
+  ],
+  [
+    311.777931675,
+    98.35164835164835
+  ],
+  [
+    311.935395609,
+    100.0
+  ],
+  [
+    312.374223865,
+    100.0
+  ],
+  [
+    312.743105695,
+    99.32432432432432
+  ],
+  [
+    312.946005059,
+    100.0
+  ],
+  [
+    313.373044438,
+    100.0
+  ],
+  [
+    313.873213158,
+    100.0
+  ],
+  [
+    314.132489567,
+    99.03846153846153
+  ],
+  [
+    314.369844294,
+    96.84210526315789
+  ],
+  [
+    314.476571552,
+    100.0
+  ],
+  [
+    314.582659061,
+    100.0
+  ],
+  [
+    315.08291286,
+    99.5
+  ],
+  [
+    315.402444687,
+    100.0
+  ],
+  [
+    315.902609551,
+    99.4949494949495
+  ],
+  [
+    316.40279875,
+    99.5049504950495
+  ],
+  [
+    316.903003037,
+    98.49246231155779
+  ],
+  [
+    317.267122312,
+    98.63013698630137
+  ],
+  [
+    317.657856525,
+    97.43589743589743
+  ],
+  [
+    318.158120302,
+    100.0
+  ],
+  [
+    318.658331262,
+    99.50248756218906
+  ],
+  [
+    319.158575944,
+    99.5
+  ],
+  [
+    319.658781904,
+    100.0
+  ],
+  [
+    320.158994507,
+    98.5
+  ],
+  [
+    320.659193814,
+    100.0
+  ],
+  [
+    321.204166469,
+    99.08256880733946
+  ],
+  [
+    321.704376262,
+    100.0
+  ],
+  [
+    322.182131664,
+    98.42931937172774
+  ],
+  [
+    322.638667638,
+    98.36065573770492
+  ],
+  [
+    323.140406221,
+    100.0
+  ],
+  [
+    323.394549328,
+    99.00990099009901
+  ],
+  [
+    323.708017398,
+    99.2063492063492
+  ],
+  [
+    324.208219818,
+    100.0
+  ],
+  [
+    324.708422948,
+    100.0
+  ],
+  [
+    325.208613736,
+    99.5
+  ],
+  [
+    325.708815344,
+    100.0
+  ],
+  [
+    326.209011161,
+    100.0
+  ],
+  [
+    326.4205517,
+    100.0
+  ],
+  [
+    326.920714266,
+    99.5
+  ],
+  [
+    327.42089205,
+    97.98994974874373
+  ],
+  [
+    327.921086144,
+    99.0
+  ],
+  [
+    328.421296668,
+    100.0
+  ],
+  [
+    328.657147276,
+    100.0
+  ],
+  [
+    329.157342321,
+    100.0
+  ],
+  [
+    329.657577118,
+    99.5
+  ],
+  [
+    330.157793851,
+    99.5
+  ],
+  [
+    330.65799798,
+    100.0
+  ],
+  [
+    331.084330146,
+    98.23529411764706
+  ],
+  [
+    331.640754406,
+    99.55156950672645
+  ],
+  [
+    332.167014381,
+    98.5781990521327
+  ],
+  [
+    332.667398464,
+    100.0
+  ],
+  [
+    333.167599608,
+    100.0
+  ],
+  [
+    333.667806052,
+    99.5
+  ],
+  [
+    334.168408982,
+    99.5
+  ],
+  [
+    334.670401915,
+    99.50248756218906
+  ],
+  [
+    335.04531616,
+    100.0
+  ],
+  [
+    335.149323277,
+    100.0
+  ],
+  [
+    335.652404861,
+    99.50248756218906
+  ],
+  [
+    336.15259765,
+    99.5
+  ],
+  [
+    336.652805316,
+    100.0
+  ],
+  [
+    336.845341686,
+    100.0
+  ],
+  [
+    337.345547441,
+    100.0
+  ],
+  [
+    337.845754791,
+    99.49748743718592
+  ],
+  [
+    338.345961069,
+    100.0
+  ],
+  [
+    338.846159913,
+    99.0
+  ],
+  [
+    339.346359338,
+    100.0
+  ],
+  [
+    339.846575644,
+    99.50248756218906
+  ],
+  [
+    340.346777473,
+    100.0
+  ],
+  [
+    340.846984983,
+    98.00995024875621
+  ],
+  [
+    341.347185921,
+    100.0
+  ],
+  [
+    341.847397559,
+    98.5
+  ],
+  [
+    342.347591523,
+    100.0
+  ],
+  [
+    342.847794175,
+    100.0
+  ],
+  [
+    343.347998589,
+    99.5
+  ],
+  [
+    343.848194768,
+    100.0
+  ],
+  [
+    344.348400845,
+    100.0
+  ],
+  [
+    344.848595301,
+    99.50248756218906
+  ],
+  [
+    345.348791894,
+    100.0
+  ],
+  [
+    345.848984638,
+    100.0
+  ],
+  [
+    346.34919253,
+    100.0
+  ],
+  [
+    346.849395773,
+    99.5
+  ],
+  [
+    347.349584379,
+    100.0
+  ],
+  [
+    347.849770431,
+    100.0
+  ],
+  [
+    348.349970668,
+    99.5
+  ],
+  [
+    348.460675848,
+    97.77777777777777
+  ],
+  [
+    349.001339866,
+    99.53703703703704
+  ],
+  [
+    349.501573525,
+    100.0
+  ],
+  [
+    350.001789382,
+    100.0
+  ],
+  [
+    350.501994028,
+    99.5
+  ],
+  [
+    351.002197352,
+    100.0
+  ],
+  [
+    351.291610911,
+    100.0
+  ],
+  [
+    351.794408484,
+    100.0
+  ],
+  [
+    352.294612629,
+    100.0
+  ],
+  [
+    352.794819669,
+    100.0
+  ],
+  [
+    353.295027134,
+    99.5
+  ],
+  [
+    353.795227782,
+    100.0
+  ],
+  [
+    354.295413703,
+    100.0
+  ],
+  [
+    354.795634098,
+    100.0
+  ],
+  [
+    355.295841108,
+    99.5
+  ],
+  [
+    355.796053268,
+    100.0
+  ],
+  [
+    356.296253996,
+    100.0
+  ],
+  [
+    356.796411644,
+    100.0
+  ],
+  [
+    357.296607764,
+    99.5
+  ],
+  [
+    357.796816097,
+    100.0
+  ],
+  [
+    358.297012147,
+    100.0
+  ],
+  [
+    358.797210341,
+    100.0
+  ],
+  [
+    359.297416098,
+    99.49748743718592
+  ],
+  [
+    359.797620784,
+    99.5049504950495
+  ],
+  [
+    360.297826381,
+    100.0
+  ],
+  [
+    360.79804315,
+    100.0
+  ],
+  [
+    361.298247474,
+    98.5
+  ],
+  [
+    361.798412911,
+    100.0
+  ],
+  [
+    362.281923014,
+    100.0
+  ],
+  [
+    362.413917337,
+    100.0
+  ],
+  [
+    362.515441419,
+    100.0
+  ],
+  [
+    362.683718917,
+    100.0
+  ],
+  [
+    363.184172769,
+    98.99497487437186
+  ],
+  [
+    363.685412722,
+    100.0
+  ],
+  [
+    364.18841124,
+    100.0
+  ],
+  [
+    364.688612593,
+    100.0
+  ],
+  [
+    365.18881001,
+    99.50248756218906
+  ],
+  [
+    365.689013518,
+    100.0
+  ],
+  [
+    366.189220412,
+    100.0
+  ],
+  [
+    366.68941342,
+    99.5
+  ],
+  [
+    367.189622719,
+    100.0
+  ],
+  [
+    367.68983839,
+    100.0
+  ],
+  [
+    368.190041567,
+    100.0
+  ],
+  [
+    368.690248221,
+    99.49748743718592
+  ],
+  [
+    369.190416361,
+    100.0
+  ],
+  [
+    369.690618063,
+    100.0
+  ],
+  [
+    370.193413827,
+    99.5049504950495
+  ],
+  [
+    370.693607808,
+    100.0
+  ],
+  [
+    371.193814273,
+    99.5
+  ],
+  [
+    371.694011931,
+    100.0
+  ],
+  [
+    372.194207125,
+    100.0
+  ],
+  [
+    372.6944033,
+    100.0
+  ],
+  [
+    373.194616948,
+    98.5
+  ],
+  [
+    373.694819825,
+    98.49246231155779
+  ],
+  [
+    374.195021731,
+    99.50248756218906
+  ],
+  [
+    374.695217405,
+    100.0
+  ],
+  [
+    375.195414032,
+    100.0
+  ],
+  [
+    375.695611429,
+    100.0
+  ],
+  [
+    376.195812243,
+    100.0
+  ],
+  [
+    376.696013959,
+    100.0
+  ],
+  [
+    377.196210303,
+    98.00995024875621
+  ],
+  [
+    377.698405793,
+    100.0
+  ],
+  [
+    378.198601929,
+    99.5
+  ],
+  [
+    378.698799217,
+    100.0
+  ],
+  [
+    379.198999824,
+    100.0
+  ],
+  [
+    379.699194671,
+    100.0
+  ],
+  [
+    380.199399157,
+    100.0
+  ],
+  [
+    380.699595237,
+    100.0
+  ],
+  [
+    380.935963482,
+    100.0
+  ],
+  [
+    381.436419783,
+    100.0
+  ],
+  [
+    381.936612627,
+    100.0
+  ],
+  [
+    382.436822412,
+    100.0
+  ],
+  [
+    382.937059137,
+    99.50248756218906
+  ],
+  [
+    383.437255287,
+    100.0
+  ],
+  [
+    383.937412665,
+    100.0
+  ],
+  [
+    384.437614676,
+    100.0
+  ],
+  [
+    384.937809404,
+    100.0
+  ],
+  [
+    385.438002808,
+    100.0
+  ],
+  [
+    385.938192464,
+    100.0
+  ],
+  [
+    386.438375979,
+    100.0
+  ],
+  [
+    386.938602994,
+    100.0
+  ],
+  [
+    387.053200595,
+    97.82608695652173
+  ],
+  [
+    387.192479679,
+    100.0
+  ],
+  [
+    387.692714619,
+    100.0
+  ],
+  [
+    388.192939049,
+    100.0
+  ],
+  [
+    388.693146198,
+    100.0
+  ],
+  [
+    389.024026803,
+    100.0
+  ],
+  [
+    389.524189559,
+    100.0
+  ],
+  [
+    390.02440839,
+    99.50248756218906
+  ],
+  [
+    390.524614676,
+    100.0
+  ],
+  [
+    391.024834529,
+    100.0
+  ],
+  [
+    391.525044091,
+    100.0
+  ],
+  [
+    392.025255338,
+    100.0
+  ],
+  [
+    392.52552922,
+    100.0
+  ],
+  [
+    393.025734327,
+    100.0
+  ],
+  [
+    393.525926066,
+    100.0
+  ],
+  [
+    394.026134529,
+    100.0
+  ],
+  [
+    394.52633178,
+    100.0
+  ],
+  [
+    395.026547837,
+    99.50248756218906
+  ],
+  [
+    395.526763914,
+    100.0
+  ],
+  [
+    396.026961686,
+    100.0
+  ],
+  [
+    396.527406707,
+    100.0
+  ],
+  [
+    397.027602957,
+    99.5049504950495
+  ],
+  [
+    397.527797173,
+    100.0
+  ],
+  [
+    398.028407089,
+    100.0
+  ],
+  [
+    398.528605233,
+    100.0
+  ],
+  [
+    399.028817324,
+    100.0
+  ],
+  [
+    399.529006733,
+    99.49748743718592
+  ],
+  [
+    400.029403687,
+    99.5049504950495
+  ],
+  [
+    400.52960089,
+    100.0
+  ],
+  [
+    401.03041586,
+    99.5
+  ],
+  [
+    401.530630967,
+    100.0
+  ],
+  [
+    402.030842492,
+    100.0
+  ],
+  [
+    402.531039829,
+    100.0
+  ],
+  [
+    403.031239642,
+    100.0
+  ],
+  [
+    403.531413516,
+    100.0
+  ],
+  [
+    404.034414747,
+    99.50248756218906
+  ],
+  [
+    404.534604261,
+    100.0
+  ],
+  [
+    405.034798292,
+    100.0
+  ],
+  [
+    405.534989909,
+    100.0
+  ],
+  [
+    406.035188279,
+    99.5
+  ],
+  [
+    406.535373003,
+    100.0
+  ],
+  [
+    407.035588595,
+    100.0
+  ],
+  [
+    407.535787135,
+    100.0
+  ],
+  [
+    408.035987599,
+    100.0
+  ],
+  [
+    408.536178154,
+    100.0
+  ],
+  [
+    409.036380952,
+    100.0
+  ],
+  [
+    409.536597813,
+    99.0049751243781
+  ],
+  [
+    410.036796011,
+    100.0
+  ],
+  [
+    410.536996783,
+    100.0
+  ],
+  [
+    411.037209538,
+    100.0
+  ],
+  [
+    411.53740974,
+    100.0
+  ],
+  [
+    412.037604601,
+    100.0
+  ],
+  [
+    412.537816885,
+    99.0
+  ],
+  [
+    413.038035241,
+    100.0
+  ],
+  [
+    413.538232747,
+    99.50248756218906
+  ],
+  [
+    414.038410026,
+    100.0
+  ],
+  [
+    414.539408239,
+    100.0
+  ],
+  [
+    414.648625512,
+    100.0
+  ],
+  [
+    415.149300444,
+    99.50248756218906
+  ],
+  [
+    415.484546417,
+    100.0
+  ],
+  [
+    415.986407091,
+    100.0
+  ],
+  [
+    416.486609496,
+    100.0
+  ],
+  [
+    416.989408481,
+    100.0
+  ],
+  [
+    417.489594292,
+    100.0
+  ],
+  [
+    417.989799772,
+    99.50248756218906
+  ],
+  [
+    418.490027755,
+    100.0
+  ],
+  [
+    418.990229088,
+    100.0
+  ],
+  [
+    419.490424931,
+    100.0
+  ],
+  [
+    419.850415654,
+    99.30555555555556
+  ],
+  [
+    420.312477064,
+    99.45652173913044
+  ],
+  [
+    420.812653852,
+    100.0
+  ],
+  [
+    421.274891274,
+    100.0
+  ],
+  [
+    421.775408544,
+    100.0
+  ],
+  [
+    422.276418558,
+    100.0
+  ],
+  [
+    422.776611095,
+    98.50746268656717
+  ],
+  [
+    423.276823098,
+    100.0
+  ],
+  [
+    423.417155825,
+    100.0
+  ],
+  [
+    424.019396733,
+    97.9253112033195
+  ],
+  [
+    424.251966221,
+    100.0
+  ],
+  [
+    424.752335155,
+    100.0
+  ],
+  [
+    425.252559499,
+    100.0
+  ],
+  [
+    425.752760685,
+    100.0
+  ],
+  [
+    426.2529725,
+    99.50248756218906
+  ],
+  [
+    426.75316019,
+    99.5
+  ],
+  [
+    427.25541624,
+    99.5
+  ],
+  [
+    427.755615271,
+    98.0
+  ],
+  [
+    428.255816096,
+    99.5
+  ],
+  [
+    428.654928561,
+    76.72955974842768
+  ],
+  [
+    429.155407192,
+    77.61194029850746
+  ],
+  [
+    429.655601805,
+    100.0
+  ],
+  [
+    430.155812789,
+    100.0
+  ],
+  [
+    430.656408547,
+    99.50248756218906
+  ],
+  [
+    431.156599092,
+    100.0
+  ],
+  [
+    431.658418391,
+    100.0
+  ],
+  [
+    432.158643872,
+    99.50248756218906
+  ],
+  [
+    432.658850137,
+    100.0
+  ],
+  [
+    433.159055654,
+    100.0
+  ],
+  [
+    433.659253519,
+    100.0
+  ],
+  [
+    434.159534168,
+    99.50248756218906
+  ],
+  [
+    434.659726703,
+    100.0
+  ],
+  [
+    435.159922073,
+    100.0
+  ],
+  [
+    435.660129406,
+    99.5
+  ],
+  [
+    436.160333522,
+    99.5
+  ],
+  [
+    436.660551004,
+    100.0
+  ],
+  [
+    437.160741475,
+    99.49748743718592
+  ],
+  [
+    437.663417099,
+    100.0
+  ],
+  [
+    438.163617579,
+    99.50248756218906
+  ],
+  [
+    438.663813931,
+    100.0
+  ],
+  [
+    439.164020091,
+    100.0
+  ],
+  [
+    439.664205613,
+    100.0
+  ],
+  [
+    440.164422383,
+    99.0
+  ],
+  [
+    440.664625598,
+    100.0
+  ],
+  [
+    441.164826275,
+    100.0
+  ],
+  [
+    441.665000365,
+    98.99497487437186
+  ],
+  [
+    442.165201916,
+    99.0049751243781
+  ],
+  [
+    442.665406482,
+    100.0
+  ],
+  [
+    443.165607162,
+    100.0
+  ],
+  [
+    443.665806369,
+    99.5
+  ],
+  [
+    444.166005034,
+    100.0
+  ],
+  [
+    444.666178723,
+    99.5
+  ],
+  [
+    445.166384643,
+    100.0
+  ],
+  [
+    445.666545598,
+    100.0
+  ],
+  [
+    446.166737842,
+    100.0
+  ],
+  [
+    446.666903106,
+    100.0
+  ],
+  [
+    447.16710102,
+    100.0
+  ],
+  [
+    447.667267195,
+    100.0
+  ],
+  [
+    448.167403685,
+    100.0
+  ],
+  [
+    448.532348064,
+    97.26027397260275
+  ],
+  [
+    449.032690706,
+    100.0
+  ],
+  [
+    449.532902179,
+    99.5
+  ],
+  [
+    450.033087606,
+    100.0
+  ],
+  [
+    450.533279786,
+    100.0
+  ],
+  [
+    451.034407512,
+    100.0
+  ],
+  [
+    451.534600052,
+    100.0
+  ],
+  [
+    452.034787082,
+    100.0
+  ],
+  [
+    452.534979723,
+    100.0
+  ],
+  [
+    453.035159389,
+    99.50248756218906
+  ],
+  [
+    453.535355466,
+    100.0
+  ],
+  [
+    454.035562894,
+    100.0
+  ],
+  [
+    454.535757358,
+    100.0
+  ],
+  [
+    455.035956931,
+    100.0
+  ],
+  [
+    455.536151175,
+    100.0
+  ],
+  [
+    456.036356629,
+    100.0
+  ],
+  [
+    456.536569757,
+    99.0
+  ],
+  [
+    457.039406727,
+    100.0
+  ],
+  [
+    457.539582618,
+    100.0
+  ],
+  [
+    458.039781693,
+    100.0
+  ],
+  [
+    458.539977341,
+    100.0
+  ],
+  [
+    459.040166958,
+    99.50248756218906
+  ],
+  [
+    459.540361454,
+    100.0
+  ],
+  [
+    460.043411922,
+    100.0
+  ],
+  [
+    460.324097276,
+    100.0
+  ],
+  [
+    460.824285491,
+    75.37688442211055
+  ],
+  [
+    461.324523448,
+    75.12437810945273
+  ],
+  [
+    461.824708496,
+    75.0
+  ],
+  [
+    462.324904926,
+    59.0
+  ],
+  [
+    462.825141491,
+    25.125628140703512
+  ],
+  [
+    463.270652378,
+    41.80790960451978
+  ]
+];
+// Position of the vertical axis.
+const X_LINE = 50;
+// General-use margin size.
+const MARGIN = 5;
+// Position of the horizontal axis, relative to the bottom.
+const Y_LINE = 35;
+// Minimum distance between time tick labels.
+const MIN_TICK_DIST = 50;
+// Radius for rounded rectangle corners.
+const RADIUS = 3;
+// Height of unit boxes.
+const BOX_HEIGHT = 25;
+// Distance between Y tick marks on the unit graph.
+const Y_TICK_DIST = BOX_HEIGHT + 2;
+// Rects used for mouseover detection.
+// Objects of {x, y, x2, y2, i} where `i` is the index into UNIT_DATA.
+let HIT_BOXES = [];
+// Index into UNIT_DATA of the last unit hovered over by mouse.
+let LAST_HOVER = null;
+// Key is unit index, value is {x, y, width, sections} of the box.
+let UNIT_COORDS = {};
+// Map of unit index to the index it was unlocked by.
+let REVERSE_UNIT_DEPS = {};
+let REVERSE_UNIT_RMETA_DEPS = {};
+let UNIT_BY_INDEX = {};
+
+const MIN_GRAPH_WIDTH = 200;
+const MAX_GRAPH_WIDTH = 4096;
+
+// How many pixels per second is added by each scale value
+const SCALE_PIXELS_PER_SEC = 8;
+
+function scale_to_graph_width(scale) {
+  // The scale corresponds to `SCALE_PIXELS_PER_SEC` pixels per seconds.
+  // We thus multiply it by that, and the total duration, to get the graph width.
+  const width = scale * SCALE_PIXELS_PER_SEC * DURATION;
+
+  // We then cap the size of the graph. It is hard to view if it is too large, and
+  // browsers may not render a large graph because it takes too much memory.
+  // 4096 is still ridiculously large, and probably won't render on mobile
+  // browsers, but should be ok for many desktop environments.
+  // Also use a minimum width of 200.
+  return Math.max(MIN_GRAPH_WIDTH, Math.min(MAX_GRAPH_WIDTH, width));
+}
+
+// This function performs the reverse of `scale_to_graph_width`.
+function width_to_graph_scale(width) {
+  const maxWidth = Math.min(MAX_GRAPH_WIDTH, width);
+  const minWidth = Math.max(MIN_GRAPH_WIDTH, width);
+
+  const trimmedWidth = Math.max(minWidth, Math.min(maxWidth, width));
+
+  const scale = Math.round(trimmedWidth / (DURATION * SCALE_PIXELS_PER_SEC));
+  return Math.max(1, scale);
+}
+
+// Init scale value and limits based on the client's window width and min/max graph width.
+const scaleElement = document.getElementById('scale');
+scaleElement.min = width_to_graph_scale(MIN_GRAPH_WIDTH);
+scaleElement.max = width_to_graph_scale(MAX_GRAPH_WIDTH);
+scaleElement.value = width_to_graph_scale(window.innerWidth * 0.75);
+
+// Colors from css
+const getCssColor = name => getComputedStyle(document.body).getPropertyValue(name);
+const TEXT_COLOR = getCssColor('--text');
+const BG_COLOR = getCssColor('--background');
+const CANVAS_BG = getCssColor('--canvas-background');
+const AXES_COLOR = getCssColor('--canvas-axes');
+const GRID_COLOR = getCssColor('--canvas-grid');
+const CODEGEN_COLOR = getCssColor('--canvas-codegen');
+const LINK_COLOR = getCssColor('--canvas-link');
+// Final leftover section after link
+const OTHER_COLOR = getCssColor('--canvas-other');
+const CUSTOM_BUILD_COLOR = getCssColor('--canvas-custom-build');
+const NOT_CUSTOM_BUILD_COLOR = getCssColor('--canvas-not-custom-build');
+const DEP_LINE_COLOR = getCssColor('--canvas-dep-line');
+const DEP_LINE_HIGHLIGHTED_COLOR = getCssColor('--canvas-dep-line-highlighted');
+const CPU_COLOR = getCssColor('--canvas-cpu');
+
+for (const unit of UNIT_DATA) {
+  UNIT_BY_INDEX[unit.i] = unit;
+  for (let unblocked of unit.unblocked_units) {
+    REVERSE_UNIT_DEPS[unblocked] = unit.i;
+  }
+  for (let unblocked of unit.unblocked_rmeta_units) {
+    REVERSE_UNIT_RMETA_DEPS[unblocked] = unit.i;
+  }
+}
+
+// Compute x,y coordinate of each block.
+// We also populate a map with the count of each unit name to disambiguate if necessary
+function compute_unit_coords(units, px_per_sec) {
+  const unitCount = new Map();
+  UNIT_COORDS = {};
+  for (i = 0; i < units.length; i++) {
+    let unit = units[i];
+    let y = i * Y_TICK_DIST + 1;
+    let x = px_per_sec * unit.start;
+
+    const sections = [];
+    if (unit.sections !== null) {
+      // We have access to compilation sections
+      for (const section of unit.sections) {
+        const [name, { start, end }] = section;
+        sections.push({
+          name,
+          start: x + px_per_sec * start,
+          width: (end - start) * px_per_sec
+        });
+      }
+    }
+
+    let width = Math.max(px_per_sec * unit.duration, 1.0);
+    UNIT_COORDS[unit.i] = { x, y, width, sections };
+
+    const count = unitCount.get(unit.name) || 0;
+    unitCount.set(unit.name, count + 1);
+  }
+
+  return { UNIT_COORDS, unitCount }
+}
+
+class SvgRenderer {
+  constructor() {}
+
+  render_pipeline_graph() {
+    if (UNIT_DATA.length == 0) {
+      return;
+    }
+    HIT_BOXES.length = 0;
+    const min_time = document.getElementById('min-unit-time').valueAsNumber;
+
+    const units = UNIT_DATA.filter(unit => unit.duration >= min_time);
+
+    const graph_height = Y_TICK_DIST * units.length;
+    let { canvas_height, canvas_width, graph_width, px_per_sec } = graph_dimension(graph_height);
+    const axes = this._draw_graph_axes({ canvas_height, graph_height, graph_width, px_per_sec });
+
+    // Draw Y tick marks.
+    let y_ticks = '';
+    if (units.length != 0) {
+      const path_commands = Array(units.length - 1)
+        .fill(0)
+        .map((_, idx) => {
+          const n = idx + 1;
+          const y = MARGIN + Y_TICK_DIST * n;
+          return `M${X_LINE} ${y} h-5`;
+        });
+      y_ticks = `<path class="axis axis-y" d="${path_commands.join(" ")}"></path>`;
+    }
+
+    // Draw Y labels.
+    const y_labels = Array(units.length)
+      .fill(0)
+      .map((_, n) => {
+          let y = MARGIN + Y_TICK_DIST * n + Y_TICK_DIST / 2;
+          return `<text class="axis axis-y" x="${X_LINE - 4}" y="${y}">${n + 1}</text>`;
+      })
+      .join("");
+
+    // Draw the graph.
+    const { UNIT_COORDS, unitCount } = compute_unit_coords(units, px_per_sec);
+    const presentSections = new Set();
+
+    // Draw the blocks.
+    let blocks = Array(units.length)
+      .fill(0)
+      .map((_, i) => {
+        let unit = units[i];
+        let { x, y, width, sections } = UNIT_COORDS[unit.i];
+
+        const boxes = [this._roundedRect("", x, y, width, unit)].concat(
+          sections.map((section) => {
+            presentSections.add(section.name);
+            return this._roundedRect(
+              section.name,
+              section.start,
+              y,
+              section.width,
+              unit,
+            );
+          }),
+        );
+
+        const labelName = (unitCount.get(unit.name) || 0) > 1 ? `${unit.name} (v${unit.version})${unit.target}` : `${unit.name}${unit.target}`;
+        const label = `${labelName}: ${unit.duration}s`;
+
+        const text_info_width = measure_text_width(label);
+        const label_x = Math.min(x + 5.0, canvas_width - text_info_width - X_LINE);
+        const box_label = `<text class="box" x="${label_x}" y="${y + BOX_HEIGHT / 2}">${label}</text>`;
+
+        const dep_lines = this._draw_dep_lines(unit.i);
+        return boxes.concat(box_label).concat(dep_lines);
+      })
+      .flat()
+      .join("");
+
+    blocks = `
+<g id="boxes" transform="translate(${X_LINE} ${MARGIN})">${blocks}</g>
+<g id="hl-dep-lines" transform="translate(${X_LINE} ${MARGIN})"></g>`;
+
+    // Draw a legend.
+    const legend = `
+<g class="legend" transform="translate(${canvas_width-200},${MARGIN})">
+  ${this._draw_legend(160, get_legend_entries(presentSections))}
+</g>`;
+
+    const svg_container = document.getElementById("pipeline-container");
+    if (svg_container) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", canvas_width);
+      svg.setAttribute("height", canvas_height);
+      Object.assign(svg.style, {
+        background: CANVAS_BG,
+        color: TEXT_COLOR,
+        fontFamily: 'sans-serif',
+        fontSize: '16px'
+      });
+      svg.innerHTML = `
+<style type="text/css">
+  path.axis {
+    fill: none;
+    stroke: ${AXES_COLOR};
+    stroke-width: 2;
+  }
+  text.axis {
+    fill: ${AXES_COLOR};
+    font-size: 16px;
+    stroke: none;
+    text-anchor: middle;
+  }
+  text.axis-y {
+    dominant-baseline: middle;
+    text-anchor: end;
+  }
+  .grid {
+    stroke: ${GRID_COLOR};
+    stroke-dasharray: 2 4;
+    stroke-width: 2;
+  }
+  rect.box {
+    fill: ${NOT_CUSTOM_BUILD_COLOR};
+    height: ${BOX_HEIGHT}px;
+    rx: ${RADIUS}px;
+    ry: ${RADIUS}px;
+  }
+  rect.box.run-custom-build {
+    fill: ${CUSTOM_BUILD_COLOR};
+  }
+  rect.box.codegen {
+    fill: ${CODEGEN_COLOR};
+  }
+  rect.box.link {
+    fill: ${LINK_COLOR};
+  }
+  rect.box.other {
+    fill: ${OTHER_COLOR}
+  }
+  text.box {
+    dominant-baseline: middle;
+    fill: ${TEXT_COLOR};
+    font-size: 14px;
+    text-anchor: start
+  }
+  .dep-line {
+    fill: none;
+    stroke: ${DEP_LINE_COLOR};
+    stroke-dasharray: 2;
+    stroke-width: 2;
+  }
+  #hl-dep-lines .dep-line{
+    stroke: ${DEP_LINE_HIGHLIGHTED_COLOR};
+  }
+  path.legend__cell {
+    stroke-width: 2;
+  }
+  .legend__desc {
+    fill: ${TEXT_COLOR};
+    dominant-baseline: middle;
+  }
+</style>
+${axes}
+${y_ticks}
+${y_labels}
+${blocks}
+${legend}`;
+      svg_container.innerHTML = svg.outerHTML;
+    }
+  }
+
+  // Draw a legend at the current position of the ctx.
+  // entries should be an array of objects with the following scheme:
+  // {
+  //   "name": <name of the legend entry> [string],
+  //   "color": <color of the legend entry> [string],
+  //   "line": <should the entry be a thin line or a rectangle> [bool]
+  // }
+  _draw_legend(width, entries) {
+    const entry_height = 20;
+
+    // Add a bit of margin to the bottom and top
+    const height = entries.length * entry_height + 4;
+
+    // Draw background
+    let legend = [];
+    legend.push(`<rect stroke="${TEXT_COLOR}" stroke-width="1" fill="${BG_COLOR}" width="${width}" height="${height}"></rect>`);
+
+    // Dimension of a block
+    const block_height = 15;
+    const block_width = 30;
+
+    // Margin from the left edge
+    const x_start = 5;
+    // Width of the "mark" section (line/block)
+    const mark_width = 45;
+
+    // Draw legend entries
+    let y = 12;
+    for (const entry of entries) {
+      const cell = entry.line ?
+        `<path class="legend__cell" stroke="${entry.color}" d="M${x_start} ${y} h ${mark_width}"></path>` :
+        `
+<rect class="legend__cell" fill="${entry.color}" width="${block_width}" height="${block_height}"
+  x="${x_start + (mark_width - block_width) / 2}" y="${y - (block_height / 2)}"
+></rect>`;
+      legend.push(cell);
+      legend.push(`<text class="legend__desc" x="${x_start + mark_width + 4}" y="${y + 1}">${entry.name}</text>`)
+      y += entry_height;
+    }
+    return legend.join("")
+  }
+
+  // Draws lines from the given unit to the units it unlocks.
+  _draw_dep_lines(unit_idx) {
+    const unit = UNIT_BY_INDEX[unit_idx];
+    const { x, y, sections } = UNIT_COORDS[unit_idx];
+    return unit.unblocked_units
+      .map((unblocked) => this._draw_one_dep_line(x, y, unblocked, unit_idx))
+      .concat(
+        unit.unblocked_rmeta_units.map((unblocked) => {
+          const codegen_x = get_codegen_section_x(sections);
+          return this._draw_one_dep_line(codegen_x, y, unblocked, unit_idx);
+        }),
+      )
+      .join("");
+  }
+
+  _draw_one_dep_line(from_x, from_y, to_unit, from_unit) {
+    if (to_unit in UNIT_COORDS) {
+      let { x: u_x, y: u_y } = UNIT_COORDS[to_unit];
+      // Use multiple path instead to avoid potential rendering issue while scrolling in Firefox.
+      return `
+<path class="dep-line" data-unblocked="${to_unit}" data-unblocked-by="${from_unit}" d="M ${from_x} ${from_y + BOX_HEIGHT / 2} h -5"></path>
+<path class="dep-line" data-unblocked="${to_unit}" data-unblocked-by="${from_unit}" d="M ${from_x - 5} ${from_y + BOX_HEIGHT / 2} V ${u_y + BOX_HEIGHT / 2}"></path>
+<path class="dep-line" data-unblocked="${to_unit}" data-unblocked-by="${from_unit}" d="M ${from_x - 5} ${u_y + BOX_HEIGHT / 2} H${u_x}"></path>
+`;
+    }
+  }
+
+  render_timing_graph() {
+    if (CONCURRENCY_DATA.length == 0) {
+      return;
+    }
+    const HEIGHT = 400;
+    const AXIS_HEIGHT = HEIGHT - MARGIN - Y_LINE;
+    const TOP_MARGIN = 10;
+    const GRAPH_HEIGHT = AXIS_HEIGHT - TOP_MARGIN;
+
+    let { canvas_height, canvas_width, graph_height, graph_width, px_per_sec } = graph_dimension(AXIS_HEIGHT);
+    const axis_bottom = this._draw_graph_axes({ canvas_height, graph_height, graph_width, px_per_sec });
+
+    // Draw Y tick marks and labels.
+    let max_v = 0;
+    for (let c of CONCURRENCY_DATA) {
+      max_v = Math.max(max_v, c.active, c.waiting, c.inactive);
+    }
+    const px_per_v = GRAPH_HEIGHT / max_v;
+    const { step, tick_dist, num_ticks } = split_ticks(max_v, px_per_v, GRAPH_HEIGHT);
+
+    const labels = [];
+    const ticks_path_commands = Array(num_ticks)
+      .fill(0)
+      .map((_, n) => {
+        const y = HEIGHT - Y_LINE - ((n + 1) * tick_dist);
+        labels.push( `<text class="axis axis-y" x="${X_LINE - 10}" y="${y}">${(n + 1) * step}</text>`);
+        return `M${X_LINE} ${y} h-5`;
+      })
+      .join(" ");
+    const ticks = `<path class="axis axis-y" d="${ticks_path_commands}"></path>`;
+    const ticks_labels = labels.join("");
+
+    // Label the Y axis.
+    let label_y = (HEIGHT - Y_LINE) / 2;
+
+    const y_axis_label = `<text class="axis axis-label" transform="translate(15, ${label_y}) rotate(270)"># Units</text>`
+    const axis_left = `${y_axis_label}${ticks}${ticks_labels}`;
+
+    // Draw the graph.
+
+    function coord(t, v) {
+      return {
+        x: graph_width * (t / DURATION),
+        y: TOP_MARGIN + GRAPH_HEIGHT * (1.0 - (v / max_v))
+      };
+    }
+
+    const cpuFillStyle = CPU_COLOR;
+    let cpu = "";
+    if (CPU_USAGE.length > 1) {
+      const bottomLeft = coord(CPU_USAGE[0][0], 0);
+      const bottomRight = coord(CPU_USAGE[CPU_USAGE.length - 1][0], 0);
+      const path_commands = [`M${bottomLeft.x} ${bottomLeft.y}`]
+      .concat(
+        Array(CPU_USAGE.length)
+          .fill(0)
+          .map((_, i) => {
+            let [time, usage] = CPU_USAGE[i];
+            let { x, y } = coord(time, (usage / 100.0) * max_v);
+            return `L${x} ${y}`;
+          }),
+      )
+      .concat(`L${bottomRight.x} ${bottomRight.y}`);
+      cpu = `<path stroke-width="0" fill="${cpuFillStyle}" d="${path_commands.join("")}"></path>`;
+    }
+
+    function draw_line(style, key) {
+      let first = CONCURRENCY_DATA[0];
+      let last = coord(first.t, key(first));
+      const path_commands = [];
+      path_commands.push(`M${last.x} ${last.y}`)
+      for (let i = 1; i < CONCURRENCY_DATA.length; i++) {
+        let c = CONCURRENCY_DATA[i];
+        let { x, y } = coord(c.t, key(c));
+        path_commands.push(`L${x} ${last.y} V${y}`);
+        last = { x, y };
+      }
+      return `<path class="status-line" stroke="${style}" d="${path_commands.join("")}"></path>`
+    }
+
+    const lines = [];
+    lines.push(draw_line('blue', function(c) { return c.inactive; }));
+    lines.push(draw_line('red', function(c) { return c.waiting; }));
+    lines.push(draw_line('green', function(c) { return c.active; }));
+
+    const timings = `<g class="graph-content" transform="translate(${X_LINE} ${MARGIN})">${cpu}${lines}</g>`;
+
+    // Draw a legend.
+    const legend = `
+<g class="legend" transform="translate(${canvas_width-200},${MARGIN})">
+${this._draw_legend(150, [{
+    name: "Waiting",
+    color: "red",
+    line: true
+  }, {
+    name: "Inactive",
+    color: "blue",
+    line: true
+  }, {
+    name: "Active",
+    color: "green",
+    line: true
+  }, {
+    name: "CPU Usage",
+    color: cpuFillStyle,
+    line: false
+}])}
+</g>`;
+
+    const svg_container = document.getElementById("timing-container");
+    if (svg_container) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("width", canvas_width);
+      svg.setAttribute("height", canvas_height);
+      Object.assign(svg.style, {
+        background: CANVAS_BG,
+        color: TEXT_COLOR,
+        fontFamily: 'sans-serif',
+        fontSize: '16px'
+      });
+      svg.innerHTML = `
+<style type="text/css">
+  path.axis {
+    fill: none;
+    stroke: ${AXES_COLOR};
+    stroke-width: 2;
+  }
+  text.axis {
+    fill: ${AXES_COLOR};
+    font-size: 16px;
+    stroke: none;
+    text-anchor: middle;
+  }
+  text.axis-y {
+    dominant-baseline: middle;
+    text-anchor: end;
+  }
+  .grid {
+    stroke: ${GRID_COLOR};
+    stroke-dasharray: 2 4;
+    stroke-width: 2;
+  }
+  .status-line {
+    fill: none;
+    stroke-width: 2;
+  }
+  path.legend__cell {
+    stroke-width: 2;
+  }
+  .legend__desc {
+    fill: ${TEXT_COLOR};
+    dominant-baseline: middle;
+  }
+</style>
+${axis_bottom}
+${axis_left}
+${timings}
+${legend}
+`;
+      svg_container.innerHTML = svg.outerHTML;
+    }
+  }
+
+  _draw_graph_axes({ canvas_height, graph_height, graph_width, px_per_sec }) {
+    // Draw main axes.
+    const main_axes = `
+<path class="axis" d="
+  M${X_LINE} ${MARGIN}
+  V${graph_height + MARGIN}
+  H${X_LINE + graph_width + 20}"
+></path>`;
+
+    // Draw X tick marks.
+    const { step, tick_dist, num_ticks } = split_ticks(DURATION, px_per_sec, graph_width);
+    const TICK_LENGTH = 5;
+    const grid_height = canvas_height - Y_LINE;
+    const labels = [];
+    const ticks_path_commands = Array(num_ticks)
+        .fill(0)
+        .map((_, n) => {
+          const x = X_LINE + ((n + 1) * tick_dist);
+          const label = `
+  <text class="axis" x="${x}" y="${grid_height + 20}">
+    ${(n + 1) * step}s
+  </text>`;
+          labels.push(label);
+          return `M${x} ${grid_height} v${TICK_LENGTH}`;
+        })
+        .join(" ");
+
+    const ticks = `<path class="axis"  d="${ticks_path_commands}"></path>`;
+    const ticks_labels = labels.join("")
+
+    // Draw vertical lines.
+    const vertical_lines = Array(num_ticks)
+      .fill(0)
+      .map((_, n) => {
+        const x = X_LINE + ((n + 1) * tick_dist);
+        return `<path class="grid" d="M${x} ${grid_height - 1} V${MARGIN}"></path>`;
+      })
+      .join("");
+    return `${main_axes}${ticks}${vertical_lines}${ticks_labels}`;
+  }
+
+  _roundedRect(section_name, x, y, width, unit) {
+    return `
+<rect class="box ${unit.mode} ${section_name}" data-i="${unit.i}" x="${x}" y="${y}" width="${width}"
+  onmousemove="hl(${unit.i})"
+>
+</rect>`
+  }
+}
+
+// Determine the width of text for svg.
+function measure_text_width(text) {
+  let ctx;
+  let canvas = measure_text_width.canvas;
+  if (!canvas) {
+    canvas = (measure_text_width.canvas = document.createElement("canvas"));
+  }
+  ctx = canvas.getContext("2d");
+  ctx.font = '14px sans-serif';
+  const text_info = ctx.measureText(text);
+  return text_info.width;
+}
+
+// Gets the x-coordinate of the codegen section of a unit.
+//
+// This is for drawing rmeta dependency lines.
+function get_codegen_section_x(sections) {
+    const codegen_section = sections.find(s => s.name === "codegen")
+    if (!codegen_section) {
+        // This happens only when type-checking (e.g., `cargo check`)
+        return null;
+    }
+    return codegen_section.start;
+}
+
+function get_legend_entries(presentSections) {
+    let frontend_name = "Frontend/rest";
+    if (presentSections.has("other")) {
+      frontend_name = "Frontend";
+    }
+
+    const legend_entries = [{
+      name: frontend_name,
+      color: NOT_CUSTOM_BUILD_COLOR,
+      line: false
+    }];
+    if (presentSections.has("codegen")) {
+      legend_entries.push({
+        name: "Codegen",
+        color: CODEGEN_COLOR,
+        line: false
+      });
+    }
+    if (presentSections.has("link")) {
+      legend_entries.push({
+        name: "Linking",
+        color: LINK_COLOR,
+        line: false
+      });
+    }
+    if (presentSections.has("other")) {
+      legend_entries.push({
+        name: "Other",
+        color: OTHER_COLOR,
+        line: false
+      });
+    }
+  return legend_entries
+}
+
+function graph_dimension(graph_height) {
+  const scale = document.getElementById('scale').valueAsNumber;
+  const graph_width = scale_to_graph_width(scale);
+  const px_per_sec = graph_width / DURATION;
+  const canvas_width = Math.max(graph_width + X_LINE + 30, X_LINE + 250);
+  const canvas_height = graph_height + MARGIN + Y_LINE;
+  return { canvas_height, canvas_width, graph_height, graph_width, px_per_sec, scale }
+}
+
+// Determine the spacing and number of ticks along an axis.
+function split_ticks(max_value, px_per_v, max_px) {
+  const max_ticks = Math.floor(max_px / MIN_TICK_DIST);
+  if (max_ticks <= 1) {
+    // Graph is too small for even 1 tick.
+    return {step: max_value, tick_dist: max_px, num_ticks: 1};
+  }
+  let step;
+  if (max_value <= max_ticks) {
+    step = 1;
+  } else if (max_value <= max_ticks * 2) {
+    step = 2;
+  } else if (max_value <= max_ticks * 4) {
+    step = 4;
+  } else if (max_value <= max_ticks * 5) {
+    step = 5;
+  } else {
+    step = 10;
+    let count = 0;
+    while (true) {
+      if (count > 100) {
+        throw Error("tick loop too long");
+      }
+      count += 1;
+      if (max_value <= max_ticks * step) {
+        break;
+      }
+      step += 10;
+    }
+  }
+  const tick_dist = px_per_v * step;
+  const num_ticks = Math.floor(max_value / step);
+  return {step, tick_dist, num_ticks};
+}
+
+function hl(i) {
+  // Highlight dependency lines on mouse hover.
+  if (i === undefined || i == LAST_HOVER) {
+    return
+  }
+  LAST_HOVER = i;
+  let g = document.getElementById("hl-dep-lines");
+
+  if (g) {
+    const selector = '#boxes .dep-line[data-unblocked="'+i+'"],#boxes .dep-line[data-unblocked-by="' + i + '"]';
+    const lines = Array.from(document.querySelectorAll(selector)).map(el => el.outerHTML);
+    g.innerHTML = lines.join("");
+  }
+}
+
+let renderer = new SvgRenderer();
+try {
+  renderer.render_pipeline_graph();
+  renderer.render_timing_graph();
+} catch (err) {
+  console.error(err);
+}
+
+// Set up and handle controls.
+{
+  const range = document.getElementById('min-unit-time');
+  const time_output = document.getElementById('min-unit-time-output');
+  time_output.innerHTML = `${range.value}s`;
+  range.oninput = event => {
+    time_output.innerHTML = `${range.value}s`;
+    try {
+      renderer.render_pipeline_graph();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const scale = document.getElementById('scale');
+  const scale_output = document.getElementById('scale-output');
+  scale_output.innerHTML = `${scale.value}`;
+  scale.oninput = event => {
+    scale_output.innerHTML = `${scale.value}`;
+    try {
+      renderer.render_pipeline_graph();
+      renderer.render_timing_graph();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  Array.from(document.querySelectorAll("input[name='renderer']")).forEach(function(el) {
+    el.addEventListener("change", function(event) {
+      renderer = setupRenderer(event.target.value);
+      try {
+        renderer.render_pipeline_graph();
+        renderer.render_timing_graph();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  });
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+continuation-compiler-readback	0
+continuation-source-admission	0
+continuation-controller-admission	0
+original-failed-ratchet-preservation	0
+continuation-ratchet	0
+continuation-generated	0
+continuation-source-readback	0
+continuation-controller-readback	0
+continuation-integration-2	0
+continuation-production-self-validation	0
+continuation-final-source-readback	0
+continuation-final-controller-readback	0
+original-failure-final-readback	0

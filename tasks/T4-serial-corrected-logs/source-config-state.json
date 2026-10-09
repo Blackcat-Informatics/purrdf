@@ -1,0 +1,7 @@
+{
+  "repository_cargo_config": {
+    ".cargo/config": false,
+    ".cargo/config.toml": false
+  },
+  "initial_evidence_hash_command": "b3sum recorded seven existing source paths; requested .cargo/config.toml was absent, causing exit1; retained existing hashes remain valid, explicit absence is configuration evidence rather than a shipping failure."
+}

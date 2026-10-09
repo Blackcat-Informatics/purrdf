@@ -1,0 +1,50 @@
+[
+  {
+    "case": "before-downstream",
+    "warmth": "cold",
+    "phases": 9,
+    "success": true,
+    "context_keys": [
+      "request",
+      "identity",
+      "execution_window",
+      "cargo"
+    ]
+  },
+  {
+    "case": "before-downstream",
+    "warmth": "warm",
+    "phases": 9,
+    "success": true,
+    "context_keys": [
+      "request",
+      "identity",
+      "execution_window",
+      "cargo"
+    ]
+  },
+  {
+    "case": "after-downstream",
+    "warmth": "cold",
+    "phases": 9,
+    "success": true,
+    "context_keys": [
+      "request",
+      "identity",
+      "execution_window",
+      "cargo"
+    ]
+  },
+  {
+    "case": "after-downstream",
+    "warmth": "warm",
+    "phases": 9,
+    "success": true,
+    "context_keys": [
+      "request",
+      "identity",
+      "execution_window",
+      "cargo"
+    ]
+  }
+]

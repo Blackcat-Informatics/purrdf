@@ -1,0 +1,3 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 5384882d6575 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/308-reduce-native-ci-test-compilation-and-c f83095460] Fix native profiling of C API Rust test artifacts
+ 1 file changed, 68 insertions(+)

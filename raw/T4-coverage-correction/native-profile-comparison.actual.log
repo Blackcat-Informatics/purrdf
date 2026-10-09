@@ -1,0 +1,634 @@
+native-profile-comparison	Set up job	﻿2026-10-08T21:22:50.1820129Z Current runner version: '2.337.0'
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1845366Z ##[group]Runner Image Provisioner
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1846416Z Hosted Compute Agent
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1847025Z Version: 20261002.596
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1847593Z Commit: c3d12f3313a95f25162a1503be624f3b0617f8c0
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1848242Z Build Date: 2026-10-02T22:28:27Z
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1848920Z Worker ID: {1b71f38e-ce71-4f56-91cb-5aff2fd3e331}
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1849600Z Region: westus3
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1850118Z Cloud: Azure
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1850598Z ##[endgroup]
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1852039Z ##[group]Operating System
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1852691Z Ubuntu
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1853160Z 24.04.5
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1853644Z LTS
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1854173Z ##[endgroup]
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1854674Z ##[group]Runner Image
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1855645Z Image: ubuntu-24.04
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1856332Z Version: 20261004.327.1
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1857295Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261004.327/images/ubuntu/Ubuntu2404-Readme.md
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1858882Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261004.327
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1859802Z ##[endgroup]
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1860824Z ##[group]GITHUB_TOKEN Permissions
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1862854Z Contents: read
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1863411Z Metadata: read
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1864087Z ##[endgroup]
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1866397Z Secret source: Actions
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1867327Z Cache mode: write
+native-profile-comparison	Set up job	2026-10-08T21:22:50.1867982Z Prepare workflow directory
+native-profile-comparison	Set up job	2026-10-08T21:22:50.2269979Z Prepare all required actions
+native-profile-comparison	Set up job	2026-10-08T21:22:50.2323327Z Getting action download info
+native-profile-comparison	Set up job	2026-10-08T21:22:50.5549774Z Download action repository 'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0' (SHA:9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0)
+native-profile-comparison	Set up job	2026-10-08T21:22:50.6658646Z Download action repository 'dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8' (SHA:29eef336d9b2848a0b548edc03f92a220660cdb8)
+native-profile-comparison	Set up job	2026-10-08T21:22:50.8941156Z Download action repository 'actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e' (SHA:95815c38cf2ff2164869cbab79da8d1f422bc89e)
+native-profile-comparison	Set up job	2026-10-08T21:22:51.5951316Z Download action repository 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' (SHA:043fb46d1a93c77aae656e7c1c64a875d1fc6a0a)
+native-profile-comparison	Set up job	2026-10-08T21:22:51.7927041Z Complete job name: native-profile-comparison
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	﻿2026-10-08T21:22:51.8769554Z ##[group]Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8770547Z with:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8770966Z   persist-credentials: false
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8771467Z   repository: Blackcat-Informatics/purrdf
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8775217Z   token: ***
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8775612Z   ssh-strict: true
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8776237Z   ssh-user: git
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8776645Z   clean: true
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8777055Z   sparse-checkout-cone-mode: true
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8777532Z   fetch-depth: 1
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8777942Z   fetch-tags: false
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8778348Z   show-progress: true
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8778789Z   lfs: false
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8779183Z   submodules: false
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8779596Z   set-safe-directory: true
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8780051Z   allow-unsafe-pr-checkout: false
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8780809Z env:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8781192Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.8781601Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9755530Z Syncing repository: Blackcat-Informatics/purrdf
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9758459Z ##[group]Getting Git version info
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9759442Z Working directory is '/home/runner/work/purrdf/purrdf'
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9761119Z [command]/usr/bin/git version
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9811368Z git version 2.55.0
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9830643Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9841370Z Temporarily overriding HOME='/home/runner/work/_temp/09e2c22f-538b-42fc-9788-7a92dab61089' before making global git config changes
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9843090Z Adding repository directory to the temporary git global config as a safe directory
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9846726Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9886675Z Deleting the contents of '/home/runner/work/purrdf/purrdf'
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9890323Z ##[group]Determining repository object format
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9891735Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9892439Z ##[group]Initializing the repository
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9895886Z [command]/usr/bin/git init /home/runner/work/purrdf/purrdf
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9990377Z hint: Using 'master' as the name for the initial branch. This default branch name
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9991599Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9992461Z hint: to use in all of your new repositories, which will suppress this warning,
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9993147Z hint: call:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9993528Z hint:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9994148Z hint: 	git config --global init.defaultBranch <name>
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9994708Z hint:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9995236Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9996329Z hint: 'development'. The just-created branch can be renamed via this command:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9997361Z hint:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9997752Z hint: 	git branch -m <name>
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9998185Z hint:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9998755Z hint: Disable this message with "git config set advice.defaultBranchName false"
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:51.9999747Z Initialized empty Git repository in /home/runner/work/purrdf/purrdf/.git/
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0001851Z [command]/usr/bin/git remote add origin https://github.com/Blackcat-Informatics/purrdf
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0043878Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0044682Z ##[group]Disabling automatic garbage collection
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0046605Z [command]/usr/bin/git config --local gc.auto 0
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0072103Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0072876Z ##[group]Setting up auth
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0074046Z Removing SSH command configuration
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0077394Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0103573Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0376597Z Removing HTTP extra header
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0382023Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0410354Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0579452Z Removing includeIf entries pointing to credentials config files
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0584140Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0612969Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0795516Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0822166Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0847842Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0875417Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0900612Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0922267Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0923446Z ##[group]Fetching the repository
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:52.0930690Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +47c9cdfcffe9271facb85c05034d89e466a4d77a:refs/remotes/origin/paudley/308-reduce-native-ci-test-compilation-and-c
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9315063Z From https://github.com/Blackcat-Informatics/purrdf
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9319790Z  * [new ref]           47c9cdfcffe9271facb85c05034d89e466a4d77a -> origin/paudley/308-reduce-native-ci-test-compilation-and-c
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9325746Z [command]/usr/bin/git branch --list --remote origin/paudley/308-reduce-native-ci-test-compilation-and-c
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9352394Z   origin/paudley/308-reduce-native-ci-test-compilation-and-c
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9361608Z [command]/usr/bin/git rev-parse refs/remotes/origin/paudley/308-reduce-native-ci-test-compilation-and-c
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9382357Z 47c9cdfcffe9271facb85c05034d89e466a4d77a
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9387022Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9388467Z ##[group]Determining the checkout info
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9390583Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9391920Z [command]/usr/bin/git sparse-checkout disable
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9444487Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9470073Z ##[group]Checking out the ref
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:56.9473787Z [command]/usr/bin/git checkout --progress --force -B paudley/308-reduce-native-ci-test-compilation-and-c refs/remotes/origin/paudley/308-reduce-native-ci-test-compilation-and-c
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9637901Z Switched to a new branch 'paudley/308-reduce-native-ci-test-compilation-and-c'
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9641426Z branch 'paudley/308-reduce-native-ci-test-compilation-and-c' set up to track 'origin/paudley/308-reduce-native-ci-test-compilation-and-c'.
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9666003Z ##[endgroup]
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9715279Z [command]/usr/bin/git log -1 --format=%H
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9739575Z 47c9cdfcffe9271facb85c05034d89e466a4d77a
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9748117Z ##[group]Removing auth
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9748808Z Removing SSH command configuration
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9751394Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9782481Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9982678Z Removing HTTP extra header
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:57.9986829Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0013100Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0208152Z Removing includeIf entries pointing to credentials config files
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0211227Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0233687Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0234281Z includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0234722Z includeif.gitdir:/github/workspace/.git.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0235449Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0240988Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0259509Z /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0267304Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git.path /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0301556Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0322226Z /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0331719Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/purrdf/purrdf/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0359350Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0380120Z /github/runner_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0388364Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0414690Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0432303Z /github/runner_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0437507Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0464677Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0654737Z Removing credentials config '/home/runner/work/_temp/git-credentials-7c1e2bcf-fedd-40a1-af81-4b9fadf1784c.config'
+native-profile-comparison	Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:22:58.0662956Z ##[endgroup]
+native-profile-comparison	Install Rust	﻿2026-10-08T21:22:58.0965519Z ##[group]Run dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.0965937Z with:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.0966290Z   toolchain: nightly
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.0966497Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.0966678Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.0966882Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1060490Z ##[start-action display=Run : parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1104126Z ##[group]Run : parse toolchain version
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1104594Z ^[[36;1m: parse toolchain version^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1104921Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1105605Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1106281Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1106573Z ^[[36;1m  exit 1^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1106899Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1107374Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1107881Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1108374Z ^[[36;1m  else^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1108770Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1109230Z ^[[36;1m  fi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1109535Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1110061Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1110501Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1110998Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1111466Z ^[[36;1melse^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1111713Z ^[[36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1111998Z ^[[36;1mfi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1286879Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1287311Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1287518Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1287736Z   toolchain: nightly
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1288171Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1413925Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=35]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1438471Z ##[start-action display=Run : construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1459890Z ##[group]Run : construct rustup command line
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1460245Z ^[[36;1m: construct rustup command line^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1460683Z ^[[36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1461287Z ^[[36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1461769Z ^[[36;1mecho "downgrade=" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1504576Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1504928Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1505129Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1505368Z   targets: 
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1505620Z   components: 
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1505828Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1587423Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=14]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1591891Z ##[start-action display=Run : set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1612528Z ##[group]Run : set $CARGO_HOME
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1612831Z ^[[36;1m: set $CARGO_HOME^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1613153Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1658945Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1659298Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1659693Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1659930Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1735462Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=14]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1738409Z ##[start-action display=Run : install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1765770Z ##[group]Run : install rustup if needed
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1766333Z ^[[36;1m: install rustup if needed^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1766631Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1767386Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1768082Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1768613Z ^[[36;1mfi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1813422Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1813805Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1814022Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1814291Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1814539Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1886800Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=14]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1891811Z ##[start-action display=Run : install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1899797Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1903708Z ##[start-action display=rustup toolchain install nightly;id=__dtolnay_rust-toolchain.__run_4]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1924793Z ##[group]Run rustup toolchain install nightly --profile minimal --no-self-update
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1925349Z ^[[36;1mrustup toolchain install nightly --profile minimal --no-self-update^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1969917Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1970258Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1970462Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1970707Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1970966Z   RUSTUP_PERMIT_COPY_RENAME: 1
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.1971208Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.2412950Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.4195016Z info: latest update on 2026-10-08 for version 1.101.0-nightly (1d81eb4ad 2026-10-07)
+native-profile-comparison	Install Rust	2026-10-08T21:22:58.4197296Z info: downloading 3 components
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0537838Z 
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0605478Z   nightly-x86_64-unknown-linux-gnu installed - rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0606326Z 
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0642920Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=8873]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0648327Z ##[start-action display=Run rustup default nightly;id=__dtolnay_rust-toolchain.__run_5]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0750329Z ##[group]Run rustup default nightly
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0750754Z ^[[36;1mrustup default nightly^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0791265Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0791610Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0791803Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0792026Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0792265Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0890686Z info: using existing install for nightly-x86_64-unknown-linux-gnu
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0896359Z info: default toolchain set to nightly-x86_64-unknown-linux-gnu
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0896824Z 
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0962910Z   nightly-x86_64-unknown-linux-gnu unchanged - rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0963380Z 
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0963874Z info: note that the toolchain 'nightly-x86_64-unknown-linux-gnu' is currently in use (overridden by '/home/runner/work/purrdf/purrdf/rust-toolchain.toml')
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0977569Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=32]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0982322Z ##[start-action display=Run : create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.0999840Z ##[group]Run : create cachekey
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1000129Z ^[[36;1m: create cachekey^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1000617Z ^[[36;1mDATE=$(rustc +nightly --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1001232Z ^[[36;1mHASH=$(rustc +nightly --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1001720Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1036918Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1037254Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1037448Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1037677Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1037919Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1332625Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=34]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1335010Z ##[start-action display=Run : disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1351276Z ##[group]Run : disable incremental compilation
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1351632Z ^[[36;1m: disable incremental compilation^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1351943Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1352264Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1352559Z ^[[36;1mfi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1388260Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1388607Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1388797Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1389017Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1389250Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1448987Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=11]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1451188Z ##[start-action display=Run : enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1467102Z ##[group]Run : enable colors in Cargo output
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1467457Z ^[[36;1m: enable colors in Cargo output^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1467758Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1468090Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1468367Z ^[[36;1mfi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1502427Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1502913Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1503107Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1503328Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1503571Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1503777Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1565727Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=11]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1571004Z ##[start-action display=Run : enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1588173Z ##[group]Run : enable Cargo sparse registry
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1588524Z ^[[36;1m: enable Cargo sparse registry^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1588904Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1589576Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1590281Z ^[[36;1m  if rustc +nightly --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1590851Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1591362Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1591850Z ^[[36;1m  elif rustc +nightly --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1592391Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1592886Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1593221Z ^[[36;1m  fi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1593521Z ^[[36;1mfi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1629438Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1629789Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1629989Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1630217Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1630463Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1630684Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1630919Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1920771Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=34]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1924996Z ##[start-action display=Run : work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1942180Z ##[group]Run : work around spurious network errors in curl 8.0
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1942609Z ^[[36;1m: work around spurious network errors in curl 8.0^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1943162Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1943765Z ^[[36;1mif rustc +nightly --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1944218Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1944525Z ^[[36;1mfi^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1980221Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1980576Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1980794Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1981026Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1981272Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1981498Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.1981715Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2152597Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=22]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2156783Z ##[start-action display=Run rustc +nightly --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2175105Z ##[group]Run rustc +nightly --version --verbose
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2175465Z ^[[36;1mrustc +nightly --version --verbose^[[0m
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2211644Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2211999Z env:
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2212197Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2212420Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2212662Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2212885Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2213269Z ##[endgroup]
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2366449Z rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2367052Z binary: rustc
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2367451Z commit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2367936Z commit-date: 2026-10-07
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2368291Z host: x86_64-unknown-linux-gnu
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2368672Z release: 1.101.0-nightly
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2369024Z LLVM version: 23.1.3
+native-profile-comparison	Install Rust	2026-10-08T21:23:07.2384472Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=22]
+native-profile-comparison	Prepare the original retained-evidence absolute path	﻿2026-10-08T21:23:07.2444254Z ##[group]Run campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2444857Z ^[[36;1mcampaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"^[[0m
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2445260Z ^[[36;1msudo mkdir -p "$campaign"^[[0m
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2445559Z ^[[36;1msudo chown -R "$(id -u):$(id -g)" "$campaign"^[[0m
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2481694Z shell: /usr/bin/bash -e {0}
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2482089Z env:
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2482317Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2482647Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2483053Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2483343Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Prepare the original retained-evidence absolute path	2026-10-08T21:23:07.2483575Z ##[endgroup]
+native-profile-comparison	Download failure-preserving arm evidence	﻿2026-10-08T21:23:07.2753168Z ##[group]Run actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2753604Z with:
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2753837Z   pattern: native-profile-37822266421-1-arm-*
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2754193Z   path: /opt/purrdf-native-profile/37822266421-1/downloads
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2754508Z   merge-multiple: false
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2754746Z   repository: Blackcat-Informatics/purrdf
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2755015Z   run-id: 37822266421
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2755210Z env:
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2755387Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2755608Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2755850Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2756314Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.2756613Z ##[endgroup]
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.4403727Z (node:2496) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.4404588Z (Use `node --trace-deprecation ...` to show where the warning was created)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6931649Z Found 25 artifact(s)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6933398Z Filtering artifacts by pattern 'native-profile-37822266421-1-arm-*'
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6954768Z Preparing to download the following artifacts:
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6956243Z - native-profile-37822266421-1-arm-profile-before-capi (ID: 11579752745, Size: 3562906, Expected Digest: sha256:6df2c879710b8416587e2c35e0b5f110938e2e6b2f7ded946e1d468fdac3bfa3)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6958213Z - native-profile-37822266421-1-arm-after-integration-4 (ID: 11579330066, Size: 2814314, Expected Digest: sha256:b7b7147d860d60d06cb21035e14fff532936b0fc94f6c36303d42f75be413351)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6960250Z - native-profile-37822266421-1-arm-after-capi (ID: 11578629421, Size: 3551615, Expected Digest: sha256:4b48edda140085e3d38996af06d05ce9ddddeae9cd8e7b47cfd636fca7ff47a3)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6962130Z - native-profile-37822266421-1-arm-after-downstream (ID: 11578454793, Size: 2465179, Expected Digest: sha256:1d59548e5710f6eb2a9856a3c6e3d0025adab80a4f46e8bed8c360f740471a08)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6964178Z - native-profile-37822266421-1-arm-after-integration-3 (ID: 11577857838, Size: 2741085, Expected Digest: sha256:d893906e7ab6c42d177640215813d2beaf98c2f5812c1c19a1b5bfebf9d381e0)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6966442Z - native-profile-37822266421-1-arm-after-integration-2 (ID: 11576714855, Size: 3718832, Expected Digest: sha256:635f5bbf1b560638b201efdaca3a18e7606ad2e4452fc3bb489f58e7a0d5aa77)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6968536Z - native-profile-37822266421-1-arm-after-integration-1 (ID: 11575708871, Size: 2691784, Expected Digest: sha256:cba4706c40c0b17e4de6f828d889755ae3f5c92877c5c04fb6d52bea1fffd4fd)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6970350Z - native-profile-37822266421-1-arm-after-lib (ID: 11575540935, Size: 3138457, Expected Digest: sha256:b56bbed540988cb682c60c34fd7caaac72ec30cff81619b71d0e88bdb874286d)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6977664Z - native-profile-37822266421-1-arm-after-doc (ID: 11575103061, Size: 2695574, Expected Digest: sha256:154ffc26f72c7ec24ee96dcb263abfbf1cf6f9ffcc0b75a5ace78c73efded214)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6982078Z - native-profile-37822266421-1-arm-before-monolithic (ID: 11573741742, Size: 6083928, Expected Digest: sha256:b6adef4d87598de7fecbb18ea0600ff7b749401cad3924cc903fc3deaec7ab98)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6984216Z - native-profile-37822266421-1-arm-before-capi (ID: 11573698293, Size: 3551893, Expected Digest: sha256:70575ea964bb40a4de353d9516dc336d3063c5e0abf4db2df05ecf7789f59d90)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.6986594Z - native-profile-37822266421-1-arm-before-downstream (ID: 11573099942, Size: 2465226, Expected Digest: sha256:dd949cf3b2036ae86f567e93149d100bf651beff8cb49e5d71df88c814e1b04a)
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.9403142Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/95bb3547c8c58f56be513e375f2b7ce5e6ce044770e940ac466f67304da6b313.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:07.9404624Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-profile-before-capi
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0446837Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/d00d5410ffff0a300e6178e4a506d3db7ca2c4ab8cdb47071163ade459bd8557.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0449308Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-capi
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0475438Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/f7d1d53e722b1713a063f8e42e87b0a12f4870a8862a2845dbcffec35a3a290b.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0477094Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-integration-1
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0502925Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/473128d5183daf6d16ec417539fb7ea129e6990973a7a4299657fc599005a0f3.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0505006Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-doc
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0508158Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/5a6395945002570b6789992f17fa032ef113ea8d4e22e8d26d3d82b874c04a41.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0509610Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-before-monolithic
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0583756Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/117434500ed5aa3102d600d47c37da8f02935dfaeedb519d8db0979f2f43c517.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0585187Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-lib
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0610363Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/94be785506402e409daf592c899cf5a82fa72bab905e2dda4c4226a6c28a85f2.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0611819Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-integration-3
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0626789Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/d073288510735826b3929118ffb4ef1fe8e3ce919f7e075de52a99afe5129f1f.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0628273Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-integration-2
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0638378Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/ff03a16e473d5f30483b765f15d24a68cde6c243416733f07a66b6dcb2675f62.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0639951Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-downstream
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0651756Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/86204ad4b00f4711fc0a35f130f28e2360b63ffd106c1476d425c584a36e7f8a.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0653228Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-before-downstream
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0681486Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/5a121bacedb5227283f32d9ff167b7af3b88c4d5b8ced46c9867387a9223c722.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.0684104Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-after-integration-4
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.1118410Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/290968d1-6611-4c65-b3b5-bb12d421a66e/workflow-job-run-18b3b311-c74c-583e-988e-84dccfa2c8a8/artifacts/7218653db58f464c67bde31c55487278f07b11a1d0ecea7e5cca03780818ade3.zip
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.1120465Z Starting download of artifact to: /opt/purrdf-native-profile/37822266421-1/downloads/native-profile-37822266421-1-arm-before-capi
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.2225540Z (node:2496) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.8204182Z SHA256 digest of downloaded artifact is 6df2c879710b8416587e2c35e0b5f110938e2e6b2f7ded946e1d468fdac3bfa3
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.8205324Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.8319375Z SHA256 digest of downloaded artifact is cba4706c40c0b17e4de6f828d889755ae3f5c92877c5c04fb6d52bea1fffd4fd
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.8320809Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.9150017Z SHA256 digest of downloaded artifact is 154ffc26f72c7ec24ee96dcb263abfbf1cf6f9ffcc0b75a5ace78c73efded214
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.9150779Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.9579045Z SHA256 digest of downloaded artifact is dd949cf3b2036ae86f567e93149d100bf651beff8cb49e5d71df88c814e1b04a
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.9580046Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.9927919Z SHA256 digest of downloaded artifact is 1d59548e5710f6eb2a9856a3c6e3d0025adab80a4f46e8bed8c360f740471a08
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:08.9929058Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0014589Z SHA256 digest of downloaded artifact is b7b7147d860d60d06cb21035e14fff532936b0fc94f6c36303d42f75be413351
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0015780Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0204530Z SHA256 digest of downloaded artifact is b56bbed540988cb682c60c34fd7caaac72ec30cff81619b71d0e88bdb874286d
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0207288Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0547432Z SHA256 digest of downloaded artifact is 4b48edda140085e3d38996af06d05ce9ddddeae9cd8e7b47cfd636fca7ff47a3
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0548668Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0562774Z SHA256 digest of downloaded artifact is 70575ea964bb40a4de353d9516dc336d3063c5e0abf4db2df05ecf7789f59d90
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0564495Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0566819Z SHA256 digest of downloaded artifact is d893906e7ab6c42d177640215813d2beaf98c2f5812c1c19a1b5bfebf9d381e0
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0568951Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0577640Z SHA256 digest of downloaded artifact is 635f5bbf1b560638b201efdaca3a18e7606ad2e4452fc3bb489f58e7a0d5aa77
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.0578675Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.2228398Z SHA256 digest of downloaded artifact is b6adef4d87598de7fecbb18ea0600ff7b749401cad3924cc903fc3deaec7ab98
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.2229466Z Artifact download completed successfully.
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.2230071Z Total of 12 artifact(s) downloaded
+native-profile-comparison	Download failure-preserving arm evidence	2026-10-08T21:23:09.2235579Z Download artifact has finished successfully
+native-profile-comparison	Build comparison controller outside arms	﻿2026-10-08T21:23:09.2361919Z ##[group]Run campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2362615Z ^[[36;1mcampaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"^[[0m
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2363319Z ^[[36;1mCARGO_TARGET_DIR="$campaign/comparison-target" CARGO_BUILD_BUILD_DIR="$campaign/comparison-build" \^[[0m
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2364080Z ^[[36;1m  cargo build --locked -p purrdf-capi --example native_ci_profile --profile test --jobs 8^[[0m
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2364852Z ^[[36;1mecho "PURRDF_HOSTED_CONTROLLER=$campaign/comparison-target/debug/examples/native_ci_profile" >> "$GITHUB_ENV"^[[0m
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2400537Z shell: /usr/bin/bash -e {0}
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2400870Z env:
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2401127Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2401421Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2401757Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2425336Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2425705Z ##[endgroup]
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.2979806Z info: syncing channel updates for nightly-x86_64-unknown-linux-gnu
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.4484095Z info: latest update on 2026-10-08 for version 1.101.0-nightly (1d81eb4ad 2026-10-07)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:09.4614541Z info: downloading 4 components
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.1110639Z ^[[1m^[[92m    Updating^[[0m crates.io index
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.3456332Z ^[[1m^[[92m Downloading^[[0m crates ...
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4150282Z ^[[1m^[[92m  Downloaded^[[0m cfg-if v1.0.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4249927Z ^[[1m^[[92m  Downloaded^[[0m block-buffer v0.12.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4491755Z ^[[1m^[[92m  Downloaded^[[0m cpufeatures v0.3.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4502833Z ^[[1m^[[92m  Downloaded^[[0m ghash v0.6.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4511580Z ^[[1m^[[92m  Downloaded^[[0m crypto-common v0.2.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4519562Z ^[[1m^[[92m  Downloaded^[[0m inout v0.2.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4527445Z ^[[1m^[[92m  Downloaded^[[0m universal-hash v0.6.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4556444Z ^[[1m^[[92m  Downloaded^[[0m aho-corasick v1.1.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4597155Z ^[[1m^[[92m  Downloaded^[[0m aead v0.6.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4640111Z ^[[1m^[[92m  Downloaded^[[0m cipher v0.5.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4656420Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-deque v0.8.6
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4666220Z ^[[1m^[[92m  Downloaded^[[0m cpubits v0.1.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4672286Z ^[[1m^[[92m  Downloaded^[[0m fastrand v2.4.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4682052Z ^[[1m^[[92m  Downloaded^[[0m either v1.16.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4690968Z ^[[1m^[[92m  Downloaded^[[0m polyval v0.7.3
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4703403Z ^[[1m^[[92m  Downloaded^[[0m visual-hashing v1.0.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4715742Z ^[[1m^[[92m  Downloaded^[[0m ctutils v0.4.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4729856Z ^[[1m^[[92m  Downloaded^[[0m digest v0.11.3
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4748787Z ^[[1m^[[92m  Downloaded^[[0m ctr v0.10.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4761614Z ^[[1m^[[92m  Downloaded^[[0m sha2 v0.11.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4782967Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-epoch v0.9.18
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4797364Z ^[[1m^[[92m  Downloaded^[[0m crossbeam-utils v0.8.21
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4815718Z ^[[1m^[[92m  Downloaded^[[0m hybrid-array v0.4.15
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4834170Z ^[[1m^[[92m  Downloaded^[[0m cmov v0.5.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4845884Z ^[[1m^[[92m  Downloaded^[[0m twox-hash v2.1.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4860976Z ^[[1m^[[92m  Downloaded^[[0m const-oid v0.10.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4875780Z ^[[1m^[[92m  Downloaded^[[0m getrandom v0.3.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4898504Z ^[[1m^[[92m  Downloaded^[[0m rayon-core v1.13.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4927065Z ^[[1m^[[92m  Downloaded^[[0m memchr v2.8.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4963438Z ^[[1m^[[92m  Downloaded^[[0m aes v0.9.3
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.4986721Z ^[[1m^[[92m  Downloaded^[[0m typenum v1.20.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5011444Z ^[[1m^[[92m  Downloaded^[[0m aes-gcm v0.11.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5033953Z ^[[1m^[[92m  Downloaded^[[0m regex v1.12.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5068459Z ^[[1m^[[92m  Downloaded^[[0m hashbrown v0.17.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5103779Z ^[[1m^[[92m  Downloaded^[[0m rayon v1.12.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5157950Z ^[[1m^[[92m  Downloaded^[[0m regex-syntax v0.8.11
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5208856Z ^[[1m^[[92m  Downloaded^[[0m regex-automata v0.4.14
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5305115Z ^[[1m^[[92m  Downloaded^[[0m libc v0.2.186
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.5526139Z ^[[1m^[[92m  Downloaded^[[0m structured-zstd v0.0.49
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6028800Z ^[[1m^[[92m   Compiling^[[0m typenum v1.20.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6030040Z ^[[1m^[[92m   Compiling^[[0m purrdf-hash v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hash)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6041867Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.3.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6045803Z ^[[1m^[[92m   Compiling^[[0m const-oid v0.10.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6046742Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6047458Z ^[[1m^[[92m   Compiling^[[0m purrdf-events v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-events)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6048150Z ^[[1m^[[92m   Compiling^[[0m regex-syntax v0.8.11
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6078804Z ^[[1m^[[92m   Compiling^[[0m purrdf-core v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-core)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6581712Z ^[[1m^[[92m   Compiling^[[0m crossbeam-utils v0.8.21
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.6937464Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.17.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.7577589Z ^[[1m^[[92m   Compiling^[[0m rayon-core v1.13.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:14.9797530Z ^[[1m^[[92m   Compiling^[[0m either v1.16.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:15.0477335Z ^[[1m^[[92m   Compiling^[[0m libc v0.2.186
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:15.4227342Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.3.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:16.4907598Z ^[[1m^[[92m   Compiling^[[0m crossbeam-epoch v0.9.18
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:16.5737627Z ^[[1m^[[92m   Compiling^[[0m cmov v0.5.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:16.6517360Z ^[[1m^[[92m   Compiling^[[0m cpubits v0.1.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:16.7157553Z ^[[1m^[[92m   Compiling^[[0m fastrand v2.4.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:16.9849674Z ^[[1m^[[92m   Compiling^[[0m ctutils v0.4.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:17.2847771Z ^[[1m^[[92m   Compiling^[[0m crossbeam-deque v0.8.6
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:17.5428504Z ^[[1m^[[92m   Compiling^[[0m hybrid-array v0.4.15
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:17.5782328Z ^[[1m^[[92m   Compiling^[[0m twox-hash v2.1.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:17.7627585Z ^[[1m^[[92m   Compiling^[[0m structured-zstd v0.0.49
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:17.7793595Z ^[[1m^[[92m   Compiling^[[0m visual-hashing v1.0.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:18.7942978Z ^[[1m^[[92m   Compiling^[[0m regex-automata v0.4.14
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:18.8768103Z ^[[1m^[[92m   Compiling^[[0m purrdf-stack v3.0.1 (/home/runner/work/purrdf/purrdf/crates/stack)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:19.0397543Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.2.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:19.1277632Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.12.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:19.1927540Z ^[[1m^[[92m   Compiling^[[0m rayon v1.12.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:19.2967380Z ^[[1m^[[92m   Compiling^[[0m inout v0.2.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:20.9787397Z ^[[1m^[[92m   Compiling^[[0m digest v0.11.3
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:21.2357395Z ^[[1m^[[92m   Compiling^[[0m cipher v0.5.2
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:21.3737963Z ^[[1m^[[92m   Compiling^[[0m purrdf-lex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/lex)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:21.9737297Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.11.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:22.5507811Z ^[[1m^[[92m   Compiling^[[0m purrdf-deflate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/deflate)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:26.7117683Z ^[[1m^[[92m   Compiling^[[0m regex v1.12.4
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:26.8453792Z ^[[1m^[[92m   Compiling^[[0m purrdf-xsd v3.0.1 (/home/runner/work/purrdf/purrdf/crates/xsd)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:27.1977889Z ^[[1m^[[92m   Compiling^[[0m purrdf-iri v3.0.1 (/home/runner/work/purrdf/purrdf/crates/iri)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:30.3897445Z ^[[1m^[[92m   Compiling^[[0m universal-hash v0.6.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:30.5358165Z ^[[1m^[[92m   Compiling^[[0m purrdf-cdt v3.0.1 (/home/runner/work/purrdf/purrdf/crates/cdt)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:37.3067870Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-algebra v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-algebra)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:38.1797826Z ^[[1m^[[92m   Compiling^[[0m polyval v0.7.3
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:38.6377369Z ^[[1m^[[92m   Compiling^[[0m ghash v0.6.0
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:38.7891376Z ^[[1m^[[92m   Compiling^[[0m ctr v0.10.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:39.1507400Z ^[[1m^[[92m   Compiling^[[0m aes v0.9.3
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:40.4397524Z ^[[1m^[[92m   Compiling^[[0m aead v0.6.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:40.6547713Z ^[[1m^[[92m   Compiling^[[0m aes-gcm v0.11.1
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:40.8667685Z ^[[1m^[[92m   Compiling^[[0m purrdf-ed25519 v3.0.1 (/home/runner/work/purrdf/purrdf/crates/ed25519)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:40.9585846Z ^[[1m^[[92m   Compiling^[[0m purrdf-testkit v3.0.1 (/home/runner/work/purrdf/purrdf/crates/testkit)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:23:43.4237913Z ^[[1m^[[92m   Compiling^[[0m purrdf-gts v3.0.1 (/home/runner/work/purrdf/purrdf/crates/gts)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:10.5598032Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-results v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-results)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:14.7808085Z ^[[1m^[[92m   Compiling^[[0m purrdf-sparql-eval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/sparql-eval)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:17.1586567Z ^[[1m^[[92m   Compiling^[[0m purrdf-datalog v3.0.1 (/home/runner/work/purrdf/purrdf/crates/datalog)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:20.8927733Z ^[[1m^[[92m   Compiling^[[0m purrdf-columnar v3.0.1 (/home/runner/work/purrdf/purrdf/crates/columnar)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:24.9297997Z ^[[1m^[[92m   Compiling^[[0m purrdf-entail v3.0.1 (/home/runner/work/purrdf/purrdf/crates/entail)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:34.8578142Z ^[[1m^[[92m   Compiling^[[0m purrdf-markdown v3.0.1 (/home/runner/work/purrdf/purrdf/crates/markdown)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:45.9487663Z ^[[1m^[[92m   Compiling^[[0m purrdf-rdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:48.5431940Z ^[[1m^[[92m   Compiling^[[0m purrdf-text v3.0.1 (/home/runner/work/purrdf/purrdf/crates/text)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:24:53.0847792Z ^[[1m^[[92m   Compiling^[[0m purrdf-geo v3.0.1 (/home/runner/work/purrdf/purrdf/crates/geo)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:25:20.3961522Z ^[[1m^[[92m   Compiling^[[0m purrdf-retrieval v3.0.1 (/home/runner/work/purrdf/purrdf/crates/retrieval)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:25:22.5687949Z ^[[1m^[[92m   Compiling^[[0m purrdf-slice v3.0.1 (/home/runner/work/purrdf/purrdf/crates/slice)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:25:23.9065102Z ^[[1m^[[92m   Compiling^[[0m purrdf-hnsw v3.0.1 (/home/runner/work/purrdf/purrdf/crates/hnsw)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:25:37.1937884Z ^[[1m^[[92m   Compiling^[[0m purrdf-shapes v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shapes)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:25:40.1486194Z ^[[1m^[[92m   Compiling^[[0m purrdf-shex v3.0.1 (/home/runner/work/purrdf/purrdf/crates/shex)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:26:02.6336399Z ^[[1m^[[92m   Compiling^[[0m purrdf-json v3.0.1 (/home/runner/work/purrdf/purrdf/crates/json)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:26:36.0348000Z ^[[1m^[[92m   Compiling^[[0m purrdf-validate v3.0.1 (/home/runner/work/purrdf/purrdf/crates/validate)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:26:49.2137710Z ^[[1m^[[92m   Compiling^[[0m purrdf v3.0.1 (/home/runner/work/purrdf/purrdf/crates/purrdf)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:28:25.6937120Z ^[[1m^[[92m   Compiling^[[0m purrdf-capi v3.0.1 (/home/runner/work/purrdf/purrdf/crates/rdf-capi)
+native-profile-comparison	Build comparison controller outside arms	2026-10-08T21:28:39.5819339Z ^[[1m^[[92m    Finished^[[0m `test` profile [optimized] target(s) in 5m 25s
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	﻿2026-10-08T21:28:39.6089732Z ##[group]Run set -o pipefail
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6090130Z ^[[36;1mset -o pipefail^[[0m
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6090601Z ^[[36;1mcampaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"^[[0m
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6091282Z ^[[36;1m"$PURRDF_HOSTED_CONTROLLER" hosted-restore "$campaign" 2>&1 | tee "$campaign/restore-refusals.txt"^[[0m
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6126657Z shell: /usr/bin/bash -e {0}
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6126992Z env:
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6127244Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6127531Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6127852Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6128133Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6128716Z   PURRDF_HOSTED_CONTROLLER: /opt/purrdf-native-profile/37822266421-1/comparison-target/debug/examples/native_ci_profile
+native-profile-comparison	Require the exact current-attempt inventory before restoring any evidence	2026-10-08T21:28:39.6129318Z ##[endgroup]
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	﻿2026-10-08T21:28:39.6226957Z ##[group]Run set -o pipefail
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6227355Z ^[[36;1mset -o pipefail^[[0m
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6227809Z ^[[36;1mcampaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"^[[0m
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6228529Z ^[[36;1m"$PURRDF_HOSTED_CONTROLLER" hosted-compare "$campaign" 2>&1 | tee "$campaign/comparison-refusals.txt"^[[0m
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6263655Z shell: /usr/bin/bash -e {0}
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6263981Z env:
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6264237Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6264547Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6264877Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6265154Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6265737Z   PURRDF_HOSTED_CONTROLLER: /opt/purrdf-native-profile/37822266421-1/comparison-target/debug/examples/native_ci_profile
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:39.6266518Z ##[endgroup]
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:40.7601883Z Error: Custom { kind: Other, error: "actual combined compiled target/features coverage differs" }
+native-profile-comparison	Validate all matching inputs and complete coverage before comparing either cold or warm	2026-10-08T21:28:40.7673563Z ##[error]Process completed with exit code 1.
+native-profile-comparison	Retain comparison policies and outputs even on refusal	﻿2026-10-08T21:28:40.7743560Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7744042Z with:
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7744333Z   name: native-profile-37822266421-1-comparison
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7745413Z   path: /opt/purrdf-native-profile/37822266421-1/*-policy.json
+native-profile-comparison	Retain comparison policies and outputs even on refusal	/opt/purrdf-native-profile/37822266421-1/*-comparison.json
+native-profile-comparison	Retain comparison policies and outputs even on refusal	/opt/purrdf-native-profile/37822266421-1/comparison-refusals.txt
+native-profile-comparison	Retain comparison policies and outputs even on refusal	/opt/purrdf-native-profile/37822266421-1/restore-refusals.txt
+native-profile-comparison	Retain comparison policies and outputs even on refusal	
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7746631Z   if-no-files-found: error
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7746982Z   compression-level: 6
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7747296Z   overwrite: false
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7747577Z   include-hidden-files: false
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7747882Z   archive: true
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7748135Z env:
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7748376Z   CARGO_BUILD_JOBS: 8
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7748668Z   CARGO_HOME: /home/runner/.cargo
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7748980Z   CARGO_INCREMENTAL: 0
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7749260Z   CARGO_TERM_COLOR: always
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7749824Z   PURRDF_HOSTED_CONTROLLER: /opt/purrdf-native-profile/37822266421-1/comparison-target/debug/examples/native_ci_profile
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.7750442Z ##[endgroup]
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.9124892Z With the provided path, there will be 3 files uploaded
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.9130120Z Artifact name is valid!
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:40.9131086Z Root directory input is valid!
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:41.2478341Z Uploading artifact: native-profile-37822266421-1-comparison.zip
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:41.2550247Z Beginning upload of artifact content to blob storage
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:41.5024314Z Uploaded bytes 774
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:41.5588102Z Finished uploading artifact content to blob storage!
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:41.5589429Z SHA256 digest of uploaded artifact is 5ee72b91d57dcce2cfadc7f2b3e07232b64585a603b29afa6f260f5b72d557b3
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:41.5590602Z Finalizing artifact upload
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:42.0167625Z Artifact native-profile-37822266421-1-comparison successfully finalized. Artifact ID 11579478752
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:42.0169328Z Artifact native-profile-37822266421-1-comparison has been successfully uploaded! Final size is 774 bytes. Artifact ID is 11579478752
+native-profile-comparison	Retain comparison policies and outputs even on refusal	2026-10-08T21:28:42.0172251Z Artifact download URL: https://github.com/Blackcat-Informatics/purrdf/actions/runs/37822266421/artifacts/11579478752
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	﻿2026-10-08T21:28:42.0364350Z Post job cleanup.
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1189837Z [command]/usr/bin/git version
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1232712Z git version 2.55.0
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1265620Z Temporarily overriding HOME='/home/runner/work/_temp/9c87b385-0c89-4daa-95a8-d6f1eeb04157' before making global git config changes
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1266661Z Adding repository directory to the temporary git global config as a safe directory
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1270837Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/purrdf/purrdf
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1298105Z Removing SSH command configuration
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1304588Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1334839Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1530892Z Removing HTTP extra header
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1535939Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1565766Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1761756Z Removing includeIf entries pointing to credentials config files
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1767768Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+native-profile-comparison	Post Run actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0	2026-10-08T21:28:42.1798313Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+native-profile-comparison	Complete job	﻿2026-10-08T21:28:42.2127691Z Cleaning up orphan processes
+native-profile-comparison	Complete job	2026-10-08T21:28:42.2368364Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

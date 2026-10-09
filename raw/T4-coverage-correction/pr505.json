@@ -1,0 +1,30 @@
+{
+  "baseRefName": "main",
+  "body": "Native CI and C tests now retain source-bound phase, Cargo freshness, runtime and timing receipts through shared Rust tooling and an optional same-runner cold/warm campaign. Comparison keeps workspace/first-party targets and features exact, requires every baseline external dependency variant, and explicitly reports extra partition dependency builds with their full costs.\n\nThe completed twelve-case/24-receipt campaign demonstrates the existing nested C profile fix:32.88% less cold command time and24.22% less unchanged-warm command time. Six native shards cost more aggregate work; their59.17%/54.37% lower idealized max is a model, not observed parallel speedup. Actual production scheduling observations are reported separately. Normal tests, strict O3/assertions/overflow, C ABI controls and downstream coverage remain intact.\n\nValidation: full local make check passed on measurement source47c9; the comparison-only correction passed36 owning tests, strict all-target CAPI clippy, normal hooks and the original Rust validator against all24 immutable measured receipts. The original hosted comparator failure is retained; corrected replay passes without rerunning or altering measured workloads. Current-head PR CI and review are pending.\n\nCloses #308.\n",
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABad7uMQ",
+      "author": {
+        "login": "coderabbitai"
+      },
+      "authorAssociation": "NONE",
+      "body": "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<!-- review_stack_entry_start -->\n\n<a href=\"https://app.coderabbit.ai/change-stack/Blackcat-Informatics/purrdf/pull/505?cs_source=review_comment\"><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-stack-in-coderabbit-ui-dark.svg?v=2\" alt=\"Review in Change Stack \u2192\" width=\"220\" height=\"32\"></a>\n\n<!-- review_stack_entry_end -->\n<!-- This is an auto-generated comment: review in progress by coderabbit.ai -->\n\n> [!NOTE]\n> Currently processing new changes in this PR. This may take a few minutes, please wait...\n> \n> <details>\n> <summary>\u2699\ufe0f Run configuration</summary>\n> \n> - **Configuration used**: defaults\n> - **Review profile**: CHILL\n> - **Plan**: Team\n> - **Run ID**: `cc61c3f2-58c4-41ea-a37b-a0f924254f01`\n> \n> </details>\n> \n> <details>\n> <summary>\ud83d\udce5 Commits</summary>\n> \n> Reviewing files that changed from the base of the PR and between 341ad5ae2cecc5de026047f86dcd1194aff25f10 and 17b22bfdb78c97400d6efbb05b8c46902a090e13.\n> \n> </details>\n> \n> <details>\n> <summary>\ud83d\udcd2 Files selected for processing (9)</summary>\n> \n> * `.github/workflows/ci.yaml`\n> * `CONTRIBUTING.md`\n> * `crates/rdf-capi/Cargo.toml`\n> * `crates/rdf-capi/examples/native_ci_profile.rs`\n> * `crates/rdf-capi/tests/c_smoke.rs`\n> * `crates/rdf-capi/tests/native_profile.rs`\n> * `crates/rdf-capi/tests/support/hosted.rs`\n> * `crates/rdf-capi/tests/support/phases.rs`\n> * `crates/rdf-capi/tests/support/profile.rs`\n> \n> </details>\n> \n> ```ascii\n>  ___________________________________________________\n> < Vibe code cleanup in progress... Expect swearing. >\n>  ---------------------------------------------------\n>   \\\n>    \\   \\\n>         \\ /\\\n>         ( )\n>       .( o ).\n> ```\n\n<!-- end of auto-generated comment: review in progress by coderabbit.ai -->\n\n<!-- finishing_touch_checkbox_start -->\n\n<details>\n<summary>\u2728 Finishing Touches</summary>\n\n<details open>\n<summary>\ud83d\udcdd Generate docstrings</summary>\n\n- [ ] <!-- {\"checkboxId\":\"3e1879ae-f29b-4d0d-8e06-d12b7ba33d98\"} --> Commit to this branch\n- [ ] <!-- {\"checkboxId\":\"7962f53c-55bc-4827-bfbf-6a18da830691\"} --> Create a new PR\n\n</details>\n<details open>\n<summary>\ud83e\uddea Generate unit tests (beta)</summary>\n\n- [ ] <!-- {\"checkboxId\": \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\", \"radioGroupId\": \"utg-output-choice-group-unknown_comment_id\"} --> Commit to this branch\n- [ ] <!-- {\"checkboxId\": \"f47ac10b-58cc-4372-a567-0e02b2c3d479\", \"radioGroupId\": \"utg-output-choice-group-unknown_comment_id\"} --> Create a new PR\n\n</details>\n\n</details>\n\n<!-- finishing_touch_checkbox_end -->\n\n<!-- autopilot:start -->\n- [ ] <!-- {\"checkboxId\":\"2708ad07-9f24-4260-9c11-7dc76a49f2e3\"} --> <strong title=\"Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts\">Autopilot</strong> \u00b7 Keep fixing CodeRabbit findings and required CI, and resolving merge conflicts\n<!-- autopilot:end -->\n<!-- tips_start -->\n\n---\n\n\n\n\n<sub>Comment `@coderabbitai help` to get the list of available commands.</sub>\n\n<!-- tips_end -->",
+      "createdAt": "2026-10-08T23:38:11Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/505#issuecomment-6071184945",
+      "viewerDidAuthor": false
+    }
+  ],
+  "createdAt": "2026-10-08T23:37:32Z",
+  "headRefName": "paudley/308-reduce-native-ci-test-compilation-and-c",
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 505,
+  "reviews": [],
+  "state": "OPEN",
+  "title": "Capture and validate native CI and C phase costs",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/505"
+}

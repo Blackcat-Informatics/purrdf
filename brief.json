@@ -1,0 +1,91 @@
+{
+  "issue": 308,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Reduce native CI test compilation and C smoke time",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 454,
+      "title": "rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6",
+      "state": "OPEN"
+    },
+    {
+      "number": 402,
+      "title": "SHACL dated profile selection and complete validation reports (additive)",
+      "state": "OPEN"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 393,
+      "title": "EXPLAIN aborts the process on a large join",
+      "state": "CLOSED"
+    },
+    {
+      "number": 392,
+      "title": "A pattern after OPTIONAL or BIND, or an OPTIONAL body, is evaluated without the bindings before it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 385,
+      "title": "An alternative path of plain predicates is not translated, and a UNION in its place joins by position",
+      "state": "CLOSED"
+    },
+    {
+      "number": 407,
+      "title": "text: analyzer stages for stemming, accent folding, dictionary segmentation, void stripping, token bounds, phonetic codes and substring matching",
+      "state": "CLOSED"
+    },
+    {
+      "number": 387,
+      "title": "Explore stronger blank-node scope representation and hazard detection",
+      "state": "CLOSED"
+    },
+    {
+      "number": 384,
+      "title": "Build a portable adversarial SHACL suite and contribute missing W3C tests",
+      "state": "OPEN"
+    },
+    {
+      "number": 142,
+      "title": "structured-zstd 0.0.40 huff0 encoder panics (\"internal error\") composing large gts bundles \u2014 bump past 0.0.40",
+      "state": "CLOSED"
+    },
+    {
+      "number": 22,
+      "title": "SPARQL NOW() returns Unix epoch (1970-01-01) instead of the current query time",
+      "state": "CLOSED"
+    },
+    {
+      "number": 153,
+      "title": "SHACL engine: parallelize per-focus constraint evaluation for whole-bundle validation",
+      "state": "CLOSED"
+    },
+    {
+      "number": 136,
+      "title": "csvw: project_csvw_exact has no curated/summary profile (only the lossless full-carrier package)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 109,
+      "title": "epic(shapes): schema-language emitters (Pydantic, LinkML, TypeScript, GraphQL)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "performance": 1,
+    "none": 12
+  },
+  "coverage": [
+    "issue #308 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Reduce', 'native', 'compilation']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits"
+  ]
+}

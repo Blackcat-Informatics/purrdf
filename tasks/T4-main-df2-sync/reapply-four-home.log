@@ -1,0 +1,4 @@
+error: workflows/ci.yaml: No such file or directory
+error: rdf-capi/examples/native_ci_profile.rs: No such file or directory
+error: rdf-capi/tests/support/hosted.rs: No such file or directory
+error: rdf-capi/tests/support/profile.rs: No such file or directory

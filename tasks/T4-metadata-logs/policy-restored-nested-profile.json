@@ -1,0 +1,10 @@
+{
+  "before": [
+    "/opt/purrdf-308-current-telemetry.591np1/metadata-current/capi-dev/capi-cold-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-308-current-telemetry.591np1/metadata-current/capi-shipping/capi-cold-receipt.json"
+  ],
+  "change": "nested-profile",
+  "output": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-metadata-logs/restored-nested-profile-validation.json"
+}

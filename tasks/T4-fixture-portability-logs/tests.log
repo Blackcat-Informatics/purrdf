@@ -1,0 +1,58 @@
+    Finished `test` profile [optimized] target(s) in 0.05s
+     Running tests/native_profile.rs (/home/paudley/Active/.purrdf-308-fixture-portability-20261008/build/debug/build/purrdf-capi/06bef51ce427b051/out/native_profile-06bef51ce427b051)
+
+running 35 tests
+test hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads ... ok
+test hosted::tests::cargo_c_identity_refuses_successful_generic_help_and_wrong_release ... ok
+test hosted::tests::execution_windows_refuse_missing_and_reversed_clocks ... ok
+test hosted::tests::hosted_inventory_and_exact_counterfactual_are_closed ... ok
+test hosted::tests::incomplete_or_changed_case_refuses_before_reclaiming_any_cache ... ok
+test hosted::tests::physical_runner_identity_ignores_frequency_but_refuses_missing_observations ... ok
+test hosted::tests::private_cache_boundaries_and_upload_outputs_are_mandatory ... ok
+test hosted::tests::restoration_never_follows_an_alias_to_prior_evidence ... ok
+test hosted::tests::restored_destinations_are_never_overwritten ... ok
+test hosted::tests::restores_only_complete_current_attempt_and_preserves_prior_evidence ... ok
+test hosted::tests::shared_setup_requires_ordered_endpoints_and_all_owned_source_records ... ok
+test hosted::tests::stale_wrong_prefix_wrong_case_and_partial_attempt_refuse_before_any_move ... ok
+test hosted::tests::symlinked_case_or_cache_never_reclaims_foreign_bytes ... ok
+test hosted::tests::uploaded_case_reclamation_preserves_proof_and_all_siblings ... ok
+test phases::tests::child_and_validation_failures_are_recorded_and_receipt_failures_are_hard ... ok
+test phases::tests::mixed_harness_frames_preserve_strict_artifact_selection ... ok
+test phases::tests::nul_inventory_preserves_literal_paths_and_refuses_lossy_decoding ... ok
+test phases::tests::rejects_malformed_missing_unrelated_and_ambiguous_artifacts ... ok
+test phases::tests::selects_exact_package_and_retains_freshness_metadata ... ok
+test profile::tests::actual_delegate_failures_and_missing_requests_are_hard_and_retained ... cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+ok
+test profile::tests::admits_exact_nested_profile_delta_and_refuses_extra_source_changes ... ok
+test profile::tests::cargo_configuration_absence_is_bound_and_private_values_are_excluded ... ok
+test profile::tests::cargo_configuration_malformed_responses_never_become_absence ... ok
+test profile::tests::cold_build_and_target_are_independent_and_warm_admission_is_explicit ... ok
+test profile::tests::complete_comparison_records_aggregate_cost_but_never_invents_runner_wall_time ... ok
+test profile::tests::libtest_frames_preserve_inventory_without_inventing_c_libraries ... ok
+test profile::tests::lost_or_changed_compiler_receipts_cannot_qualify_observed_reduction ... ok
+test profile::tests::missing_malformed_ambiguous_and_tampered_child_bindings_refuse ... ok
+test profile::tests::mixed_children_bind_libraries_before_cleanup_and_match_actual_c_smoke ... ok
+test profile::tests::physical_roots_normalize_without_losing_package_or_target_identity ... ok
+test profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors ... FAILED
+test profile::tests::real_sdk_metadata_uses_admitted_arm_directories_and_preserves_inventory ... ok
+test profile::tests::rejects_missing_failed_mismatched_tools_config_concurrency_cache_and_coverage ... ok
+test profile::tests::telemetry_preserves_selection_and_harness_arguments_and_nonbuild_commands ... ok
+test profile::tests::warm_arm_retains_old_reports_but_attributes_only_new_or_changed_reports ... ok
+
+failures:
+
+---- profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors stdout ----
+
+thread 'profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors' (2417001) panicked at crates/rdf-capi/tests/support/profile.rs:1589:9:
+assertion `left == right` failed
+  left: Some("present")
+ right: Some("absent")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors
+
+test result: FAILED. 34 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p purrdf-capi --test native_profile`

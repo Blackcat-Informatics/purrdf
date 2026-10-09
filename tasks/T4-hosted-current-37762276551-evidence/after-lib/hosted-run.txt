@@ -1,0 +1,1 @@
+Error: Custom { kind: Other, error: "actual-native-command: exit status: 2\n+ cargo test --workspace --exclude purrdf-python --locked --lib --bins\nError: Custom { kind: Other, error: \"Cargo did not report the exact CAPI cdylib\" }\nmake: *** [Makefile:276: test-shard] Error 1\n" }

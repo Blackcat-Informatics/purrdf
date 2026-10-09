@@ -1,0 +1,194 @@
+[
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-capi/capi-cold-receipt.json",
+    "case": "after-capi",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:d6a560d8caa5ffc68dbb4ae6ba3ccf7d4c1dbc9802b70f942b172a99c10605e5:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 532.968296226,
+    "native_command_seconds": 532.957652674
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-capi/capi-warm-receipt.json",
+    "case": "after-capi",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:d6a560d8caa5ffc68dbb4ae6ba3ccf7d4c1dbc9802b70f942b172a99c10605e5:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 13.490876743,
+    "native_command_seconds": 13.479629279
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-doc/doc-cold-receipt.json",
+    "case": "after-doc",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:96e5b5f58794f083e9560890009129ce11397247fbfb8213726e7a7612eca096:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 554.835941336,
+    "native_command_seconds": 554.823095617
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-doc/doc-warm-receipt.json",
+    "case": "after-doc",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:96e5b5f58794f083e9560890009129ce11397247fbfb8213726e7a7612eca096:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 54.262343388,
+    "native_command_seconds": 54.248563772
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-downstream/downstream-cold-receipt.json",
+    "case": "after-downstream",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 8.403976245,
+    "native_command_seconds": 8.392257293
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-downstream/downstream-warm-receipt.json",
+    "case": "after-downstream",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 0.092809919,
+    "native_command_seconds": 0.080817166
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-1/integration-1-cold-receipt.json",
+    "case": "after-integration-1",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:cb8e815f8089b948174fa2ef0d432ef87fc756f31ab0bb117fe37032bbe18bf2:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 737.963555059,
+    "native_command_seconds": 737.952567469
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-1/integration-1-warm-receipt.json",
+    "case": "after-integration-1",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:cb8e815f8089b948174fa2ef0d432ef87fc756f31ab0bb117fe37032bbe18bf2:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 177.783784777,
+    "native_command_seconds": 177.773040391
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-2/integration-2-cold-receipt.json",
+    "case": "after-integration-2",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 1213.387778675,
+    "native_command_seconds": 1213.375195241
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-2/integration-2-warm-receipt.json",
+    "case": "after-integration-2",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 479.954154825,
+    "native_command_seconds": 479.942487056
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-3/integration-3-cold-receipt.json",
+    "case": "after-integration-3",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:cb8e815f8089b948174fa2ef0d432ef87fc756f31ab0bb117fe37032bbe18bf2:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 744.022584923,
+    "native_command_seconds": 744.010908757
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-3/integration-3-warm-receipt.json",
+    "case": "after-integration-3",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:cb8e815f8089b948174fa2ef0d432ef87fc756f31ab0bb117fe37032bbe18bf2:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 86.583405702,
+    "native_command_seconds": 86.57067957
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-4/integration-4-cold-receipt.json",
+    "case": "after-integration-4",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 674.036023293,
+    "native_command_seconds": 674.023310143
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-integration-4/integration-4-warm-receipt.json",
+    "case": "after-integration-4",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 98.129914784,
+    "native_command_seconds": 98.1123651
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-lib/lib-cold-receipt.json",
+    "case": "after-lib",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 1090.008264185,
+    "native_command_seconds": 1089.99592782
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/after-lib/lib-warm-receipt.json",
+    "case": "after-lib",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:3299cf67f851daca4f64162f6dec2ecb9e783cdc2c966c9574eaafb3b5ab7a24:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 204.120415297,
+    "native_command_seconds": 204.10816485
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-capi/capi-cold-receipt.json",
+    "case": "before-capi",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:5ab2265349feac6512fc30ab13edb76f9847b32c82fe93227b0f4301210f1c0c:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 643.433502028,
+    "native_command_seconds": 643.422207338
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-capi/capi-warm-receipt.json",
+    "case": "before-capi",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:5ab2265349feac6512fc30ab13edb76f9847b32c82fe93227b0f4301210f1c0c:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 16.038811193,
+    "native_command_seconds": 16.026675172
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-downstream/downstream-cold-receipt.json",
+    "case": "before-downstream",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:30ac1e3d47da3f178e85d5520dda8979eef471316f2eb529bd9203a8c859b092:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 8.506795416,
+    "native_command_seconds": 8.49598248
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-downstream/downstream-warm-receipt.json",
+    "case": "before-downstream",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:30ac1e3d47da3f178e85d5520dda8979eef471316f2eb529bd9203a8c859b092:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 0.092236088,
+    "native_command_seconds": 0.080500298
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-monolithic/monolithic-cold-receipt.json",
+    "case": "before-monolithic",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:dc13949b79f4d49867613d2be921855689c24599e1d231c5ffe04cfb7df2490e:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 3437.032776851,
+    "native_command_seconds": 3436.918085381
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/before-monolithic/monolithic-warm-receipt.json",
+    "case": "before-monolithic",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20261004.327.1:Linux:X64:dc13949b79f4d49867613d2be921855689c24599e1d231c5ffe04cfb7df2490e:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 1334.404251471,
+    "native_command_seconds": 1334.386974154
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/profile-before-capi/capi-cold-receipt.json",
+    "case": "profile-before-capi",
+    "warmth": "cold",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:30ac1e3d47da3f178e85d5520dda8979eef471316f2eb529bd9203a8c859b092:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 908.341504884,
+    "native_command_seconds": 908.329595376
+  },
+  {
+    "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-hosted-role-37768038171-evidence/profile-before-capi/capi-warm-receipt.json",
+    "case": "profile-before-capi",
+    "warmth": "warm",
+    "runner_class": "ubuntu24:20260927.320.1:Linux:X64:30ac1e3d47da3f178e85d5520dda8979eef471316f2eb529bd9203a8c859b092:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+    "seconds": 16.577880636,
+    "native_command_seconds": 16.566110208
+  }
+]

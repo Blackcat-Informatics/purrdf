@@ -1,0 +1,1 @@
+Actual tool terminal observations: production session77405 exit0; neighbors50808 exit0; source43358 exit0; codegen15289 exit0. All nine direct harness child exits0 recorded in invalidations/terminals.txt. Restored strict nested-profile comparator actual exit0.

@@ -1,0 +1,44 @@
+{
+  "schema": "purrdf-native-comparison-v1",
+  "change": "native-partition",
+  "before": [
+    "/opt/purrdf-native-profile/37822266421-1/before-monolithic/monolithic-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/before-capi/capi-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/before-downstream/downstream-warm-receipt.json"
+  ],
+  "after": [
+    "/opt/purrdf-native-profile/37822266421-1/after-lib/lib-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-doc/doc-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-integration-1/integration-1-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-integration-2/integration-2-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-integration-3/integration-3-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-integration-4/integration-4-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-capi/capi-warm-receipt.json",
+    "/opt/purrdf-native-profile/37822266421-1/after-downstream/downstream-warm-receipt.json"
+  ],
+  "before_aggregate_command_ns": "947010453118",
+  "after_aggregate_command_ns": "955640841253",
+  "aggregate_reduction_observed": false,
+  "additional_after_dependency_variants": [
+    {
+      "package_id": "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "once_cell",
+        "src_path": "/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/once_cell-1.21.4/src/lib.rs",
+        "edition": "2021",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "features": []
+    }
+  ],
+  "critical_path": "NOT MEASURED: aggregate durations do not establish hosted six-runner wall time",
+  "rust_cost": "combined preparation/code generation/linking and test execution; see Cargo timing reports, never subtraction-derived pure link time"
+}

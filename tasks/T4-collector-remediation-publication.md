@@ -1,0 +1,5 @@
+The profiling workflow completed with a real failure after the monolithic native test command succeeded. The command itself passed the 35 controller tests and all 16 C smoke phases. Telemetry collection then rejected three intentional nonzero LUBM configuration probes exercised by the successful parent test harness.
+
+This is a separate collector/admission defect; the already-pushed fixture portability correction does not fix it. The owning repair will distinguish successful compilation followed by an executable refusal from a failed compiler command, retain the actual nonzero child receipts, preserve executable stdout exactly, and keep required compiler/C identity checks strict. The campaign will also record Cargo jobs as eight independently of the runner's observed libtest parallelism.
+
+The failed run supplies no accepted complete comparison or improvement claim. A new full profiling campaign will follow repair qualification and normal publication; numerical acceptance and the final full local/hosted qualification remain pending.

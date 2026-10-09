@@ -1,0 +1,39 @@
+{
+  "schema": "purrdf-process-phases-v1",
+  "context": {
+    "original_argv": [
+      "--version"
+    ],
+    "delegated_argv": [
+      "--version"
+    ],
+    "capi_artifacts": []
+  },
+  "phases": [
+    {
+      "name": "rust-preparation-codegen-link-and-test-command",
+      "elapsed_ns": "8943543",
+      "command": {
+        "program": "/home/runner/.cargo/bin/cargo",
+        "argv": [
+          "--version"
+        ],
+        "env": [],
+        "cwd": "/home/runner/work/purrdf/purrdf",
+        "exit_code": 0,
+        "exit_status": "exit status: 0",
+        "stdout": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29)\n",
+        "stderr": ""
+      },
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "selected-capi-artifact-identities",
+      "elapsed_ns": "3917",
+      "command": null,
+      "success": true,
+      "error": null
+    }
+  ]
+}

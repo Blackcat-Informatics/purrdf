@@ -1,0 +1,42 @@
+[
+  {
+    "label": "before-capi-capi-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "before-capi-capi-warm",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-capi-capi-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-capi-capi-warm",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-doc-doc-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-doc-doc-warm",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-integration-4-integration-4-cold",
+    "phases": 9,
+    "exit": 0
+  },
+  {
+    "label": "after-integration-4-integration-4-warm",
+    "phases": 9,
+    "exit": 0
+  }
+]

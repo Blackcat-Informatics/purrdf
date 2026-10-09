@@ -1,0 +1,13 @@
+{
+  "root": "/opt/purrdf-308-current-telemetry.591np1/metadata-current/shipping-source",
+  "directory": "/opt/purrdf-308-current-telemetry.591np1/metadata-current/capi-shipping",
+  "cargo": "/home/paudley/stage/packages/rustup/active-toolchain/bin/cargo",
+  "lane": "capi",
+  "warmth": "cold",
+  "jobs": 8,
+  "test_threads": 8,
+  "runner_class": "local current-source seam qualification; not hosted timing evidence",
+  "dependency_cache": "existing local registry/download cache reused; no flush",
+  "compiler_cache": "inherited compiler wrappers and effective configuration captured; no override or flush",
+  "page_cache": "uncontrolled local OS page cache; cold means empty owned Cargo target and build only"
+}

@@ -1,0 +1,13 @@
+diff --git a/crates/rdf-capi/tests/c_smoke.rs b/crates/rdf-capi/tests/c_smoke.rs
+index 21e66d15..cdec6d98 100644
+--- a/crates/rdf-capi/tests/c_smoke.rs
++++ b/crates/rdf-capi/tests/c_smoke.rs
+@@ -90,7 +90,7 @@ fn c_abi_smoke() -> std::io::Result<()> {
+     // economy, not a correctness requirement — the cdylib is located from Cargo's
+     // JSON output below, never from this name.
+     let profile = if cfg!(debug_assertions) {
+-        "test"
++        "dev"
+     } else {
+         "release"
+     };

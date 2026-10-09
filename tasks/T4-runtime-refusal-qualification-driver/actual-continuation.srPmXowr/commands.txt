@@ -1,0 +1,13 @@
+cmp /opt/purrdf-308-runtime-refusal.hyKidvRk/compiler.txt /opt/purrdf-308-runtime-refusal.hyKidvRk/continuation.srPmXowr/compiler.txt 
+b3sum --check /opt/purrdf-308-runtime-refusal.hyKidvRk/source-blake3.txt 
+b3sum --check /opt/purrdf-308-runtime-refusal.hyKidvRk/frozen-controller-blake3.txt 
+b3sum /opt/purrdf-308-runtime-refusal.hyKidvRk/ratchet.log /opt/purrdf-308-runtime-refusal.hyKidvRk/terminals.txt 
+cargo run --quiet --locked --jobs 8 -p helper-census -- --non-rust-ratchet --merge-base-with origin/main --target worktree 
+bash scripts/check-generated.sh 
+b3sum --check /opt/purrdf-308-runtime-refusal.hyKidvRk/source-blake3.txt 
+b3sum --check /opt/purrdf-308-runtime-refusal.hyKidvRk/frozen-controller-blake3.txt 
+/opt/purrdf-308-runtime-refusal.hyKidvRk/native_ci_profile.frozen run /opt/purrdf-308-runtime-refusal.hyKidvRk/continuation.srPmXowr/request-integration-2.json 
+/opt/purrdf-308-runtime-refusal.hyKidvRk/native_ci_profile.frozen compare /opt/purrdf-308-runtime-refusal.hyKidvRk/continuation.srPmXowr/integration-2-self-policy.json 
+b3sum --check /opt/purrdf-308-runtime-refusal.hyKidvRk/source-blake3.txt 
+b3sum --check /opt/purrdf-308-runtime-refusal.hyKidvRk/frozen-controller-blake3.txt 
+cmp /opt/purrdf-308-runtime-refusal.hyKidvRk/continuation.srPmXowr/original-failed-ratchet-preservation.log /dev/fd/63 

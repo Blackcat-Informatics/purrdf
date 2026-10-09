@@ -1,0 +1,1 @@
+crates/rdf-capi/tests/c_smoke.rs

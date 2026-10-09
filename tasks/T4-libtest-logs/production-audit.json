@@ -1,0 +1,52 @@
+{
+  "receipt": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-libtest-logs/production-cargo/cargo-400829-1791457334009988547.json",
+  "wrapper_exit": 0,
+  "cargo_exit": 0,
+  "successful_phases": 2,
+  "compiler_frames": 73,
+  "capi_frame": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi#purrdf-capi@3.0.1",
+    "manifest_path": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi/Cargo.toml",
+    "target": {
+      "kind": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "crate_types": [
+        "staticlib",
+        "cdylib",
+        "rlib"
+      ],
+      "name": "purrdf",
+      "src_path": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/crates/rdf-capi/src/lib.rs",
+      "edition": "2024",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/opt/.cargo/slots/95be0b9034a0e1f3/0/build/debug/build/purrdf-capi/441b5bcdf95f24ef/out/purrdf-441b5bcdf95f24ef"
+    ],
+    "executable": "/opt/.cargo/slots/95be0b9034a0e1f3/0/build/debug/build/purrdf-capi/441b5bcdf95f24ef/out/purrdf-441b5bcdf95f24ef",
+    "fresh": false
+  },
+  "capi_captures": [],
+  "timings": [
+    {
+      "path": "/home/paudley/Active/purrdf/.worktrees/308-reduce-native-ci-test-compilation-and-c/.stage/reduce-native-ci-test-compilation-and-c/tasks/T4-libtest-logs/production-cargo/cargo-400829-1791457334009988547-cargo-timing-20261008T110214031Z-953d4568b6767426.html",
+      "bytes": 29521,
+      "blake3": "26147ee15713b005eef5bdf36dd2e58d91d7a4a2ae21029fbd6e3f2aa179e106"
+    }
+  ],
+  "actual_tests_passed": 104
+}

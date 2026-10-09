@@ -1,0 +1,74 @@
+[
+  {
+    "case": "native-profile (before-monolithic)",
+    "setup_seconds": 726.0,
+    "after_seconds": 6.0,
+    "job": 113280829503
+  },
+  {
+    "case": "native-profile (after-integration-4)",
+    "setup_seconds": 749.0,
+    "after_seconds": 5.0,
+    "job": 113280829508
+  },
+  {
+    "case": "native-profile (before-capi)",
+    "setup_seconds": 703.0,
+    "after_seconds": 5.0,
+    "job": 113280829510
+  },
+  {
+    "case": "native-profile (after-integration-2)",
+    "setup_seconds": 726.0,
+    "after_seconds": 3.0,
+    "job": 113280829511
+  },
+  {
+    "case": "native-profile (after-doc)",
+    "setup_seconds": 770.0,
+    "after_seconds": 4.0,
+    "job": 113280829550
+  },
+  {
+    "case": "native-profile (after-capi)",
+    "setup_seconds": 671.0,
+    "after_seconds": 4.0,
+    "job": 113280829570
+  },
+  {
+    "case": "native-profile (before-downstream)",
+    "setup_seconds": 700.0,
+    "after_seconds": 4.0,
+    "job": 113280829574
+  },
+  {
+    "case": "native-profile (after-downstream)",
+    "setup_seconds": 643.0,
+    "after_seconds": 5.0,
+    "job": 113280829589
+  },
+  {
+    "case": "native-profile (profile-before-capi)",
+    "setup_seconds": 701.0,
+    "after_seconds": 5.0,
+    "job": 113280829628
+  },
+  {
+    "case": "native-profile (after-lib)",
+    "setup_seconds": 684.0,
+    "after_seconds": 4.0,
+    "job": 113280829639
+  },
+  {
+    "case": "native-profile (after-integration-3)",
+    "setup_seconds": 685.0,
+    "after_seconds": 5.0,
+    "job": 113280829640
+  },
+  {
+    "case": "native-profile (after-integration-1)",
+    "setup_seconds": 752.0,
+    "after_seconds": 6.0,
+    "job": 113280829657
+  }
+]

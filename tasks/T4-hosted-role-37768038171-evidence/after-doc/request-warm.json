@@ -1,0 +1,14 @@
+{
+  "root": "/home/runner/work/purrdf/purrdf",
+  "directory": "/opt/purrdf-native-profile/37768038171-1/after-doc",
+  "cargo": "/home/runner/.cargo/bin/cargo",
+  "lane": "doc",
+  "warmth": "warm",
+  "jobs": 4,
+  "test_threads": 4,
+  "runner_class": "ubuntu24:20261004.327.1:Linux:X64:96e5b5f58794f083e9560890009129ce11397247fbfb8213726e7a7612eca096:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+  "dependency_cache": "no artifact cache restored; registry/download cache may exist",
+  "compiler_cache": "no compiler cache requested; wrappers/configuration captured by controller",
+  "page_cache": "uncontrolled hosted OS page cache; cold refers ONLY to empty Cargo target/build directories",
+  "previous": "/opt/purrdf-native-profile/37768038171-1/after-doc/doc-cold-receipt.json"
+}

@@ -1,0 +1,82 @@
+[
+  {
+    "child": "cargo-11621-1791458436758428788.json",
+    "frame": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///home/runner/work/purrdf/purrdf/crates/rdf-capi#purrdf-capi@3.0.1",
+      "manifest_path": "/home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml",
+      "target": {
+        "kind": [
+          "staticlib",
+          "cdylib",
+          "rlib"
+        ],
+        "crate_types": [
+          "staticlib",
+          "cdylib",
+          "rlib"
+        ],
+        "name": "purrdf",
+        "src_path": "/home/runner/work/purrdf/purrdf/crates/rdf-capi/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/opt/purrdf-native-profile/37768038171-1/after-lib/build/debug/build/purrdf-capi/7d3ffd6192919e87/out/purrdf-7d3ffd6192919e87"
+      ],
+      "executable": "/opt/purrdf-native-profile/37768038171-1/after-lib/build/debug/build/purrdf-capi/7d3ffd6192919e87/out/purrdf-7d3ffd6192919e87",
+      "fresh": false
+    },
+    "capi_artifacts": []
+  },
+  {
+    "child": "cargo-26884-1791459527810904747.json",
+    "frame": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///home/runner/work/purrdf/purrdf/crates/rdf-capi#purrdf-capi@3.0.1",
+      "manifest_path": "/home/runner/work/purrdf/purrdf/crates/rdf-capi/Cargo.toml",
+      "target": {
+        "kind": [
+          "staticlib",
+          "cdylib",
+          "rlib"
+        ],
+        "crate_types": [
+          "staticlib",
+          "cdylib",
+          "rlib"
+        ],
+        "name": "purrdf",
+        "src_path": "/home/runner/work/purrdf/purrdf/crates/rdf-capi/src/lib.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/opt/purrdf-native-profile/37768038171-1/after-lib/build/debug/build/purrdf-capi/7d3ffd6192919e87/out/purrdf-7d3ffd6192919e87"
+      ],
+      "executable": "/opt/purrdf-native-profile/37768038171-1/after-lib/build/debug/build/purrdf-capi/7d3ffd6192919e87/out/purrdf-7d3ffd6192919e87",
+      "fresh": true
+    },
+    "capi_artifacts": []
+  }
+]

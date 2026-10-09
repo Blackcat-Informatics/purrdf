@@ -1,0 +1,7 @@
+The native profiling fixture portability correction is committed and pushed as `40de8b0402a29cff51d3c6dd50d96eb49f7c435f`, through normal signing and hooks.
+
+Focused qualification now passes all 35 controller tests, strict CAPI all-target clippy, the 22 owning checks and source/controller/filesystem readbacks. Cargo-created target **and** build directories were physically outside `/opt`; the five affected fixtures used real exclusive children under the explicitly provisioned `/opt` parent. Parent ownership, child cleanup and a protected sibling sentinel were verified. Production request, receipt and reclamation validation remain unchanged.
+
+The initial local 34-pass/1-failure run is retained: it exposed Cargo ancestor configuration in the configuration-absence fixture, whose isolated holder was then corrected without weakening its assertions. The earlier hosted integration-2 failure at `639a72740` also remains a failure. Local SDK identity is separately recorded from the hosted compiler; the selected current controller was frozen outside managed artifact slots before later commands.
+
+Fresh hosted dispatch is held until the existing run `37790706268` finishes its active first monolithic measurement. The workflow's branch concurrency policy would otherwise cancel that measurement. This update claims focused source qualification and publication only: the full 12-case/24-receipt matched campaign, attributable reduction and Task5 full local/hosted acceptance remain unfinished. No PR or completion claim is made.

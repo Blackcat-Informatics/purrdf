@@ -1,0 +1,22 @@
+cargo test --locked --jobs 8 -p purrdf-capi --test native_profile -- --list 
+cargo test --locked --jobs 8 -p purrdf-capi --test native_profile 
+cargo clippy --locked --jobs 8 -p purrdf-capi --all-targets -- -D warnings 
+cargo build --locked --jobs 8 -p purrdf-capi --example native_ci_profile --profile test --message-format=json-render-diagnostics 
+cargo run --quiet --locked --jobs 8 -p helper-census -- --check 
+cargo run --quiet --locked --jobs 8 -p helper-census -- --self-test 
+cargo run --quiet --locked --jobs 8 -p helper-census -- --glossary-gate 
+python3 scripts/check-shared-helpers.py --self-test 
+python3 scripts/check-shared-helpers.py 
+actionlint 
+python3 scripts/check-test-shards.py --self-test 
+python3 scripts/check-test-shards.py 
+python3 scripts/check-build-profiles.py --self-test 
+python3 scripts/check-build-profiles.py 
+python3 scripts/check-toolchain-pin.py 
+python3 scripts/check-gate-parity.py --self-test 
+python3 scripts/check-gate-parity.py 
+cargo fmt --all -- --check 
+git diff --check 
+git diff --cached --check 
+cargo run --quiet --locked --jobs 8 -p helper-census -- --non-rust-ratchet --merge-base-with origin/main --target worktree 
+bash scripts/check-generated.sh 

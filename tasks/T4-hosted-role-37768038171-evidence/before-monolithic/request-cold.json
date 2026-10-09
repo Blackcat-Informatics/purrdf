@@ -1,0 +1,13 @@
+{
+  "root": "/home/runner/work/purrdf/purrdf",
+  "directory": "/opt/purrdf-native-profile/37768038171-1/before-monolithic",
+  "cargo": "/home/runner/.cargo/bin/cargo",
+  "lane": "monolithic",
+  "warmth": "cold",
+  "jobs": 4,
+  "test_threads": 4,
+  "runner_class": "ubuntu24:20261004.327.1:Linux:X64:dc13949b79f4d49867613d2be921855689c24599e1d231c5ffe04cfb7df2490e:5376e4eb1b9932fc8997c3acb66af84de94f7be482356b53dc1a4863725993eb",
+  "dependency_cache": "no artifact cache restored; registry/download cache may exist",
+  "compiler_cache": "no compiler cache requested; wrappers/configuration captured by controller",
+  "page_cache": "uncontrolled hosted OS page cache; cold refers ONLY to empty Cargo target/build directories"
+}

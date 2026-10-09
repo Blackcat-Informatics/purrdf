@@ -1,0 +1,84 @@
+[
+  {
+    "path": "/opt/purrdf-308-current-telemetry.591np1/doc/doc-cold-cargo/cargo-3936480-1791451633020493970.json",
+    "argv": [
+      "test",
+      "--workspace",
+      "--locked",
+      "--doc",
+      "--color=never",
+      "--message-format=json-render-diagnostics",
+      "--timings"
+    ],
+    "command_keys": [
+      "program",
+      "argv",
+      "env",
+      "cwd",
+      "exit_code",
+      "exit_status",
+      "stdout",
+      "stderr"
+    ],
+    "capi_captures": 1,
+    "stdout_lines": 879,
+    "harness_test_result": true
+  },
+  {
+    "path": "/opt/purrdf-308-current-telemetry.591np1/doc/doc-cold-cargo/cargo-3949313-1791451672641809395.json",
+    "argv": [
+      "build",
+      "--workspace",
+      "--locked",
+      "--examples",
+      "--profile",
+      "test",
+      "--color=never",
+      "--message-format=json-render-diagnostics",
+      "--timings"
+    ],
+    "command_keys": [
+      "program",
+      "argv",
+      "env",
+      "cwd",
+      "exit_code",
+      "exit_status",
+      "stdout",
+      "stderr"
+    ],
+    "capi_captures": 1,
+    "stdout_lines": 167,
+    "harness_test_result": false
+  },
+  {
+    "path": "/opt/purrdf-308-current-telemetry.591np1/doc/doc-cold-cargo/cargo-3952870-1791451690221604900.json",
+    "argv": [
+      "test",
+      "--workspace",
+      "--locked",
+      "--example",
+      "graphql_oracle_fixture",
+      "--example",
+      "typescript_oracle_fixture",
+      "--example",
+      "text_relevance",
+      "--color=never",
+      "--message-format=json-render-diagnostics",
+      "--timings"
+    ],
+    "command_keys": [
+      "program",
+      "argv",
+      "env",
+      "cwd",
+      "exit_code",
+      "exit_status",
+      "stdout",
+      "stderr"
+    ],
+    "capi_captures": 0,
+    "stdout_lines": 112,
+    "harness_test_result": true
+  }
+]
