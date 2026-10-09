@@ -4,7 +4,8 @@
 //! Draining a graph declared on a `MutableDataset` row by row stays linear.
 //!
 //! Each removal decides whether it emptied the graph, because the removal of a
-//! declared graph's last row withdraws the declaration. That decision reads the
+//! declared graph's last row withdraws the declaration in explicit implicit mode.
+//! That decision reads the
 //! graph's live row count; it must never re-walk the dataset, which would make the
 //! drain quadratic. The proof is operational: the drain runs inside a counting
 //! allocator window, and a re-walk of the delta's rows allocates its replay order on
@@ -84,7 +85,10 @@ fn draining_a_declared_graph_does_not_rewalk_the_dataset_per_removal() {
     const ROWS: usize = 2048;
     let base = base();
     for graph in [iri("declared"), TermValue::blank("declared")] {
-        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        let mut mutable = MutableDataset::new_with_graph_existence(
+            Arc::clone(&base),
+            GraphExistenceMode::Implicit,
+        );
         assert_eq!(mutable.declare_named_graph(graph.clone()), Ok(true));
         let quads = rows_in(&graph, ROWS);
         for quad in &quads {
@@ -103,7 +107,8 @@ fn draining_a_declared_graph_does_not_rewalk_the_dataset_per_removal() {
 #[test]
 fn emptiness_is_decided_per_graph_and_by_the_graphs_own_rows() {
     let base = base();
-    let mut mutable = MutableDataset::new(Arc::clone(&base));
+    let mut mutable =
+        MutableDataset::new_with_graph_existence(Arc::clone(&base), GraphExistenceMode::Implicit);
     let declared = iri("declared");
     let other = iri("other");
     assert_eq!(mutable.declare_named_graph(declared.clone()), Ok(true));

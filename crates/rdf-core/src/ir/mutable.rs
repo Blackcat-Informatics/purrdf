@@ -66,17 +66,17 @@ pub use delta_view::{DeltaDatasetView, DeltaViewId};
 /// The lifetime of named-graph declarations in a mutable branch.
 ///
 /// Frozen datasets carry graph presence, never this caller-selected policy.
-/// [`Self::Implicit`] is the 3.x default; [`Self::RememberEmpty`] is expected to
-/// become the default in v4.0.
+/// [`Self::RememberEmpty`] is the default; select [`Self::Implicit`] explicitly
+/// to use row-driven graph lifetime.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GraphExistenceMode {
     /// Preserve the current row-based graph lifetime: removing a graph's last row
     /// withdraws its declaration. An explicitly declared empty graph survives
     /// until a mutation or explicit withdrawal empties it.
-    #[default]
     Implicit,
     /// Remember named-graph slots independently of rows, until explicit withdrawal.
+    #[default]
     RememberEmpty,
 }
 
@@ -306,7 +306,7 @@ impl MutableDataset {
     pub fn new(base: Arc<RdfDataset>) -> Self {
         Self {
             base,
-            graph_existence: GraphExistenceMode::Implicit,
+            graph_existence: GraphExistenceMode::RememberEmpty,
             delta: DeltaBuilder::default(),
             added: FastSet::default(),
             added_ord: FastMap::default(),
@@ -329,8 +329,8 @@ impl MutableDataset {
 
     /// Branch from `base` with an explicitly selected graph-existence policy.
     /// No base row is copied; the policy applies only to this mutable branch.
-    /// [`Self::new`] keeps [`GraphExistenceMode::Implicit`] in 3.x; remembered
-    /// empty graphs are expected to become the default in v4.0.
+    /// [`Self::new`] remembers empty named graphs; select
+    /// [`GraphExistenceMode::Implicit`] explicitly for row-driven lifetime.
     #[must_use]
     pub fn new_with_graph_existence(base: Arc<RdfDataset>, mode: GraphExistenceMode) -> Self {
         Self {
@@ -2694,7 +2694,8 @@ mod tests {
         let empty_base = || RdfDatasetBuilder::new().freeze().expect("empty base");
 
         // DROP GRAPH of one declaration; the other survives.
-        let mut m = MutableDataset::new(empty_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(empty_base(), GraphExistenceMode::Implicit);
         m.declare_named_graph(iri_val("g")).expect("declares");
         m.declare_named_graph(iri_val("h")).expect("declares");
         m.withdraw_graph_declaration(&iri_val("h"));
@@ -2707,13 +2708,15 @@ mod tests {
 
         // A declared graph with a row stays while the row does; removing the last
         // row withdraws it.
-        let mut m = MutableDataset::new(empty_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(empty_base(), GraphExistenceMode::Implicit);
         m.declare_named_graph(iri_val("g")).expect("declares");
         let row = QuadValues::quad(iri_val("s"), iri_val("p"), iri_val("o"), iri_val("g"));
         ins(&mut m, row.clone());
         m.withdraw_graph_declaration(&iri_val("g"));
         assert_eq!(names(&m), std::collections::BTreeSet::from([iri_val("g")]));
-        let mut m = MutableDataset::new(empty_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(empty_base(), GraphExistenceMode::Implicit);
         m.declare_named_graph(iri_val("g")).expect("declares");
         ins(&mut m, row.clone());
         assert!(m.remove(&row));
@@ -2755,7 +2758,10 @@ mod tests {
         let bg = populated.intern_iri("http://example.org/bg");
         populated.push_quad(s, p, o, Some(bg));
         for (base, emptied) in [(empty.freeze(), false), (populated.freeze(), true)] {
-            let mut m = MutableDataset::new(base.expect("base freezes"));
+            let mut m = MutableDataset::new_with_graph_existence(
+                base.expect("base freezes"),
+                GraphExistenceMode::Implicit,
+            );
             if emptied {
                 assert!(m.remove(&QuadValues::quad(
                     iri_val("s0"),
@@ -3589,20 +3595,23 @@ mod tests {
 
     #[test]
     fn an_untouched_dataset_enumerates_every_base_graph_including_the_declared_empty_one() {
-        let m = MutableDataset::new(graph_base());
+        let m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
     }
 
     #[test]
     fn removing_the_last_quad_of_a_graph_withdraws_the_graph() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(m.remove(&in_graph("a", "c", "one")));
         assert_eq!(graph_names(&m), ["empty", "stmt", "two"]);
     }
 
     #[test]
     fn removing_some_but_not_all_quads_of_a_graph_keeps_it() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(m.remove(&in_graph("a", "c", "two")));
         assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
         assert!(m.remove(&in_graph("a", "d", "two")));
@@ -3611,7 +3620,8 @@ mod tests {
 
     #[test]
     fn removing_the_only_reifier_of_a_graph_withdraws_the_graph() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(m.remove(&reifier_in("stmt")));
         assert_eq!(graph_names(&m), ["empty", "one", "two"]);
     }
@@ -3620,7 +3630,8 @@ mod tests {
     fn a_graph_repopulated_after_losing_its_last_quad_exists() {
         // Re-inserting the same base quad (un-suppression) and inserting a different
         // quad (a delta row in a base graph) both bring the graph back.
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(m.remove(&in_graph("a", "c", "one")));
         assert!(ins(&mut m, in_graph("a", "c", "one")));
         assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
@@ -3631,7 +3642,8 @@ mod tests {
 
     #[test]
     fn an_unrelated_insert_keeps_the_declared_empty_graph() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(ins(&mut m, q("x", "p", "y")));
         assert!(ins(&mut m, in_graph("x", "y", "fresh")));
         assert_eq!(graph_names(&m), ["empty", "fresh", "one", "stmt", "two"]);
@@ -3639,7 +3651,8 @@ mod tests {
 
     #[test]
     fn a_delta_graph_emptied_again_is_not_enumerated() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(ins(&mut m, in_graph("x", "y", "fresh")));
         assert!(m.remove(&in_graph("x", "y", "fresh")));
         assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
@@ -3649,7 +3662,8 @@ mod tests {
     fn emptying_a_declared_empty_graph_after_populating_it_withdraws_it() {
         // The declared empty graph gains a quad and then loses it: the removal of its
         // last quad is an operation that leaves it empty, so it is withdrawn.
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         assert!(ins(&mut m, in_graph("x", "y", "empty")));
         assert_eq!(graph_names(&m), ["empty", "one", "stmt", "two"]);
         assert!(m.remove(&in_graph("x", "y", "empty")));
@@ -3658,7 +3672,8 @@ mod tests {
 
     #[test]
     fn withdrawing_a_declaration_hides_only_an_empty_graph() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         // A graph that still holds rows is unaffected by a withdrawal.
         m.withdraw_graph_declaration(&iri_val("two"));
         // A graph the dataset never knew is a no-op, not an error.
@@ -3686,7 +3701,7 @@ mod tests {
         b.push_annotation_in_graph(r, p, c, Some(mix));
         let base = b.freeze().expect("mixed base freezes");
         let annotation = in_graph("r", "c", "mix");
-        let mut m = MutableDataset::new(base);
+        let mut m = MutableDataset::new_with_graph_existence(base, GraphExistenceMode::Implicit);
         assert!(m.remove(&in_graph("a", "c", "mix")));
         assert_eq!(graph_names(&m), ["mix"], "a reifier and annotation remain");
         assert!(m.remove(&reifier_in("mix")));
@@ -3694,7 +3709,10 @@ mod tests {
         assert!(m.remove(&annotation));
         assert!(graph_names(&m).is_empty(), "every row is gone");
         // Order does not matter: the annotation first, then the reifier.
-        let mut m = MutableDataset::new(m.base().clone());
+        let mut m = MutableDataset::new_with_graph_existence(
+            m.base().clone(),
+            GraphExistenceMode::Implicit,
+        );
         assert!(m.remove(&annotation));
         assert!(m.remove(&in_graph("a", "c", "mix")));
         assert_eq!(graph_names(&m), ["mix"], "the reifier remains");
@@ -3704,7 +3722,8 @@ mod tests {
 
     #[test]
     fn withdrawing_every_declaration_keeps_only_populated_graphs() {
-        let mut m = MutableDataset::new(graph_base());
+        let mut m =
+            MutableDataset::new_with_graph_existence(graph_base(), GraphExistenceMode::Implicit);
         m.withdraw_named_graph_declarations();
         assert_eq!(graph_names(&m), ["one", "stmt", "two"]);
         // The default graph is not a named graph and is untouched.
@@ -3727,7 +3746,7 @@ mod tests {
                 .iter()
                 .map(|g| (*g).to_owned())
                 .collect();
-            let mut m = MutableDataset::new(base);
+            let mut m = MutableDataset::new_with_graph_existence(base, GraphExistenceMode::Implicit);
             let mut emptied = std::collections::BTreeSet::<String>::new();
             let local = |v: &TermValue| match v {
                 TermValue::Iri(iri) => iri.trim_start_matches("http://example.org/").to_owned(),

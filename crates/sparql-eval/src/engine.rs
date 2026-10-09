@@ -4354,8 +4354,10 @@ impl QueryOptions<'_> {
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
     /// depth, no `SERVICE` source, and the engine's own `LOAD` resolver. What every
     /// entry did before it took options.
+    /// UPDATE remembers empty named graphs; explicitly select
+    /// [`purrdf_core::GraphExistenceMode::Implicit`] for row-driven lifetime.
     pub const EMPTY: Self = Self {
-        graph_existence: purrdf_core::GraphExistenceMode::Implicit,
+        graph_existence: purrdf_core::GraphExistenceMode::RememberEmpty,
         prebinding: ShaclPrebinding::None,
         functions: &crate::user_fn::BoundFunctionRegistry::EMPTY,
         user_function_admission: None,

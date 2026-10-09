@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::RdfDataset;
+use purrdf_core::{MutableDataset, RdfDataset, RdfDatasetBuilder};
 use purrdf_rdf::native_codecs::{
     NativeRdfFormat, SerializeOptions, StatementLayer, parse_dataset, serialize_dataset_to_format,
     serialize_dataset_with,
@@ -30,6 +30,32 @@ const SOURCE: &str = "<http://example.org/s> <http://example.org/p> <http://exam
 <http://example.org/g1> { <http://example.org/s> <http://example.org/p> <http://example.org/in-g1> . }\n\
 <http://example.org/empty> { }\n\
 _:blank { }\n";
+
+#[test]
+fn default_mutable_declarations_survive_real_empty_graph_carriers() {
+    let base = RdfDatasetBuilder::new().freeze().expect("empty base");
+    let mut mutable = MutableDataset::new(base);
+    let graph = TermValue::Iri("http://example.org/default-created".to_owned());
+    mutable
+        .create_named_graph(graph.clone())
+        .expect("default remembered CREATE");
+    let dataset = mutable.freeze().expect("publication");
+    assert!(declares_graph(&dataset, &graph));
+    for format in [
+        NativeRdfFormat::TriG,
+        NativeRdfFormat::JsonLd,
+        NativeRdfFormat::TriX,
+    ] {
+        let bytes = serialize_dataset_to_format(dataset.as_ref(), format, None)
+            .expect("writes empty declaration")
+            .bytes;
+        let reparsed =
+            parse_dataset(&bytes, format.media_type(), None).expect("reads empty declaration");
+        assert!(declares_graph(&reparsed, &graph), "{format:?}");
+        assert_eq!(reparsed.named_graphs().count(), 1);
+        assert_eq!(reparsed.quad_count(), 0);
+    }
+}
 
 fn source() -> Arc<RdfDataset> {
     parse_dataset(SOURCE.as_bytes(), NativeRdfFormat::TriG.media_type(), None)

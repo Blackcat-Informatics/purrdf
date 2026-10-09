@@ -47,6 +47,39 @@ fn named_row(graph: TermValue) -> QuadValues {
 }
 
 #[test]
+fn omitted_policy_remembers_empty_slots_across_mutation_and_reconstruction() {
+    assert_eq!(
+        GraphExistenceMode::default(),
+        GraphExistenceMode::RememberEmpty
+    );
+    let base = empty_dataset();
+    let mut mutable = MutableDataset::new(Arc::clone(&base));
+    let graph = iri("default-lifetime");
+    mutable
+        .create_named_graph(graph.clone())
+        .expect("creates slot");
+    let retained = mutable.snapshot_view().expect("retained empty snapshot");
+    let row = named_row(graph.clone());
+    mutable.insert(row.clone()).expect("inserts row");
+    assert!(mutable.remove(&row));
+    assert_eq!(published_names(&mutable), std::slice::from_ref(&graph));
+    assert_eq!(graph_names(&retained), std::slice::from_ref(&graph));
+    let mut rebuilt = MutableDataset::new(mutable.freeze().expect("freezes"));
+    assert_eq!(rebuilt.graph_existence(), GraphExistenceMode::RememberEmpty);
+    assert_eq!(published_names(&rebuilt), std::slice::from_ref(&graph));
+    rebuilt.withdraw_graph_declaration(&graph);
+    assert_eq!(published_names(&rebuilt), [] as [TermValue; 0]);
+    assert_eq!(graph_names(&*base), [] as [TermValue; 0]);
+    let mut implicit =
+        MutableDataset::new_with_graph_existence(empty_dataset(), GraphExistenceMode::Implicit);
+    implicit
+        .insert(row.clone())
+        .expect("implicit valid neighbor");
+    assert!(implicit.remove(&row));
+    assert_eq!(published_names(&implicit), [] as [TermValue; 0]);
+}
+
+#[test]
 fn an_empty_graph_declaration_sets_the_frozen_capability() {
     let mut builder = RdfDatasetBuilder::new();
     let graph = builder.intern_iri("http://example.org/empty");
@@ -78,14 +111,18 @@ fn withdrawing_the_only_named_graph_clears_the_snapshot_capability() {
 }
 
 #[test]
-fn mode_selection_is_local_and_default_construction_remains_implicit() {
+fn mode_selection_is_local_and_default_construction_remembers_empty_graphs() {
     let base = empty_dataset();
     let mut remembered = MutableDataset::new_with_graph_existence(
         Arc::clone(&base),
         GraphExistenceMode::RememberEmpty,
     );
-    let implicit = MutableDataset::new(Arc::clone(&base));
-    assert_eq!(GraphExistenceMode::default(), GraphExistenceMode::Implicit);
+    let implicit =
+        MutableDataset::new_with_graph_existence(Arc::clone(&base), GraphExistenceMode::Implicit);
+    assert_eq!(
+        GraphExistenceMode::default(),
+        GraphExistenceMode::RememberEmpty
+    );
     assert_eq!(implicit.graph_existence(), GraphExistenceMode::Implicit);
     assert_eq!(
         remembered.graph_existence(),
@@ -98,7 +135,7 @@ fn mode_selection_is_local_and_default_construction_remains_implicit() {
     let new_default_branch = MutableDataset::new(remembered.freeze().expect("freezes"));
     assert_eq!(
         new_default_branch.graph_existence(),
-        GraphExistenceMode::Implicit
+        GraphExistenceMode::RememberEmpty
     );
     assert_eq!(published_names(&new_default_branch), [iri("g")]);
 }
@@ -258,6 +295,26 @@ fn base_ordinary_reifier_and_annotation_rows_each_keep_remembered_slots() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn omitted_policy_retains_last_physical_row_graph_for_every_role() {
+    for role in 0..3 {
+        let graph = iri("role-default");
+        let base = role_base(&graph, role);
+        let mut mutable = MutableDataset::new(Arc::clone(&base));
+        for row in mutable.quads_for_pattern(None, None, None, GraphMatchValue::Any) {
+            assert!(mutable.remove(&row));
+        }
+        assert_eq!(published_names(&mutable), std::slice::from_ref(&graph));
+        let retained = mutable
+            .snapshot_view()
+            .expect("retained empty role snapshot");
+        mutable.withdraw_graph_declaration(&graph);
+        assert_eq!(published_names(&mutable), [] as [TermValue; 0]);
+        assert_eq!(graph_names(&retained), [graph]);
+        assert!(base.capabilities().named_graphs);
     }
 }
 
