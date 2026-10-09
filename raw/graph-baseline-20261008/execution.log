@@ -1,0 +1,4 @@
+error: could not execute process `kache rustc -vV` (never executed)
+
+Caused by:
+  No such file or directory (os error 2)

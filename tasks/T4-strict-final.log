@@ -1,0 +1,6 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.00s

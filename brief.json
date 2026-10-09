@@ -1,0 +1,41 @@
+{
+  "issue": 401,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Update transfers preserve RDF 1.2 identity: per-document LOAD blank scoping and typed record transfer",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 400,
+      "title": "Opt-in remembered empty named graphs for the mutable dataset and SPARQL Update",
+      "state": "CLOSED"
+    },
+    {
+      "number": 385,
+      "title": "An alternative path of plain predicates is not translated, and a UNION in its place joins by position",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 18,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #401 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Update', 'transfers', 'preserve']: 4 other item(s)",
+    "GhpRsq-Defect-Class trailers: 2 distinct class(es) in the last 200 commits"
+  ]
+}

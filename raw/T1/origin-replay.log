@@ -1,0 +1,299 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 25.10s
+     Running unittests src/lib.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 55 tests
+test ir::mutable::delta_view::tests::snapshot_rejects_invalid_delta_positions_before_exposing_a_view ... ok
+test ir::mutable::delta_view::tests::snapshot_shares_base_and_isolates_suppression_reinsertion_and_new_terms ... ok
+test ir::mutable::delta_view::tests::rdf12_tables_deduplicate_overlaps_and_keep_graphs_and_direction ... ok
+test ir::mutable::tests::a_configured_but_unused_derivation_predicate_survives_freeze ... ok
+test ir::mutable::tests::a_delta_graph_emptied_again_is_not_enumerated ... ok
+test ir::mutable::delta_view::tests::changed_quads_names_every_row_the_rdf12_overlay_moves_on_or_off_the_surface ... ok
+test ir::mutable::tests::a_graph_repopulated_after_losing_its_last_quad_exists ... ok
+test ir::mutable::tests::an_unrelated_insert_keeps_the_declared_empty_graph ... ok
+test ir::mutable::tests::an_untouched_dataset_enumerates_every_base_graph_including_the_declared_empty_one ... ok
+test ir::mutable::tests::a_graph_is_emptied_only_when_its_quads_reifiers_and_annotations_are_all_gone ... ok
+test ir::mutable::tests::base_value_of_agrees_with_term_value_on_every_literal_shape ... ok
+test ir::mutable::tests::classification_collision_counts_the_actual_physical_rows ... ok
+test ir::mutable::tests::blank_identity_visit_retains_suppressed_and_removed_nested_values ... ok
+test ir::mutable::tests::contains_and_pattern_reflect_effective_set ... ok
+test ir::mutable::tests::classification_restores_only_targets_it_owned ... ok
+test ir::mutable::tests::declared_named_graphs_follow_the_withdrawal_rules ... ok
+test ir::mutable::tests::declared_named_graphs_survive_freeze_and_snapshot ... ok
+test ir::mutable::tests::emptying_a_declared_empty_graph_after_populating_it_withdraws_it ... ok
+test ir::mutable::tests::freeze_and_snapshot_keep_the_base_content_addressing ... ok
+test ir::mutable::tests::freeze_and_snapshot_of_an_unconfigured_base_stay_unconfigured ... ok
+test ir::mutable::tests::freeze_empty_mutation_equals_base_quads ... ok
+test ir::mutable::tests::freeze_carries_base_quad_locations ... ok
+test ir::mutable::tests::insert_existing_base_quad_is_noop ... ok
+test ir::mutable::tests::freeze_round_trip_quads_reifiers_annotations ... ok
+test ir::mutable::tests::named_graph_quads_round_trip ... ok
+test ir::mutable::tests::normalization_does_not_reorder_an_independently_added_target ... ok
+test ir::mutable::tests::ordinary_restoration_classifies_suppressed_base_roles ... ok
+test ir::mutable::delta_view::tests::indexed_patterns_match_complete_scan_for_shared_and_delta_ids ... ok
+test ir::mutable::tests::quads_for_pattern_matches_delta_only_named_graph ... ok
+test ir::mutable::tests::public_mutation_metrics_exclude_derived_classification ... ok
+test ir::mutable::tests::redeclaring_a_withdrawn_base_graph_lists_it_once ... ok
+test ir::mutable::tests::removing_some_but_not_all_quads_of_a_graph_keeps_it ... ok
+test ir::mutable::tests::removing_the_last_quad_of_a_graph_withdraws_the_graph ... ok
+test ir::mutable::tests::removing_the_only_reifier_of_a_graph_withdraws_the_graph ... ok
+test ir::mutable::tests::rule1_insert_of_suppressed_base_unsuppresses ... ok
+test ir::mutable::tests::freeze_replays_delta_insertions_in_call_order_across_fresh_datasets ... ok
+test ir::mutable::tests::rule2_remove_of_delta_added_drops_from_added ... ok
+test ir::mutable::tests::rule3_remove_of_base_quad_creates_suppression ... ok
+test ir::mutable::tests::rule4_reinsert_after_removal_both_orders ... ok
+test ir::mutable::tests::should_compact_signals_on_churn ... ok
+test ir::mutable::tests::two_branches_mutate_independently ... ok
+test ir::mutable::tests::typed_base_three_roles_restore_each_exactly_and_remove_base_plus_delta ... ok
+test ir::mutable::tests::typed_composites_refuse_malformed_values_and_preserve_bound_identity ... ok
+test ir::mutable::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_terms ... ok
+test ir::mutable::tests::typed_exact_ingress_does_not_classify_and_snapshots_are_independent ... ok
+test ir::mutable::tests::typed_ingress_refuses_invalid_roles_without_membership_or_term_publication ... ok
+test ir::mutable::tests::typed_roles_restore_one_and_ordinary_mutation_restores_all ... ok
+test ir::mutable::tests::typed_snapshot_limits_price_role_masks_and_refusal_adds_no_successful_work ... ok
+test ir::mutable::tests::withdrawing_a_declaration_hides_only_an_empty_graph ... ok
+test ir::mutable::tests::withdrawing_every_declaration_keeps_only_populated_graphs ... ok
+test ir::mutable::tests::normalization_has_stable_order_through_conversion_and_undo ... ok
+test ir::mutable::tests::typed_three_role_state_machine_matches_physical_model ... ok
+test ir::mutable::tests::property_mutations_match_hashset_model ... ok
+test ir::mutable::tests::property_graph_enumeration_matches_a_full_scan ... ok
+test ir::mutable::term_walk_tests::a_hundred_thousand_level_term_is_checked_and_interned_on_a_128_kib_thread ... ok
+
+test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 1175 filtered out; finished in 0.08s
+
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 17.96s
+     Running tests/shared_views.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/a1a9a50de8f4286f/out/shared_views-a1a9a50de8f4286f)
+
+running 59 tests
+test a_carrier_and_a_separate_composite_share_one_retention_and_keep_their_own_work ... ok
+test a_carrier_and_a_separate_reader_release_one_base_under_either_drop_order ... ok
+test a_declared_graph_that_owns_rows_is_charged_once ... ok
+test a_frozen_owner_shares_one_graph_digest_analysis_between_its_readers ... ok
+test a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers ... ok
+test a_removed_rows_terms_are_not_charged_to_the_snapshot ... ok
+test a_graph_selection_filters_every_layer_and_keeps_the_names_it_chose ... ok
+test a_delta_rides_the_view_carrier_without_compaction ... ok
+test a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers ... ok
+test accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched ... ok
+test a_shared_ledger_does_not_move_per_view_admission ... ok
+test a_selection_places_binds_and_retains_like_any_other_source ... ok
+test a_selection_backed_carrier_keeps_its_owners_resident_in_the_ledger ... ok
+test adding_reifier_classifies_only_rows_in_the_same_graph ... ok
+test a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them ... ok
+test admission_limits_cover_sources_payload_rows_terms_and_derived_graph_text ... ok
+test accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers ... ok
+test an_oversized_delta_is_refused_before_the_freeze_and_counts_no_work ... ok
+test an_undersized_budget_refuses_the_view_carrier_and_admits_its_adequate_twin ... ok
+test blanks_referenced_only_inside_composite_literals_stay_independent ... ok
+test composite_literals_are_charged_with_the_blanks_they_embed ... ok
+test composite_literals_rebind_external_nested_and_triple_term_references ... ok
+test canonical_identity_is_byte_equal_over_flat_composite_and_delta_views ... ok
+test content_equal_views_with_different_fingerprints_publish_equal_identities ... ok
+test appending_a_co_referent_source_over_a_standardized_scope_still_matches_from_scratch ... ok
+test cumulative_admission_refuses_an_oversized_append_and_admits_its_twin ... ok
+test declaration_only_projection_and_named_blank_scope_do_not_collide ... ok
+test appending_named_sources_accumulates_every_freeze_and_copied_term ... ok
+test deleting_one_declaration_keeps_unrelated_annotation_only_records_in_their_table ... ok
+test cross_type_isomorphism_compares_a_composite_against_a_flat_dataset ... ok
+test declaration_only_graphs_are_charged_before_the_snapshot_freezes_them ... ok
+test converting_between_carriers_carries_every_sidecar_handle_and_identity ... ok
+test delta_sources_compose_without_materialization_and_keep_all_declarations ... ok
+test every_term_shape_is_charged_as_the_freeze_interns_it ... ok
+test flat_and_view_carriers_agree_on_every_identity_they_publish ... ok
+test graph_projection_deduplicates_within_and_between_sources ... ok
+test infallible_views_certify_ready_before_and_after_a_full_read ... ok
+test flat_canon_agrees_across_every_fallible_dataset_view_wrapper ... ok
+test language_tags_are_charged_folded_as_the_freeze_interns_them ... ok
+test independent_occurrences_and_shared_contributions_have_explicit_blank_identity ... ok
+test one_base_shared_by_two_carriers_is_retained_exactly_once ... ok
+test a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart ... ok
+test materialized_bytes_ignore_operational_counter_changes ... ok
+test retention_is_released_by_the_last_reader_under_either_drop_order ... ok
+test reusing_source_owners_does_not_carry_a_previous_views_literal_rebinding ... ok
+test selecting_a_graph_the_composite_does_not_hold_is_refused_and_its_neighbour_is_not ... ok
+test per_graph_canonicalization_over_a_view_matches_the_flat_graph_projection ... ok
+test shared_ownership_drops_explicitly_and_clones_do_not_copy_dictionaries_or_maps ... ok
+test source_local_integer_collision_does_not_alias_typed_values ... ok
+test suppression_counts_every_native_table_occurrence_and_reclassification_deduplicates ... ok
+test statement_rows_remove_and_reinsert_without_resurrection_or_duplicates ... ok
+test repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed ... ok
+test two_distinct_bases_each_report_their_own_retention ... ok
+test the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise ... ok
+test composite_probes_yield_each_source_in_order_once ... ok
+test appending_sources_one_at_a_time_composes_what_the_whole_list_composes ... ok
+test the_modal_constructors_are_the_endpoints_of_the_per_source_binding ... ok
+test prepared_composite_probes_reuse_plans_across_rows_and_graph_placements ... ok
+test delta_composite_and_selection_probe_order_is_frozen ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/hash)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-events)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/alloc-probe)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/stack)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/testkit)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/cdt)
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/rdf-core/src/ir/mutable.rs:461:45
+    |
+461 |     pub fn insert_record(&mut self, record: RecordValues) -> Result<bool, crate::RdfDiagnostic> {
+    |                                             ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+461 |     pub fn insert_record(&mut self, record: &RecordValues) -> Result<bool, crate::RdfDiagnostic> {
+    |                                             +
+
+error: this `if` guard returns a bool literal and is followed by another
+   --> crates/rdf-core/src/ir/mutable.rs:805:9
+    |
+805 | /         if self.base_contains_record(key) && self.suppressed.insert(key) {
+806 | |             return true;
+807 | |         }
+808 | |         false
+    | |_____________^ help: you can reduce it to: `self.base_contains_record(key) && self.suppressed.insert(key)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_bool
+    = note: `-D clippy::needless-bool` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_bool)]`
+
+error: this `if` statement can be collapsed
+    --> crates/rdf-core/src/ir/mutable.rs:1072:13
+     |
+1072 | /             if self.suppressed.contains(&key)
+1073 | |                 && !self
+1074 | |                     .reclassified
+1075 | |                     .get(&(quad.s, quad.g))
+...    |
+1083 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+     = note: `-D clippy::collapsible-if` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+     |
+1076 ~                     .is_some_and(|conversions| conversions.contains_key(&key))
+1077 ~                 && self.insert_record_rows(key, None) {
+1078 |                     self.caller_insert(key);
+1079 |                     restored.push(key);
+1080 |                     changed = true;
+1081 ~                 }
+     |
+
+error: usage of `bool::then` in `filter_map`
+    --> crates/rdf-core/src/ir/mutable.rs:1367:14
+     |
+1367 |               .filter_map(|(source, conversion)| {
+     |  ______________^
+1368 | |                 (matches!(source.quad.s, MutTermId::Base(_))
+1369 | |                     && conversion.ordinal.is_none()
+1370 | |                     && self.added.contains(&conversion.target)
+...    |
+1382 | |                 })
+1383 | |             })
+     | |______________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#filter_map_bool_then
+     = note: `-D clippy::filter-map-bool-then` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::filter_map_bool_then)]`
+help: use `filter` then `map` instead
+     |
+1367 ~             .filter(|&(source, conversion)| (matches!(source.quad.s, MutTermId::Base(_))
+1368 +                     && conversion.ordinal.is_none()
+1369 +                     && self.added.contains(&conversion.target)
+1370 +                     && self.classification_created.contains(&conversion.target))).map(|(source, conversion)| (
+1371 +                         conversion.target.kind,
+1372 +                         super::QuadIds {
+1373 +                             s: base_id(source.quad.s),
+1374 +                             p: base_id(source.quad.p),
+1375 +                             o: base_id(source.quad.o),
+1376 +                             g: source.quad.g.map(base_id),
+1377 +                         },
+1378 +                     ))
+     |
+
+error: could not compile `purrdf-core` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: `into_iter` call on a collection with only one item
+    --> crates/rdf-core/src/ir/mutable.rs:1915:43
+     |
+1915 |         assert_eq!(typed_image(&mutable), [record].into_iter().collect());
+     |                                           ^^^^^^^^^^^^^^^^^^^^ help: try: `std::iter::once(record)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_on_single_items
+     = note: `-D clippy::iter-on-single-items` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::iter_on_single_items)]`
+
+error: `into_iter` call on a collection with only one item
+    --> crates/rdf-core/src/ir/mutable.rs:2003:47
+     |
+2003 |             assert_eq!(typed_image(&mutable), [record].into_iter().collect());
+     |                                               ^^^^^^^^^^^^^^^^^^^^ help: try: `std::iter::once(record)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_on_single_items
+
+error: all if blocks contain the same code at the end
+    --> crates/rdf-core/src/ir/mutable.rs:2089:13
+     |
+2089 | /                 assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 0));
+2090 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#branches_sharing_code
+     = note: `-D clippy::branches-sharing-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::branches_sharing_code)]`
+help: consider moving these statements after the if
+     |
+2089 ~             }
+2090 +             assert_eq!((mutable.added_len(), mutable.suppressed_len()), (0, 0));
+     |
+
+error: `into_iter` call on a collection with only one item
+    --> crates/rdf-core/src/ir/mutable.rs:2081:21
+     |
+2081 | /                     [RecordValues {
+2082 | |                         kind: RecordKind::Ordinary,
+2083 | |                         quad: row.clone()
+2084 | |                     }]
+2085 | |                     .into_iter()
+     | |________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_on_single_items
+help: try
+     |
+2081 ~                     std::iter::once(RecordValues {
+2082 +                         kind: RecordKind::Ordinary,
+2083 +                         quad: row.clone()
+2084 +                     })
+     |
+
+error: `into_iter` call on a collection with only one item
+    --> crates/rdf-core/src/ir/mutable.rs:2246:13
+     |
+2246 | /             [RecordValues {
+2247 | |                 kind: RecordKind::Ordinary,
+2248 | |                 quad: record.quad
+2249 | |             }]
+2250 | |             .into_iter()
+     | |________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_on_single_items
+help: try
+     |
+2246 ~             std::iter::once(RecordValues {
+2247 +                 kind: RecordKind::Ordinary,
+2248 +                 quad: record.quad
+2249 +             })
+     |
+
+error: could not compile `purrdf-core` (lib test) due to 9 previous errors

@@ -1,0 +1,74 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+error: unused imports: `RdfLiteral`, `ResourceDimension`, and `TermValue`
+  --> crates/sparql-eval/tests/update_typed_records.rs:9:68
+   |
+ 9 |     BlankScope, GraphExistenceMode, RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension,
+   |                                                                    ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+10 |     SparqlRequest, TermValue,
+   |                    ^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `QueryGovernors`
+  --> crates/sparql-eval/tests/update_typed_records.rs:13:72
+   |
+13 |     GraphResolveRequest, GraphResolver, LoadError, NativeSparqlEngine, QueryGovernors, QueryOptions,
+   |                                                                        ^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `repeated_cached_document_load_has_fresh_identities` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:473:5
+    |
+473 |     repeated_cached_document_load_has_fresh_identities,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `orphan_annotation_copy_preserves_its_role` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:474:5
+    |
+474 |     orphan_annotation_copy_preserves_its_role,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `equal_value_ordinary_and_annotation_copy_preserves_both_roles` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:475:5
+    |
+475 |     equal_value_ordinary_and_annotation_copy_preserves_both_roles,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `all_transfers_preserve_exact_roles_and_source_blanks_in_both_graphs` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:476:5
+    |
+476 |     all_transfers_preserve_exact_roles_and_source_blanks_in_both_graphs,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `transfers_charge_physical_attempts_even_when_add_deduplicates` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:477:5
+    |
+477 |     transfers_charge_physical_attempts_even_when_add_deduplicates,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_freshens_scoped_bare_triple_and_nested_composite_identities_together` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:478:5
+    |
+478 |     load_freshens_scoped_bare_triple_and_nested_composite_identities_together,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_shares_request_mints_with_data_templates_and_bnode` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:479:5
+    |
+479 |     load_shares_request_mints_with_data_templates_and_bnode,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_avoids_unused_suppressed_and_composite_only_destination_blanks` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:480:5
+    |
+480 |     load_avoids_unused_suppressed_and_composite_only_destination_blanks,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `load_preserves_physical_roles_and_charges_each_original_record` in this scope
+   --> crates/sparql-eval/tests/update_typed_records.rs:481:5
+    |
+481 |     load_preserves_physical_roles_and_charges_each_original_record,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (test "update_typed_records") due to 11 previous errors

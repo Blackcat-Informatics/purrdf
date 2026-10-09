@@ -1,0 +1,19 @@
+query {
+  repository(owner: "Blackcat-Informatics", name: "purrdf") {
+    pullRequest(number: 507) {
+      reviewThreads(first: 100) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line startLine diffSide
+          comments(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              id databaseId author { login } body url createdAt
+              path line originalLine commit { oid }
+            }
+          }
+        }
+      }
+    }
+  }
+}

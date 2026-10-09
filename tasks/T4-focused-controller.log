@@ -1,0 +1,20 @@
+test prepared_composite_probes_reuse_plans_across_rows_and_graph_placements ... ok
+test delta_composite_and_selection_probe_order_is_frozen ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test load_avoids_unused_suppressed_and_composite_only_destination_blanks ... ok
+test transfers_charge_physical_attempts_even_when_add_deduplicates ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test load_preserves_physical_roles_and_charges_each_original_record ... ok
+test load_charges_original_physical_records_when_destination_deduplicates ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     = note: `-D clippy::redundant-clone` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: could not compile `purrdf-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

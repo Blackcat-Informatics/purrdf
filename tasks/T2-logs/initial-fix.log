@@ -1,0 +1,81 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/update.rs:1236:29
+     |
+1236 |                 if scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix) {
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1236 -                 if scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix) {
+1236 +                 if scope == BlankScope::DEFAULT && label.starts_with(prefix) {
+     |
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/update.rs:1002:56
+     |
+1002 |         m.insert_record(&record).map_err(|e| iri_abort(&e))?;
+     |                                              --------- ^^ expected `&IriError`, found `&RdfDiagnostic`
+     |                                              |
+     |                                              arguments to this function are incorrect
+     |
+     = note: expected reference `&IriError`
+                found reference `&RdfDiagnostic`
+note: function defined here
+    --> crates/sparql-eval/src/update.rs:155:4
+     |
+ 155 | fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+     |    ^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/update.rs:1153:36
+     |
+1153 |             .map_err(|e| iri_abort(&e))?;
+     |                          --------- ^^ expected `&IriError`, found `&RdfDiagnostic`
+     |                          |
+     |                          arguments to this function are incorrect
+     |
+     = note: expected reference `&IriError`
+                found reference `&RdfDiagnostic`
+note: function defined here
+    --> crates/sparql-eval/src/update.rs:155:4
+     |
+ 155 | fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+     |    ^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/update.rs:1182:36
+     |
+1182 |             .map_err(|e| iri_abort(&e))?;
+     |                          --------- ^^ expected `&IriError`, found `&RdfDiagnostic`
+     |                          |
+     |                          arguments to this function are incorrect
+     |
+     = note: expected reference `&IriError`
+                found reference `&RdfDiagnostic`
+note: function defined here
+    --> crates/sparql-eval/src/update.rs:155:4
+     |
+ 155 | fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+     |    ^^^^^^^^^ ---------------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/update.rs:1218:36
+     |
+1218 |             .map_err(|e| iri_abort(&e))?;
+     |                          --------- ^^ expected `&IriError`, found `&RdfDiagnostic`
+     |                          |
+     |                          arguments to this function are incorrect
+     |
+     = note: expected reference `&IriError`
+                found reference `&RdfDiagnostic`
+note: function defined here
+    --> crates/sparql-eval/src/update.rs:155:4
+     |
+ 155 | fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
+     |    ^^^^^^^^^ ---------------------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 5 previous errors

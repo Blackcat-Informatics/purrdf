@@ -1,0 +1,30 @@
+{
+  "issue": 401,
+  "branch": "paudley/401-update-transfers-preserve-rdf-1-2",
+  "base": "origin/main",
+  "commits": [
+    {
+      "oid": "20e2e637cd7bee8c18ed80f15a2b4397155f489d",
+      "subject": "Preserve typed graph transfers and fresh LOAD identities",
+      "date": "2026-10-08"
+    },
+    {
+      "oid": "b0fc9e8890e084e725785f77028fd24f8c9e38b5",
+      "subject": "Preserve physical RDF record roles in mutable datasets",
+      "date": "2026-10-08"
+    }
+  ],
+  "files": [
+    "crates/rdf-core/src/ir/builder.rs",
+    "crates/rdf-core/src/ir/import.rs",
+    "crates/rdf-core/src/ir/mod.rs",
+    "crates/rdf-core/src/ir/mutable.rs",
+    "crates/rdf-core/src/ir/mutable/delta_view.rs",
+    "crates/rdf-core/src/ir/validate.rs",
+    "crates/rdf-core/src/lib.rs",
+    "crates/sparql-eval/Cargo.toml",
+    "crates/sparql-eval/src/update.rs",
+    "crates/sparql-eval/tests/update_typed_records.rs"
+  ],
+  "adrs_touched": []
+}

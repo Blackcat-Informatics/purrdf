@@ -1,0 +1,55 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1.46s
+     Running tests/blank_publication.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/8a74cfd831aecdf4/out/blank_publication-8a74cfd831aecdf4)
+
+running 4 tests
+test declarations_add_only_their_blank_names_to_the_base_and_delta_visit ... ok
+test a_declared_blank_graph_name_is_a_retained_identity_fresh_blanks_avoid ... ok
+test visitor_stops_at_the_first_break_in_either_storage_layer ... ok
+test inventory_keeps_suppressed_and_nested_base_and_delta_identities ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cdt_blank_identity.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/e84e9e8caba6606d/out/cdt_blank_identity-e84e9e8caba6606d)
+
+running 12 tests
+test a_consistent_renaming_holds_across_repeats_and_nesting ... ok
+test a_renaming_spanning_the_literal_boundary_is_isomorphic ... ok
+test a_consistent_renaming_inside_a_composite_literal_is_isomorphic ... ok
+test a_rewritten_composite_keeps_iri_elements_in_their_canonical_form ... ok
+test conflating_across_the_literal_boundary_is_not_isomorphic ... ok
+test canonical_relabel_leaves_no_dangling_embedded_label ... ok
+test an_embedded_blank_node_counts_as_a_blank_node ... ok
+test splitting_an_embedded_blank_node_is_not_isomorphic ... ok
+test skolemization_round_trips_over_an_embedded_blank ... ok
+test the_canonical_form_carries_issued_labels_inside_the_literal ... ok
+test ground_content_still_counts ... ok
+test canonical_relabel_is_idempotent_over_embedded_blanks ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/graph_existence_modes.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/1e641aa0a423377f/out/graph_existence_modes-1e641aa0a423377f)
+
+running 11 tests
+test an_empty_graph_declaration_sets_the_frozen_capability ... ok
+test create_obeys_mode_and_explicit_declaration_remains_idempotent ... ok
+test a_graph_name_already_interned_as_an_object_gets_its_own_slot ... ok
+test declarations_stay_distinct_across_blank_scopes_and_bulk_withdrawal ... ok
+test mode_selection_is_local_and_default_construction_remains_implicit ... ok
+test base_ordinary_reifier_and_annotation_rows_each_keep_remembered_slots ... ok
+test withdrawing_the_only_named_graph_clears_the_snapshot_capability ... ok
+test graph_ingress_refusals_do_not_create_a_slot_and_valid_neighbors_succeed ... ok
+test removing_the_last_added_row_preserves_only_remembered_slots ... ok
+test withdrawing_an_empty_remembered_slot_removes_it_from_either_origin ... ok
+test withdrawing_a_populated_graph_answers_the_same_across_a_freeze ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/import_view.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/2f0d3dbd5dc81d3a/out/import_view-2f0d3dbd5dc81d3a)
+
+running 2 tests
+test separate_imports_do_not_alias_source_local_ids_or_scoped_blanks ... ok
+test materialization_preserves_empty_graphs_and_the_complete_statement_layer ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

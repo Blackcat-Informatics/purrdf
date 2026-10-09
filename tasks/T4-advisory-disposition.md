@@ -1,0 +1,3 @@
+The docstring percentage warning is acknowledged as an advisory, not a passed check. The new public record types, fields and ingress/removal/export contracts are documented, including errors and graph/role behavior. The repository's strict documentation/build gates passed. I am declining cosmetic documentation of private/test bodies solely to reach the bot's proposed percentage.
+
+The optional generated-test/autofix/CLI offers are also declined. The owning delta-origin regression reproduced the real ordinal defect, and the existing production native/WASM controls cover the affected path. Their actual results and the fix are being published separately; no original golden, admission rule or hook has been weakened.

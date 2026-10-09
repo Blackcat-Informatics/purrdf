@@ -1,0 +1,9 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 29.28s
+     Running unittests src/lib.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 1 test
+test ir::mutable::tests::normalization_preserves_delta_target_ordinal_through_undo ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1231 filtered out; finished in 0.00s
+

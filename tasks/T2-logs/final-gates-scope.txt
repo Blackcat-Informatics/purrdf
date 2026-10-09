@@ -1,0 +1,5 @@
+ActiveState=active
+InvocationID=ef59c186c2574650b4ed06533ba7cf94
+ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-401-task2-final-gates-20261008.scope
+MemoryMax=68719476736
+MemorySwapMax=0

@@ -1,0 +1,29 @@
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# Prior-art assessment
+
+Status: gathered-evidence/source assessment complete, no new runtime or forge work. Read issue.md, prior-art.md and brief.json supplied by supported Stagectl, existing main portfolio graph design/readiness/baseline witness report, and current401 core/evaluator source. Applicable repository law requires RDF1.2 surfaces, additive public changes, one implementation home, Rust-owned checks, no new semantic features or silent fallbacks.
+
+## Coverage and recurrence
+
+The brief actually gathered issue401 and zero comments; the two-hop link crawl found no references, the three-token forge search returned four other items, and the last200 commit trailers counted18 `none` and1 `performance`. These trailer counts are not a count of graph identity bugs. Defect-specific recurrence is UNKNOWN from this search; neither no comments nor no links proves no prior attempt. No governing ADR was cited by the issue. No additional issue retrieval or title-derived semantic claim was made in this analysis.
+
+| Gathered item/input | What is reusable and what it does not prove |
+|---|---|
+| Closed400 remembered-empty-graph foundation | Current core GraphExistenceMode, named declarations/withdrawals/live counts, retained views and evaluator missing/self/empty rules are present and reusable. This is source-verified; do not reimplement the already-merged foundation. It does not fix LOAD fresh identity or typed ADD/COPY/MOVE. |
+| Closed469/478 governor performance items | Related titles identify governed/parallel work. Their complete issue bodies were not gathered here, so no acceptance/result is inferred from titles. Current update governor/stop/source-prefix behavior is the preservation authority; changes require focused governed_update boundaries rather than replaying unrelated performance campaigns. |
+| Closed385 alternative-path item | Search relevance only. No source-backed transfer dependency was found; do not expand401 into algebra translation. |
+| Portfolio graph-typed-transfer-implementation-design.md | Concrete owner-level design and fixture map: physical RecordKey membership, exact typed ingress, shared importer/term-fold/CDT identity path and source snapshot ordering. Reuse as design input, not as implementation or passing new-source qualification. Its original source was df2, while this intake is current aab; inspected defect paths still match its structural diagnosis. |
+| Portfolio graph-update-baseline-witnesses.md | Actual locked public-path session53766 exit0 reproduced three defective outputs: repeated same-Arc LOAD has1row instead of2; orphan annotation COPY has only1annotation among2rows; cross-role COPY has3rows/1annotation instead of4rows/2annotations. Those assertions intentionally certify defect reproduction, not correctness. Use the immutable fixtures/logs as failing-before evidence with explicit source scope; corrected current behavior is unrun. |
+| Retained471 branch and dirty adaptation | Prior readiness records five owned native/CLI/C/WASM commits after merged400 plus7 staged/4 unstaged paths, separately preserved by root. They are input to later v4 default adaptation, not current-main completion or permission to modify the sibling. Old whole C/WASM/PO files would overwrite modern governed/XPath/async/translation paths; reuse exact intended deltas only after401. |
+
+## Current reusable source homes
+
+The three DatasetImporter replay streams preserve physical RDF1.2 roles and iterative term memoization. Its snapshot/freeze route is stronger prior art than the flattened mutable transfer currently used by Update. MutableDataset already owns publication identity inventory across base/delta and unused/suppressed terms; update::mutable_mint_prefix calls the shared destination namespace home. TermValue's iterative folds and cdt_blank rewriting handle nested/triple/composite identity without copying parser logic. Existing graph_existence_modes/import_view/blank_publication/cdt_blank_identity and evaluator update_graph_modes/update_graph_existence/cdt_query_blank_scope/governed_update provide focused test homes and compatibility witnesses.
+
+The key limitation is below the transfer wrapper: added/suppressed/ordinal sets are value-only QuadKey, append_delta and DeltaDatasetView classify roles again, and base_occurrences combines physical streams. A wrapper-only typed record does not preserve same-value distinct roles, selective restore, cardinality or freeze. The smallest coherent repair therefore changes the native owner representation plus typed traversal, retaining the established flat API semantics; it does not introduce an alternate store/freezer/classifier.
+
+LOAD additionally needs a fresh pair-keyed map for each successful document resolution, even identical cached Arc/IRI, integrated with the existing request counter and selected namespace. Share that map across bare/nested/CDT identities, preserve ordinary literal bytes and use the existing malformed-input/admission laws. ADD/COPY/MOVE preserve identities rather than applying LOAD freshening. Error/cancellation/SILENT, physical mutation charge, source snapshot, empty declaration and explicit graph-mode contracts remain mandatory.
+
+## Delivery judgment
+
+Deliver401 identity/typed transfer first under the current Implicit default, with both explicit modes tested and issue-required actual semver-checks/make check/make wasm. Then adapt471 default/explicit-opt-out across current Rust/CLI/Python/C/WASM doors and documentation under its separate breaking contract. This prevents a default switch from masking an existing identity defect and preserves401's additive requirement. No new branch, retained-sibling mutation, external submission,280 scope or extra benchmark campaign is justified by this intake. Source implementation and new runtime/final gates remain NOT RUN.

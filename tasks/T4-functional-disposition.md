@@ -1,0 +1,7 @@
+Fixed in be3fdeb84, committed with normal hooks and pushed successfully.
+
+The finding was valid: an independently inserted annotation had its ordinal overwritten by a delta ordinary origin during classification. Removing the redundant minimum rewrite leaves insert_record_rows as the creation-only ordinal owner. The new regression failed before the fix (ordinal0 instead of2); it now preserves the independent target ordinal, exact actual public stream through classification/undo, restored original replay order and unique live ordinals. The original base-origin regression and frozen probe-order golden remain unchanged.
+
+Actual affected results:1232 core library tests,59 shared-view controls,10 native public UPDATE cases and the same10 real WASM UPDATE cases passed. Strict core/evaluator all-target lint and formatting passed after removing an unnecessary clone in the new test. Independent focused completion/gap review PASS. Earlier full native/workspace/all-release-WASM/API qualification remains applicable to unchanged contracts; it is retained as its original execution, not relabeled a new full run. All failing attempts and their dispositions are preserved.
+
+Current-head hosted CI and final integration remain pending. The complete graph-transfer/LOAD contract remains in scope; no scope cuts or deferred requirements are used.

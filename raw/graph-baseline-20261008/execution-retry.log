@@ -1,0 +1,44 @@
+     Locking 51 packages to highest Rust 1.100.0-nightly compatible versions
+      Adding wasm-bindgen v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-macro-support v0.2.125 (available: v0.2.129)
+      Adding wasm-bindgen-shared v0.2.125 (available: v0.2.129)
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/crates/hash)
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.23
+   Compiling crossbeam-epoch v0.9.21
+   Compiling libc v0.2.190
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.5
+   Compiling crossbeam-deque v0.8.8
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/crates/rdf-events)
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-automata v0.4.18
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/crates/rdf-core)
+   Compiling digest v0.11.3
+   Compiling cpufeatures v0.3.1
+   Compiling rayon-core v1.13.0
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/crates/deflate)
+   Compiling getrandom v0.3.4
+   Compiling hashbrown v0.17.1
+   Compiling either v1.19.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/crates/stack)
+   Compiling regex v1.13.1
+   Compiling rayon v1.12.0
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/crates/sparql-eval)
+   Compiling graph-update-baseline-probe v0.0.0 (/home/paudley/Active/purrdf/.stage/portfolio-recovery-20261007/raw/graph-baseline-20261008)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 27.28s
+     Running `/opt/purrdf-graph-baseline-20261008-target/debug/graph-update-baseline-probe`
+cached-document-twice expected_rows=2 actual_rows=1 defect=true
+copy-physical-roles overlap=false source_rows=1 expected_rows=2 actual_rows=2 expected_annotations=2 actual_annotations=1 ordinary_rows=1 defect=true
+copy-physical-roles overlap=true source_rows=2 expected_rows=4 actual_rows=3 expected_annotations=2 actual_annotations=1 ordinary_rows=2 defect=true

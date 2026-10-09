@@ -1,0 +1,23 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.4
+   Compiling regex-automata v0.4.14
+   Compiling cpufeatures v0.3.0
+   Compiling either v1.16.0
+   Compiling sha2 v0.11.0
+   Compiling regex v1.12.4
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/crates/rdf-core)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/crates/stack)
+   Compiling rayon v1.12.0
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/crates/sparql-eval)
+   Compiling graph-update-baseline-probe v0.0.0 (/home/paudley/Active/purrdf/.stage/portfolio-recovery-20261007/raw/graph-baseline-20261008)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.97s
+     Running `/opt/purrdf-graph-baseline-20261008-target/debug/graph-update-baseline-probe`
+cached-document-twice expected_rows=2 actual_rows=1 defect=true
+copy-physical-roles overlap=false source_rows=1 expected_rows=2 actual_rows=2 expected_annotations=2 actual_annotations=1 ordinary_rows=1 defect=true
+copy-physical-roles overlap=true source_rows=2 expected_rows=4 actual_rows=3 expected_annotations=2 actual_annotations=1 ordinary_rows=2 defect=true

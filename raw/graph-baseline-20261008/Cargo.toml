@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+[package]
+name = "graph-update-baseline-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+purrdf-core = { path = "/home/paudley/Active/purrdf/crates/rdf-core" }
+purrdf-sparql-eval = { path = "/home/paudley/Active/purrdf/crates/sparql-eval" }
+
+[profile.dev]
+debug = 0

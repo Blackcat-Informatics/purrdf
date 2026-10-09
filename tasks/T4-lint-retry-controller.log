@@ -1,0 +1,10 @@
+running 1 test
+test ir::mutable::tests::normalization_preserves_delta_target_ordinal_through_undo ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1231 filtered out; finished in 0.00s
+
+    Blocking waiting for file lock on package cache
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.00s

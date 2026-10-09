@@ -1,0 +1,63 @@
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# Task1 independent source review
+
+VERDICT: PASS (Task1 only).
+
+Current frozen seven-path core implementation meets Task1's additive typed storage/snapshot foundation and compatibility contract. Independently read task1-settled.log and task1-{clippy,tests,fmt,settled}.exit: actual session1373 terminal0, strict core all-target clippy0, fmt0, full core lib1230PASS and integrations blank4/CDT12/graph11/import2/declaration6/sharedviews59PASS, each zero failures/ignored. The subsequent two-role replay guard is independently source-reviewed and actually qualified by97654: mutable55/sharedviews59PASS plus strict core all-target clippy0/fmt0, all four guard exit receipts0. Prior full1230/integrations remain applicable because only inactive cursor selection changed. Task2 production Update wiring, Task3 semver/full native/WASM and Task4 delivery remain separate unfinished work; this verdict does not promote Task1 to whole401 completion.
+
+Final guard assessment: one constructor scan stores separate ordinary/annotation replay-presence booleans. A false ordinary flag selects Cursor::Empty before reading base annotations; a false annotation flag's lazy then opens no local-pattern/base cursor. Neither branch changes active replay membership/order, admission, cardinality, physical classification or caller metrics. This preserves the old no-inactive-arm work without a new classifier, test-only visitation mirror or generic campaign. Actual replay-guard.log and guard-{clippy,fmt,mutable,views}.exit were read; source is frozen and no finding remains.
+
+| Task1 acceptance | Final judgment and actual evidence |
+|---|---|
+| Typed physical ingress and same-kind/cross-role laws | PASS: role-qualified keys reach builder/mutable/import/reexports; three-role native model and selective base restoration/mixed-delta controls pass in full1230. |
+| Validation before term minting | PASS: shared borrowed validate_record, iterative position/literal/CDT validation, canonical reifier restrictions. Invalid builder and mutable controls prove no term/row publication; no per-record temporary dataset. |
+| Ordinary classification and reversible provenance | PASS: scoped owner indices/direct classification, generated-target ownership, restored-role classification and exact collision/undo controls all pass. View contains no second classifier. |
+| Public value metrics and physical/live counts | PASS: maintained caller-origin metrics exclude normalization effects; promotion/demotion/undo and restored-role controls preserve old values. Physical masks/counts and net graph change remain independent. |
+| Deterministic authored/probe ordering | PASS: total origin tie, caller term priming and sparse owned base-origin replay; independent authored-target ordered regression and unchanged full probe-order golden pass in all59 shared views. |
+| Snapshot/freeze/metadata/lifetime/admission | PASS: typed importer/freezer, retained-view isolation, preserved ordinary locations/base sidecars, both graph modes/declarations, blank/CDT scope and exact/one-below retention controls qualify through1230 plus4/12/11/2/6/59. Matching admission/view formulas include replay set; failed publication does not add successful work. |
+| Strict owning qualification | PASS: actual settled strict all-target core clippy, full owning test scope and fmt each0. Earlier failures remain historical evidence below. |
+
+## Retained investigation checkpoints
+
+The following findings and pending observations describe earlier drafts. All are superseded by the final verdict/table and focused correction adjudications; no historical failure was deleted or reclassified as a successful execution.
+
+Read plan Task1 and typed-transfer design, T1 implementation readiness and T2 production-wiring readiness, owning builder/validate/import/reexports and mutable/delta-view diff against aab23cbf2. Applicable AGENTS, root baseline/goals, helper ledger and accepted focused plan review govern. No reviewer builds, shipping edits, index/ref changes or forge operations occurred.
+
+## HISTORICAL: concrete owning findings
+
+1. **Reversible classification loses caller suppression when its target was a suppressed base role.** normalize_subject records generated ownership only if insert_record_rows creates an added target. A restored suppressed base target is not added, so it is left visible during undo. Concrete input: base Ordinary(q)+Annotation(q), no reifier; typed remove Annotation(q); ordinary insert declaration for q.subject; ordinary remove declaration. Conversion temporarily restores Annotation(q), but undo restores Ordinary(q) without suppressing the generated target again: two records survive instead of the one caller retained. Writer confirmed the source computation. Required correction: track ownership of a target restored from base as well as a generated added target; preserve independently visible targets. Regression must assert exact roles/counts/snapshot/freeze for this sequence, both graph modes and the already-visible-target neighbor.
+
+2. **Every ordinary insert now scans the growing delta classification state.** insert_key calls normalize_subject on any changed ordinary insertion. normalize_subject scans reclassified/automatic collections, and has_effective_reifier scans added. N unrelated ordinary rows in an empty dataset therefore acquire quadratic mutation work, where previous hashed insertion plus one append pass was linear overall. Required correction: classify the newly inserted ordinary row directly, and normalize affected subject/graph only when a declaration change requires it; maintain indexed membership if scans otherwise remain. Preserve real promotion/demotion and restore-all compatibility. This is a concrete production hot-path regression, not a request for an unrelated benchmark campaign.
+
+Both findings were sent promptly to root and sole writer. Retry3 source recheck discharges their source causes: classification_created now owns restored-base targets as well as added targets; subject/graph-indexed origins/conversions and reifier counts plus direct new-row classification remove the every-insert whole-delta scan. Actual regression/runtime qualification remains pending.
+
+Two adjacent source findings remain open:
+
+3. Ordinary restore-all skips classification of a restored row: with base Ordinary(q) suppressed, then an ordinary added declaration for q.subject, ordinary insert(q) sets changed=true by restoring the base role and therefore skips the new-row classify_record branch. Since q itself is not a declaration, it also skips normalize_subject. The restored ordinary remains ordinary instead of being inferred as annotation under the effective added reifier. Classify the restored eligible roles through the indexed owner while preserving exact insert_record behavior; add the required exact-role restore neighbor.
+
+4. normalize_subject sorts candidates only by added_ord.unwrap_or(0), leaving base rows tied with the first delta ordinal. The unstable sort and unordered automatic origin input can select different fresh conversion ordinal order. This is observable through DatasetMut::quads_for_pattern, which reads added_in_order directly; deterministic freeze sorting alone is insufficient. Establish an explicit total canonical base/table or tuple tie and preserved delta order, and assert actual ordered vectors through permutation/undo neighbors. Current typed_image set comparisons do not prove ordering.
+
+These are scoped rechecks of the changed normalization, not new generic campaigns or a reopened plan. All source findings were sent promptly to root/writer; final verdict still requires frozen source and owning actual results.
+
+## HISTORICAL: draft source coverage
+
+| Required Task1 behavior | Draft assessment |
+|---|---|
+| Exact physical membership and selective restore | Role-qualified RecordKey; same-kind probes and distinct-role coexistence are coherent. Public value-key metrics use maintained reference counts. New selective restoration fixture covers ordinary+annotation; final complete role/state coverage remains pending. |
+| Reversible ordinary classification, counts and graph lifetime | Single classifier home retained, eager normalized physical publication removes view's second classifier. Net effective-count adjustment occurs once per affected graph. The reversible-base-target finding above blocks acceptance. |
+| Typed validation before interning | Builder and mutable ingress call shared validate_record before key_of/interning. Fold is iterative; subject/predicate/graph/literal checks reuse native validation helpers; canonical reifier predicate/triple restrictions are explicit. No per-record temporary builder. New invalid-role/position fixture asserts no delta terms or rows published. |
+| Snapshot, freeze, retained view and metadata | Role masks and larger key byte charge are wired consistently through DeltaAdmission/view. Typed importer replays all three streams; freeze still uses it and preserves surviving ordinary locations while base owns non-RDF sidecars. New retained snapshot and exact/one-below limit controls are meaningful, but final actual results are pending. |
+| Deterministic order and public compatibility | Role-key ordinals and per-value counts are present. No default switch or DatasetMut signature change. Existing compatibility tests must remain intact; classification undo/duplicate and insertion-order neighbors need final coverage. |
+| Production consumer preparation | Public RecordKind/RecordValues, builder push_record, mutable typed methods and typed import export form a usable native seam. Actual evaluator wiring is Task2 and is not claimed complete here. |
+
+The old public-path baseline42918 intentionally reproduces an incorrect three-row mutable result versus two-row frozen oracle. It is failing-behavior evidence only. At this historical checkpoint, frozen final source and owning qualification were still required; the current final results above subsequently discharged those conditions.
+
+## Focused final replay recheck
+
+All concrete source findings are now DISCHARGED IN SOURCE. Restored-base target ownership, scoped automatic/conversion/reifier indices, restored-role classification and canonical total-origin sorting were inspected. Separate caller_added/caller_suppressed metrics exclude generated promotion/demotion while preserving physical accounting; actual public_mutation_metrics_exclude_derived_classification verifies the old1/0 and0/1 neighbors and their undo. Typed three-role base restoration, mixed base/delta removal, malformed CDT refusal before builder/mutable interning and scoped CDT identity retention extend meaningful native coverage.
+
+The final converted replay set requires a base origin (no delta ordinal), target still added, and classification_created ownership. An independent authored target therefore stays in its original delta segment; new normalization_does_not_reorder_an_independently_added_target asserts its ordered annotation vector and exact undo set. Role-specific original base cursors provide explicit normalized-origin replay, and generic delta streams exclude exactly those targets. No view-time classifier was reintroduced. Caller-origin priming preserves native term-ID probe order without unused-origin retention. Matching DeltaAdmission/frozen auxiliary formulas and actual copied-index accounting include the sparse role-qualified set. Surviving base ordinary location attachment remains before generated/caller delta publication, and non-RDF sidecars remain base-owned.
+
+Final lint refinement adjudicated: insert_record now borrows RecordValues like builder/removal; pre-mint validation/membership/accounting remain unchanged. Filter/map and branch simplifications retain all ownership conditions and no lint allow or gate bypass. Actual settled1373 qualification above discharges the later strict failure; prior75582 and earlier failures remain attributable snapshots, not final-source acceptance. All concrete source findings are discharged with actual owning positive/control coverage.
+
+HISTORICAL session75582: origin-replay.log showed55 mutable controls passed (0fail/0ignore), followed by complete shared_views59 passed (0fail/0ignore), including the unchanged probe-order golden. Subsequent strict clippy in that attempt failed with owning lib/cfgtest style errors. Those exact errors were repaired and actual1373 strict/fmt/full owning results above discharged the then-pending final verdict. The initial and priming-only failed logs/outputs remain historical; no extra broad reviewer campaign was performed.

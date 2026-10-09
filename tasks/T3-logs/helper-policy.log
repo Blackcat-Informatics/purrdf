@@ -1,0 +1,15 @@
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/testkit)
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/helper-census)
+    Finished `test` profile [optimized] target(s) in 20.32s
+     Running unittests src/main.rs (/opt/purrdf-401-qualification/build/debug/build/helper-census/4b6541df90e9b283/out/helper_census-4b6541df90e9b283)
+
+running 6 tests
+test policy::tests::feature_maps_ignore_packages_outside_the_workspace ... ok
+test policy::tests::lines_and_rules_match_the_former_dead_test_guard ... ok
+test policy::tests::all_policy_negative_vectors_and_valid_neighbors_hold ... ok
+test policy::tests::missing_governed_directory_fails_and_empty_directory_passes ... ok
+test policy::tests::python_sources_have_no_build_directory_exemption ... ok
+test policy::tests::the_source_walk_excludes_build_and_sibling_trees ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 65 filtered out; finished in 0.05s
+

@@ -1,0 +1,1 @@
+env CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/scripts/wasm-test-runner.sh cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test update_typed_records --jobs 8 

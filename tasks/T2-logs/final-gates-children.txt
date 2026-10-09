@@ -1,0 +1,6 @@
+PID 2666987 bash
+0::/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-401-task2-final-gates-20261008.scope
+PID 2669897 make
+0::/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-401-task2-final-gates-20261008.scope
+PID 2670330 python3
+0::/user.slice/user-1000.slice/user@1000.service/app.slice/purrdf-401-task2-final-gates-20261008.scope

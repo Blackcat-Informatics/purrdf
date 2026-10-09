@@ -1,0 +1,1 @@
+{"errors":[{"message":"Expected one of SCHEMA, SCALAR, TYPE, ENUM, INPUT, UNION, INTERFACE, actual: RCURLY (\"}\") at [1, 360]","locations":[{"line":1,"column":360}]}]}

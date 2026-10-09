@@ -1,0 +1,51 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 50.76s
+     Running unittests src/lib.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-sparql-eval/0f1f025a3a622dc8/out/purrdf_sparql_eval-0f1f025a3a622dc8)
+
+running 43 tests
+test update::tests::clear_default_empties_default_graph ... ok
+test update::tests::add_copies_source_into_dest_keeping_both ... ok
+test update::tests::basic_profile_gate_admits_a_within_profile_update ... ok
+test update::tests::copy_replaces_dest_then_fills_it ... ok
+test update::tests::a_host_reported_stop_is_the_trip_under_silent_too ... ok
+test update::tests::basic_profile_gate_refuses_triple_term_and_leaves_dataset_unchanged ... ok
+test update::tests::delete_data_removes_quad ... ok
+test update::tests::create_graph_is_a_noop ... ok
+test update::tests::drop_named_graph_removes_its_quads ... ok
+test update::tests::graph_op_to_named_or_all_destination_is_a_hard_error ... ok
+test update::tests::custom_aggregate_arity_mismatch_in_update_where_carries_the_aggregate_code ... ok
+test update::tests::insert_data_adds_quad ... ok
+test update::tests::insert_data_blank_node_mints_a_blank ... ok
+test update::tests::delete_where_removes_matches ... ok
+test update::tests::delete_template_with_a_triple_term_subject_removes_nothing_and_errors_on_nothing ... ok
+test update::tests::delete_insert_modify_round_trips_a_where_bound_value ... ok
+test update::tests::insert_data_skips_an_ill_formed_ground_quad ... ok
+test update::tests::insert_only_modify_keeps_source ... ok
+test update::tests::insert_template_skips_a_literal_subject_and_keeps_its_sibling ... ok
+test update::tests::insert_template_skips_an_ill_formed_object_triple_term ... ok
+test update::tests::insert_template_skips_a_triple_term_subject_and_keeps_its_sibling ... ok
+test update::tests::later_operation_sees_earlier_effect ... ok
+test update::tests::load_counter_admits_complete_batches_or_refuses_before_minting ... ok
+test update::tests::insert_template_skips_a_nested_triple_term_subject ... ok
+test update::tests::load_map_invariant_refuses_bare_and_composite_missing_identities ... ok
+test update::tests::load_into_named_graph_rekeys_to_destination ... ok
+test update::tests::load_silent_without_resolver_is_a_noop_ok ... ok
+test update::tests::load_without_resolver_is_a_hard_error ... ok
+test update::tests::load_with_resolver_imports_into_default_graph ... ok
+test update::tests::load_silent_succeeds_for_every_failure_and_records_it ... ok
+test update::tests::move_clears_source_after_copy ... ok
+test update::tests::move_self_to_self_preserves_the_graph ... ok
+test update::tests::remembered_create_registers_an_empty_graph ... ok
+test update::tests::recognized_versions_still_apply ... ok
+test update::tests::unrecognized_version_refused_and_leaves_dataset_unchanged ... ok
+test update::tests::unregistered_aggregate_in_update_where_is_refused_with_the_aggregate_code_and_zero_charge ... ok
+test update::tests::unregistered_property_function_in_update_where_still_reports_the_property_function_code ... ok
+test update::tests::late_raw_values_preserve_fresh_bnode_identity_in_update_where ... ok
+test update::tests::using_nonexistent_graph_matches_nothing ... ok
+test update::tests::using_scopes_where_to_the_named_graph ... ok
+test update::tests::using_named_restricts_graph_var_in_where ... ok
+test update::tests::with_scopes_where_and_targets_the_named_graph ... ok
+test update::tests::index_of_is_not_called_per_update_row ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 1380 filtered out; finished in 0.00s
+

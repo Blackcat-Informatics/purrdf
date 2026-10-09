@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 401,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2",
+  "branch": "paudley/401-update-transfers-preserve-rdf-1-2",
+  "slug": "update-transfers-preserve-rdf-1-2",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/.stage/update-transfers-preserve-rdf-1-2",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "aab23cbf20b68483ae58bf8440cd882bf1e1897b",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2",
+    "branch:paudley/401-update-transfers-preserve-rdf-1-2",
+    "stage:/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/.stage/update-transfers-preserve-rdf-1-2",
+    "issue:/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/.stage/update-transfers-preserve-rdf-1-2/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-08T19:56:00-0600"
+}

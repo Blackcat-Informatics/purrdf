@@ -1,0 +1,40 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/mutable.rs:521:37
+    |
+521 |             GraphMatchValue::Any => crate::GraphMatch::Any,
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+521 -             GraphMatchValue::Any => crate::GraphMatch::Any,
+521 +             GraphMatchValue::Any => GraphMatch::Any,
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/mutable.rs:522:41
+    |
+522 |             GraphMatchValue::Default => crate::GraphMatch::Default,
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+522 -             GraphMatchValue::Default => crate::GraphMatch::Default,
+522 +             GraphMatchValue::Default => GraphMatch::Default,
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/mutable.rs:527:17
+    |
+527 |                 crate::GraphMatch::Named(id)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+527 -                 crate::GraphMatch::Named(id)
+527 +                 GraphMatch::Named(id)
+    |
+
+error: could not compile `purrdf-core` (lib) due to 3 previous errors

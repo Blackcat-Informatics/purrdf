@@ -1,0 +1,1008 @@
+? ? ? *
+  delta: s0 p0 o0 g0, s0 p0 o1 g1, s0 p1 o0 g0, s0 p1 o1 g1, s1 p0 o0 -, s1 p0 o1 g0, s1 p1 o0 -, s1 p1 o1 g0, s2 p0 o0 g1, s2 p0 o1 -, s2 p1 o0 g1, s2 p1 o1 -, s3 p0 o0 g0, s3 p0 o1 g1, s3 p1 o0 g0, s3 p1 o1 g1, late p0 o0 -, late p1 o1 g1, s3 p1 o0 -, s2 p0 o1 g1, r p1 o1 g0
+  composite: s0 p0 o0 -, s0 p0 o1 g0, s0 p1 o0 -, s0 p1 o1 g0, s1 p0 o0 g1, s1 p0 o1 -, s1 p1 o0 g1, s1 p1 o1 -, s2 p0 o0 g0, s2 p0 o1 g1, s2 p1 o0 g0, s2 p1 o1 g1, s3 p0 o0 -, s3 p0 o1 g0, s3 p1 o0 -, s3 p1 o1 g0, s0 p0 o0 g0, s0 p0 o1 g1, s0 p1 o0 g0, s0 p1 o1 g1, s1 p0 o0 -, s1 p0 o1 g0, s1 p1 o0 -, s1 p1 o1 g0, s2 p0 o0 g1, s2 p0 o1 -, s2 p1 o0 g1, s2 p1 o1 -, s3 p0 o0 g0, s3 p0 o1 g1, s3 p1 o0 g0, s3 p1 o1 g1, late p0 o0 -, late p1 o1 g1, r p1 o1 g0, s0 p0 o0 g1, s0 p0 o1 -, s0 p1 o0 g1, s0 p1 o1 -, s1 p0 o0 g0, s1 p0 o1 g1, s1 p1 o0 g0, s1 p1 o1 g1, s2 p0 o0 -, s2 p0 o1 g0, s2 p1 o0 -, s2 p1 o1 g0, s3 p0 o0 g1, s3 p0 o1 -, s3 p1 o0 g1, s3 p1 o1 -
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s2 p0 o0 g0, s2 p1 o0 g0, s3 p0 o1 g0, s3 p1 o1 g0, s0 p0 o0 g0, s0 p1 o0 g0, s1 p0 o1 g0, s1 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0, r p1 o1 g0, s1 p0 o0 g0, s1 p1 o0 g0, s2 p0 o1 g0, s2 p1 o1 g0, s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o1 g1, s2 p1 o1 g1, s0 p0 o1 g1, s0 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s0 p0 o0 g1, s0 p1 o0 g1, s1 p0 o1 g1, s1 p1 o1 g1, s3 p0 o0 g1, s3 p1 o0 g1
+? ? ? -
+  delta: s1 p0 o0 -, s1 p1 o0 -, s2 p0 o1 -, s2 p1 o1 -, late p0 o0 -, s3 p1 o0 -
+  composite: s0 p0 o0 -, s0 p1 o0 -, s1 p0 o1 -, s1 p1 o1 -, s3 p0 o0 -, s3 p1 o0 -, s1 p0 o0 -, s1 p1 o0 -, s2 p0 o1 -, s2 p1 o1 -, late p0 o0 -, s0 p0 o1 -, s0 p1 o1 -, s2 p0 o0 -, s2 p1 o0 -, s3 p0 o1 -, s3 p1 o1 -
+  selection: none
+? ? ? g0
+  delta: s0 p0 o0 g0, s0 p1 o0 g0, s1 p0 o1 g0, s1 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0, r p1 o1 g0
+  composite: s0 p0 o1 g0, s0 p1 o1 g0, s2 p0 o0 g0, s2 p1 o0 g0, s3 p0 o1 g0, s3 p1 o1 g0, s0 p0 o0 g0, s0 p1 o0 g0, s1 p0 o1 g0, s1 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0, r p1 o1 g0, s1 p0 o0 g0, s1 p1 o0 g0, s2 p0 o1 g0, s2 p1 o1 g0
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s2 p0 o0 g0, s2 p1 o0 g0, s3 p0 o1 g0, s3 p1 o1 g0, s0 p0 o0 g0, s0 p1 o0 g0, s1 p0 o1 g0, s1 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0, r p1 o1 g0, s1 p0 o0 g0, s1 p1 o0 g0, s2 p0 o1 g0, s2 p1 o1 g0
+? ? ? g1
+  delta: s0 p0 o1 g1, s0 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s2 p0 o1 g1
+  composite: s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o1 g1, s2 p1 o1 g1, s0 p0 o1 g1, s0 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s0 p0 o0 g1, s0 p1 o0 g1, s1 p0 o1 g1, s1 p1 o1 g1, s3 p0 o0 g1, s3 p1 o0 g1
+  selection: s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o1 g1, s2 p1 o1 g1, s0 p0 o1 g1, s0 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s0 p0 o0 g1, s0 p1 o0 g1, s1 p0 o1 g1, s1 p1 o1 g1, s3 p0 o0 g1, s3 p1 o0 g1
+? ? o0 *
+  delta: s0 p0 o0 g0, s0 p1 o0 g0, s1 p0 o0 -, s1 p1 o0 -, s2 p0 o0 g1, s2 p1 o0 g1, s3 p0 o0 g0, s3 p1 o0 g0, late p0 o0 -, s3 p1 o0 -
+  composite: s0 p0 o0 -, s0 p1 o0 -, s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o0 g0, s2 p1 o0 g0, s3 p0 o0 -, s3 p1 o0 -, s0 p0 o0 g0, s0 p1 o0 g0, s1 p0 o0 -, s1 p1 o0 -, s2 p0 o0 g1, s2 p1 o0 g1, s3 p0 o0 g0, s3 p1 o0 g0, late p0 o0 -, s0 p0 o0 g1, s0 p1 o0 g1, s1 p0 o0 g0, s1 p1 o0 g0, s2 p0 o0 -, s2 p1 o0 -, s3 p0 o0 g1, s3 p1 o0 g1
+  selection: s2 p0 o0 g0, s2 p1 o0 g0, s0 p0 o0 g0, s0 p1 o0 g0, s3 p0 o0 g0, s3 p1 o0 g0, s1 p0 o0 g0, s1 p1 o0 g0, s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o0 g1, s2 p1 o0 g1, s0 p0 o0 g1, s0 p1 o0 g1, s3 p0 o0 g1, s3 p1 o0 g1
+? ? o0 -
+  delta: s1 p0 o0 -, s1 p1 o0 -, late p0 o0 -, s3 p1 o0 -
+  composite: s0 p0 o0 -, s0 p1 o0 -, s3 p0 o0 -, s3 p1 o0 -, s1 p0 o0 -, s1 p1 o0 -, late p0 o0 -, s2 p0 o0 -, s2 p1 o0 -
+  selection: none
+? ? o0 g0
+  delta: s0 p0 o0 g0, s0 p1 o0 g0, s3 p0 o0 g0, s3 p1 o0 g0
+  composite: s2 p0 o0 g0, s2 p1 o0 g0, s0 p0 o0 g0, s0 p1 o0 g0, s3 p0 o0 g0, s3 p1 o0 g0, s1 p0 o0 g0, s1 p1 o0 g0
+  selection: s2 p0 o0 g0, s2 p1 o0 g0, s0 p0 o0 g0, s0 p1 o0 g0, s3 p0 o0 g0, s3 p1 o0 g0, s1 p0 o0 g0, s1 p1 o0 g0
+? ? o0 g1
+  delta: s2 p0 o0 g1, s2 p1 o0 g1
+  composite: s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o0 g1, s2 p1 o0 g1, s0 p0 o0 g1, s0 p1 o0 g1, s3 p0 o0 g1, s3 p1 o0 g1
+  selection: s1 p0 o0 g1, s1 p1 o0 g1, s2 p0 o0 g1, s2 p1 o0 g1, s0 p0 o0 g1, s0 p1 o0 g1, s3 p0 o0 g1, s3 p1 o0 g1
+? ? o1 *
+  delta: s0 p0 o1 g1, s0 p1 o1 g1, s1 p0 o1 g0, s1 p1 o1 g0, s2 p0 o1 -, s2 p1 o1 -, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s2 p0 o1 g1, r p1 o1 g0
+  composite: s0 p0 o1 g0, s0 p1 o1 g0, s1 p0 o1 -, s1 p1 o1 -, s2 p0 o1 g1, s2 p1 o1 g1, s3 p0 o1 g0, s3 p1 o1 g0, s0 p0 o1 g1, s0 p1 o1 g1, s1 p0 o1 g0, s1 p1 o1 g0, s2 p0 o1 -, s2 p1 o1 -, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, r p1 o1 g0, s0 p0 o1 -, s0 p1 o1 -, s1 p0 o1 g1, s1 p1 o1 g1, s2 p0 o1 g0, s2 p1 o1 g0, s3 p0 o1 -, s3 p1 o1 -
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s3 p0 o1 g0, s3 p1 o1 g0, s1 p0 o1 g0, s1 p1 o1 g0, r p1 o1 g0, s2 p0 o1 g0, s2 p1 o1 g0, s2 p0 o1 g1, s2 p1 o1 g1, s0 p0 o1 g1, s0 p1 o1 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s1 p0 o1 g1, s1 p1 o1 g1
+? ? o1 -
+  delta: s2 p0 o1 -, s2 p1 o1 -
+  composite: s1 p0 o1 -, s1 p1 o1 -, s2 p0 o1 -, s2 p1 o1 -, s0 p0 o1 -, s0 p1 o1 -, s3 p0 o1 -, s3 p1 o1 -
+  selection: none
+? ? o1 g0
+  delta: s1 p0 o1 g0, s1 p1 o1 g0, r p1 o1 g0
+  composite: s0 p0 o1 g0, s0 p1 o1 g0, s3 p0 o1 g0, s3 p1 o1 g0, s1 p0 o1 g0, s1 p1 o1 g0, r p1 o1 g0, s2 p0 o1 g0, s2 p1 o1 g0
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s3 p0 o1 g0, s3 p1 o1 g0, s1 p0 o1 g0, s1 p1 o1 g0, r p1 o1 g0, s2 p0 o1 g0, s2 p1 o1 g0
+? ? o1 g1
+  delta: s0 p0 o1 g1, s0 p1 o1 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s2 p1 o1 g1, s0 p0 o1 g1, s0 p1 o1 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s1 p0 o1 g1, s1 p1 o1 g1
+  selection: s2 p0 o1 g1, s2 p1 o1 g1, s0 p0 o1 g1, s0 p1 o1 g1, s3 p0 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s1 p0 o1 g1, s1 p1 o1 g1
+? p0 ? *
+  delta: s0 p0 o0 g0, s0 p0 o1 g1, s1 p0 o0 -, s1 p0 o1 g0, s2 p0 o0 g1, s2 p0 o1 -, s3 p0 o0 g0, s3 p0 o1 g1, late p0 o0 -, s2 p0 o1 g1
+  composite: s0 p0 o0 -, s0 p0 o1 g0, s1 p0 o0 g1, s1 p0 o1 -, s2 p0 o0 g0, s2 p0 o1 g1, s3 p0 o0 -, s3 p0 o1 g0, s0 p0 o0 g0, s0 p0 o1 g1, s1 p0 o0 -, s1 p0 o1 g0, s2 p0 o0 g1, s2 p0 o1 -, s3 p0 o0 g0, s3 p0 o1 g1, late p0 o0 -, s0 p0 o0 g1, s0 p0 o1 -, s1 p0 o0 g0, s1 p0 o1 g1, s2 p0 o0 -, s2 p0 o1 g0, s3 p0 o0 g1, s3 p0 o1 -
+  selection: s2 p0 o0 g0, s0 p0 o1 g0, s3 p0 o1 g0, s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o1 g0, s1 p0 o0 g0, s2 p0 o1 g0, s1 p0 o0 g1, s2 p0 o1 g1, s2 p0 o0 g1, s0 p0 o1 g1, s3 p0 o1 g1, s0 p0 o0 g1, s3 p0 o0 g1, s1 p0 o1 g1
+? p0 ? -
+  delta: s1 p0 o0 -, s2 p0 o1 -, late p0 o0 -
+  composite: s0 p0 o0 -, s3 p0 o0 -, s1 p0 o1 -, s1 p0 o0 -, s2 p0 o1 -, late p0 o0 -, s2 p0 o0 -, s0 p0 o1 -, s3 p0 o1 -
+  selection: none
+? p0 ? g0
+  delta: s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o1 g0
+  composite: s2 p0 o0 g0, s0 p0 o1 g0, s3 p0 o1 g0, s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o1 g0, s1 p0 o0 g0, s2 p0 o1 g0
+  selection: s2 p0 o0 g0, s0 p0 o1 g0, s3 p0 o1 g0, s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o1 g0, s1 p0 o0 g0, s2 p0 o1 g0
+? p0 ? g1
+  delta: s2 p0 o0 g1, s0 p0 o1 g1, s3 p0 o1 g1, s2 p0 o1 g1
+  composite: s1 p0 o0 g1, s2 p0 o1 g1, s2 p0 o0 g1, s0 p0 o1 g1, s3 p0 o1 g1, s0 p0 o0 g1, s3 p0 o0 g1, s1 p0 o1 g1
+  selection: s1 p0 o0 g1, s2 p0 o1 g1, s2 p0 o0 g1, s0 p0 o1 g1, s3 p0 o1 g1, s0 p0 o0 g1, s3 p0 o0 g1, s1 p0 o1 g1
+? p0 o0 *
+  delta: s0 p0 o0 g0, s1 p0 o0 -, s2 p0 o0 g1, s3 p0 o0 g0, late p0 o0 -
+  composite: s0 p0 o0 -, s1 p0 o0 g1, s2 p0 o0 g0, s3 p0 o0 -, s0 p0 o0 g0, s1 p0 o0 -, s2 p0 o0 g1, s3 p0 o0 g0, late p0 o0 -, s0 p0 o0 g1, s1 p0 o0 g0, s2 p0 o0 -, s3 p0 o0 g1
+  selection: s2 p0 o0 g0, s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o0 g0, s1 p0 o0 g1, s2 p0 o0 g1, s0 p0 o0 g1, s3 p0 o0 g1
+? p0 o0 -
+  delta: s1 p0 o0 -, late p0 o0 -
+  composite: s0 p0 o0 -, s3 p0 o0 -, s1 p0 o0 -, late p0 o0 -, s2 p0 o0 -
+  selection: none
+? p0 o0 g0
+  delta: s0 p0 o0 g0, s3 p0 o0 g0
+  composite: s2 p0 o0 g0, s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o0 g0
+  selection: s2 p0 o0 g0, s0 p0 o0 g0, s3 p0 o0 g0, s1 p0 o0 g0
+? p0 o0 g1
+  delta: s2 p0 o0 g1
+  composite: s1 p0 o0 g1, s2 p0 o0 g1, s0 p0 o0 g1, s3 p0 o0 g1
+  selection: s1 p0 o0 g1, s2 p0 o0 g1, s0 p0 o0 g1, s3 p0 o0 g1
+? p0 o1 *
+  delta: s0 p0 o1 g1, s1 p0 o1 g0, s2 p0 o1 -, s3 p0 o1 g1, s2 p0 o1 g1
+  composite: s0 p0 o1 g0, s1 p0 o1 -, s2 p0 o1 g1, s3 p0 o1 g0, s0 p0 o1 g1, s1 p0 o1 g0, s2 p0 o1 -, s3 p0 o1 g1, s0 p0 o1 -, s1 p0 o1 g1, s2 p0 o1 g0, s3 p0 o1 -
+  selection: s0 p0 o1 g0, s3 p0 o1 g0, s1 p0 o1 g0, s2 p0 o1 g0, s2 p0 o1 g1, s0 p0 o1 g1, s3 p0 o1 g1, s1 p0 o1 g1
+? p0 o1 -
+  delta: s2 p0 o1 -
+  composite: s1 p0 o1 -, s2 p0 o1 -, s0 p0 o1 -, s3 p0 o1 -
+  selection: none
+? p0 o1 g0
+  delta: s1 p0 o1 g0
+  composite: s0 p0 o1 g0, s3 p0 o1 g0, s1 p0 o1 g0, s2 p0 o1 g0
+  selection: s0 p0 o1 g0, s3 p0 o1 g0, s1 p0 o1 g0, s2 p0 o1 g0
+? p0 o1 g1
+  delta: s0 p0 o1 g1, s3 p0 o1 g1, s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s0 p0 o1 g1, s3 p0 o1 g1, s1 p0 o1 g1
+  selection: s2 p0 o1 g1, s0 p0 o1 g1, s3 p0 o1 g1, s1 p0 o1 g1
+? p1 ? *
+  delta: s0 p1 o0 g0, s0 p1 o1 g1, s1 p1 o0 -, s1 p1 o1 g0, s2 p1 o0 g1, s2 p1 o1 -, s3 p1 o0 g0, s3 p1 o1 g1, late p1 o1 g1, s3 p1 o0 -, r p1 o1 g0
+  composite: s0 p1 o0 -, s0 p1 o1 g0, s1 p1 o0 g1, s1 p1 o1 -, s2 p1 o0 g0, s2 p1 o1 g1, s3 p1 o0 -, s3 p1 o1 g0, s0 p1 o0 g0, s0 p1 o1 g1, s1 p1 o0 -, s1 p1 o1 g0, s2 p1 o0 g1, s2 p1 o1 -, s3 p1 o0 g0, s3 p1 o1 g1, late p1 o1 g1, r p1 o1 g0, s0 p1 o0 g1, s0 p1 o1 -, s1 p1 o0 g0, s1 p1 o1 g1, s2 p1 o0 -, s2 p1 o1 g0, s3 p1 o0 g1, s3 p1 o1 -
+  selection: s2 p1 o0 g0, s0 p1 o1 g0, s3 p1 o1 g0, s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o1 g0, r p1 o1 g0, s1 p1 o0 g0, s2 p1 o1 g0, s1 p1 o0 g1, s2 p1 o1 g1, s2 p1 o0 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s0 p1 o0 g1, s3 p1 o0 g1, s1 p1 o1 g1
+? p1 ? -
+  delta: s1 p1 o0 -, s2 p1 o1 -, s3 p1 o0 -
+  composite: s0 p1 o0 -, s3 p1 o0 -, s1 p1 o1 -, s1 p1 o0 -, s2 p1 o1 -, s2 p1 o0 -, s0 p1 o1 -, s3 p1 o1 -
+  selection: none
+? p1 ? g0
+  delta: s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o1 g0, r p1 o1 g0
+  composite: s2 p1 o0 g0, s0 p1 o1 g0, s3 p1 o1 g0, s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o1 g0, r p1 o1 g0, s1 p1 o0 g0, s2 p1 o1 g0
+  selection: s2 p1 o0 g0, s0 p1 o1 g0, s3 p1 o1 g0, s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o1 g0, r p1 o1 g0, s1 p1 o0 g0, s2 p1 o1 g0
+? p1 ? g1
+  delta: s2 p1 o0 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1
+  composite: s1 p1 o0 g1, s2 p1 o1 g1, s2 p1 o0 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s0 p1 o0 g1, s3 p1 o0 g1, s1 p1 o1 g1
+  selection: s1 p1 o0 g1, s2 p1 o1 g1, s2 p1 o0 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s0 p1 o0 g1, s3 p1 o0 g1, s1 p1 o1 g1
+? p1 o0 *
+  delta: s0 p1 o0 g0, s1 p1 o0 -, s2 p1 o0 g1, s3 p1 o0 g0, s3 p1 o0 -
+  composite: s0 p1 o0 -, s1 p1 o0 g1, s2 p1 o0 g0, s3 p1 o0 -, s0 p1 o0 g0, s1 p1 o0 -, s2 p1 o0 g1, s3 p1 o0 g0, s0 p1 o0 g1, s1 p1 o0 g0, s2 p1 o0 -, s3 p1 o0 g1
+  selection: s2 p1 o0 g0, s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o0 g0, s1 p1 o0 g1, s2 p1 o0 g1, s0 p1 o0 g1, s3 p1 o0 g1
+? p1 o0 -
+  delta: s1 p1 o0 -, s3 p1 o0 -
+  composite: s0 p1 o0 -, s3 p1 o0 -, s1 p1 o0 -, s2 p1 o0 -
+  selection: none
+? p1 o0 g0
+  delta: s0 p1 o0 g0, s3 p1 o0 g0
+  composite: s2 p1 o0 g0, s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o0 g0
+  selection: s2 p1 o0 g0, s0 p1 o0 g0, s3 p1 o0 g0, s1 p1 o0 g0
+? p1 o0 g1
+  delta: s2 p1 o0 g1
+  composite: s1 p1 o0 g1, s2 p1 o0 g1, s0 p1 o0 g1, s3 p1 o0 g1
+  selection: s1 p1 o0 g1, s2 p1 o0 g1, s0 p1 o0 g1, s3 p1 o0 g1
+? p1 o1 *
+  delta: s0 p1 o1 g1, s1 p1 o1 g0, s2 p1 o1 -, s3 p1 o1 g1, late p1 o1 g1, r p1 o1 g0
+  composite: s0 p1 o1 g0, s1 p1 o1 -, s2 p1 o1 g1, s3 p1 o1 g0, s0 p1 o1 g1, s1 p1 o1 g0, s2 p1 o1 -, s3 p1 o1 g1, late p1 o1 g1, r p1 o1 g0, s0 p1 o1 -, s1 p1 o1 g1, s2 p1 o1 g0, s3 p1 o1 -
+  selection: s0 p1 o1 g0, s3 p1 o1 g0, s1 p1 o1 g0, r p1 o1 g0, s2 p1 o1 g0, s2 p1 o1 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s1 p1 o1 g1
+? p1 o1 -
+  delta: s2 p1 o1 -
+  composite: s1 p1 o1 -, s2 p1 o1 -, s0 p1 o1 -, s3 p1 o1 -
+  selection: none
+? p1 o1 g0
+  delta: s1 p1 o1 g0, r p1 o1 g0
+  composite: s0 p1 o1 g0, s3 p1 o1 g0, s1 p1 o1 g0, r p1 o1 g0, s2 p1 o1 g0
+  selection: s0 p1 o1 g0, s3 p1 o1 g0, s1 p1 o1 g0, r p1 o1 g0, s2 p1 o1 g0
+? p1 o1 g1
+  delta: s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1
+  composite: s2 p1 o1 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s1 p1 o1 g1
+  selection: s2 p1 o1 g1, s0 p1 o1 g1, s3 p1 o1 g1, late p1 o1 g1, s1 p1 o1 g1
+s0 ? ? *
+  delta: s0 p0 o0 g0, s0 p0 o1 g1, s0 p1 o0 g0, s0 p1 o1 g1
+  composite: s0 p0 o0 -, s0 p0 o1 g0, s0 p1 o0 -, s0 p1 o1 g0, s0 p0 o0 g0, s0 p0 o1 g1, s0 p1 o0 g0, s0 p1 o1 g1, s0 p0 o0 g1, s0 p0 o1 -, s0 p1 o0 g1, s0 p1 o1 -
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s0 p0 o0 g0, s0 p1 o0 g0, s0 p0 o1 g1, s0 p1 o1 g1, s0 p0 o0 g1, s0 p1 o0 g1
+s0 ? ? -
+  delta: none
+  composite: s0 p0 o0 -, s0 p1 o0 -, s0 p0 o1 -, s0 p1 o1 -
+  selection: none
+s0 ? ? g0
+  delta: s0 p0 o0 g0, s0 p1 o0 g0
+  composite: s0 p0 o1 g0, s0 p1 o1 g0, s0 p0 o0 g0, s0 p1 o0 g0
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s0 p0 o0 g0, s0 p1 o0 g0
+s0 ? ? g1
+  delta: s0 p0 o1 g1, s0 p1 o1 g1
+  composite: s0 p0 o1 g1, s0 p1 o1 g1, s0 p0 o0 g1, s0 p1 o0 g1
+  selection: s0 p0 o1 g1, s0 p1 o1 g1, s0 p0 o0 g1, s0 p1 o0 g1
+s0 ? o0 *
+  delta: s0 p0 o0 g0, s0 p1 o0 g0
+  composite: s0 p0 o0 -, s0 p1 o0 -, s0 p0 o0 g0, s0 p1 o0 g0, s0 p0 o0 g1, s0 p1 o0 g1
+  selection: s0 p0 o0 g0, s0 p1 o0 g0, s0 p0 o0 g1, s0 p1 o0 g1
+s0 ? o0 -
+  delta: none
+  composite: s0 p0 o0 -, s0 p1 o0 -
+  selection: none
+s0 ? o0 g0
+  delta: s0 p0 o0 g0, s0 p1 o0 g0
+  composite: s0 p0 o0 g0, s0 p1 o0 g0
+  selection: s0 p0 o0 g0, s0 p1 o0 g0
+s0 ? o0 g1
+  delta: none
+  composite: s0 p0 o0 g1, s0 p1 o0 g1
+  selection: s0 p0 o0 g1, s0 p1 o0 g1
+s0 ? o1 *
+  delta: s0 p0 o1 g1, s0 p1 o1 g1
+  composite: s0 p0 o1 g0, s0 p1 o1 g0, s0 p0 o1 g1, s0 p1 o1 g1, s0 p0 o1 -, s0 p1 o1 -
+  selection: s0 p0 o1 g0, s0 p1 o1 g0, s0 p0 o1 g1, s0 p1 o1 g1
+s0 ? o1 -
+  delta: none
+  composite: s0 p0 o1 -, s0 p1 o1 -
+  selection: none
+s0 ? o1 g0
+  delta: none
+  composite: s0 p0 o1 g0, s0 p1 o1 g0
+  selection: s0 p0 o1 g0, s0 p1 o1 g0
+s0 ? o1 g1
+  delta: s0 p0 o1 g1, s0 p1 o1 g1
+  composite: s0 p0 o1 g1, s0 p1 o1 g1
+  selection: s0 p0 o1 g1, s0 p1 o1 g1
+s0 p0 ? *
+  delta: s0 p0 o0 g0, s0 p0 o1 g1
+  composite: s0 p0 o0 -, s0 p0 o1 g0, s0 p0 o0 g0, s0 p0 o1 g1, s0 p0 o0 g1, s0 p0 o1 -
+  selection: s0 p0 o1 g0, s0 p0 o0 g0, s0 p0 o1 g1, s0 p0 o0 g1
+s0 p0 ? -
+  delta: none
+  composite: s0 p0 o0 -, s0 p0 o1 -
+  selection: none
+s0 p0 ? g0
+  delta: s0 p0 o0 g0
+  composite: s0 p0 o1 g0, s0 p0 o0 g0
+  selection: s0 p0 o1 g0, s0 p0 o0 g0
+s0 p0 ? g1
+  delta: s0 p0 o1 g1
+  composite: s0 p0 o1 g1, s0 p0 o0 g1
+  selection: s0 p0 o1 g1, s0 p0 o0 g1
+s0 p0 o0 *
+  delta: s0 p0 o0 g0
+  composite: s0 p0 o0 -, s0 p0 o0 g0, s0 p0 o0 g1
+  selection: s0 p0 o0 g0, s0 p0 o0 g1
+s0 p0 o0 -
+  delta: none
+  composite: s0 p0 o0 -
+  selection: none
+s0 p0 o0 g0
+  delta: s0 p0 o0 g0
+  composite: s0 p0 o0 g0
+  selection: s0 p0 o0 g0
+s0 p0 o0 g1
+  delta: none
+  composite: s0 p0 o0 g1
+  selection: s0 p0 o0 g1
+s0 p0 o1 *
+  delta: s0 p0 o1 g1
+  composite: s0 p0 o1 g0, s0 p0 o1 g1, s0 p0 o1 -
+  selection: s0 p0 o1 g0, s0 p0 o1 g1
+s0 p0 o1 -
+  delta: none
+  composite: s0 p0 o1 -
+  selection: none
+s0 p0 o1 g0
+  delta: none
+  composite: s0 p0 o1 g0
+  selection: s0 p0 o1 g0
+s0 p0 o1 g1
+  delta: s0 p0 o1 g1
+  composite: s0 p0 o1 g1
+  selection: s0 p0 o1 g1
+s0 p1 ? *
+  delta: s0 p1 o0 g0, s0 p1 o1 g1
+  composite: s0 p1 o0 -, s0 p1 o1 g0, s0 p1 o0 g0, s0 p1 o1 g1, s0 p1 o0 g1, s0 p1 o1 -
+  selection: s0 p1 o1 g0, s0 p1 o0 g0, s0 p1 o1 g1, s0 p1 o0 g1
+s0 p1 ? -
+  delta: none
+  composite: s0 p1 o0 -, s0 p1 o1 -
+  selection: none
+s0 p1 ? g0
+  delta: s0 p1 o0 g0
+  composite: s0 p1 o1 g0, s0 p1 o0 g0
+  selection: s0 p1 o1 g0, s0 p1 o0 g0
+s0 p1 ? g1
+  delta: s0 p1 o1 g1
+  composite: s0 p1 o1 g1, s0 p1 o0 g1
+  selection: s0 p1 o1 g1, s0 p1 o0 g1
+s0 p1 o0 *
+  delta: s0 p1 o0 g0
+  composite: s0 p1 o0 -, s0 p1 o0 g0, s0 p1 o0 g1
+  selection: s0 p1 o0 g0, s0 p1 o0 g1
+s0 p1 o0 -
+  delta: none
+  composite: s0 p1 o0 -
+  selection: none
+s0 p1 o0 g0
+  delta: s0 p1 o0 g0
+  composite: s0 p1 o0 g0
+  selection: s0 p1 o0 g0
+s0 p1 o0 g1
+  delta: none
+  composite: s0 p1 o0 g1
+  selection: s0 p1 o0 g1
+s0 p1 o1 *
+  delta: s0 p1 o1 g1
+  composite: s0 p1 o1 g0, s0 p1 o1 g1, s0 p1 o1 -
+  selection: s0 p1 o1 g0, s0 p1 o1 g1
+s0 p1 o1 -
+  delta: none
+  composite: s0 p1 o1 -
+  selection: none
+s0 p1 o1 g0
+  delta: none
+  composite: s0 p1 o1 g0
+  selection: s0 p1 o1 g0
+s0 p1 o1 g1
+  delta: s0 p1 o1 g1
+  composite: s0 p1 o1 g1
+  selection: s0 p1 o1 g1
+s1 ? ? *
+  delta: s1 p0 o0 -, s1 p0 o1 g0, s1 p1 o0 -, s1 p1 o1 g0
+  composite: s1 p0 o0 g1, s1 p0 o1 -, s1 p1 o0 g1, s1 p1 o1 -, s1 p0 o0 -, s1 p0 o1 g0, s1 p1 o0 -, s1 p1 o1 g0, s1 p0 o0 g0, s1 p0 o1 g1, s1 p1 o0 g0, s1 p1 o1 g1
+  selection: s1 p0 o1 g0, s1 p1 o1 g0, s1 p0 o0 g0, s1 p1 o0 g0, s1 p0 o0 g1, s1 p1 o0 g1, s1 p0 o1 g1, s1 p1 o1 g1
+s1 ? ? -
+  delta: s1 p0 o0 -, s1 p1 o0 -
+  composite: s1 p0 o1 -, s1 p1 o1 -, s1 p0 o0 -, s1 p1 o0 -
+  selection: none
+s1 ? ? g0
+  delta: s1 p0 o1 g0, s1 p1 o1 g0
+  composite: s1 p0 o1 g0, s1 p1 o1 g0, s1 p0 o0 g0, s1 p1 o0 g0
+  selection: s1 p0 o1 g0, s1 p1 o1 g0, s1 p0 o0 g0, s1 p1 o0 g0
+s1 ? ? g1
+  delta: none
+  composite: s1 p0 o0 g1, s1 p1 o0 g1, s1 p0 o1 g1, s1 p1 o1 g1
+  selection: s1 p0 o0 g1, s1 p1 o0 g1, s1 p0 o1 g1, s1 p1 o1 g1
+s1 ? o0 *
+  delta: s1 p0 o0 -, s1 p1 o0 -
+  composite: s1 p0 o0 g1, s1 p1 o0 g1, s1 p0 o0 -, s1 p1 o0 -, s1 p0 o0 g0, s1 p1 o0 g0
+  selection: s1 p0 o0 g0, s1 p1 o0 g0, s1 p0 o0 g1, s1 p1 o0 g1
+s1 ? o0 -
+  delta: s1 p0 o0 -, s1 p1 o0 -
+  composite: s1 p0 o0 -, s1 p1 o0 -
+  selection: none
+s1 ? o0 g0
+  delta: none
+  composite: s1 p0 o0 g0, s1 p1 o0 g0
+  selection: s1 p0 o0 g0, s1 p1 o0 g0
+s1 ? o0 g1
+  delta: none
+  composite: s1 p0 o0 g1, s1 p1 o0 g1
+  selection: s1 p0 o0 g1, s1 p1 o0 g1
+s1 ? o1 *
+  delta: s1 p0 o1 g0, s1 p1 o1 g0
+  composite: s1 p0 o1 -, s1 p1 o1 -, s1 p0 o1 g0, s1 p1 o1 g0, s1 p0 o1 g1, s1 p1 o1 g1
+  selection: s1 p0 o1 g0, s1 p1 o1 g0, s1 p0 o1 g1, s1 p1 o1 g1
+s1 ? o1 -
+  delta: none
+  composite: s1 p0 o1 -, s1 p1 o1 -
+  selection: none
+s1 ? o1 g0
+  delta: s1 p0 o1 g0, s1 p1 o1 g0
+  composite: s1 p0 o1 g0, s1 p1 o1 g0
+  selection: s1 p0 o1 g0, s1 p1 o1 g0
+s1 ? o1 g1
+  delta: none
+  composite: s1 p0 o1 g1, s1 p1 o1 g1
+  selection: s1 p0 o1 g1, s1 p1 o1 g1
+s1 p0 ? *
+  delta: s1 p0 o0 -, s1 p0 o1 g0
+  composite: s1 p0 o0 g1, s1 p0 o1 -, s1 p0 o0 -, s1 p0 o1 g0, s1 p0 o0 g0, s1 p0 o1 g1
+  selection: s1 p0 o1 g0, s1 p0 o0 g0, s1 p0 o0 g1, s1 p0 o1 g1
+s1 p0 ? -
+  delta: s1 p0 o0 -
+  composite: s1 p0 o1 -, s1 p0 o0 -
+  selection: none
+s1 p0 ? g0
+  delta: s1 p0 o1 g0
+  composite: s1 p0 o1 g0, s1 p0 o0 g0
+  selection: s1 p0 o1 g0, s1 p0 o0 g0
+s1 p0 ? g1
+  delta: none
+  composite: s1 p0 o0 g1, s1 p0 o1 g1
+  selection: s1 p0 o0 g1, s1 p0 o1 g1
+s1 p0 o0 *
+  delta: s1 p0 o0 -
+  composite: s1 p0 o0 g1, s1 p0 o0 -, s1 p0 o0 g0
+  selection: s1 p0 o0 g0, s1 p0 o0 g1
+s1 p0 o0 -
+  delta: s1 p0 o0 -
+  composite: s1 p0 o0 -
+  selection: none
+s1 p0 o0 g0
+  delta: none
+  composite: s1 p0 o0 g0
+  selection: s1 p0 o0 g0
+s1 p0 o0 g1
+  delta: none
+  composite: s1 p0 o0 g1
+  selection: s1 p0 o0 g1
+s1 p0 o1 *
+  delta: s1 p0 o1 g0
+  composite: s1 p0 o1 -, s1 p0 o1 g0, s1 p0 o1 g1
+  selection: s1 p0 o1 g0, s1 p0 o1 g1
+s1 p0 o1 -
+  delta: none
+  composite: s1 p0 o1 -
+  selection: none
+s1 p0 o1 g0
+  delta: s1 p0 o1 g0
+  composite: s1 p0 o1 g0
+  selection: s1 p0 o1 g0
+s1 p0 o1 g1
+  delta: none
+  composite: s1 p0 o1 g1
+  selection: s1 p0 o1 g1
+s1 p1 ? *
+  delta: s1 p1 o0 -, s1 p1 o1 g0
+  composite: s1 p1 o0 g1, s1 p1 o1 -, s1 p1 o0 -, s1 p1 o1 g0, s1 p1 o0 g0, s1 p1 o1 g1
+  selection: s1 p1 o1 g0, s1 p1 o0 g0, s1 p1 o0 g1, s1 p1 o1 g1
+s1 p1 ? -
+  delta: s1 p1 o0 -
+  composite: s1 p1 o1 -, s1 p1 o0 -
+  selection: none
+s1 p1 ? g0
+  delta: s1 p1 o1 g0
+  composite: s1 p1 o1 g0, s1 p1 o0 g0
+  selection: s1 p1 o1 g0, s1 p1 o0 g0
+s1 p1 ? g1
+  delta: none
+  composite: s1 p1 o0 g1, s1 p1 o1 g1
+  selection: s1 p1 o0 g1, s1 p1 o1 g1
+s1 p1 o0 *
+  delta: s1 p1 o0 -
+  composite: s1 p1 o0 g1, s1 p1 o0 -, s1 p1 o0 g0
+  selection: s1 p1 o0 g0, s1 p1 o0 g1
+s1 p1 o0 -
+  delta: s1 p1 o0 -
+  composite: s1 p1 o0 -
+  selection: none
+s1 p1 o0 g0
+  delta: none
+  composite: s1 p1 o0 g0
+  selection: s1 p1 o0 g0
+s1 p1 o0 g1
+  delta: none
+  composite: s1 p1 o0 g1
+  selection: s1 p1 o0 g1
+s1 p1 o1 *
+  delta: s1 p1 o1 g0
+  composite: s1 p1 o1 -, s1 p1 o1 g0, s1 p1 o1 g1
+  selection: s1 p1 o1 g0, s1 p1 o1 g1
+s1 p1 o1 -
+  delta: none
+  composite: s1 p1 o1 -
+  selection: none
+s1 p1 o1 g0
+  delta: s1 p1 o1 g0
+  composite: s1 p1 o1 g0
+  selection: s1 p1 o1 g0
+s1 p1 o1 g1
+  delta: none
+  composite: s1 p1 o1 g1
+  selection: s1 p1 o1 g1
+s2 ? ? *
+  delta: s2 p0 o0 g1, s2 p0 o1 -, s2 p1 o0 g1, s2 p1 o1 -, s2 p0 o1 g1
+  composite: s2 p0 o0 g0, s2 p0 o1 g1, s2 p1 o0 g0, s2 p1 o1 g1, s2 p0 o0 g1, s2 p0 o1 -, s2 p1 o0 g1, s2 p1 o1 -, s2 p0 o0 -, s2 p0 o1 g0, s2 p1 o0 -, s2 p1 o1 g0
+  selection: s2 p0 o0 g0, s2 p1 o0 g0, s2 p0 o1 g0, s2 p1 o1 g0, s2 p0 o1 g1, s2 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1
+s2 ? ? -
+  delta: s2 p0 o1 -, s2 p1 o1 -
+  composite: s2 p0 o1 -, s2 p1 o1 -, s2 p0 o0 -, s2 p1 o0 -
+  selection: none
+s2 ? ? g0
+  delta: none
+  composite: s2 p0 o0 g0, s2 p1 o0 g0, s2 p0 o1 g0, s2 p1 o1 g0
+  selection: s2 p0 o0 g0, s2 p1 o0 g0, s2 p0 o1 g0, s2 p1 o1 g0
+s2 ? ? g1
+  delta: s2 p0 o0 g1, s2 p1 o0 g1, s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s2 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1
+  selection: s2 p0 o1 g1, s2 p1 o1 g1, s2 p0 o0 g1, s2 p1 o0 g1
+s2 ? o0 *
+  delta: s2 p0 o0 g1, s2 p1 o0 g1
+  composite: s2 p0 o0 g0, s2 p1 o0 g0, s2 p0 o0 g1, s2 p1 o0 g1, s2 p0 o0 -, s2 p1 o0 -
+  selection: s2 p0 o0 g0, s2 p1 o0 g0, s2 p0 o0 g1, s2 p1 o0 g1
+s2 ? o0 -
+  delta: none
+  composite: s2 p0 o0 -, s2 p1 o0 -
+  selection: none
+s2 ? o0 g0
+  delta: none
+  composite: s2 p0 o0 g0, s2 p1 o0 g0
+  selection: s2 p0 o0 g0, s2 p1 o0 g0
+s2 ? o0 g1
+  delta: s2 p0 o0 g1, s2 p1 o0 g1
+  composite: s2 p0 o0 g1, s2 p1 o0 g1
+  selection: s2 p0 o0 g1, s2 p1 o0 g1
+s2 ? o1 *
+  delta: s2 p0 o1 -, s2 p1 o1 -, s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s2 p1 o1 g1, s2 p0 o1 -, s2 p1 o1 -, s2 p0 o1 g0, s2 p1 o1 g0
+  selection: s2 p0 o1 g0, s2 p1 o1 g0, s2 p0 o1 g1, s2 p1 o1 g1
+s2 ? o1 -
+  delta: s2 p0 o1 -, s2 p1 o1 -
+  composite: s2 p0 o1 -, s2 p1 o1 -
+  selection: none
+s2 ? o1 g0
+  delta: none
+  composite: s2 p0 o1 g0, s2 p1 o1 g0
+  selection: s2 p0 o1 g0, s2 p1 o1 g0
+s2 ? o1 g1
+  delta: s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s2 p1 o1 g1
+  selection: s2 p0 o1 g1, s2 p1 o1 g1
+s2 p0 ? *
+  delta: s2 p0 o0 g1, s2 p0 o1 -, s2 p0 o1 g1
+  composite: s2 p0 o0 g0, s2 p0 o1 g1, s2 p0 o0 g1, s2 p0 o1 -, s2 p0 o0 -, s2 p0 o1 g0
+  selection: s2 p0 o0 g0, s2 p0 o1 g0, s2 p0 o1 g1, s2 p0 o0 g1
+s2 p0 ? -
+  delta: s2 p0 o1 -
+  composite: s2 p0 o1 -, s2 p0 o0 -
+  selection: none
+s2 p0 ? g0
+  delta: none
+  composite: s2 p0 o0 g0, s2 p0 o1 g0
+  selection: s2 p0 o0 g0, s2 p0 o1 g0
+s2 p0 ? g1
+  delta: s2 p0 o0 g1, s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s2 p0 o0 g1
+  selection: s2 p0 o1 g1, s2 p0 o0 g1
+s2 p0 o0 *
+  delta: s2 p0 o0 g1
+  composite: s2 p0 o0 g0, s2 p0 o0 g1, s2 p0 o0 -
+  selection: s2 p0 o0 g0, s2 p0 o0 g1
+s2 p0 o0 -
+  delta: none
+  composite: s2 p0 o0 -
+  selection: none
+s2 p0 o0 g0
+  delta: none
+  composite: s2 p0 o0 g0
+  selection: s2 p0 o0 g0
+s2 p0 o0 g1
+  delta: s2 p0 o0 g1
+  composite: s2 p0 o0 g1
+  selection: s2 p0 o0 g1
+s2 p0 o1 *
+  delta: s2 p0 o1 -, s2 p0 o1 g1
+  composite: s2 p0 o1 g1, s2 p0 o1 -, s2 p0 o1 g0
+  selection: s2 p0 o1 g0, s2 p0 o1 g1
+s2 p0 o1 -
+  delta: s2 p0 o1 -
+  composite: s2 p0 o1 -
+  selection: none
+s2 p0 o1 g0
+  delta: none
+  composite: s2 p0 o1 g0
+  selection: s2 p0 o1 g0
+s2 p0 o1 g1
+  delta: s2 p0 o1 g1
+  composite: s2 p0 o1 g1
+  selection: s2 p0 o1 g1
+s2 p1 ? *
+  delta: s2 p1 o0 g1, s2 p1 o1 -
+  composite: s2 p1 o0 g0, s2 p1 o1 g1, s2 p1 o0 g1, s2 p1 o1 -, s2 p1 o0 -, s2 p1 o1 g0
+  selection: s2 p1 o0 g0, s2 p1 o1 g0, s2 p1 o1 g1, s2 p1 o0 g1
+s2 p1 ? -
+  delta: s2 p1 o1 -
+  composite: s2 p1 o1 -, s2 p1 o0 -
+  selection: none
+s2 p1 ? g0
+  delta: none
+  composite: s2 p1 o0 g0, s2 p1 o1 g0
+  selection: s2 p1 o0 g0, s2 p1 o1 g0
+s2 p1 ? g1
+  delta: s2 p1 o0 g1
+  composite: s2 p1 o1 g1, s2 p1 o0 g1
+  selection: s2 p1 o1 g1, s2 p1 o0 g1
+s2 p1 o0 *
+  delta: s2 p1 o0 g1
+  composite: s2 p1 o0 g0, s2 p1 o0 g1, s2 p1 o0 -
+  selection: s2 p1 o0 g0, s2 p1 o0 g1
+s2 p1 o0 -
+  delta: none
+  composite: s2 p1 o0 -
+  selection: none
+s2 p1 o0 g0
+  delta: none
+  composite: s2 p1 o0 g0
+  selection: s2 p1 o0 g0
+s2 p1 o0 g1
+  delta: s2 p1 o0 g1
+  composite: s2 p1 o0 g1
+  selection: s2 p1 o0 g1
+s2 p1 o1 *
+  delta: s2 p1 o1 -
+  composite: s2 p1 o1 g1, s2 p1 o1 -, s2 p1 o1 g0
+  selection: s2 p1 o1 g0, s2 p1 o1 g1
+s2 p1 o1 -
+  delta: s2 p1 o1 -
+  composite: s2 p1 o1 -
+  selection: none
+s2 p1 o1 g0
+  delta: none
+  composite: s2 p1 o1 g0
+  selection: s2 p1 o1 g0
+s2 p1 o1 g1
+  delta: none
+  composite: s2 p1 o1 g1
+  selection: s2 p1 o1 g1
+s3 ? ? *
+  delta: s3 p0 o0 g0, s3 p0 o1 g1, s3 p1 o0 g0, s3 p1 o1 g1, s3 p1 o0 -
+  composite: s3 p0 o0 -, s3 p0 o1 g0, s3 p1 o0 -, s3 p1 o1 g0, s3 p0 o0 g0, s3 p0 o1 g1, s3 p1 o0 g0, s3 p1 o1 g1, s3 p0 o0 g1, s3 p0 o1 -, s3 p1 o0 g1, s3 p1 o1 -
+  selection: s3 p0 o1 g0, s3 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0, s3 p0 o1 g1, s3 p1 o1 g1, s3 p0 o0 g1, s3 p1 o0 g1
+s3 ? ? -
+  delta: s3 p1 o0 -
+  composite: s3 p0 o0 -, s3 p1 o0 -, s3 p0 o1 -, s3 p1 o1 -
+  selection: none
+s3 ? ? g0
+  delta: s3 p0 o0 g0, s3 p1 o0 g0
+  composite: s3 p0 o1 g0, s3 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0
+  selection: s3 p0 o1 g0, s3 p1 o1 g0, s3 p0 o0 g0, s3 p1 o0 g0
+s3 ? ? g1
+  delta: s3 p0 o1 g1, s3 p1 o1 g1
+  composite: s3 p0 o1 g1, s3 p1 o1 g1, s3 p0 o0 g1, s3 p1 o0 g1
+  selection: s3 p0 o1 g1, s3 p1 o1 g1, s3 p0 o0 g1, s3 p1 o0 g1
+s3 ? o0 *
+  delta: s3 p0 o0 g0, s3 p1 o0 g0, s3 p1 o0 -
+  composite: s3 p0 o0 -, s3 p1 o0 -, s3 p0 o0 g0, s3 p1 o0 g0, s3 p0 o0 g1, s3 p1 o0 g1
+  selection: s3 p0 o0 g0, s3 p1 o0 g0, s3 p0 o0 g1, s3 p1 o0 g1
+s3 ? o0 -
+  delta: s3 p1 o0 -
+  composite: s3 p0 o0 -, s3 p1 o0 -
+  selection: none
+s3 ? o0 g0
+  delta: s3 p0 o0 g0, s3 p1 o0 g0
+  composite: s3 p0 o0 g0, s3 p1 o0 g0
+  selection: s3 p0 o0 g0, s3 p1 o0 g0
+s3 ? o0 g1
+  delta: none
+  composite: s3 p0 o0 g1, s3 p1 o0 g1
+  selection: s3 p0 o0 g1, s3 p1 o0 g1
+s3 ? o1 *
+  delta: s3 p0 o1 g1, s3 p1 o1 g1
+  composite: s3 p0 o1 g0, s3 p1 o1 g0, s3 p0 o1 g1, s3 p1 o1 g1, s3 p0 o1 -, s3 p1 o1 -
+  selection: s3 p0 o1 g0, s3 p1 o1 g0, s3 p0 o1 g1, s3 p1 o1 g1
+s3 ? o1 -
+  delta: none
+  composite: s3 p0 o1 -, s3 p1 o1 -
+  selection: none
+s3 ? o1 g0
+  delta: none
+  composite: s3 p0 o1 g0, s3 p1 o1 g0
+  selection: s3 p0 o1 g0, s3 p1 o1 g0
+s3 ? o1 g1
+  delta: s3 p0 o1 g1, s3 p1 o1 g1
+  composite: s3 p0 o1 g1, s3 p1 o1 g1
+  selection: s3 p0 o1 g1, s3 p1 o1 g1
+s3 p0 ? *
+  delta: s3 p0 o0 g0, s3 p0 o1 g1
+  composite: s3 p0 o0 -, s3 p0 o1 g0, s3 p0 o0 g0, s3 p0 o1 g1, s3 p0 o0 g1, s3 p0 o1 -
+  selection: s3 p0 o1 g0, s3 p0 o0 g0, s3 p0 o1 g1, s3 p0 o0 g1
+s3 p0 ? -
+  delta: none
+  composite: s3 p0 o0 -, s3 p0 o1 -
+  selection: none
+s3 p0 ? g0
+  delta: s3 p0 o0 g0
+  composite: s3 p0 o1 g0, s3 p0 o0 g0
+  selection: s3 p0 o1 g0, s3 p0 o0 g0
+s3 p0 ? g1
+  delta: s3 p0 o1 g1
+  composite: s3 p0 o1 g1, s3 p0 o0 g1
+  selection: s3 p0 o1 g1, s3 p0 o0 g1
+s3 p0 o0 *
+  delta: s3 p0 o0 g0
+  composite: s3 p0 o0 -, s3 p0 o0 g0, s3 p0 o0 g1
+  selection: s3 p0 o0 g0, s3 p0 o0 g1
+s3 p0 o0 -
+  delta: none
+  composite: s3 p0 o0 -
+  selection: none
+s3 p0 o0 g0
+  delta: s3 p0 o0 g0
+  composite: s3 p0 o0 g0
+  selection: s3 p0 o0 g0
+s3 p0 o0 g1
+  delta: none
+  composite: s3 p0 o0 g1
+  selection: s3 p0 o0 g1
+s3 p0 o1 *
+  delta: s3 p0 o1 g1
+  composite: s3 p0 o1 g0, s3 p0 o1 g1, s3 p0 o1 -
+  selection: s3 p0 o1 g0, s3 p0 o1 g1
+s3 p0 o1 -
+  delta: none
+  composite: s3 p0 o1 -
+  selection: none
+s3 p0 o1 g0
+  delta: none
+  composite: s3 p0 o1 g0
+  selection: s3 p0 o1 g0
+s3 p0 o1 g1
+  delta: s3 p0 o1 g1
+  composite: s3 p0 o1 g1
+  selection: s3 p0 o1 g1
+s3 p1 ? *
+  delta: s3 p1 o0 g0, s3 p1 o1 g1, s3 p1 o0 -
+  composite: s3 p1 o0 -, s3 p1 o1 g0, s3 p1 o0 g0, s3 p1 o1 g1, s3 p1 o0 g1, s3 p1 o1 -
+  selection: s3 p1 o1 g0, s3 p1 o0 g0, s3 p1 o1 g1, s3 p1 o0 g1
+s3 p1 ? -
+  delta: s3 p1 o0 -
+  composite: s3 p1 o0 -, s3 p1 o1 -
+  selection: none
+s3 p1 ? g0
+  delta: s3 p1 o0 g0
+  composite: s3 p1 o1 g0, s3 p1 o0 g0
+  selection: s3 p1 o1 g0, s3 p1 o0 g0
+s3 p1 ? g1
+  delta: s3 p1 o1 g1
+  composite: s3 p1 o1 g1, s3 p1 o0 g1
+  selection: s3 p1 o1 g1, s3 p1 o0 g1
+s3 p1 o0 *
+  delta: s3 p1 o0 g0, s3 p1 o0 -
+  composite: s3 p1 o0 -, s3 p1 o0 g0, s3 p1 o0 g1
+  selection: s3 p1 o0 g0, s3 p1 o0 g1
+s3 p1 o0 -
+  delta: s3 p1 o0 -
+  composite: s3 p1 o0 -
+  selection: none
+s3 p1 o0 g0
+  delta: s3 p1 o0 g0
+  composite: s3 p1 o0 g0
+  selection: s3 p1 o0 g0
+s3 p1 o0 g1
+  delta: none
+  composite: s3 p1 o0 g1
+  selection: s3 p1 o0 g1
+s3 p1 o1 *
+  delta: s3 p1 o1 g1
+  composite: s3 p1 o1 g0, s3 p1 o1 g1, s3 p1 o1 -
+  selection: s3 p1 o1 g0, s3 p1 o1 g1
+s3 p1 o1 -
+  delta: none
+  composite: s3 p1 o1 -
+  selection: none
+s3 p1 o1 g0
+  delta: none
+  composite: s3 p1 o1 g0
+  selection: s3 p1 o1 g0
+s3 p1 o1 g1
+  delta: s3 p1 o1 g1
+  composite: s3 p1 o1 g1
+  selection: s3 p1 o1 g1
+late ? ? *
+  delta: late p0 o0 -, late p1 o1 g1
+  composite: late p0 o0 -, late p1 o1 g1
+  selection: late p1 o1 g1
+late ? ? -
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late ? ? g0
+  delta: none
+  composite: none
+  selection: none
+late ? ? g1
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+late ? o0 *
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late ? o0 -
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late ? o0 g0
+  delta: none
+  composite: none
+  selection: none
+late ? o0 g1
+  delta: none
+  composite: none
+  selection: none
+late ? o1 *
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+late ? o1 -
+  delta: none
+  composite: none
+  selection: none
+late ? o1 g0
+  delta: none
+  composite: none
+  selection: none
+late ? o1 g1
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+late p0 ? *
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late p0 ? -
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late p0 ? g0
+  delta: none
+  composite: none
+  selection: none
+late p0 ? g1
+  delta: none
+  composite: none
+  selection: none
+late p0 o0 *
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late p0 o0 -
+  delta: late p0 o0 -
+  composite: late p0 o0 -
+  selection: none
+late p0 o0 g0
+  delta: none
+  composite: none
+  selection: none
+late p0 o0 g1
+  delta: none
+  composite: none
+  selection: none
+late p0 o1 *
+  delta: none
+  composite: none
+  selection: none
+late p0 o1 -
+  delta: none
+  composite: none
+  selection: none
+late p0 o1 g0
+  delta: none
+  composite: none
+  selection: none
+late p0 o1 g1
+  delta: none
+  composite: none
+  selection: none
+late p1 ? *
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+late p1 ? -
+  delta: none
+  composite: none
+  selection: none
+late p1 ? g0
+  delta: none
+  composite: none
+  selection: none
+late p1 ? g1
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+late p1 o0 *
+  delta: none
+  composite: none
+  selection: none
+late p1 o0 -
+  delta: none
+  composite: none
+  selection: none
+late p1 o0 g0
+  delta: none
+  composite: none
+  selection: none
+late p1 o0 g1
+  delta: none
+  composite: none
+  selection: none
+late p1 o1 *
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+late p1 o1 -
+  delta: none
+  composite: none
+  selection: none
+late p1 o1 g0
+  delta: none
+  composite: none
+  selection: none
+late p1 o1 g1
+  delta: late p1 o1 g1
+  composite: late p1 o1 g1
+  selection: late p1 o1 g1
+r ? ? *
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r ? ? -
+  delta: none
+  composite: none
+  selection: none
+r ? ? g0
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r ? ? g1
+  delta: none
+  composite: none
+  selection: none
+r ? o0 *
+  delta: none
+  composite: none
+  selection: none
+r ? o0 -
+  delta: none
+  composite: none
+  selection: none
+r ? o0 g0
+  delta: none
+  composite: none
+  selection: none
+r ? o0 g1
+  delta: none
+  composite: none
+  selection: none
+r ? o1 *
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r ? o1 -
+  delta: none
+  composite: none
+  selection: none
+r ? o1 g0
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r ? o1 g1
+  delta: none
+  composite: none
+  selection: none
+r p0 ? *
+  delta: none
+  composite: none
+  selection: none
+r p0 ? -
+  delta: none
+  composite: none
+  selection: none
+r p0 ? g0
+  delta: none
+  composite: none
+  selection: none
+r p0 ? g1
+  delta: none
+  composite: none
+  selection: none
+r p0 o0 *
+  delta: none
+  composite: none
+  selection: none
+r p0 o0 -
+  delta: none
+  composite: none
+  selection: none
+r p0 o0 g0
+  delta: none
+  composite: none
+  selection: none
+r p0 o0 g1
+  delta: none
+  composite: none
+  selection: none
+r p0 o1 *
+  delta: none
+  composite: none
+  selection: none
+r p0 o1 -
+  delta: none
+  composite: none
+  selection: none
+r p0 o1 g0
+  delta: none
+  composite: none
+  selection: none
+r p0 o1 g1
+  delta: none
+  composite: none
+  selection: none
+r p1 ? *
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r p1 ? -
+  delta: none
+  composite: none
+  selection: none
+r p1 ? g0
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r p1 ? g1
+  delta: none
+  composite: none
+  selection: none
+r p1 o0 *
+  delta: none
+  composite: none
+  selection: none
+r p1 o0 -
+  delta: none
+  composite: none
+  selection: none
+r p1 o0 g0
+  delta: none
+  composite: none
+  selection: none
+r p1 o0 g1
+  delta: none
+  composite: none
+  selection: none
+r p1 o1 *
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r p1 o1 -
+  delta: none
+  composite: none
+  selection: none
+r p1 o1 g0
+  delta: r p1 o1 g0
+  composite: r p1 o1 g0
+  selection: r p1 o1 g0
+r p1 o1 g1
+  delta: none
+  composite: none
+  selection: none

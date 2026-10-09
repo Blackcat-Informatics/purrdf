@@ -1,0 +1,25 @@
+     Cloning aab23cbf20b68483ae58bf8440cd882bf1e1897b
+    Building purrdf-core v3.0.1 (current)
+       Built [   5.638s] (current)
+     Parsing purrdf-core v3.0.1 (current)
+      Parsed [   0.088s] (current)
+    Building purrdf-core v3.0.1 (baseline)
+       Built [   5.552s] (baseline)
+     Parsing purrdf-core v3.0.1 (baseline)
+      Parsed [   0.089s] (baseline)
+    Checking purrdf-core v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.173s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [  12.219s] purrdf-core
+    Building purrdf-sparql-eval v3.0.1 (current)
+       Built [   7.694s] (current)
+     Parsing purrdf-sparql-eval v3.0.1 (current)
+      Parsed [   0.054s] (current)
+    Building purrdf-sparql-eval v3.0.1 (baseline)
+       Built [   6.656s] (baseline)
+     Parsing purrdf-sparql-eval v3.0.1 (baseline)
+      Parsed [   0.052s] (baseline)
+    Checking purrdf-sparql-eval v3.0.1 -> v3.0.1 (assume minor change)
+     Checked [   0.033s] 196 checks: 196 pass, 58 skip
+     Summary no semver update required
+    Finished [  15.229s] purrdf-sparql-eval

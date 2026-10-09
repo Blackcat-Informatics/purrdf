@@ -1,0 +1,273 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/mutable.rs:521:37
+    |
+521 |             GraphMatchValue::Any => crate::GraphMatch::Any,
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+521 -             GraphMatchValue::Any => crate::GraphMatch::Any,
+521 +             GraphMatchValue::Any => GraphMatch::Any,
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/mutable.rs:522:41
+    |
+522 |             GraphMatchValue::Default => crate::GraphMatch::Default,
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+522 -             GraphMatchValue::Default => crate::GraphMatch::Default,
+522 +             GraphMatchValue::Default => GraphMatch::Default,
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/mutable.rs:527:17
+    |
+527 |                 crate::GraphMatch::Named(id)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+527 -                 crate::GraphMatch::Named(id)
+527 +                 GraphMatch::Named(id)
+    |
+
+error[E0599]: no method named `filter` found for enum `Result<Option<TermId>, !>` in the current scope
+   --> crates/rdf-core/src/ir/mutable.rs:448:14
+    |
+446 | /         self.base
+447 | |             .term_id_by_value(graph)
+448 | |             .filter(|&id| self.base.has_named_graph(id))
+    | |             -^^^^^^ `Result<Option<TermId>, !>` is not an iterator
+    | |_____________|
+    |
+    |
+help: call `.into_iter()` first
+    |
+448 |             .into_iter().filter(|&id| self.base.has_named_graph(id))
+    |              ++++++++++++
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/mutable.rs:562:20
+    |
+562 |             if let TermRef::Blank { label, scope } = self.base.resolve(id) {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------- this expression has type `Result<TermRef<'_>, !>`
+    |                    |
+    |                    expected `Result<TermRef<'_>, !>`, found `TermRef<'_, _>`
+    |
+    = note: expected enum `Result<TermRef<'_, TermId>, !>`
+               found enum `TermRef<'_, _>`
+help: try wrapping the pattern in `Ok`
+    |
+562 |             if let Ok(TermRef::Blank { label, scope }) = self.base.resolve(id) {
+    |                    +++                               +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/mutable.rs:661:16
+    |
+661 |         if let Some(id) = self.base.term_id_by_value(value) {
+    |                ^^^^^^^^   --------------------------------- this expression has type `Result<Option<TermId>, !>`
+    |                |
+    |                expected `Result<Option<TermId>, !>`, found `Option<_>`
+    |
+    = note: expected enum `Result<Option<TermId>, !>`
+               found enum `Option<_>`
+help: try wrapping the pattern in `Ok`
+    |
+661 |         if let Ok(Some(id)) = self.base.term_id_by_value(value) {
+    |                +++        +
+
+error[E0277]: expected an `FnOnce(Option<TermId>)` closure, found `fn(TermId) -> MutTermId {MutTermId::Base}`
+   --> crates/rdf-core/src/ir/mutable.rs:693:73
+    |
+693 |         let resolve = |v: &TermValue| self.base.term_id_by_value(v).map(MutTermId::Base);
+    |                                                                     --- ^^^^^^^^^^^^^^^ expected an `FnOnce(Option<TermId>)` closure, found `fn(TermId) -> MutTermId {MutTermId::Base}`
+    |                                                                     |
+    |                                                                     required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(Option<TermId>)` is not implemented for fn item `fn(TermId) -> MutTermId {MutTermId::Base}`
+    = note: expected a closure with signature `fn(Option<TermId>)`
+               found a closure with signature `fn(TermId)`
+note: required by a bound in `Result::<T, E>::map`
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:834:12
+    |
+832 |     pub const fn map<U, F>(self, op: F) -> Result<U, E>
+    |                  --- required by a bound in this associated function
+833 |     where
+834 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map`
+
+error[E0277]: the `?` operator can only be used on `Option`s, not `Result`s, in a closure that returns `Option`
+   --> crates/rdf-core/src/ir/mutable.rs:698:36
+    |
+696 |         let base_key = (|| {
+    |                         -- this function returns an `Option`
+697 |             Some(QuadKey {
+698 |                 s: resolve(&quad.s)?,
+    |                                    ^ use `.ok()?` if you want to discard the `Result<!, !>` error information
+
+error[E0277]: the `?` operator can only be used on `Option`s, not `Result`s, in a closure that returns `Option`
+   --> crates/rdf-core/src/ir/mutable.rs:699:36
+    |
+696 |         let base_key = (|| {
+    |                         -- this function returns an `Option`
+...
+699 |                 p: resolve(&quad.p)?,
+    |                                    ^ use `.ok()?` if you want to discard the `Result<!, !>` error information
+
+error[E0277]: the `?` operator can only be used on `Option`s, not `Result`s, in a closure that returns `Option`
+   --> crates/rdf-core/src/ir/mutable.rs:700:36
+    |
+696 |         let base_key = (|| {
+    |                         -- this function returns an `Option`
+...
+700 |                 o: resolve(&quad.o)?,
+    |                                    ^ use `.ok()?` if you want to discard the `Result<!, !>` error information
+
+error[E0277]: the `?` operator can only be used on `Option`s, not `Result`s, in a closure that returns `Option`
+   --> crates/rdf-core/src/ir/mutable.rs:703:47
+    |
+696 |         let base_key = (|| {
+    |                         -- this function returns an `Option`
+...
+703 |                     Some(g) => Some(resolve(g)?),
+    |                                               ^ use `.ok()?` if you want to discard the `Result<!, !>` error information
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/mutable.rs:727:16
+    |
+727 |         if let Some(id) = self.base.term_id_by_value(value) {
+    |                ^^^^^^^^   --------------------------------- this expression has type `Result<Option<TermId>, !>`
+    |                |
+    |                expected `Result<Option<TermId>, !>`, found `Option<_>`
+    |
+    = note: expected enum `Result<Option<TermId>, !>`
+               found enum `Option<_>`
+help: try wrapping the pattern in `Ok`
+    |
+727 |         if let Ok(Some(id)) = self.base.term_id_by_value(value) {
+    |                +++        +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/mutable.rs:940:49
+    |
+940 |                 matches!(self.base.resolve(id), TermRef::Iri(iri) if iri == RDF_REIFIES)
+    |                          ---------------------  ^^^^^^^^^^^^^^^^^ expected `Result<TermRef<'_>, !>`, found `TermRef<'_, _>`
+    |                          |
+    |                          this expression has type `Result<TermRef<'_>, !>`
+    |
+    = note: expected enum `Result<TermRef<'_, TermId>, !>`
+               found enum `TermRef<'_, _>`
+help: try wrapping the pattern in `Ok`
+    |
+940 |                 matches!(self.base.resolve(id), Ok(TermRef::Iri(iri)) if iri == RDF_REIFIES)
+    |                                                 +++                 +
+
+error[E0308]: mismatched types
+   --> crates/rdf-core/src/ir/mutable.rs:948:72
+    |
+948 |                 MutTermId::Base(id) => matches!(self.base.resolve(id), TermRef::Triple { .. }),
+    |                                                 ---------------------  ^^^^^^^^^^^^^^^^^^^^^^ expected `Result<TermRef<'_>, !>`, found `TermRef<'_, _>`
+    |                                                 |
+    |                                                 this expression has type `Result<TermRef<'_>, !>`
+    |
+    = note: expected enum `Result<TermRef<'_, TermId>, !>`
+               found enum `TermRef<'_, _>`
+help: try wrapping the pattern in `Ok`
+    |
+948 |                 MutTermId::Base(id) => matches!(self.base.resolve(id), Ok(TermRef::Triple { .. })),
+    |                                                                        +++                      +
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1193:16
+     |
+1193 |         if let Some(id) = self.base.term_id_by_value(graph) {
+     |                ^^^^^^^^   --------------------------------- this expression has type `Result<Option<TermId>, !>`
+     |                |
+     |                expected `Result<Option<TermId>, !>`, found `Option<_>`
+     |
+     = note: expected enum `Result<Option<TermId>, !>`
+                found enum `Option<_>`
+help: try wrapping the pattern in `Ok`
+     |
+1193 |         if let Ok(Some(id)) = self.base.term_id_by_value(graph) {
+     |                +++        +
+
+error[E0277]: expected an `FnOnce(Option<TermId>)` closure, found `fn(TermId) -> MutTermId {MutTermId::Base}`
+    --> crates/rdf-core/src/ir/mutable.rs:1215:18
+     |
+1215 |             .map(MutTermId::Base)
+     |              --- ^^^^^^^^^^^^^^^ expected an `FnOnce(Option<TermId>)` closure, found `fn(TermId) -> MutTermId {MutTermId::Base}`
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(Option<TermId>)` is not implemented for fn item `fn(TermId) -> MutTermId {MutTermId::Base}`
+     = note: expected a closure with signature `fn(Option<TermId>)`
+                found a closure with signature `fn(TermId)`
+note: required by a bound in `Result::<T, E>::map`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:834:12
+     |
+ 832 |     pub const fn map<U, F>(self, op: F) -> Result<U, E>
+     |                  --- required by a bound in this associated function
+ 833 |     where
+ 834 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map`
+
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+    --> crates/rdf-core/src/ir/mutable.rs:1216:14
+     |
+1216 |             .or_else(|| self.delta.find(graph).map(MutTermId::Delta))
+     |              ^^^^^^^ -- takes 0 arguments
+     |              |
+     |              expected closure that takes 1 argument
+     |
+help: consider changing the closure to take and ignore the expected argument
+     |
+1216 |             .or_else(|_| self.delta.find(graph).map(MutTermId::Delta))
+     |                       +
+
+error[E0599]: no method named `is_some_and` found for enum `Result<T, E>` in the current scope
+    --> crates/rdf-core/src/ir/mutable.rs:1217:14
+     |
+1213 | /         self.base
+1214 | |             .term_id_by_value(graph)
+1215 | |             .map(MutTermId::Base)
+1216 | |             .or_else(|| self.delta.find(graph).map(MutTermId::Delta))
+1217 | |             .is_some_and(|id| self.graph_rows.get(&id).is_some_and(|&rows| rows > 0))
+     | |_____________-^^^^^^^^^^^
+     |
+help: there is a method `is_ok_and` with a similar name
+     |
+1217 -             .is_some_and(|id| self.graph_rows.get(&id).is_some_and(|&rows| rows > 0))
+1217 +             .is_ok_and(|id| self.graph_rows.get(&id).is_some_and(|&rows| rows > 0))
+     |
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1343:27
+     |
+1343 |             copied_terms: dataset.term_count(),
+     |                           ^^^^^^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1416:13
+     |
+1416 |             extent,
+     |             ^^^^^^ expected `(u64, usize, usize)`, found `(usize, usize, usize)`
+     |
+     = note: expected tuple `(u64, _, _)`
+                found tuple `(usize, _, _)`
+
+error[E0308]: mismatched types
+    --> crates/rdf-core/src/ir/mutable.rs:1427:27
+     |
+1427 |             copied_terms: delta.term_count(),
+     |                           ^^^^^^^^^^^^^^^^^^ expected `usize`, found `u64`
+
+Some errors have detailed explanations: E0277, E0308, E0593, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-core` (lib) due to 21 previous errors

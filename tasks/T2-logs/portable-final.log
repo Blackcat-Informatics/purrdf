@@ -1,0 +1,20 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 40.30s
+     Running tests/update_typed_records.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-sparql-eval/2e3b89f410bb1239/out/update_typed_records-2e3b89f410bb1239)
+
+running 10 tests
+test orphan_annotation_copy_preserves_its_role ... ok
+test equal_value_ordinary_and_annotation_copy_preserves_both_roles ... ok
+test load_charges_original_physical_records_when_destination_deduplicates ... ok
+test repeated_cached_document_load_has_fresh_identities ... ok
+test load_preserves_physical_roles_and_charges_each_original_record ... ok
+test load_shares_request_mints_with_data_templates_and_bnode ... ok
+test load_avoids_unused_suppressed_and_composite_only_destination_blanks ... ok
+test load_freshens_scoped_bare_triple_and_nested_composite_identities_together ... ok
+test transfers_charge_physical_attempts_even_when_add_deduplicates ... ok
+test all_transfers_preserve_exact_roles_and_source_blanks_in_both_graphs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

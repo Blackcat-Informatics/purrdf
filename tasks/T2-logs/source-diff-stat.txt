@@ -1,0 +1,5 @@
+ crates/rdf-core/src/ir/import.rs  |  39 +++---
+ crates/rdf-core/src/ir/mutable.rs |  94 +++++++++++--
+ crates/sparql-eval/Cargo.toml     |   4 +
+ crates/sparql-eval/src/update.rs  | 282 +++++++++++++++++++++++++++++++++-----
+ 4 files changed, 356 insertions(+), 63 deletions(-)

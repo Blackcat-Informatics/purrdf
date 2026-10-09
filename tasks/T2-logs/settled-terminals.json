@@ -1,0 +1,22 @@
+{
+  "parent": "b0fc9e889",
+  "terminal_observation": "Actual tools.write_stdin results retained by owner; individual command exits are adjacent files.",
+  "sessions": [
+    {"handle": 42961, "label": "failing-before", "exit": 101},
+    {"handle": 25371, "label": "initial-fix", "exit": 101},
+    {"handle": 3700, "label": "fix-retry", "exit": 0},
+    {"handle": 73442, "label": "expanded", "exit": 101},
+    {"handle": 47089, "label": "expanded-retry", "exit": 101},
+    {"handle": 21679, "label": "controls", "exit": 101},
+    {"handle": 43791, "label": "controls-retry", "exit": 101},
+    {"handle": 66436, "label": "selected-retry", "exit": 101},
+    {"handle": 23842, "label": "prefix-retry", "exit": 0},
+    {"handle": 23160, "label": "focused", "exit": 101},
+    {"handle": 91727, "label": "strict-retry", "exit": 101},
+    {"handle": 1826, "label": "final-focused", "exit": 0, "scope": "purrdf-401-task2-final-focused-20261008.scope", "invocation": "8c5e812fa20249319c0a58fb2f5334ae"},
+    {"handle": 55268, "label": "final-gates", "exit": 0, "scope": "purrdf-401-task2-final-gates-20261008.scope", "invocation": "ef59c186c2574650b4ed06533ba7cf94"}
+  ],
+  "runtime": {"existing_affected": 663, "portable_final": 10, "new_ignored": 0},
+  "source": "source.sha256",
+  "whole_issue_acceptance": "PENDING Task3 full native/WASM/semver and Task4 publication"
+}

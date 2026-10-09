@@ -1,0 +1,15 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+error: assigning the result of `Clone::clone()` may be inefficient
+   --> crates/sparql-eval/tests/update_typed_records.rs:176:25
+    |
+176 |                         record.quad.g = dest.clone();
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `record.quad.g.clone_from(&dest)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+    = note: `-D clippy::assigning-clones` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assigning_clones)]`
+
+error: could not compile `purrdf-sparql-eval` (test "update_typed_records") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

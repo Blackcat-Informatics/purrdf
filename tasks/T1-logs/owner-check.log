@@ -1,0 +1,215 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/hash)
+    Checking typenum v1.20.1
+    Checking regex-syntax v0.8.11
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-events)
+    Checking libc v0.2.186
+    Checking hashbrown v0.17.1
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/alloc-probe)
+    Checking hybrid-array v0.4.15
+    Checking regex-automata v0.4.14
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/stack)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/deflate)
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+    Checking regex v1.12.4
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/xsd)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/testkit)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/cdt)
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/import.rs:103:49
+    |
+103 | pub fn record_values<D: DatasetView<ReadError = std::convert::Infallible>>(
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+103 - pub fn record_values<D: DatasetView<ReadError = std::convert::Infallible>>(
+103 + pub fn record_values<D: DatasetView<ReadError = Infallible>>(
+    |
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1377:22
+     |
+1377 |         let s = self.intern_value(&q.s);
+     |                      ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1377 |         let s = self.intern_iri_value(&q.s);
+     |                             ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1378:22
+     |
+1378 |         let p = self.intern_value(&q.p);
+     |                      ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1378 |         let p = self.intern_iri_value(&q.p);
+     |                             ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1379:22
+     |
+1379 |         let o = self.intern_value(&q.o);
+     |                      ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1379 |         let o = self.intern_iri_value(&q.o);
+     |                             ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1380:43
+     |
+1380 |         let g = q.g.as_ref().map(|g| self.intern_value(g));
+     |                                           ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1380 |         let g = q.g.as_ref().map(|g| self.intern_iri_value(g));
+     |                                                  ++++
+
+error[E0599]: no method named `quads_for_pattern` found for struct `Arc<RdfDataset>` in the current scope
+   --> crates/rdf-core/src/ir/mutable.rs:916:22
+    |
+915 | /                 self.base
+916 | |                     .quads_for_pattern(Some(id), None, None, g)
+    | |_____________________-^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:580:8
+    |
+580 |       fn quads_for_pattern(
+    |          ----------------- the method is available for `Arc<RdfDataset>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `quads_for_pattern` is implemented but not in scope; perhaps you want to import it
+    |
+ 47 + use crate::dataset_view::DatasetView;
+    |
+help: there is a method `quads_for_pattern_cursor` with a similar name
+    |
+916 |                     .quads_for_pattern_cursor(Some(id), None, None, g)
+    |                                       +++++++
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no method named `intern_value` found for mutable reference `&mut builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1377:22
+     |
+1377 |         let s = self.intern_value(&q.s);
+     |                      ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1377 |         let s = self.intern_iri_value(&q.s);
+     |                             ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1378:22
+     |
+1378 |         let p = self.intern_value(&q.p);
+     |                      ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1378 |         let p = self.intern_iri_value(&q.p);
+     |                             ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1379:22
+     |
+1379 |         let o = self.intern_value(&q.o);
+     |                      ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1379 |         let o = self.intern_iri_value(&q.o);
+     |                             ++++
+
+error[E0599]: no method named `intern_value` found for mutable reference `&mut builder::RdfDatasetBuilder` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1380:43
+     |
+1380 |         let g = q.g.as_ref().map(|g| self.intern_value(g));
+     |                                           ^^^^^^^^^^^^
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `TermFactory` which provides `intern_value` is implemented but not in scope; perhaps you want to import it
+     |
+  20 + use crate::backend::TermFactory;
+     |
+help: there is a method `intern_iri_value` with a similar name
+     |
+1380 |         let g = q.g.as_ref().map(|g| self.intern_iri_value(g));
+     |                                                  ++++
+
+error[E0599]: no method named `quads_for_pattern` found for struct `std::sync::Arc<dataset::RdfDataset>` in the current scope
+   --> crates/rdf-core/src/ir/mutable.rs:916:22
+    |
+915 | /                 self.base
+916 | |                     .quads_for_pattern(Some(id), None, None, g)
+    | |_____________________-^^^^^^^^^^^^^^^^^
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:580:8
+    |
+580 |       fn quads_for_pattern(
+    |          ----------------- the method is available for `std::sync::Arc<dataset::RdfDataset>` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `quads_for_pattern` is implemented but not in scope; perhaps you want to import it
+    |
+ 47 + use crate::dataset_view::DatasetView;
+    |
+help: there is a method `quads_for_pattern_cursor` with a similar name
+    |
+916 |                     .quads_for_pattern_cursor(Some(id), None, None, g)
+    |                                       +++++++
+
+error: could not compile `purrdf-core` (lib test) due to 6 previous errors

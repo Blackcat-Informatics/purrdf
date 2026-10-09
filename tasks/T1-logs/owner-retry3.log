@@ -1,0 +1,57 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 32.72s
+     Running unittests src/lib.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 49 tests
+test ir::mutable::delta_view::tests::snapshot_shares_base_and_isolates_suppression_reinsertion_and_new_terms ... ok
+test ir::mutable::delta_view::tests::rdf12_tables_deduplicate_overlaps_and_keep_graphs_and_direction ... ok
+test ir::mutable::delta_view::tests::snapshot_rejects_invalid_delta_positions_before_exposing_a_view ... ok
+test ir::mutable::tests::a_configured_but_unused_derivation_predicate_survives_freeze ... ok
+test ir::mutable::tests::a_delta_graph_emptied_again_is_not_enumerated ... ok
+test ir::mutable::delta_view::tests::changed_quads_names_every_row_the_rdf12_overlay_moves_on_or_off_the_surface ... ok
+test ir::mutable::tests::a_graph_is_emptied_only_when_its_quads_reifiers_and_annotations_are_all_gone ... ok
+test ir::mutable::tests::an_unrelated_insert_keeps_the_declared_empty_graph ... ok
+test ir::mutable::tests::an_untouched_dataset_enumerates_every_base_graph_including_the_declared_empty_one ... ok
+test ir::mutable::tests::a_graph_repopulated_after_losing_its_last_quad_exists ... ok
+test ir::mutable::tests::base_value_of_agrees_with_term_value_on_every_literal_shape ... ok
+test ir::mutable::tests::blank_identity_visit_retains_suppressed_and_removed_nested_values ... ok
+test ir::mutable::tests::classification_collision_counts_the_actual_physical_rows ... ok
+test ir::mutable::tests::contains_and_pattern_reflect_effective_set ... ok
+test ir::mutable::tests::classification_restores_only_targets_it_owned ... ok
+test ir::mutable::tests::declared_named_graphs_follow_the_withdrawal_rules ... ok
+test ir::mutable::tests::declared_named_graphs_survive_freeze_and_snapshot ... ok
+test ir::mutable::tests::emptying_a_declared_empty_graph_after_populating_it_withdraws_it ... ok
+test ir::mutable::tests::freeze_and_snapshot_keep_the_base_content_addressing ... ok
+test ir::mutable::tests::freeze_and_snapshot_of_an_unconfigured_base_stay_unconfigured ... ok
+test ir::mutable::tests::freeze_carries_base_quad_locations ... ok
+test ir::mutable::tests::freeze_empty_mutation_equals_base_quads ... ok
+test ir::mutable::tests::insert_existing_base_quad_is_noop ... ok
+test ir::mutable::tests::named_graph_quads_round_trip ... ok
+test ir::mutable::tests::freeze_round_trip_quads_reifiers_annotations ... ok
+test ir::mutable::tests::quads_for_pattern_matches_delta_only_named_graph ... ok
+test ir::mutable::tests::redeclaring_a_withdrawn_base_graph_lists_it_once ... ok
+test ir::mutable::tests::removing_some_but_not_all_quads_of_a_graph_keeps_it ... ok
+test ir::mutable::tests::removing_the_last_quad_of_a_graph_withdraws_the_graph ... ok
+test ir::mutable::tests::removing_the_only_reifier_of_a_graph_withdraws_the_graph ... ok
+test ir::mutable::tests::rule1_insert_of_suppressed_base_unsuppresses ... ok
+test ir::mutable::delta_view::tests::indexed_patterns_match_complete_scan_for_shared_and_delta_ids ... ok
+test ir::mutable::tests::rule2_remove_of_delta_added_drops_from_added ... ok
+test ir::mutable::tests::rule3_remove_of_base_quad_creates_suppression ... ok
+test ir::mutable::tests::rule4_reinsert_after_removal_both_orders ... ok
+test ir::mutable::tests::should_compact_signals_on_churn ... ok
+test ir::mutable::tests::two_branches_mutate_independently ... ok
+test ir::mutable::tests::typed_ingress_refuses_invalid_roles_without_membership_or_term_publication ... ok
+test ir::mutable::tests::freeze_replays_delta_insertions_in_call_order_across_fresh_datasets ... ok
+test ir::mutable::tests::typed_exact_ingress_does_not_classify_and_snapshots_are_independent ... ok
+test ir::mutable::tests::typed_snapshot_limits_price_role_masks_and_refusal_adds_no_successful_work ... ok
+test ir::mutable::tests::typed_roles_restore_one_and_ordinary_mutation_restores_all ... ok
+test ir::mutable::tests::withdrawing_every_declaration_keeps_only_populated_graphs ... ok
+test ir::mutable::tests::withdrawing_a_declaration_hides_only_an_empty_graph ... ok
+test ir::mutable::term_walk_tests::the_walks_agree_with_their_recursive_references_on_generated_terms ... ok
+test ir::mutable::tests::typed_three_role_state_machine_matches_physical_model ... ok
+test ir::mutable::tests::property_mutations_match_hashset_model ... ok
+test ir::mutable::tests::property_graph_enumeration_matches_a_full_scan ... ok
+test ir::mutable::term_walk_tests::a_hundred_thousand_level_term_is_checked_and_interned_on_a_128_kib_thread ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 1175 filtered out; finished in 0.09s
+

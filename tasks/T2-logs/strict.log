@@ -1,0 +1,56 @@
+    Checking either v1.16.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-algebra)
+    Checking crossbeam-utils v0.8.21
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/rdf-core)
+    Checking getrandom v0.3.4
+    Checking crossbeam-epoch v0.9.18
+    Checking crossbeam-deque v0.8.6
+    Checking rayon-core v1.13.0
+    Checking rayon v1.12.0
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+error: used `assert!` to check that a value is empty
+    --> crates/rdf-core/src/ir/mutable.rs:1935:13
+     |
+1935 |             assert!(mutable.records_for_pattern(s, p, o, g).unwrap().is_empty());
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+     |
+1935 -             assert!(mutable.records_for_pattern(s, p, o, g).unwrap().is_empty());
+1935 +             assert_eq!(mutable.records_for_pattern(s, p, o, g).unwrap(), [] as [ir::mutable::RecordValues; 0]);
+     |
+
+error: could not compile `purrdf-core` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: assigning the result of `Clone::clone()` may be inefficient
+    --> crates/sparql-eval/src/update.rs:1152:9
+     |
+1152 |         record.quad.g = dest.clone();
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `record.quad.g.clone_from(&dest)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+     = note: `-D clippy::assigning-clones` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assigning_clones)]`
+
+error: assigning the result of `Clone::clone()` may be inefficient
+    --> crates/sparql-eval/src/update.rs:1180:9
+     |
+1180 |         record.quad.g = dest.clone();
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `record.quad.g.clone_from(&dest)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: assigning the result of `Clone::clone()` may be inefficient
+    --> crates/sparql-eval/src/update.rs:1215:9
+     |
+1215 |         copied.quad.g = dest.clone();
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `copied.quad.g.clone_from(&dest)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 3 previous errors
+error: could not compile `purrdf-sparql-eval` (lib test) due to 3 previous errors

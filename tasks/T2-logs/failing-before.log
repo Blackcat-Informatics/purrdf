@@ -1,0 +1,51 @@
+   Compiling crossbeam-utils v0.8.21
+   Compiling rayon-core v1.13.0
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-results)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling rayon v1.12.0
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/401-update-transfers-preserve-rdf-1-2/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 26.41s
+     Running tests/update_typed_records.rs (/opt/purrdf-401-qualification/build/debug/build/purrdf-sparql-eval/2e3b89f410bb1239/out/update_typed_records-2e3b89f410bb1239)
+
+running 3 tests
+test repeated_cached_document_load_has_fresh_identities ... FAILED
+test orphan_annotation_copy_preserves_its_role ... FAILED
+test equal_value_ordinary_and_annotation_copy_preserves_both_roles ... FAILED
+
+failures:
+
+---- repeated_cached_document_load_has_fresh_identities stdout ----
+
+thread 'repeated_cached_document_load_has_fresh_identities' (2528203) panicked at crates/sparql-eval/tests/update_typed_records.rs:38:9:
+assertion `left == right` failed: each successful resolution is a distinct document
+  left: 1
+ right: 3
+
+---- orphan_annotation_copy_preserves_its_role stdout ----
+
+thread 'orphan_annotation_copy_preserves_its_role' (2528202) panicked at crates/sparql-eval/tests/update_typed_records.rs:58:9:
+assertion `left == right` failed: annotation role survives transfer
+  left: 1
+ right: 2
+
+---- equal_value_ordinary_and_annotation_copy_preserves_both_roles stdout ----
+
+thread 'equal_value_ordinary_and_annotation_copy_preserves_both_roles' (2528201) panicked at crates/sparql-eval/tests/update_typed_records.rs:58:9:
+assertion `left == right` failed: annotation role survives transfer
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    equal_value_ordinary_and_annotation_copy_preserves_both_roles
+    orphan_annotation_copy_preserves_its_role
+    repeated_cached_document_load_has_fresh_identities
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test update_typed_records`
