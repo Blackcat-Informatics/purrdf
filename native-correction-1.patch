@@ -1,0 +1,550 @@
+--- a/crates/entail/src/owl_dl/parser.rs
++++ b/crates/entail/src/owl_dl/parser.rs
+@@ -155,8 +155,6 @@
+     pub(crate) ty: u32,
+     pub(crate) thing: u32,
+     pub(crate) nothing: u32,
+-    pub(crate) bottom_object: u32,
+-    pub(crate) bottom_data: u32,
+     pub(crate) class: u32,
+     pub(crate) restriction: u32,
+     pub(crate) on_property: u32,
+@@ -284,8 +282,6 @@
+             ty: i.intern_iri(RDF_TYPE),
+             thing: i.intern_iri(OWL_THING),
+             nothing: i.intern_iri(OWL_NOTHING),
+-            bottom_object: i.intern_iri(OWL_BOTTOMOBJECTPROPERTY),
+-            bottom_data: i.intern_iri(OWL_BOTTOMDATAPROPERTY),
+             class,
+             restriction,
+             on_property: i.intern_iri(OWL_ONPROPERTY),
+@@ -1227,11 +1223,7 @@
+             #[cfg(test)]
+             full_rematch: false,
+         };
+-        constrain_bottom_roles(
+-            &mut kb,
+-            &v,
+-            triples.iter().copied().flat_map(<[_; 3]>::from),
+-        );
++        constrain_bottom_roles(&mut kb, triples.iter().copied().flat_map(<[_; 3]>::from));
+         kb.encode_until(|| poll(stop))?;
+         Ok(kb)
+     })
+@@ -1241,34 +1233,40 @@
+ /// Install the fixed empty extension of each mentioned bottom role through
+ /// the ordinary universal-restriction calculus. Unmentioned built-ins add no
+ /// work to an unrelated knowledge base; query-only references use this same home.
+-pub(crate) fn constrain_bottom_roles(
+-    kb: &mut Kb,
+-    vocab: &Vocab,
+-    terms: impl IntoIterator<Item = u32>,
+-) -> bool {
+-    let roles = [vocab.bottom_object, vocab.bottom_data];
+-    let mut mentioned = [false; 2];
++pub(crate) fn constrain_bottom_roles(kb: &mut Kb, terms: impl IntoIterator<Item = u32>) -> bool {
++    let mut mentioned = [None; 2];
+     for term in terms {
+-        for (index, role) in roles.iter().enumerate() {
+-            mentioned[index] |= term == *role;
++        if let Some(index) = bottom_role_index(&kb.interner, term) {
++            mentioned[index] = Some(term);
+         }
+     }
+     let mut changed = false;
+-    for (index, role) in roles.into_iter().enumerate() {
+-        if mentioned[index] {
+-            let filler = kb
+-                .table
+-                .intern(Concept::All(Role::Named(role), Box::new(Concept::Bottom)));
+-            if !kb.tbox.contains(&(kb.top, filler)) {
+-                kb.tbox.push((kb.top, filler));
+-                kb.encoded = false;
+-                changed = true;
+-            }
++    for role in mentioned.into_iter().flatten() {
++        let filler = kb
++            .table
++            .intern(Concept::All(Role::Named(role), Box::new(Concept::Bottom)));
++        if !kb.tbox.contains(&(kb.top, filler)) {
++            kb.tbox.push((kb.top, filler));
++            kb.encoded = false;
++            changed = true;
+         }
+     }
+     changed
+ }
+ 
++/// Recognize the authored role identity without interning unused built-ins.
++/// Eagerly adding either name would renumber unrelated proof-contract terms.
++fn bottom_role_index(interner: &Interner, term: u32) -> Option<usize> {
++    let TermValue::Iri(iri) = interner.value(term) else {
++        return None;
++    };
++    match iri.as_str() {
++        OWL_BOTTOMOBJECTPROPERTY => Some(0),
++        OWL_BOTTOMDATAPROPERTY => Some(1),
++        _ => None,
++    }
++}
++
+ /// Give every literal that reaches the knowledge base its VALUE, and return the value-class
+ /// partition of those literals.
+ ///
+@@ -1658,7 +1656,7 @@
+ /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
+ ///   role assertion.
+ fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
+-    if p == v.bottom_object || p == v.bottom_data {
++    if bottom_role_index(interner, p).is_some() {
+         acc.abox_roles.push((s, p, o));
+         acc.name(interner, s);
+         acc.name(interner, o);
+--- a/crates/entail/src/owl_dl/query.rs
++++ b/crates/entail/src/owl_dl/query.rs
+@@ -275,7 +275,6 @@
+ 
+     let has_bottom_constraints = constrain_bottom_roles(
+         &mut kb,
+-        &v,
+         resolved.iter().copied().flat_map(<[_; 3]>::from).flatten(),
+     );
+ 
+--- a/crates/entail/src/owl_dl/graph.rs
++++ b/crates/entail/src/owl_dl/graph.rs
+@@ -1866,7 +1866,10 @@
+         }
+         // OWL interpretations have a non-empty object domain even with no ABox.
+         // A data-only ABox does not supply an object-domain witness either.
+-        if !fresh_types.is_empty() || !(0..st.nodes.len()).any(|index| !st.nodes[index].concrete) {
++        if !fresh_types.is_empty()
++            || !(0..st.nodes.len())
++                .any(|index| st.nodes[index].merged.is_none() && !st.nodes[index].concrete)
++        {
+             self.work.charge(self.meta.len() as u64 + 1);
+             let mut label = self.seed_label();
+             label.extend(fresh_types.iter().copied());
+--- a/crates/entail/src/owl_dl/oracle.rs
++++ b/crates/entail/src/owl_dl/oracle.rs
+@@ -3889,15 +3889,14 @@
+     assert_concrete_verdict(&[functional, values(0), values(1)], true);
+ }
+ 
+-/// `⊤ ⊑ A`, `⊤ ⊑ B`, `A ⊓ B ⊑ ⊥` with `a owl:sameAs "1"^^xsd:integer`.
++/// `⊤ ⊑ A`, `a : B`, `A ⊓ B ⊑ ⊥` with `a owl:sameAs "1"^^xsd:integer`.
+ ///
+-/// SATISFIABLE. The three inclusions refute any knowledge base with an element of `Δ_I` in it,
+-/// and the `owl:sameAs` says the only named element is a literal VALUE — an element of `Δ_D`,
+-/// which `owl:Thing` does not denote and which those inclusions therefore never quantified
+-/// over. The identification has to WITHDRAW the two unconditional consequents from the node it
+-/// produced, in whichever encoding they arrived: a seeded meta-concept under one, a derived
+-/// empty-guard clause head under the other. Keeping either would refute the knowledge base on
+-/// the strength of an axiom that never ranged over the element it closed. See
++/// SATISFIABLE. The required nonempty object domain can contain an A that is not a B.
++/// The identification says the asserted B is a literal VALUE in `Δ_D`, which `owl:Thing`
++/// does not denote. It must WITHDRAW the unconditional A consequent from that value node,
++/// in whichever encoding it arrived: a seeded meta-concept under one, a derived empty-guard
++/// clause head under the other. Keeping it would refute the knowledge base on the strength
++/// of an axiom that never ranged over the element it closed. See
+ /// [`Graph::merge_nodes`](crate::owl_dl::graph).
+ ///
+ /// The dual is the same terminology with the identification removed, which IS refuted — so
+@@ -3907,7 +3906,7 @@
+     let class = |i: usize| Concept::Named(DATA_HAND.concept_names()[i]);
+     let terminology = [
+         Axiom::Gci(Concept::Top, class(0)),
+-        Axiom::Gci(Concept::Top, class(1)),
++        Axiom::Type(data_subject(), class(1)),
+         Axiom::Gci(Concept::And(vec![class(0), class(1)]), Concept::Bottom),
+     ];
+     let mut identified = terminology.to_vec();
+@@ -3921,6 +3920,17 @@
+     let mut abstract_only = terminology.to_vec();
+     abstract_only.push(values(0));
+     assert_concrete_verdict(&abstract_only, false);
++
++    // If BOTH classes are unconditional, even identifying every named object
++    // with a value cannot remove the required anonymous object-domain witness.
++    // This is the original empty-domain oracle's now-explicit negative control.
++    let impossible_domain = [
++        Axiom::Gci(Concept::Top, class(0)),
++        Axiom::Gci(Concept::Top, class(1)),
++        Axiom::Gci(Concept::And(vec![class(0), class(1)]), Concept::Bottom),
++        Axiom::SameAs(data_subject(), 0),
++    ];
++    assert_concrete_verdict(&impossible_domain, false);
+ }
+ 
+ /// WHAT THE CONCRETE-DOMAIN FAMILY'S RANGES ACTUALLY HOLD, stated as literals.
+--- a/crates/shapes/src/json_schema.rs
++++ b/crates/shapes/src/json_schema.rs
+@@ -5468,8 +5468,9 @@
+     // single-value alternative with no member judged.
+     let requires_value = !has_values.is_empty() || !some_values.is_empty();
+     let floor = u64::from(requires_value);
+-    let single_beside_array =
+-        max_count != Some(1) && min_count.map_or(floor, |n| n.max(floor)) <= 1;
++    let single_beside_array = max_count != Some(1)
++        && max_count.is_none_or(|n| n >= 1)
++        && min_count.map_or(floor, |n| n.max(floor)) <= 1;
+     // Only a value schema or an array form that judges something can be bypassed:
+     // an unconstrained value beside an unbounded array of unconstrained values
+     // accepts every array either way.
+@@ -5569,9 +5570,9 @@
+         }
+         let array_form = crate::json_model::object(arr);
+ 
+-        // A single value is permissible exactly when minCount <= 1.
+-        let allow_single = min_count.is_none_or(|n| n <= 1);
+-        if allow_single {
++        // Both count bounds must admit one before adding the unwrapped form.
++        // In particular, maxCount=0 cannot be bypassed by a bare single value.
++        if single_beside_array {
+             json!({ "anyOf": [single, array_form] })
+         } else {
+             array_form
+--- a/crates/shapes/tests/ontology_schema_surface.rs
++++ b/crates/shapes/tests/ontology_schema_surface.rs
+@@ -13,8 +13,8 @@
+ use purrdf_lex::json::Value;
+ use purrdf_rdf::RdfDataset;
+ use purrdf_shapes::json_schema::{
+-    Namespaces, SchemaCompileRequest, SchemaCoveragePrecision, SchemaCoverageStatus,
+-    SchemaSurfaceMode, compile_schema,
++    Namespaces, SchemaClassPropertyCoverage, SchemaCompileRequest, SchemaCoveragePrecision,
++    SchemaCoverageStatus, SchemaSurfaceMode, compile_schema,
+ };
+ use purrdf_shapes::shapes::{Shapes, from_dataset};
+ use purrdf_shapes::{
+@@ -332,11 +332,20 @@
+     let shapes = shapes(shapes_turtle);
+     let ontology = parse(ontology);
+     let namespaces = namespaces();
++    compile_shapes(&shapes, &ontology, &namespaces, mode)
++}
++
++fn compile_shapes(
++    shapes: &Shapes,
++    ontology: &RdfDataset,
++    namespaces: &Namespaces,
++    mode: SchemaSurfaceMode,
++) -> (
++    purrdf_shapes::SchemaCompilation,
++    SchemaClassExpressionReport,
++) {
+     compile_schema_with_class_expressions(&SchemaCompileRequest::new(
+-        &shapes,
+-        &namespaces,
+-        ontology.as_ref(),
+-        mode,
++        shapes, namespaces, ontology, mode,
+     ))
+     .expect("anonymous class expressions are modelled, not refused")
+ }
+@@ -664,8 +673,18 @@
+ /// Whether the projected node `subject` of `data` validates against
+ /// `#/$defs/{class}` of the compiled schema.
+ fn accepts(schema_json: &str, class: &str, data: &str, subject: &str) -> bool {
++    accepts_with_namespaces(schema_json, &namespaces(), class, data, subject)
++}
++
++fn accepts_with_namespaces(
++    schema_json: &str,
++    namespaces: &Namespaces,
++    class: &str,
++    data: &str,
++    subject: &str,
++) -> bool {
+     let data = parse(data);
+-    let projected = purrdf_shapes::instance::project_graph(&data, &namespaces());
++    let projected = purrdf_shapes::instance::project_graph(&data, namespaces);
+     let node = projected["@graph"]
+         .as_array()
+         .expect("@graph")
+@@ -1959,6 +1978,23 @@
+     assert!(sdl.contains("enum "), "{sdl}");
+ }
+ 
++fn coverage_cell<'a>(
++    compilation: &'a purrdf_shapes::SchemaCompilation,
++    property_iri: &str,
++    class_iri: &str,
++) -> &'a SchemaClassPropertyCoverage {
++    compilation
++        .coverage
++        .properties
++        .iter()
++        .find(|property| property.property_iri == property_iri)
++        .expect("property coverage")
++        .classes
++        .iter()
++        .find(|class| class.class_iri == class_iri)
++        .expect("class coverage")
++}
++
+ #[test]
+ fn every_schema_cell_that_admits_xml_reports_unchecked_representation() {
+     let ontology = "ex:C a owl:Class . ex:p a owl:DatatypeProperty .";
+@@ -2006,24 +2042,6 @@
+             SchemaSurfaceMode::OntologyComplete,
+         ),
+         (
+-            "member-node count is dropped",
+-            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:node [ sh:maxCount 0 ] ] .",
+-            ontology,
+-            SchemaSurfaceMode::OntologyComplete,
+-        ),
+-        (
+-            "And member count is dropped",
+-            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:and ( [ sh:maxCount 0 ] ) ] .",
+-            ontology,
+-            SchemaSurfaceMode::OntologyComplete,
+-        ),
+-        (
+-            "Or member count is dropped",
+-            "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:or ( [ sh:maxCount 0 ] ) ] .",
+-            ontology,
+-            SchemaSurfaceMode::OntologyComplete,
+-        ),
+-        (
+             "custom-severity exclusion is dropped",
+             "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property [ sh:path ex:p ; sh:datatype xsd:string ; sh:severity ex:Advisory ] .",
+             ontology,
+@@ -2055,16 +2073,7 @@
+         ),
+     ] {
+         let (compilation, _) = compile_both(shape, source, mode);
+-        let cell = compilation
+-            .coverage
+-            .properties
+-            .iter()
+-            .find(|property| property.property_iri == iri("p"))
+-            .expect("property coverage")
+-            .classes
+-            .iter()
+-            .find(|class| class.class_iri == iri("C"))
+-            .expect("class coverage");
++        let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
+         assert_eq!(
+             cell.precision,
+             SchemaCoveragePrecision::RepresentationApproximation,
+@@ -2081,6 +2090,63 @@
+ }
+ 
+ #[test]
++fn public_member_count_shapes_do_not_claim_an_xml_exclusion() {
++    use purrdf_shapes::shapes::Constraint;
++
++    for (legal, malformed) in [
++        ("sh:node [ ]", "sh:node [ sh:maxCount 0 ]"),
++        ("sh:and ( [ ] )", "sh:and ( [ sh:maxCount 0 ] )"),
++        ("sh:or ( [ ] )", "sh:or ( [ sh:maxCount 0 ] )"),
++    ] {
++        let declaration = |constraint: &str| {
++            format!(
++                "ex:S a sh:NodeShape ; sh:targetClass ex:C ; \
++                 sh:property [ sh:path ex:p ; {constraint} ] ."
++            )
++        };
++        assert!(
++            from_dataset(&parse(&declaration(malformed))).is_err(),
++            "the SHACL 1.2 parser must retain its malformed-node-count refusal"
++        );
++        // The public Shapes API can construct this value directly. Its compiler
++        // drops the member count, so the original typed producer must not use
++        // that dropped field to claim an exact XML exclusion.
++        let mut typed = shapes(&declaration(legal));
++        let root = typed
++            .node_shapes
++            .iter_mut()
++            .find(|shape| !shape.targets.is_empty())
++            .expect("targeted node shape");
++        let member = match root.property_shapes[0].constraints.first_mut() {
++            Some(Constraint::Node(member)) => member.as_mut(),
++            Some(Constraint::And(members) | Constraint::Or(members)) => &mut members[0],
++            other => panic!("expected the actual member constraint: {other:?}"),
++        };
++        member.constraints.push(Constraint::MaxCount(0));
++        let ontology = parse("ex:C a owl:Class . ex:p a owl:DatatypeProperty .");
++        let (compilation, _) = compile_shapes(
++            &typed,
++            &ontology,
++            &namespaces(),
++            SchemaSurfaceMode::OntologyComplete,
++        );
++        let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
++        assert_eq!(
++            cell.precision,
++            SchemaCoveragePrecision::RepresentationApproximation,
++            "the public member count has no emitted exclusion"
++        );
++        for lexical in ["<p>balanced</p>", "<p>unclosed"] {
++            let data = format!("ex:node a ex:C ; ex:p \"{lexical}\"^^rdf:XMLLiteral .");
++            assert!(
++                accepts(&compilation.compiled.schema_json, "C", &data, "node"),
++                "the actual emitted member schema admits unchecked XML"
++            );
++        }
++    }
++}
++
++#[test]
+ fn xml_exclusion_controls_keep_their_exact_shape_coverage() {
+     for constraint in [
+         "sh:datatype xsd:string",
+@@ -2099,16 +2165,7 @@
+             "ex:C a owl:Class . ex:p a owl:DatatypeProperty .",
+             SchemaSurfaceMode::OntologyComplete,
+         );
+-        let cell = compilation
+-            .coverage
+-            .properties
+-            .iter()
+-            .find(|property| property.property_iri == iri("p"))
+-            .expect("property coverage")
+-            .classes
+-            .iter()
+-            .find(|class| class.class_iri == iri("C"))
+-            .expect("class coverage");
++        let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
+         assert_eq!(
+             cell.precision,
+             SchemaCoveragePrecision::Exact,
+@@ -2121,38 +2178,63 @@
+                 "{constraint}: XML is excluded"
+             );
+         }
++        if constraint == "sh:maxCount 0" {
++            assert!(
++                accepts(
++                    &compilation.compiled.schema_json,
++                    "C",
++                    "ex:node a ex:C .",
++                    "node"
++                ),
++                "the actual zero-value neighbor conforms"
++            );
++            for data in [
++                "ex:node a ex:C ; ex:p \"allowed\" .",
++                "ex:node a ex:C ; ex:p \"first\", \"second\" .",
++            ] {
++                assert!(
++                    !accepts(&compilation.compiled.schema_json, "C", data, "node"),
++                    "maxCount=0 rejects ordinary single and multiple values too"
++                );
++            }
++        }
+     }
+ }
+ 
+ #[test]
+ fn an_external_shape_cell_reports_xml_approximation_at_its_actual_validator() {
+-    let class = "https://external.example/vocab/External";
++    let class = "https://example.org/external/External";
++    let namespaces = Namespaces::new(
++        "ex",
++        &[
++            ("ex".to_owned(), EX.to_owned()),
++            ("ext".to_owned(), "https://example.org/external/".to_owned()),
++        ],
++    )
++    .expect("both class vocabularies are explicitly caller supplied");
+     let shape = format!(
+         "ex:S a sh:NodeShape ; sh:targetClass <{class}> ; \
+          sh:property [ sh:path ex:p ; sh:datatype rdf:XMLLiteral ] ."
+     );
+-    let (compilation, _) = compile_both(&shape, "", SchemaSurfaceMode::ShapedOnly);
+-    let cell = compilation
+-        .coverage
+-        .properties
+-        .iter()
+-        .find(|property| property.property_iri == iri("p"))
+-        .expect("property coverage")
+-        .classes
+-        .iter()
+-        .find(|row| row.class_iri == class)
+-        .expect("external shape coverage");
++    let (compilation, _) = compile_shapes(
++        &shapes(&shape),
++        &parse(""),
++        &namespaces,
++        SchemaSurfaceMode::ShapedOnly,
++    );
++    let cell = coverage_cell(&compilation, &iri("p"), class);
+     assert_eq!(cell.status, SchemaCoverageStatus::HasShape);
+     assert_eq!(
+         cell.precision,
+         SchemaCoveragePrecision::RepresentationApproximation
+     );
+-    let definition = purrdf_lex::json_pointer::escape_token(class);
++    let definition = purrdf_lex::json_pointer::escape_token(&namespaces.def_key(class));
+     for lexical in ["<p>balanced</p>", "<p>unclosed"] {
+         let data = format!("ex:node a <{class}> ; ex:p \"{lexical}\"^^rdf:XMLLiteral .");
+         assert!(
+-            accepts(
++            accepts_with_namespaces(
+                 &compilation.compiled.schema_json,
++                &namespaces,
+                 &definition,
+                 &data,
+                 "node"
+--- a/crates/shapes/tests/owl_value_semantics.rs
++++ b/crates/shapes/tests/owl_value_semantics.rs
+@@ -1051,8 +1051,8 @@
+ }
+ 
+ #[test]
+-fn self_restricted_cells_are_approximations_and_unconstrained_cells_exact() {
+-    use purrdf_shapes::json_schema::SchemaCoveragePrecision::{Exact, RepresentationApproximation};
++fn self_restricted_and_xml_admitting_cells_are_approximations() {
++    use purrdf_shapes::json_schema::SchemaCoveragePrecision::RepresentationApproximation;
+     let (compilation, _) = compile(
+         "ex:F a owl:Class . ex:W a owl:Class .
+          ex:p a owl:ObjectProperty ; rdfs:domain ex:F .
+@@ -1070,21 +1070,36 @@
+          ex:plain a owl:ObjectProperty ; rdfs:domain ex:F .",
+         &example(),
+     );
+-    // Every property takes a node or a well-typed literal, so a property no
+-    // range constrains states that exactly on F and W, whatever other classes'
+-    // restrictions say.
+-    assert_eq!(cell_precision(&compilation, "p", "F"), Exact);
+-    assert_eq!(cell_precision(&compilation, "u", "F"), Exact);
+-    assert_eq!(cell_precision(&compilation, "d", "W"), Exact);
++    // These range-free cells admit the unchecked XML literal representation,
++    // including malformed XML, regardless of other classes' restrictions.
++    for (property, class) in [
++        ("p", "F"),
++        ("u", "F"),
++        ("d", "W"),
++        ("plain", "F"),
++        ("o", "F"),
++    ] {
++        assert_eq!(
++            cell_precision(&compilation, property, class),
++            RepresentationApproximation
++        );
++        let data = format!("ex:x a ex:{class} ; ex:{property} \"<p>unclosed\"^^rdf:XMLLiteral .");
++        assert!(
++            accepts(
++                &compilation.compiled.schema_json,
++                &example(),
++                class,
++                &data,
++                &format!("{EX}x")
++            ),
++            "the actual projected XML branch justifies the approximation"
++        );
++    }
+     // A self restriction, reported unrepresented, is no exact cell.
+     assert_eq!(
+         cell_precision(&compilation, "o", "SO"),
+         RepresentationApproximation
+     );
+-    // Neighbours: a plain object property, and o on a class without the
+-    // self restriction, stay exact.
+-    assert_eq!(cell_precision(&compilation, "plain", "F"), Exact);
+-    assert_eq!(cell_precision(&compilation, "o", "F"), Exact);
+ }
+ 
+ #[test]

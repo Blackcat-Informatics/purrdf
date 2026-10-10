@@ -1,0 +1,13 @@
+# Schema surface: rdf:XMLLiteral literal lexical forms are admitted unjudged
+
+Source: https://github.com/Blackcat-Informatics/purrdf/issues/468
+State: OPEN; updated: 2026-10-09T03:11:40Z; full comments: 0.
+
+The developer-schema surface admits a checked literal (node or literal, under the OWL 2 Full floor) on every OWL-derived property. Every datatype in the OWL 2 datatype map has its lexical form checked, except `rdf:XMLLiteral`: its lexical space is well-balanced XML, which no JSON Schema pattern can decide. Unconstrained cells still report `exact` while admitting any `rdf:XMLLiteral` lexical form.
+
+Required: either judge well-balanced XML exactly (a schema keyword or a validator hook the surface can rely on), or report every cell that can hold an `rdf:XMLLiteral` truthfully as `representation_approximation`. Add tests for an ill-formed and a well-formed XMLLiteral. Refs #416.
+
+## Comments
+
+None.
+

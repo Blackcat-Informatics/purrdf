@@ -1,0 +1,7 @@
+Both concrete feedback findings are corrected and pushed on PR #523 with normal signing and hooks.
+
+Commit30825eede refreshes and genuinely translates the three changed Chinese source messages through the original gettext producer. Actual make check-i18n book book-zh passes: every original poisoned-catalogue arm, all six rendering gates, zero fuzzy/untranslated/template drift, and both English and Chinese HTML book builds. The excluded-corpus scope and other-suite ledger limitations are preserved.
+
+Commit978b9e1f6 replaces the shallow depth success with the deepest accepted member of the actual fixture family. Its five base JSON containers and two per wrapper yield61 accepted wrappers and62 immediately refused under the unchanged128 cap. Each of TypeScript, GraphQL and Pydantic must actually emit both definitions at61 and return the exact shared nesting-limit error at62; the prior deeper refusal is retained. Strict affected-target Clippy and the entire original large_schema_emission target pass, all five tests.
+
+These documentation/acceptance changes preserve production algorithms and guards. The original complete native/portable acceptance and mandatory make check1 remain applicable to unchanged production source; its ledger stays1/3. Independent review has adjudicated these deltas. Hosted final-head checks, fresh review-debt disposition and protected integration remain required and pending; none of the five issues is counted closed before the actual merge.

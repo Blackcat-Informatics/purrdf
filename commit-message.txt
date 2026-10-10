@@ -1,0 +1,13 @@
+Make datatype ranges and OWL schema coverage exact
+
+Integrate timezone-required dateTimeStamp and normalized language/direction
+literals into exact range algebra and the public reasoning consumers. Preserve
+the requested datatype identity in calendar casts.
+
+Enforce bottom roles and a nonempty abstract domain while admitting finite
+cyclic class definitions. Require every published OWL consistency verdict to
+agree with an empty divergence ledger.
+
+Derive schema and emitter widths from actual inputs, retaining the shared depth
+and expanded-expression guards. Report unchecked XMLLiteral admission honestly
+from the constraints each projection enforces, and regenerate measured claims.

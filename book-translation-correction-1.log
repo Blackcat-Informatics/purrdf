@@ -1,0 +1,73 @@
+cargo run -q --locked -p helper-census -- --glossary-gate
+OK: 69 rows, 43 rejections, 24 K tokens respected by 4314 translated units; 3 tracked translated Markdown documents; 1716 self-tests
+python3 scripts/check-i18n-render.py --self-test
+check-i18n-render: mdbook 0.5.3 and mdbook-i18n-helpers 0.4.0, both at their pins.
+check-i18n-render: proving each arm goes red on a poisoned catalogue —
+  check-brand-casing.py on a bare 'purrdf' glued to CJK:
+    /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-0/markdown/introduction.md:15:2: bare 'purrdf' in prose — use 'PurRDF' for the project/brand, or wrap `purrdf` in backticks if it names the facade crate
+        本purrdf项目
+    -> red (exit 1), as required
+  check-issue-refs.py on a hazard id glued to CJK:
+    /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-1/markdown/introduction.md:15:3: process reference 'H12' — restate as the behaviour it describes, with no review-thread hazard id
+        风险H12点已处理。
+    -> red (exit 1), as required
+  check-spec-attribution.py on the quad template (a first-party extension, not defined by SPARQL 1.2) attributed to it in Chinese:
+    /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-2/markdown/introduction.md:15: `CONSTRUCT { GRAPH` attributed to `SPARQL 1.2`
+      /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-2/markdown/introduction.md:15: `四元组模板` attributed to `SPARQL 1.2`
+    
+    2 unqualified attribution(s).
+    -> red (exit 1), as required
+  check-doc-claims.py on the overclaim ban's own specimen after a full-width terminator, unscoped:
+    Rendered pages make a banned claim:
+    
+      - /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-3/markdown/introduction.md:15: banned entailment overclaim `complete OWL 2 RL entailment` — 78 / 78 is RULE-TABLE coverage. Entailment conformance is a different claim, measured separately and only over the cases actually vendored. Scope the sentence with the literal phrase 'on this vendored W3C corpus', or say the bounded thing instead
+    -> red (exit 1), as required
+  sweep_sparql_fences on a fenced sparql block with a full-width brace, written inside a paragraph:
+    sweep_sparql_fences: 1 of 27 fenced sparql block(s) do not parse:
+    
+    /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-4/markdown/introduction.md#sparql-block-1: does not parse
+        as a query: SPARQL syntax error at byte 16: expected LBrace, found Some(Word("｛"))
+        as an update: SPARQL syntax error at byte 0: expected an update operation keyword, found Some(Word("SELECT"))
+    -> red (exit 1), as required
+  sweep_sparql_fences on a shipped sparql fence's own message, its first brace made full-width:
+    sweep_sparql_fences: 1 of 26 fenced sparql block(s) do not parse:
+    
+    /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render-5/markdown/sparql/querying.md#sparql-block-1: does not parse
+        as a query: SPARQL syntax error at byte 66: expected LBrace, found Some(Word("｛"))
+        as an update: SPARQL syntax error at byte 48: expected an update operation keyword, found Some(Word("SELECT"))
+    -> red (exit 1), as required
+  reached-the-rendering on a translation of a msgid the English source does not carry (a stale entry):
+  translated messages reached the rendering:
+    zh-Hans.po:24: translated message never reached the rendering (msgid 'This sentence exists in the catalogue and nowhere in the Eng'; probe '这段译文没有对应的英文段落') — the preprocessor did not match its msgid; the English source no longer carries it (`make book-po-update` marks such entries fuzzy or obsolete)
+    -> red (exit 1), as required
+check-i18n-render: every arm went red on its poison.
+check-i18n-render: rendering the zh-Hans book with docs/book/po/zh-Hans.po —
+  33 page(s) rendered to Markdown under a scratch directory.
+  check-brand-casing.py:
+    OK: no bare 'purrdf' prose in the rendered tree (33 page(s) scanned under /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render/markdown).
+  check-issue-refs.py:
+    OK: no issue-reference tokens and no process references in the rendered tree (33 page(s) scanned under /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render/markdown).
+  check-spec-attribution.py:
+    check-spec-attribution: no unqualified specification attributions in the rendered tree (33 page(s) scanned under /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render/markdown).
+  check-doc-claims.py:
+    OK: the stale-name ban swept 33 rendered page(s) under /opt/purrdf-schema-five-qualification/target/gate-scratch/i18n-render.ZA00OW/render/markdown, and the entailment-overclaim ban swept the 9 marker-bearing page(s) among them, sentence by sentence.
+  sweep_sparql_fences:
+    sweep_sparql_fences: OK — 26 fenced sparql block(s) in 33 Markdown file(s) all parse as a query or an update
+  translated messages reached the rendering:
+    every rendered msgstr's CJK text is present in the tree.
+  catalogue docs/book/po/zh-Hans.po: 3040 message(s) — 3040 translated, 0 fuzzy, 0 untranslated, 10 obsolete.
+  drift against a fresh template: 0 source message(s) absent from the catalogue, 0 catalogue message(s) no longer in the source.
+OK: the zh-Hans rendering passes all 6 gates.
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/viz_samples docs/book/src/assets/.visualization.nHFicR --svg-only`
+wrote RDF 1.2 visualization artifacts to docs/book/src/assets/.visualization.nHFicR
+mdbook build docs/book
+ INFO Book building has started
+ INFO Running the html backend
+ INFO HTML book written to `/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/docs/book/book`
+MDBOOK_BOOK__LANGUAGE=zh-Hans MDBOOK_OUTPUT__HTML__SEARCH__ENABLE=false \
+	MDBOOK_OUTPUT__HTML__SITE_URL='/purrdf/zh-Hans/' \
+	mdbook build -d "/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/docs/book/book/zh-Hans" docs/book
+ INFO Book building has started
+ INFO Running the html backend
+ INFO HTML book written to `/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/docs/book/book/zh-Hans`

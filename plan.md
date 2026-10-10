@@ -1,0 +1,38 @@
+# Five-contract schema, datatype and OWL delivery
+
+The accepted scope is the entire bodies/comments of #451, #453, #468, #474 and #476 captured in this Stage directory. This is one complete implementation/acceptance batch and one qualification/publication task, not five per-issue loops. No required behavior is deferred or replaced with recognizing an opaque range.
+
+Repository authority: AGENTS.md, .baseline and .goals; the existing datatype/range, OWL, schema and vocabulary homes. No named governing ADR was found for these owners. Preserve main, sibling worktrees, frozen corpora and normal hooks; add no dependency, Cargo feature, implicit namespace or second algorithm. The deficiency ledger is empty. Required native, portable, generated and full-gate evidence remain distinct from issue closure.
+
+Prior art and recurrence are in prior-art.md, brief.json and prior-art-assessment.md. The fresh #476 brief has bounded last-200-commit coverage and 14 related closed issues; it is not a full historical recurrence census. The complete written proposal and independent plan PASS are in the portfolio Stage schema-five-proposal; source was then reconciled in this isolated successor. All four related issue captures are reused without a second intake.
+
+## Completeness contract
+
+| Issue | Production input and owner | Required executable acceptance | Task |
+|---|---|---|---|
+| 451 | xsd datatype/value/temporal/range, SPARQL constructor path, OWL literal registration and public range-containment | Direct temporal parser and both existing dispatcher rules require timezone; exact proper dateTime subset/complement/enumeration/cardinality and offset value identity; actual casts preserve requested dateTimeStamp IRI; public Reasoner and verified containment have no spurious boundary | 1 |
+| 453 | normalized RDF language/direction term identity, shared XSD listed-set algebra and OWL consumers | Disjoint infinite langString/dirLangString/xsd:string spaces; finite singleton/Boolean/complement/cardinality laws; stored language case/direction identity, real enum/complement/min-cardinality clash and public containment proof; ring fence unchanged | 1 |
+| 468 | actual schema compiler coverage cells and unchanged unchecked XMLLiteral lexical branch | Real projected validator admits both balanced and malformed XML strings and coverage says representation_approximation; explicit/external SHACL cells included; actual datatype/nodekind/max0/In/language exclusion controls stay exact and reject XML | 1 |
+| 474 | schema graph/seed propagation/coverage and source-byte emitter bounds, existing cached expression reader | Actual public compilation of 65,537 classes and 1,114,129 cells; each of TypeScript/GraphQL/Pydantic emits 65,537 definitions; shared depth refusal and shallow neighbor; report-only scaling benches at 16,384/32,768/65,537 classes; checked arithmetic without five old width caps | 1 |
+| 476 | existing OWL RDF parser, graph initialization and finite GCI/cycle calculus | All four frozen published consistency verdicts; full 262 cases with zero ledger and existing RL negative controls; bottom roles/assertions/hierarchy/restrictions, nonempty empty-ABox domain, positive and negative finite cycles and malformed-list/cyclic-data-range refusals | 1 |
+| All | affected production/tests/docs and generated projection inputs | Native all-target lint/runtime, useful scaling evidence, portable/WASM, actual golden/conformance regeneration, one settled mandatory full qualification; no closure before normal signed hooks, hosted checks and protected integration | 1–2 |
+
+## Native interface reconciliation
+
+Current base uses the existing resident temporal grammar/dispatcher and SPARQL canonical formatter; #508's new physical ParsedValue/Memory APIs are not on main. The successor extends that same original temporal grammar with parse_datetime_stamp, dispatches the recognized datatype and preserves explicit target IRI in both actual cast branches. Direct parser/dispatcher tests retain all valid and invalid semantic cases. No #508 source is copied. When #508 later combines with this batch its admitted doors must retain the same required-timezone/target-identity law; this is an integration obligation, not a prerequisite for this delivery.
+
+The original expanded-expression occurrence guard remains at MAX_OWL_EXPRESSION_NODES because a shared DAG may expand exponentially. It is separate from the five removed input-width caps. Cached hits charge expanded visits and relative depth before clone; neither that guard nor shared depth substitutes for class/cell/definition counts.
+
+Enhancements declined: exact XML lexical validation (#468 permits honest approximation and the current schema validator deliberately leaves XML unchecked); generalized prepared-clash architecture #499 (not needed for these source contracts); numerical optimization #443/#470 (not needed for exact datatype recognition). These do not omit any acceptance criterion.
+
+## Task 1: Integrate and qualify the entire shared behavior
+
+Implement all five source contracts, actual production callers, complete positive/negative acceptance fixtures and scaling benches before the first focused compilation. Reconcile deltas against current main, preserving both sides and avoiding an alternate implementation. Run one affected-package native all-target compile/lint/runtime batch once admitted resource headroom is available; inspect all failures and repair coherent causes without fixed per-edit ceremony. Run report-only meaningful scaling lanes and actual portable targets. Regenerate the IRI-only current golden through the existing production writer and the conformance scoreboard through the original measured generator; preserve frozen corpus and historical golden bytes.
+
+An independent review covers the applied complete contract and actual evidence once available. One proportional review with concrete findings rechecks, not a new panel. Normal signed commit/push and issue update only after required acceptance is met. Record exact commands/results and any unrun criteria in validation.md and tasks/T1-review.md.
+
+## Task 2: Complete mandatory qualification and protected publication
+
+Aim one settled make check; maximum three full attempts including failures across this coherent delivery. Never bypass or weaken hooks. Qualify the actual base candidate without automatically restarting unrelated checks solely for branch age. Write reviewer-facing PR around complete five-issue resulting behavior, publish the exact plan/evidence and source with normal hooks, use hosted final-head checks, and integrate only through /home/paudley/stage/root/bin/ghprsq. Close all five only when their full contracts and protected merge are proven. Preserve donors until their own durable archive/successor acceptance allows cleanup.
+
+Resource status: the private four-job/16GiB/no-swap lane has qualified affected Clippy/native acceptance, all262 OWL cases and RL controls, unchanged proof digests, all five large-schema tests, current golden/difference assertions, twelve original scaling lanes, actual XSD/shapes portable execution, complete measured scoreboard and governed metadata2. The actual37e3a26a7 base delta and numeric documentation-checker correction are independently accepted. Task1 has an independent PASS in tasks/T1-review.md. Required full make check1 is TERMINAL PASS on that combined source, ledger1/3, including all workspace tests/doctests and all31 release WASM crates. Normal signed hooks and push PASS at commit0088bc920; PR523 is open. Its actual merge-tree prediction equals the qualified committed tree. Hosted checks, fresh review debt and protected merge remain pending. Exact current results are in validation.md.

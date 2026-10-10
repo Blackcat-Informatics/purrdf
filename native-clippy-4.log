@@ -1,0 +1,27 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/entail)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shapes)
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/shapes/src/schema_surface.rs:1910:9
+     |
+1910 |         &mut self,
+     |         ^----^^^^
+     |          |
+     |          help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+     = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/shapes/src/schema_surface.rs:1950:9
+     |
+1950 |         &mut self,
+     |         ^----^^^^
+     |          |
+     |          help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: could not compile `purrdf-shapes` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-shapes` (lib test) due to 2 previous errors

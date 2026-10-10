@@ -1,0 +1,8 @@
+Refresh Chinese OWL consistency and conformance translations
+
+Update the three changed source messages through the original gettext
+template/catalogue refresh and translate their current complete-corpus
+verdicts. Preserve the excluded-corpus scope and other-suite ledger limits.
+
+The actual translation rendering, glossary, poisoned-catalogue controls
+and English/Chinese book builds pass. The qualified Rust source is unchanged.

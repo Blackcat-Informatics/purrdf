@@ -1,0 +1,9 @@
+Exercise exact shared emitter depth neighbors
+
+Derive the deepest accepted nested schema from the actual fixture's five
+base containers and two containers per allOf wrapper. Require all three
+emitters to emit both definitions there and reject the next wrapper depth
+with the shared nesting error. Preserve the original deeper refusal.
+
+Strict affected-target Clippy and all five original large-schema tests pass.
+Production depth guards and the qualified ranking/runtime source are unchanged.

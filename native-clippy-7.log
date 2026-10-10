@@ -1,0 +1,25 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/entail)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/validate)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/purrdf)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-conformance)
+error[E0716]: temporary value dropped while borrowed
+    --> crates/shapes/tests/ontology_schema_surface.rs:2231:62
+     |
+2231 |     let definition = purrdf_lex::json_pointer::escape_token(&namespaces.def_key(class));
+     |                                                              ^^^^^^^^^^^^^^^^^^^^^^^^^ - temporary value is freed at the end of this statement
+     |                                                              |
+     |                                                              creates a temporary value which is freed while still in use
+...
+2238 |                 &definition,
+     |                 ----------- borrow later used here
+     |
+help: consider using a `let` binding to create a longer lived value
+     |
+2231 ~     let binding = namespaces.def_key(class);
+2232 ~     let definition = purrdf_lex::json_pointer::escape_token(&binding);
+     |
+
+For more information about this error, try `rustc --explain E0716`.
+error: could not compile `purrdf-shapes` (test "ontology_schema_surface") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

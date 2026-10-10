@@ -1,0 +1,7 @@
+The complete shared implementation for #451, #453, #468, #474 and #476 is committed and pushed as 0088bc920d5fefbcf530eccfe2e8484065bf62f8 in PR #523: https://github.com/Blackcat-Informatics/purrdf/pull/523.
+
+Timezone-required dateTimeStamp and normalized language/direction values use the exact shared range algebra and OWL consumers. The OWL fixes handle bottom roles, a nonempty abstract domain and finite class cycles. Schema width bounds derive from actual input dimensions, and XMLLiteral coverage reports unchecked admission honestly through the constraints the projection enforces.
+
+Independent full-contract review and all required local qualification pass. The unchanged 262-case OWL corpus has zero divergences; all 50 RL cases and 23 negative controls pass, with both frozen proof identities unchanged. Production XML/depth/large-schema neighbors, all twelve original scaling lanes, actual XSD/shapes WASM execution, the complete measured conformance writer and governed metadata pass. Mandatory make check passes on its first attempt, including all workspace tests/doctests and the release WASM build of all 31 publishable crates. Normal signing, commit hooks and push pass.
+
+The actual merge candidate equals the qualified committed tree. Hosted final-head checks, review-debt disposition and protected integration remain pending. None of these five issues is counted closed before the actual protected merge. Scaling evidence describes the measured dimensions and host, without claiming a matched before/after speedup or a general asymptotic result.

@@ -1,0 +1,56 @@
+--- a/README.md
++++ b/README.md
+@@ -404,7 +404,7 @@
+ | SPARQL CDT (SEP-0009) | vendored `awslabs/SPARQL-CDTs` (`vectors/sparql-cdt/`) | **658 / 658**, 0 ledgered — see the lexical-space divergence in [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
+ | SPARQL execution governors | first-party frozen corpus (`vectors/sparql-governors/`) | **50 / 50**, 0 ledgered |
+ | Entailment (SPARQL regimes) | W3C sparql11 `entailment/` group | **70 / 70**, 0 ledgered |
+-| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **258 / 262** agreeing, 4 ledgered, 0 unledgered |
++| Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **262 / 262** agreeing, 0 ledgered, 0 unledgered |
+ | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
+ | RDFC-1.0 | W3C canonicalization fixtures | green |
+ | RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **12 / 12** |
+--- a/docs/book/src/entailment.md
++++ b/docs/book/src/entailment.md
+@@ -370,13 +370,12 @@
+   ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, the
+   RIF-Core rule engine, and RDF-axiomatic predicate typing, all run through the
+   SPARQL conformance harness.
+-- **W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero
++- **W3C OWL 2 test suite — 262 of 262 cases agree, 0 ledgered**, zero
+   unledgered. This corpus is *consistency*-shaped: all 262 vendored cases are
+   `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (36). It therefore
+   grades the DL/tableau lane's satisfiability verdicts and says nothing about
+-  the OWL 2 RL rule table. Every one of the 4 divergences is named in a typed
+-  ledger; an unledgered divergence, and a ledgered case that has started
+-  agreeing, are both hard failures.
++  the OWL 2 RL rule table. The typed ledger is empty. Every disagreement and
++  every stale ledger entry remains a hard failure.
+ 
+   Two things this row does **not** say. First, the upstream material is not
+   free of entailment tests — the W3C manifest holds **206 positive and 23
+@@ -388,7 +387,7 @@
+   **172 the tableau decided when the exclusion was measured** (108 consistent, 64
+   inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld (20
+   reasoner, 5 parse), and 23 carry no RDF/XML premise — so the exclusion was
+-  payload triage, not a capability limit, and "258 of 262" is a number over a
++  payload triage, not a capability limit, and "262 of 262" is a number over a
+   corpus rather than over what W3C published.
+ 
+   Those five figures are a **dated measurement**, recorded in `census.tsv`'s
+--- a/docs/book/src/project/conformance.md
++++ b/docs/book/src/project/conformance.md
+@@ -49,10 +49,10 @@
+ 
+ At the time of writing every suite is green — for example 1,105/1,105
+ attempted shexTest validation cases, 129/129 W3C SHACL, 264/264 codec
+-round-trips, 70/70 W3C SPARQL entailment-regime cases, and 258/262 agreeing
+-verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the remaining
+-non-passes strictly ledgered (4 typed OWL 2 divergences; no SPARQL case is
+-ledgered). Two of those numbers
++round-trips, 70/70 W3C SPARQL entailment-regime cases, and 262/262 agreeing
++verdicts on the vendored W3C OWL 2 DL-consistency corpus, with zero OWL 2 DL
++or SPARQL ledger entries. Other suites' non-passes remain strictly ledgered.
++Two of those numbers
+ need their scope stated: the OWL 2 DL corpus is a *subset*, 262 of the 482
+ consistency-shaped cases W3C published, and rule-table coverage is not
+ entailment conformance — on this vendored W3C corpus of OWL 2 RL entailment

@@ -1,0 +1,15 @@
+# Issue #476: OWL 2 DL: close the four ledgered W3C OWL 2 consistency divergences
+
+State: OPEN   Repo: Blackcat-Informatics/purrdf   Forge: github
+
+## Body
+
+Owner rule: OWL DL, RL and Full are the minimum support floor. The vendored W3C OWL 2 suite agrees on 258 of 262 cases. Four are ledgered in `crates/sparql-conformance/src/owl2.rs`:
+- `new-feature-bottomdataproperty-001` and `new-feature-bottomobjectproperty-001` (BottomProperty): `owl:bottomObjectProperty` and `owl:bottomDataProperty` are read as ordinary roles, so an assertion over one does not clash.
+- `webont-thing-003` (EmptyDomain): `owl:Thing owl:equivalentClass owl:Nothing` must be inconsistent, because OWL 2 forbids the empty domain.
+- `webont-i5-26-007` (CyclicClassExpression): returns an EntailError rather than a verdict.
+
+Required: all four agree with the published verdicts and leave the ledger (0 ledgered), with no new unsoundness on the RL negative lane.
+
+## Comments (0)
+

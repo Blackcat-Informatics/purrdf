@@ -1,0 +1,81 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/jsonschema)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2m 07s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 28.36s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.93s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.14s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.16s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_html_entities`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.12s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2321 file(s); entailment-overclaim ban swept 36 of 247 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2331 unit(s) outside that set).
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/jsonschema)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2.19s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/viz_samples /opt/purrdf-schema-five-qualification/target/gate-scratch/check-generated.Dptrty/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /opt/purrdf-schema-five-qualification/target/gate-scratch/check-generated.Dptrty/visualization
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 57.31s
+     Running unittests src/lib.rs (/opt/purrdf-schema-five-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1231 filtered out; finished in 0.00s
+
+/usr/bin/make license-bundles
+python3 scripts/fetch-locked-deps.py
+python3 scripts/package-licenses.py --write
+license bundles generated: 35 profiles

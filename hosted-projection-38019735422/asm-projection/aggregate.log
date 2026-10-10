@@ -1,0 +1,2 @@
+python3 scripts/check-simd-asm.py --doc --merge-reports target/asm-projection/reports
+OK: 111 sites; seven matching, successful assembly reports

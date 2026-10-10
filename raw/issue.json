@@ -1,0 +1,25 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Owner rule: OWL DL, RL and Full are the minimum support floor. The vendored W3C OWL 2 suite agrees on 258 of 262 cases. Four are ledgered in `crates/sparql-conformance/src/owl2.rs`:\n- `new-feature-bottomdataproperty-001` and `new-feature-bottomobjectproperty-001` (BottomProperty): `owl:bottomObjectProperty` and `owl:bottomDataProperty` are read as ordinary roles, so an assertion over one does not clash.\n- `webont-thing-003` (EmptyDomain): `owl:Thing owl:equivalentClass owl:Nothing` must be inconsistent, because OWL 2 forbids the empty domain.\n- `webont-i5-26-007` (CyclicClassExpression): returns an EntailError rather than a verdict.\n\nRequired: all four agree with the published verdicts and leave the ledger (0 ledgered), with no new unsoundness on the RL negative lane.",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-07T02:44:26Z",
+  "labels": [],
+  "milestone": {
+    "number": 4,
+    "title": "v4.0",
+    "description": "",
+    "dueOn": "2026-10-12T00:00:00Z"
+  },
+  "number": 476,
+  "state": "OPEN",
+  "title": "OWL 2 DL: close the four ledgered W3C OWL 2 consistency divergences",
+  "updatedAt": "2026-10-09T03:11:43Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/476"
+}

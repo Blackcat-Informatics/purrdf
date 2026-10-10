@@ -1,0 +1,92 @@
+{
+  "issue": 476,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "OWL 2 DL: close the four ledgered W3C OWL 2 consistency divergences",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 199,
+      "title": "OWL-Direct consistency exhausts budget on 17-triple satisfiable ontology",
+      "state": "CLOSED"
+    },
+    {
+      "number": 173,
+      "title": "feat(entail): close the 16 ledgered W3C OWL 2 RL entailment-corpus gaps",
+      "state": "CLOSED"
+    },
+    {
+      "number": 9,
+      "title": "Full W3C conformance (SPARQL 1.1/1.2 \u00b7 RDFC-1.0 \u00b7 IRI \u00b7 syntax) + rdflib test-suite gate",
+      "state": "CLOSED"
+    },
+    {
+      "number": 11,
+      "title": "EPIC \u2014 purrdf as a high-performance, RDF-1.2-first drop-in replacement for rdflib",
+      "state": "CLOSED"
+    },
+    {
+      "number": 7,
+      "title": "rdflib plugin entry-point discovery in purrdf.compat.rdflib",
+      "state": "CLOSED"
+    },
+    {
+      "number": 375,
+      "title": "Prep v3.0 release",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 167,
+      "title": "Expose OWL-RL materialize in the python library",
+      "state": "CLOSED"
+    },
+    {
+      "number": 402,
+      "title": "SHACL dated profile selection and complete validation reports (additive)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 37,
+      "title": "feat(entail): native OWL-DL reasoner + RIF engine for full entailment-regime conformance",
+      "state": "CLOSED"
+    },
+    {
+      "number": 185,
+      "title": "Property-function (magic predicate) registry",
+      "state": "CLOSED"
+    },
+    {
+      "number": 339,
+      "title": "Contract for an index-backed ranked producer, and three gaps found meeting it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 188,
+      "title": "SEP-0006 LATERAL surface syntax",
+      "state": "CLOSED"
+    },
+    {
+      "number": 349,
+      "title": "A selectivity-only statistic narrows a retrieval plan but is not recorded on its snapshot",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "semantic-identity-loss": 1,
+    "none": 18,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #476 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['close', 'ledgered', 'consistency']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

@@ -1,0 +1,349 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-algebra)
+error: unnecessary qualification
+   --> crates/xsd/tests/data_range.rs:788:29
+    |
+788 |         assert!(same_value(&purrdf_xsd::XsdValue::DateTime(native), &stamp));
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+788 -         assert!(same_value(&purrdf_xsd::XsdValue::DateTime(native), &stamp));
+788 +         assert!(same_value(&XsdValue::DateTime(native), &stamp));
+    |
+
+error: could not compile `purrdf-xsd` (test "data_range") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/datalog)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/columnar)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shex)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-eval)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/json)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/conformance-kit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/entail)
+error[E0425]: cannot find value `OWL_THING` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1510:34
+     |
+1510 |         let thing = b.intern_iri(OWL_THING);
+     |                                  ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this constant through its public re-export
+     |
+1278 +     use crate::vocab::OWL_THING;
+     |
+
+error[E0425]: cannot find value `OWL_NOTHING` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1511:36
+     |
+1511 |         let nothing = b.intern_iri(OWL_NOTHING);
+     |                                    ^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this constant through its public re-export
+     |
+1278 +     use crate::vocab::OWL_NOTHING;
+     |
+
+error[E0425]: cannot find function `consistent_by_both` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1514:18
+     |
+1514 |         assert!(!consistent_by_both(
+     |                  ^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/entail/src/owl_dl/mod.rs:1177:5
+     |
+1177 |     fn consistent_by_both(ds: &RdfDataset) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::absorption_tests::consistent_by_both`: not accessible
+     |
+    ::: crates/entail/src/owl_dl/tableau.rs:1121:5
+     |
+1121 |     fn consistent_by_both(kb: &Kb) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::tableau::tests::consistent_by_both`: not accessible
+
+error[E0425]: cannot find value `OWL_OBJECTPROPERTY` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1521:37
+     |
+1521 |             let kind = b.intern_iri(OWL_OBJECTPROPERTY);
+     |                                     ^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: similarly named constant `BOTTOM_OBJECT_PROPERTY` defined here
+    --> crates/iri/src/vocab.rs:246:5
+     |
+ 246 |     pub const BOTTOM_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#bottomObjectProperty";
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: a constant with a similar name exists
+     |
+1521 -             let kind = b.intern_iri(OWL_OBJECTPROPERTY);
+1521 +             let kind = b.intern_iri(BOTTOM_OBJECT_PROPERTY);
+     |
+help: consider importing this constant through its public re-export
+     |
+1278 +     use crate::vocab::OWL_OBJECTPROPERTY;
+     |
+
+error[E0425]: cannot find function `iri` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1525:30
+     |
+1525 |                 let source = iri(&mut b, "source");
+     |                              ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/entail/src/calculus/mod.rs:133:1
+     |
+ 133 | fn iri(value: &str) -> ClauseTerm {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::calculus::iri`: not accessible
+     |
+    ::: crates/entail/src/entails/homomorphism.rs:625:5
+     |
+ 625 |     fn iri(value: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::entails::homomorphism::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/owl_dl/mod.rs:805:5
+     |
+ 805 |     fn iri(b: &mut RdfDatasetBuilder, local: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/rif/eval.rs:387:5
+     |
+ 387 |     fn iri(local: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::rif::eval::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/lib.rs:986:5
+     |
+ 986 |     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::tests::iri`: not accessible
+
+error[E0425]: cannot find function `iri` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1526:30
+     |
+1526 |                 let target = iri(&mut b, "target");
+     |                              ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/entail/src/calculus/mod.rs:133:1
+     |
+ 133 | fn iri(value: &str) -> ClauseTerm {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::calculus::iri`: not accessible
+     |
+    ::: crates/entail/src/entails/homomorphism.rs:625:5
+     |
+ 625 |     fn iri(value: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::entails::homomorphism::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/owl_dl/mod.rs:805:5
+     |
+ 805 |     fn iri(b: &mut RdfDatasetBuilder, local: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/rif/eval.rs:387:5
+     |
+ 387 |     fn iri(local: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::rif::eval::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/lib.rs:986:5
+     |
+ 986 |     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::tests::iri`: not accessible
+
+error[E0425]: cannot find function `consistent_by_both` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1530:17
+     |
+1530 |                 consistent_by_both(&b.freeze().expect("empty-role fixture")),
+     |                 ^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/entail/src/owl_dl/mod.rs:1177:5
+     |
+1177 |     fn consistent_by_both(ds: &RdfDataset) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::absorption_tests::consistent_by_both`: not accessible
+     |
+    ::: crates/entail/src/owl_dl/tableau.rs:1121:5
+     |
+1121 |     fn consistent_by_both(kb: &Kb) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::tableau::tests::consistent_by_both`: not accessible
+
+error[E0425]: cannot find function `iri` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1537:21
+     |
+1537 |             let c = iri(&mut b, "C");
+     |                     ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/entail/src/calculus/mod.rs:133:1
+     |
+ 133 | fn iri(value: &str) -> ClauseTerm {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::calculus::iri`: not accessible
+     |
+    ::: crates/entail/src/entails/homomorphism.rs:625:5
+     |
+ 625 |     fn iri(value: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::entails::homomorphism::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/owl_dl/mod.rs:805:5
+     |
+ 805 |     fn iri(b: &mut RdfDatasetBuilder, local: &str) -> TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/rif/eval.rs:387:5
+     |
+ 387 |     fn iri(local: &str) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::rif::eval::tests::iri`: not accessible
+     |
+    ::: crates/entail/src/lib.rs:986:5
+     |
+ 986 |     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::tests::iri`: not accessible
+
+error[E0425]: cannot find function `consistent_by_both` in this scope
+    --> crates/entail/src/owl_dl/mod.rs:1554:17
+     |
+1554 |                 consistent_by_both(&b.freeze().expect("finite-cycle fixture")),
+     |                 ^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/entail/src/owl_dl/mod.rs:1177:5
+     |
+1177 |     fn consistent_by_both(ds: &RdfDataset) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::absorption_tests::consistent_by_both`: not accessible
+     |
+    ::: crates/entail/src/owl_dl/tableau.rs:1121:5
+     |
+1121 |     fn consistent_by_both(kb: &Kb) -> bool {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::owl_dl::tableau::tests::consistent_by_both`: not accessible
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/entail/src/owl_dl/parser.rs:775:21
+    |
+775 |                     term_values[space as usize].push(member)
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `term_values[space as usize].push(member);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: it looks like you're trying to convert a tuple to an array
+    --> crates/entail/src/owl_dl/parser.rs:1230:82
+     |
+1230 |         constrain_bottom_roles(&mut kb, &v, triples.iter().flat_map(|&(s, p, o)| [s, p, o]));
+     |                                                                                  ^^^^^^^^^
+     |
+     = help: use `.into()` instead, or `<[T; N]>::from` if type annotations are needed
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+     = note: `-D clippy::tuple-array-conversions` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::tuple_array_conversions)]`
+
+error: it looks like you're trying to convert a tuple to an array
+   --> crates/entail/src/owl_dl/query.rs:281:36
+    |
+281 |             .flat_map(|&(s, p, o)| [s, p, o].into_iter().flatten()),
+    |                                    ^^^^^^^^^
+    |
+    = help: use `.into()` instead, or `<[T; N]>::from` if type annotations are needed
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/entail/src/owl_dl/query.rs:647:6
+    |
+647 | ) -> Result<(Vec<RawTask>, BTreeSet<Construct>, Vec<(u32, Concept)>), EntailError> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: could not compile `purrdf-entail` (lib) due to 4 previous errors
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-entail` (lib test) due to 9 previous errors
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/text)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/geo)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/hnsw)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/retrieval)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shapes)
+error[E0277]: the trait bound `term::Term: std::cmp::Ord` is not satisfied
+    --> crates/shapes/src/schema_surface.rs:1446:14
+     |
+1446 |             .get(term)
+     |              ^^^ unsatisfied trait bound
+     |
+help: the trait `std::cmp::Ord` is not implemented for `term::Term`
+    --> crates/shapes/src/term.rs:238:1
+     |
+ 238 | pub enum Term {
+     | ^^^^^^^^^^^^^
+note: required by a bound in `std::collections::BTreeMap::<K, V, A>::get`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/map.rs:721:24
+     |
+ 719 |     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+     |            --- required by a bound in this associated function
+ 720 |     where
+ 721 |         K: Borrow<Q> + Ord,
+     |                        ^^^ required by this bound in `BTreeMap::<K, V, A>::get`
+
+error[E0277]: the trait bound `term::Term: std::cmp::Ord` is not satisfied
+    --> crates/shapes/src/schema_surface.rs:1446:18
+     |
+1446 |             .get(term)
+     |              --- ^^^^ unsatisfied trait bound
+     |              |
+     |              required by a bound introduced by this call
+     |
+help: the trait `std::cmp::Ord` is not implemented for `term::Term`
+    --> crates/shapes/src/term.rs:238:1
+     |
+ 238 | pub enum Term {
+     | ^^^^^^^^^^^^^
+note: required by a bound in `std::collections::BTreeMap::<K, V, A>::get`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/map.rs:722:12
+     |
+ 719 |     pub fn get<Q: ?Sized>(&self, key: &Q) -> Option<&V>
+     |            --- required by a bound in this associated function
+...
+ 722 |         Q: Ord,
+     |            ^^^ required by this bound in `BTreeMap::<K, V, A>::get`
+
+error[E0277]: the trait bound `term::Term: std::cmp::Ord` is not satisfied
+    --> crates/shapes/src/schema_surface.rs:1455:23
+     |
+1455 |             return Ok(self.cache[term].0.clone());
+     |                       ^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::cmp::Ord` is not implemented for `term::Term`
+    --> crates/shapes/src/term.rs:238:1
+     |
+ 238 | pub enum Term {
+     | ^^^^^^^^^^^^^
+     = note: required for `std::collections::BTreeMap<term::Term, (schema_surface::OntologyExpression, usize, usize)>` to implement `std::ops::Index<&term::Term>`
+
+error[E0277]: the trait bound `term::Term: std::cmp::Ord` is not satisfied
+    --> crates/shapes/src/schema_surface.rs:1488:20
+     |
+1488 |         self.cache.insert(
+     |                    ^^^^^^ unsatisfied trait bound
+     |
+help: the trait `std::cmp::Ord` is not implemented for `term::Term`
+    --> crates/shapes/src/term.rs:238:1
+     |
+ 238 | pub enum Term {
+     | ^^^^^^^^^^^^^
+note: required by a bound in `std::collections::BTreeMap::<K, V, A>::insert`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/collections/btree/map.rs:1049:12
+     |
+1047 |     pub fn insert(&mut self, key: K, value: V) -> Option<V>
+     |            ------ required by a bound in this associated function
+1048 |     where
+1049 |         K: Ord,
+     |            ^^^ required by this bound in `BTreeMap::<K, V, A>::insert`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-shapes` (lib) due to 4 previous errors
+error: could not compile `purrdf-shapes` (lib test) due to 4 previous errors

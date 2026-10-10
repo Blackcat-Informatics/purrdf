@@ -1,0 +1,95 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-events)
+   Compiling regex-automata v0.4.14
+   Compiling crossbeam-epoch v0.9.18
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling inout v0.2.2
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling rayon-core v1.13.0
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+   Compiling cpubits v0.1.1
+   Compiling libc v0.2.186
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling polyval v0.7.3
+   Compiling getrandom v0.3.4
+   Compiling regex v1.12.4
+   Compiling ghash v0.6.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling aes-gcm v0.11.1
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/xsd)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/stack)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/ed25519)
+   Compiling proc-macro2 v1.0.106
+   Compiling visual-hashing v1.0.0
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/testkit)
+   Compiling syn v2.0.118
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-algebra)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/jsonschema)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/gts)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/alloc-probe)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shapes)
+    Finished `bench` profile [optimized] target(s) in 5m 55s
+     Running benches/schema_surface.rs (/opt/purrdf-schema-five-qualification/build/release/build/purrdf-shapes/2f6c9a6dbf9676fd/out/schema_surface-2f6c9a6dbf9676fd)
+warning: schema_input_width_scaling/compile_16384_classes_4_properties: 10 samples cannot finish in 5.0 s; they will take about 9.7 s
+schema_input_width_scaling/compile_16384_classes_4_properties time:   [469.5 ms 480.0 ms 484.9 ms]  mad: 5.453 ms  (10 samples × 2 iterations)
+schema_input_width_scaling/typescript_16384_definitions time:   [657.1 ms 667.1 ms 673.5 ms]  mad: 8.149 ms  (10 samples × 1 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 1 high mild, 0 high severe)
+warning: schema_input_width_scaling/graphql_16384_definitions: 10 samples cannot finish in 5.0 s; they will take about 15.9 s
+schema_input_width_scaling/graphql_16384_definitions time:   [1.299 s 1.593 s 1.740 s]  mad: 164.6 ms  (10 samples × 1 iterations)
+warning: schema_input_width_scaling/pydantic_16384_definitions: 10 samples cannot finish in 5.0 s; they will take about 16.0 s
+schema_input_width_scaling/pydantic_16384_definitions time:   [1.615 s 1.942 s 2.205 s]  mad: 256.7 ms  (10 samples × 1 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+warning: schema_input_width_scaling/compile_32768_classes_8_properties: 10 samples cannot finish in 5.0 s; they will take about 10.6 s
+schema_input_width_scaling/compile_32768_classes_8_properties time:   [1.040 s 1.050 s 1.063 s]  mad: 9.702 ms  (10 samples × 1 iterations)
+                         outliers: 1 of 10 (0 low severe, 1 low mild, 0 high mild, 0 high severe)
+warning: schema_input_width_scaling/typescript_32768_definitions: 10 samples cannot finish in 5.0 s; they will take about 22.6 s
+schema_input_width_scaling/typescript_32768_definitions time:   [1.898 s 2.029 s 2.242 s]  mad: 201.4 ms  (10 samples × 1 iterations)
+warning: schema_input_width_scaling/graphql_32768_definitions: 10 samples cannot finish in 5.0 s; they will take about 40.5 s
+schema_input_width_scaling/graphql_32768_definitions time:   [3.508 s 3.965 s 4.225 s]  mad: 269.8 ms  (10 samples × 1 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+warning: schema_input_width_scaling/pydantic_32768_definitions: 10 samples cannot finish in 5.0 s; they will take about 44.3 s
+schema_input_width_scaling/pydantic_32768_definitions time:   [4.951 s 5.482 s 6.400 s]  mad: 577.2 ms  (10 samples × 1 iterations)
+warning: schema_input_width_scaling/compile_65537_classes_17_properties: 10 samples cannot finish in 5.0 s; they will take about 27.0 s
+schema_input_width_scaling/compile_65537_classes_17_properties time:   [2.514 s 2.605 s 2.909 s]  mad: 100.2 ms  (10 samples × 1 iterations)
+warning: schema_input_width_scaling/typescript_65537_definitions: 10 samples cannot finish in 5.0 s; they will take about 179.7 s
+schema_input_width_scaling/typescript_65537_definitions time:   [8.780 s 9.209 s 9.612 s]  mad: 248.8 ms  (10 samples × 1 iterations)
+                         outliers: 2 of 10 (0 low severe, 1 low mild, 0 high mild, 1 high severe)
+warning: schema_input_width_scaling/graphql_65537_definitions: 10 samples cannot finish in 5.0 s; they will take about 222.9 s
+schema_input_width_scaling/graphql_65537_definitions time:   [12.21 s 13.29 s 14.41 s]  mad: 972.7 ms  (10 samples × 1 iterations)
+                         outliers: 1 of 10 (0 low severe, 0 low mild, 0 high mild, 1 high severe)
+warning: schema_input_width_scaling/pydantic_65537_definitions: 10 samples cannot finish in 5.0 s; they will take about 207.7 s
+schema_input_width_scaling/pydantic_65537_definitions time:   [18.49 s 19.87 s 21.32 s]  mad: 1.022 s  (10 samples × 1 iterations)
+
+12 benchmarks measured; 0 failed

@@ -1,0 +1,67 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/jsonschema)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/alloc-probe)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.22s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.09s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 19.01s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.88s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 8.82s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.65s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_html_entities`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.28s
+     Running `/opt/purrdf-schema-five-qualification/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+Documented claims disagree with their generated source:
+
+  - scripts/conformance-baseline.json: Entailment (OWL 2 DL consistency) — expected exactly one match for the DL subset/exclusion tally in its `note`, found 0. The note was reworded, so update the pattern in scripts/check-doc-claims.py rather than letting the prose drift ungated.
+    pattern: it\s+vendors\s+(?P<graded>\d+)\s+of\s+the\s+(?P<shaped>\d+)\s+consistency-shaped\s+cases\s+in\s+the\s+upstream\s+manifest,\s+and\s+the\s+harness's\s+OWL2-DL-EXCLUDED\s+line\s+measures\s+the\s+other\s+(?P<excluded>\d+)\s+—\s+(?P<decides>\d+)\s+of\s+them\s+the\s+tableau\s+decided\s+when\s+probed\s+\((?P<dc>\d+)\s+consistent,\s+(?P<di>\d+)\s+inconsistent\)[\s\S]*?(?P<nonterm>\d+)\s+do\s+not\s+terminate\s+under\s+a\s+40\s+s\s+ceiling[\s\S]*?(?P<withheld>\d+)\s+are\s+withheld\s+\((?P<wr>\d+)\s+reasoner,\s+(?P<wp>\d+)\s+parse\)\s+and\s+(?P<nopremise>\d+)\s+carry\s+no\s+RDF/XML\s+premise\.\s+Reading\s+(?P<agreed>\d+)/(?P<total>\d+)\s+as\s+coverage
+  - docs/book/src/entailment.md: the OWL 2 divergence count in the entailment chapter — expected exactly one match for the documented claim, found 0. The row was reworded or removed; update the pattern in scripts/check-doc-claims.py so the claim stays checked.
+    pattern: Every\s+one\s+of\s+the\s+(?P<ledgered>\d+)\s+divergences\s+is\s+named\s+in\s+a\s+typed\s+ledger
+  - docs/book/src/project/conformance.md: the ledgered-gap summary in the book's conformance chapter — expected exactly one match for the documented claim, found 0. The row was reworded or removed; update the pattern in scripts/check-doc-claims.py so the claim stays checked.
+    pattern: strictly\s+ledgered\s+\((?P<ledgered>\d+)\s+typed\s+OWL\s+2\s+divergences;
+
+Every number above is restated prose. Fix the prose to match the
+generated artifact — do not edit the generated artifact to match
+the prose. Regenerate the sources with `make metadata` (rule
+inventory) and `python3 scripts/conformance-matrix.py --write-doc`
+(conformance matrix).
+make: *** [Makefile:82: metadata] Error 1

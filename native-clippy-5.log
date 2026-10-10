@@ -1,0 +1,36 @@
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/validate)
+error[E0422]: cannot find struct, variant or union type `CompiledSchema` in crate `purrdf_shapes`
+   --> crates/shapes/tests/large_schema_emission.rs:342:43
+    |
+342 |     let compiled = |depth| purrdf_shapes::CompiledSchema {
+    |                                           ^^^^^^^^^^^^^^ not found in `purrdf_shapes`
+    |
+help: consider importing this struct
+    |
+ 12 + use purrdf_shapes::json_schema::CompiledSchema;
+    |
+help: if you import `CompiledSchema`, refer to it directly
+    |
+342 -     let compiled = |depth| purrdf_shapes::CompiledSchema {
+342 +     let compiled = |depth| CompiledSchema {
+    |
+
+For more information about this error, try `rustc --explain E0422`.
+error: could not compile `purrdf-shapes` (test "large_schema_emission") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/purrdf)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-conformance)
+error: enum with no variants
+  --> crates/sparql-conformance/src/owl2.rs:83:1
+   |
+83 | pub enum Owl2Gap {}
+   | ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using the uninhabited type `!` (never type) or a wrapper around it to introduce a type which can't be instantiated
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_enums
+   = note: `-D clippy::empty-enums` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::empty_enums)]`
+
+error: could not compile `purrdf-sparql-conformance` (lib) due to 1 previous error
+error: could not compile `purrdf-sparql-conformance` (lib test) due to 1 previous error

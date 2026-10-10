@@ -1,0 +1,78 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/hash)
+   Compiling const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-events)
+   Compiling digest v0.11.3
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/lex)
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling rayon-core v1.13.0
+   Compiling regex v1.12.4
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/iri)
+   Compiling ctutils v0.4.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/deflate)
+   Compiling cpubits v0.1.1
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf-core)
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling either v1.16.0
+   Compiling hashbrown v0.17.1
+   Compiling polyval v0.7.3
+   Compiling rayon v1.12.0
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/ed25519)
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/stack)
+   Compiling proc-macro2 v1.0.106
+   Compiling visual-hashing v1.0.0
+   Compiling quote v1.0.46
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/alloc-probe)
+   Compiling syn v2.0.118
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/gts)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/jsonschema)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/datalog)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/476-owl-2-dl-close-the-four-ledgered-w3c/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 5m 16s
+     Running tests/product_wasm.rs (/opt/purrdf-schema-five-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-shapes/fa36d22320b5f453/out/product_wasm-fa36d22320b5f453.wasm)
+
+running 9 tests
+test encode_open_admit_validate_on_this_target ... ok
+test encoding_matches_the_committed_bytes_on_this_target ... ok
+test the_committed_golden_restores_on_this_target ... ok
+test member_shape_001_on_this_target ... ok
+test closed_by_types_003_on_this_target ... ok
+test unique_values_for_001_on_this_target ... ok
+test node_expr_concat_on_this_target ... ok
+test srl_eval_filter_01_on_this_target ... ok
+test merged_vocabularies_load_and_validate_on_this_target ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/exact_wasm_determinism.rs (/opt/purrdf-schema-five-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-xsd/7b1ff3f5cf3a78d9/out/exact_wasm_determinism-7b1ff3f5cf3a78d9.wasm)
+
+running 3 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_transcript_digest_is_reproduced_on_this_target ... determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+ok
+test the_oracle_vectors_replay_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
