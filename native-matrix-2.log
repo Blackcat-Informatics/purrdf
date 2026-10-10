@@ -1,0 +1,163 @@
+Running as unit: purrdf-cover-mime-native-2.service
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-eval)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:19:13
+   |
+19 |     Limit { resource: &'static str, limit: u64 },
+   |             ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D missing-docs` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:19:37
+   |
+19 |     Limit { resource: &'static str, limit: u64 },
+   |                                     ^^^^^^^^^^
+
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:30:9
+   |
+30 |         subject: String,
+   |         ^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:31:9
+   |
+31 |         field: &'static str,
+   |         ^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:37:9
+   |
+37 |         part: usize,
+   |         ^^^^^^^^^^^
+
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:38:9
+   |
+38 |         at: usize,
+   |         ^^^^^^^^^
+
+error: missing documentation for a struct field
+  --> crates/mime/src/error.rs:39:9
+   |
+39 |         reason: &'static str,
+   |         ^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:130:5
+    |
+130 |     Preamble,
+    |     ^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:131:5
+    |
+131 |     Boundary,
+    |     ^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:132:5
+    |
+132 |     ClosingBoundary,
+    |     ^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:133:5
+    |
+133 |     Epilogue,
+    |     ^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:162:5
+    |
+162 |     InvalidHeader,
+    |     ^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:163:5
+    |
+163 |     OrphanFold,
+    |     ^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:164:5
+    |
+164 |     BareLf,
+    |     ^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:165:5
+    |
+165 |     NonAsciiHeader,
+    |     ^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:166:5
+    |
+166 |     MissingHeaderSeparator,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:167:5
+    |
+167 |     DuplicateStructuralHeader,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:168:5
+    |
+168 |     ConflictingStructuralHeaders,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:169:5
+    |
+169 |     InvalidContentType,
+    |     ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:170:5
+    |
+170 |     MissingBoundary,
+    |     ^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:171:5
+    |
+171 |     MissingClosingBoundary,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:172:5
+    |
+172 |     UnexpectedBoundary,
+    |     ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:173:5
+    |
+173 |     InvalidTransferEncoding,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:174:5
+    |
+174 |     UnsupportedContainerEncoding,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/mime/src/model.rs:175:5
+    |
+175 |     InvalidEncodedWord,
+    |     ^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-mime` (lib) due to 25 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 40.258s
+             CPU time consumed: 93ms
+                   Memory peak: 8.5M (swap: 0B)

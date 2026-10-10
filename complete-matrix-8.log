@@ -1,0 +1,41 @@
+Running as unit: purrdf-cover-mime-complete-8.service
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.75s
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 17.48s
+     Running tests/byte_cover.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-core/74c92439bb584317/out/byte_cover-74c92439bb584317)
+
+running 5 tests
+test opaque_identity_covers_every_octet_and_empty_content ... ok
+test emitted_byte_continuations_obey_original_refusal_neighbors ... ok
+test span_references_prove_content_before_returning_any_window ... ok
+test delimited_records_preserve_separator_bytes_and_empty_multiplicity ... ok
+test byte_law_has_frozen_identity_and_order_independent_reconstruction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lossless.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-mime/7f7338a0da687471/out/lossless-7f7338a0da687471)
+
+running 13 tests
+test conflicting_headers_and_encoded_words_are_explicit ... ok
+test original_octets_and_repeated_folded_headers_survive ... ok
+test altered_model_and_different_profile_refuse_publication ... ok
+test caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted ... ok
+test transfer_decoding_is_exact_and_content_identity_ignores_filenames ... ok
+test malformed_source_is_typed_without_a_repair ... ok
+test real_sparql_sees_repeated_occurrences_in_original_order ... ok
+test broken_transfers_refuse_payload_but_preserve_original_cover ... ok
+test adjacent_delimiters_and_missing_closures_preserve_ranges ... ok
+test nested_multipart_keeps_parent_crlf_and_original_structure ... ok
+test graph_mutations_refuse_before_source_bytes_escape ... ok
+test production_rdf_round_trip_is_deterministic_for_original_and_broken_messages ... ok
+test large_original_source_and_header_multiset_have_only_caller_limits ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 18.766s
+             CPU time consumed: 321ms
+                   Memory peak: 7.3M (swap: 0B)

@@ -1,0 +1,30 @@
+Running as unit: purrdf-mime-correction-family-1.service
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/gts)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-results)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+error: you appear to be counting bytes the naive way
+   --> crates/mime/src/transfer.rs:219:16
+    |
+219 |             if token.iter().filter(|byte| **byte == b'?').count() >= 3 {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using the bytecount crate: `bytecount::count(token, b'?')`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#naive_bytecount
+    = note: `-D clippy::naive-bytecount` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::naive_bytecount)]`
+
+error: could not compile `purrdf-mime` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf)
+error: could not compile `purrdf-mime` (lib test) due to 1 previous error
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 32.469s
+             CPU time consumed: 98ms
+                   Memory peak: 7.1M (swap: 0B)

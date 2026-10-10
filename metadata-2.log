@@ -1,0 +1,67 @@
+Running as unit: purrdf-mime-metadata-2.service
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/gts)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.89s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.08s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.68s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.13s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_html_entities`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.94s
+     Running `/opt/.cargo/slots/b935f8b8e06a577b/0/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+Documented claims disagree with their generated source:
+
+  - docs/RELEASE.md: `purrdf-mime` is at position 24 in the release set, which _ordinal() cannot spell; extend _SPELLED / _IRREGULAR_ORDINAL in scripts/check-doc-claims.py rather than leaving this crate's ordinal unchecked
+
+Every number above is restated prose. Fix the prose to match the
+generated artifact — do not edit the generated artifact to match
+the prose. Regenerate the sources with `make metadata` (rule
+inventory) and `python3 scripts/conformance-matrix.py --write-doc`
+(conformance matrix).
+make: *** [Makefile:82: metadata] Error 1
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=2/INVALIDARGUMENT
+               Service runtime: 25.000s
+             CPU time consumed: 18.245s
+                   Memory peak: 230.2M (swap: 0B)

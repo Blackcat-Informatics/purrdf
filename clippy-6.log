@@ -1,0 +1,31 @@
+Running as unit: purrdf-cover-mime-clippy-6.service
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-eval)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+error: an array of `Range` that is only one element
+  --> crates/rdf-core/tests/byte_cover.rs:92:69
+   |
+92 |     assert_eq!(DelimitedCover::analyze(b"", b'|').unwrap().records, [0..0]);
+   |                                                                     ^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#single_range_in_vec_init
+   = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+   |
+92 -     assert_eq!(DelimitedCover::analyze(b"", b'|').unwrap().records, [0..0]);
+92 +     assert_eq!(DelimitedCover::analyze(b"", b'|').unwrap().records, (0..0).collect::<std::vec::Vec<usize>>());
+   |
+help: if you wanted an array of len 0, try
+   |
+92 -     assert_eq!(DelimitedCover::analyze(b"", b'|').unwrap().records, [0..0]);
+92 +     assert_eq!(DelimitedCover::analyze(b"", b'|').unwrap().records, [0; 0]);
+   |
+
+error: could not compile `purrdf-core` (test "byte_cover") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 7.365s
+             CPU time consumed: 112ms
+                   Memory peak: 8M (swap: 0B)

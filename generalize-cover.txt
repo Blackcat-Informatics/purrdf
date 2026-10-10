@@ -1,0 +1,71 @@
+from pathlib import Path
+
+p = Path('crates/rdf-core/src/cover.rs')
+s = p.read_text()
+start = s.index('pub fn reconstruct(')
+end = s.index('\n#[cfg(test)]', start)
+old = s[start:end]
+body = old[old.index('    for span in spans {'):]
+body = body.replace('    for span in spans {', '    let mut ordered = Vec::new();\n    for span in spans {', 1)
+body = body.replace("    }\n    let mut ordered: Vec<&VerbatimSpan<'_>> =\n        spans.iter().filter(|s| s.byte_start < s.byte_end).collect();", '        if span.byte_start < span.byte_end {\n            ordered.push(span);\n        }\n    }', 1)
+body = body.replace("VerbatimSpan<'_>", "ByteSpan<'_>")
+body = body.replace('span.text.as_bytes()', 'span.bytes').replace('piece.text.as_bytes()', 'piece.bytes')
+body = body.replace('span.text', 'span.bytes').replace('s.text', 's.bytes')
+body = body.replace('            .copied()\n', '', 1)
+body = body.replace('    String::from_utf8(bytes).map_err(|e| ReconstructError::InvalidUtf8 {\n        valid_up_to: e.utf8_error().valid_up_to(),\n    })', '    Ok(bytes)')
+header = '''pub fn reconstruct(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: &[VerbatimSpan<'_>],
+) -> Result<String, ReconstructError> {
+    let bytes = reconstruct_over(byte_length, source_digest, spans.iter().map(|span| ByteSpan {
+        byte_start: span.byte_start,
+        byte_end: span.byte_end,
+        bytes: span.text.as_bytes(),
+        continues: span.continues,
+    }))?;
+    String::from_utf8(bytes).map_err(|error| ReconstructError::InvalidUtf8 {
+        valid_up_to: error.utf8_error().valid_up_to(),
+    })
+}
+
+/// Reconstruct arbitrary bytes under the same coverage, continuation and digest law.
+///
+/// # Errors
+/// Returns the same typed span, gap, overlap and digest refusals as [`reconstruct`].
+pub fn reconstruct_bytes(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: &[ByteSpan<'_>],
+) -> Result<Vec<u8>, ReconstructError> {
+    reconstruct_over(byte_length, source_digest, spans.iter().copied())
+}
+
+fn reconstruct_over<'a>(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: impl IntoIterator<Item = ByteSpan<'a>>,
+) -> Result<Vec<u8>, ReconstructError> {
+'''
+s = s[:start] + header + body + s[end:]
+addition = '''
+mod emit;
+pub use emit::{ByteCover, CoverBuilder, DelimitedCover, EmitError, SpanReference};
+
+/// A verbatim byte span, including content that is not UTF-8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteSpan<'a> {
+    /// Inclusive byte offset in the source.
+    pub byte_start: u64,
+    /// Exclusive byte offset in the source.
+    pub byte_end: u64,
+    /// Unchanged source bytes.
+    pub bytes: &'a [u8],
+    /// The strictly earlier span this occurrence explicitly continues.
+    pub continues: Option<(u64, u64)>,
+}
+'''
+s = s.replace('use crate::ContentDigest;\n', 'use crate::ContentDigest;\n' + addition, 1)
+assert 'let mut ordered: Vec<&VerbatimSpan' not in s
+assert body.endswith('    Ok(bytes)\n}\n')
+p.write_text(s)

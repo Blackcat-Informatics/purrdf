@@ -1,0 +1,90 @@
+Running as unit: purrdf-cover-mime-native-1.service
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/hash)
+   Compiling cpufeatures v0.3.0
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-events)
+   Compiling regex-syntax v0.8.11
+   Compiling crossbeam-utils v0.8.21
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling regex-automata v0.4.14
+   Compiling inout v0.2.2
+   Compiling digest v0.11.3
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/iri)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/deflate)
+   Compiling libc v0.2.186
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/cdt)
+   Compiling cmov v0.5.4
+   Compiling regex v1.12.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling ctutils v0.4.2
+   Compiling cpubits v0.1.1
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling getrandom v0.3.4
+   Compiling either v1.16.0
+   Compiling ghash v0.6.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/stack)
+   Compiling rayon v1.12.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling aead v0.6.1
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling aes-gcm v0.11.1
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/alloc-probe)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-results)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+error[E0308]: arguments to this function are incorrect
+   --> crates/mime/src/transfer.rs:115:30
+    |
+115 |     while let Some(offset) = purrdf_lex::scan::find_byte_pair(&source[at..], b'=', b'?', 1) {
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                ----  ---- expected `[u8; 2]`, found `u8`
+    |                                                                              |
+    |                                                                              expected `[u8; 2]`, found `u8`
+    |
+note: function defined here
+   --> crates/lex/src/scan.rs:576:8
+    |
+576 | pub fn find_byte_pair(bytes: &[u8], lead: [u8; 2], trail: [u8; 2], gap: usize) -> Option<usize> {
+    |        ^^^^^^^^^^^^^^
+
+error[E0308]: arguments to this function are incorrect
+   --> crates/mime/src/transfer.rs:136:25
+    |
+136 |         let Some(end) = purrdf_lex::scan::find_byte_pair(&source[at..], b'?', b'=', 1) else {
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                ----  ---- expected `[u8; 2]`, found `u8`
+    |                                                                         |
+    |                                                                         expected `[u8; 2]`, found `u8`
+    |
+note: function defined here
+   --> crates/lex/src/scan.rs:576:8
+    |
+576 | pub fn find_byte_pair(bytes: &[u8], lead: [u8; 2], trail: [u8; 2], gap: usize) -> Option<usize> {
+    |        ^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-mime` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 43.136s
+             CPU time consumed: 96ms
+                   Memory peak: 7.4M (swap: 0B)

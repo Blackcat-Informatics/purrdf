@@ -1,0 +1,6 @@
+.................
+----------------------------------------------------------------------
+Ran 17 tests in 0.263s
+
+OK
+OK: simd-asm self-test -- every refusal fires and every valid neighbour passes

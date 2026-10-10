@@ -1,0 +1,112 @@
+Running as unit: purrdf-cover-mime-affected-5.service
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+    Finished `test` profile [optimized] target(s) in 15.57s
+     Running tests/lossless.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-mime/7f7338a0da687471/out/lossless-7f7338a0da687471)
+
+running 1 test
+test caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-events)
+    Checking regex-syntax v0.8.11
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+    Checking hybrid-array v0.4.15
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking regex-automata v0.4.14
+    Checking digest v0.11.3
+    Checking sha2 v0.11.0
+   Compiling libc v0.2.186
+    Checking regex v1.12.4
+    Checking hashbrown v0.17.1
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/stack)
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking crossbeam-epoch v0.9.18
+    Checking ctutils v0.4.2
+   Compiling rayon-core v1.13.0
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking crossbeam-deque v0.8.6
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+    Checking either v1.16.0
+   Compiling getrandom v0.3.4
+    Checking ghash v0.6.0
+    Checking rayon v1.12.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking aes-gcm v0.11.1
+    Checking structured-zstd v0.0.49
+    Checking visual-hashing v1.0.0
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/testkit)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/ed25519)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/gts)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-results)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+error: this could be rewritten as `let...else`
+   --> crates/mime/src/decode.rs:140:5
+    |
+140 | /     let source = match one(dataset, document, vocabulary.iri("source"), "source")? {
+141 | |         TermValue::Iri(source) => source,
+142 | |         _ => return Err(metadata(document, "source")),
+143 | |     };
+    | |______^ help: consider writing: `let TermValue::Iri(source) = one(dataset, document, vocabulary.iri("source"), "source")? else { return Err(metadata(document, "source")) };`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+    = note: `-D clippy::manual-let-else` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+
+error: a `Vec` of `Range` that is only one element
+   --> crates/mime/src/parse.rs:207:23
+    |
+207 |             segments: vec![value_start..physical.content_end],
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#single_range_in_vec_init
+    = note: `-D clippy::single-range-in-vec-init` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::single_range_in_vec_init)]`
+help: if you wanted a `Vec` that contains the entire range, try
+    |
+207 -             segments: vec![value_start..physical.content_end],
+207 +             segments: (value_start..physical.content_end).collect::<std::vec::Vec<usize>>(),
+    |
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/mime/src/project.rs:22:64
+   |
+22 |     fn fact(&mut self, subject: &str, predicate: &str, object: TermValue) {
+   |                                                                ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+22 |     fn fact(&mut self, subject: &str, predicate: &str, object: &TermValue) {
+   |                                                                +
+
+error: could not compile `purrdf-mime` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 49.910s
+             CPU time consumed: 235ms
+                   Memory peak: 7.3M (swap: 0B)

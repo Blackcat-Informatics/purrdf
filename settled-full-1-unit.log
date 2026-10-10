@@ -1,0 +1,6 @@
+Running as unit: purrdf-mime-settled-full1-20261010.service
+          Finished with result: success
+Main processes terminated with: code=killed, status=15/TERM
+               Service runtime: 46.996s
+             CPU time consumed: 18.991s
+                   Memory peak: 289M (swap: 0B)

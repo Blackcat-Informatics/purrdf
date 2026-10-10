@@ -1,0 +1,37 @@
+Running as unit: purrdf-mime-commit2.service
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against d608b0584e11 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/521-cover-law-generalized-identity-cover 9e6c6af64] Preserve byte covers and lossless MIME projections
+ 49 files changed, 4637 insertions(+), 54 deletions(-)
+ create mode 100644 crates/mime/Cargo.toml
+ create mode 100644 crates/mime/SPEC.md
+ create mode 100644 crates/mime/examples/gen_serialized_corpus.rs
+ create mode 100644 crates/mime/licenses/CC-BY-4.0.txt
+ create mode 100644 crates/mime/licenses/LICENSE-APACHE
+ create mode 100644 crates/mime/licenses/LICENSE-MIT
+ create mode 100644 crates/mime/licenses/LICENSE-MULAN
+ create mode 100644 crates/mime/licenses/NOTICE.txt
+ create mode 100644 crates/mime/licenses/inventory.json
+ create mode 100644 crates/mime/src/decode.rs
+ create mode 100644 crates/mime/src/error.rs
+ create mode 100644 crates/mime/src/lib.rs
+ create mode 100644 crates/mime/src/model.rs
+ create mode 100644 crates/mime/src/parse.rs
+ create mode 100644 crates/mime/src/profile.rs
+ create mode 100644 crates/mime/src/project.rs
+ create mode 100644 crates/mime/src/transfer.rs
+ create mode 100644 crates/mime/tests/corpus/cpython/LICENSES/Python-2.0.txt
+ create mode 100644 crates/mime/tests/corpus/cpython/PROVENANCE.md
+ create mode 100644 crates/mime/tests/corpus/cpython/REUSE.toml
+ create mode 100644 crates/mime/tests/corpus/cpython/msg_01.txt
+ create mode 100644 crates/mime/tests/corpus/cpython/msg_02.txt
+ create mode 100644 crates/mime/tests/golden/serialized-corpus.sha256
+ create mode 100644 crates/mime/tests/lossless.rs
+ create mode 100644 crates/mime/tests/support/corpus.rs
+ create mode 100644 crates/rdf-core/src/cover/emit.rs
+ create mode 100644 crates/rdf-core/tests/byte_cover.rs
+ create mode 100644 scripts/conformance-frozen/mime-cpython.sha256
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 26.826s
+             CPU time consumed: 35.935s
+                   Memory peak: 620.5M (swap: 0B)

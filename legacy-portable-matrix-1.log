@@ -1,0 +1,160 @@
+Running as unit: purrdf-cover-mime-legacy-portable-1.service
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 56.24s
+     Running unittests src/lib.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 7 tests
+test cover::tests::a_chain_whose_pieces_share_a_cut_decodes_by_its_declarations ... ok
+test cover::tests::a_continuation_cannot_declare_itself_and_a_split_scalar_cannot_be_smuggled ... ok
+test cover::tests::a_cover_that_rebuilds_the_wrong_bytes_is_named_by_its_digest ... ok
+test cover::tests::a_full_cover_decodes_and_a_missing_span_names_the_uncovered_run ... ok
+test cover::tests::a_span_answers_for_its_own_shape_before_the_cover_is_asked ... ok
+test cover::tests::an_empty_document_is_a_lawful_graph_of_nothing ... ok
+test cover::tests::an_overlap_is_refused_undeclared_and_admitted_declared_even_though_the_bytes_agree_either_way ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1225 filtered out; finished in 0.00s
+
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/json)
+    Finished `test` profile [optimized] target(s) in 5.78s
+     Running tests/roundtrip.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-json/ca79cd312f072723/out/roundtrip-ca79cd312f072723)
+
+running 23 tests
+test duplicate_member_occurrences_have_distinct_identity_and_parentage ... ok
+test conflicting_metadata_never_uses_first_or_last_value ... ok
+test document_profile_and_length_refuse_before_owned_subgraph_collection ... ok
+test equivalent_rdf12_metadata_and_unrelated_statement_layers_coexist ... ok
+test digest_and_profile_are_mandatory_typed_identity_metadata ... ok
+test lexical_strings_and_number_spellings_are_authoritative ... ok
+test pointers_decode_keys_and_escape_each_reference_token ... ok
+test profile_and_document_identities_match_independent_framed_sha256_vectors ... ok
+test impossible_profile_bounds_refuse_at_construction ... ok
+test profile_mismatch_fails_before_projection_or_decode ... ok
+test every_resource_bound_is_enforced_and_changes_identity ... ok
+test source_and_vocabulary_require_real_absolute_iris ... ok
+test rejects_json_grammar_extensions_and_unrepresentable_member_names ... ok
+test explicit_selection_isolates_source_revisions_in_a_merged_dataset ... ok
+test fabricated_container_size_and_extra_scalar_size_are_refused ... ok
+test rdf12_side_tables_cannot_hide_conflicting_metadata_or_ownership ... ok
+test cover_success_cannot_launder_fabricated_structural_metadata ... ok
+test rejects_changed_ownership_named_graphs_and_unexpected_predicates ... ok
+test rejects_malformed_offsets_wrong_datatypes_and_language_tags ... ok
+test sparql_traverses_parent_paths_sizes_and_distinct_raw_values ... ok
+test document_bases_factor_full_identities_for_every_namespace_shape ... ok
+test every_required_metadata_fact_is_required ... ok
+test frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/roundtrip.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-markdown/be2d79a114d394ae/out/roundtrip-be2d79a114d394ae)
+
+running 9 tests
+test a_real_split_chain_with_a_shared_cut_declares_its_overlaps_and_roundtrips ... ok
+test two_documents_in_one_dataset_each_decode_by_their_own_membership ... ok
+test a_cover_the_graph_half_extracts_and_the_span_half_refuses_names_the_missing_bytes ... ok
+test a_continues_edge_naming_a_spanless_piece_is_refused_by_the_piece_it_names ... ok
+test a_graph_that_cannot_anchor_a_decode_names_what_it_lacks ... ok
+test the_only_plain_literals_are_unit_texts_and_heading_words ... ok
+test every_shape_of_document_roundtrips_byte_for_byte ... ok
+test no_two_structure_nodes_are_adjacent_and_none_is_empty ... ok
+test the_field_guide_roundtrips_under_the_declared_law_and_under_splitting_bounds ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+ok: a panicking case fails the run
+ok: the passing neighbour of the panicking case passes
+ok: the case list is the fixture's, in its order
+ok: an unimplemented flag is refused
+ok: an implemented flag is accepted
+ok: a_host_clock_read_inside_the_seal_fails: a sealed Date.now read fails by name
+ok: a_host_entropy_read_inside_the_seal_fails: a sealed Math.random read fails by name
+ok: a_host_clock_read_after_a_nested_seal_fails: a sealed Date.now read fails by name
+ok: a_host_clock_read_outside_the_seal_passes: the unsealed neighbour passes
+ok: a_host_entropy_read_outside_the_seal_passes: the unsealed neighbour passes
+ok: a_host_clock_read_after_the_seal_passes: the unsealed neighbour passes
+ok: the_seal_returns_the_computations_value_passes: the unsealed neighbour passes
+ok: a module that never reports an exit status is refused
+ok: the print fixture reports its status and its lines reach the console
+OK: the wasm32 test runner fails a panicking case, a refused flag, sealed host reads and a silent module, and passes each neighbour
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/hash)
+   Compiling const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-events)
+   Compiling regex-automata v0.4.14
+   Compiling digest v0.11.3
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/lex)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/deflate)
+   Compiling inout v0.2.2
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+   Compiling cmov v0.5.4
+   Compiling regex v1.12.4
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/xsd)
+   Compiling crossbeam-epoch v0.9.18
+   Compiling ctutils v0.4.2
+   Compiling hashbrown v0.17.1
+   Compiling cpubits v0.1.1
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/cdt)
+   Compiling universal-hash v0.6.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling either v1.16.0
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling rayon v1.12.0
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/stack)
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling aes-gcm v0.11.1
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/alloc-probe)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/gts)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-results)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 2m 40s
+     Running tests/byte_cover.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/wasm32-unknown-unknown/debug/build/purrdf-core/08fbd55843c682da/out/byte_cover-08fbd55843c682da.wasm)
+
+running 5 tests
+test opaque_identity_covers_every_octet_and_empty_content ... ok
+test emitted_byte_continuations_obey_original_refusal_neighbors ... ok
+test span_references_prove_content_before_returning_any_window ... ok
+test delimited_records_preserve_separator_bytes_and_empty_multiplicity ... ok
+test byte_law_has_frozen_identity_and_order_independent_reconstruction ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lossless.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/wasm32-unknown-unknown/debug/build/purrdf-mime/66da2987be694ed5/out/lossless-66da2987be694ed5.wasm)
+
+running 13 tests
+test original_octets_and_repeated_folded_headers_survive ... ok
+test malformed_source_is_typed_without_a_repair ... ok
+test transfer_decoding_is_exact_and_content_identity_ignores_filenames ... ok
+test broken_transfers_refuse_payload_but_preserve_original_cover ... ok
+test nested_multipart_keeps_parent_crlf_and_original_structure ... ok
+test adjacent_delimiters_and_missing_closures_preserve_ranges ... ok
+test conflicting_headers_and_encoded_words_are_explicit ... ok
+test caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted ... ok
+test altered_model_and_different_profile_refuse_publication ... ok
+test graph_mutations_refuse_before_source_bytes_escape ... ok
+test real_sparql_sees_repeated_occurrences_in_original_order ... ok
+test production_rdf_round_trip_is_deterministic_for_original_and_broken_messages ... ok
+test large_original_source_and_header_multiset_have_only_caller_limits ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 3min 50.802s
+             CPU time consumed: 7.866s
+                   Memory peak: 36.4M (swap: 0B)

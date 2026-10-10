@@ -1,0 +1,49 @@
+Running as unit: purrdf-mime-correction-family-2.service
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+error: used `assert!` to check that a value is empty
+  --> crates/mime/tests/lossless.rs:79:5
+   |
+79 |     assert!(binary.problems.is_empty());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+   |
+79 -     assert!(binary.problems.is_empty());
+79 +     assert_eq!(binary.problems, [] as [purrdf_mime::Problem; 0]);
+   |
+
+error: used `assert!` to check that a value is empty
+  --> crates/mime/tests/lossless.rs:82:5
+   |
+82 |     assert!(eight.problems.is_empty());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+   |
+82 -     assert!(eight.problems.is_empty());
+82 +     assert_eq!(eight.problems, [] as [purrdf_mime::Problem; 0]);
+   |
+
+error: used `assert!` to check that a value is empty
+   --> crates/mime/tests/lossless.rs:123:9
+    |
+123 |         assert!(model.problems.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+    |
+123 -         assert!(model.problems.is_empty());
+123 +         assert_eq!(model.problems, [] as [purrdf_mime::Problem; 0]);
+    |
+
+error: could not compile `purrdf-mime` (test "lossless") due to 3 previous errors
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 782ms
+             CPU time consumed: 98ms
+                   Memory peak: 11M (swap: 0B)

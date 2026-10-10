@@ -1,0 +1,9 @@
+Running as unit: purrdf-mime-simd-coverage-commit1.service
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against d608b0584e11 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/521-cover-law-generalized-identity-cover 81caed915] Register MIME in the assembly audit coverage
+ 1 file changed, 1 insertion(+)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 25.102s
+             CPU time consumed: 29.202s
+                   Memory peak: 687.1M (swap: 0B)

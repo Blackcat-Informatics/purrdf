@@ -1,0 +1,39 @@
+Running as unit: purrdf-cover-mime-settled-7.service
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf-core)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/rdf)
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+error: used `assert!` to check that a value is not empty
+  --> crates/mime/tests/lossless.rs:76:9
+   |
+76 |         assert!(!model.problems.is_empty());
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_ne!` to show the value on failure
+   |
+76 -         assert!(!model.problems.is_empty());
+76 +         assert_ne!(model.problems, [] as [purrdf_mime::Problem; 0]);
+   |
+
+error: used `assert!` to check that a value is not empty
+   --> crates/mime/tests/lossless.rs:134:9
+    |
+134 |         assert!(!model.problems.is_empty());
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+    |
+134 -         assert!(!model.problems.is_empty());
+134 +         assert_ne!(model.problems, [] as [purrdf_mime::Problem; 0]);
+    |
+
+error: could not compile `purrdf-mime` (test "lossless") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 8.737s
+             CPU time consumed: 98ms
+                   Memory peak: 8.5M (swap: 0B)

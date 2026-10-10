@@ -1,0 +1,8 @@
+Running as unit: purrdf-mime-commit1.service
+Stage Git guard: staged file 'docs/RELEASE.md': nonempty credential assignment for CARGO_TOKEN
+OK: non-Rust ratchet: 1 changed non-Rust path(s) in the staged index against d608b0584e11 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 40.168s
+             CPU time consumed: 47.239s
+                   Memory peak: 507M (swap: 0B)

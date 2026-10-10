@@ -1,0 +1,56 @@
+Running as unit: purrdf-mime-correction-family4.service
+    Checking purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.67s
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+    Finished `test` profile [optimized] target(s) in 15.59s
+     Running tests/lossless.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/debug/build/purrdf-mime/7f7338a0da687471/out/lossless-7f7338a0da687471)
+
+running 16 tests
+test altered_model_and_different_profile_refuse_publication ... ok
+test real_sparql_sees_repeated_occurrences_in_original_order ... ok
+test original_octets_and_repeated_folded_headers_survive ... ok
+test conflicting_headers_and_encoded_words_are_explicit ... ok
+test transfer_decoding_is_exact_and_content_identity_ignores_filenames ... ok
+test malformed_source_is_typed_without_a_repair ... ok
+test broken_transfers_refuse_payload_but_preserve_original_cover ... ok
+test adjacent_delimiters_and_missing_closures_preserve_ranges ... ok
+test graph_mutations_refuse_before_source_bytes_escape ... ok
+test nested_multipart_keeps_parent_crlf_and_original_structure ... ok
+test identity_transfer_defects_are_observed_in_leaves_and_containers ... ok
+test encoded_words_are_checked_only_in_their_actual_header_positions ... ok
+test multipart_syntax_defects_preserve_every_original_byte ... ok
+test caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted ... ok
+test large_original_source_and_header_multiset_have_only_caller_limits ... ok
+test production_rdf_round_trip_is_deterministic_for_original_and_broken_messages ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/521-cover-law-generalized-identity-cover/crates/mime)
+    Finished `test` profile [optimized] target(s) in 11.36s
+     Running tests/lossless.rs (/opt/.cargo/slots/b935f8b8e06a577b/0/build/wasm32-unknown-unknown/debug/build/purrdf-mime/66da2987be694ed5/out/lossless-66da2987be694ed5.wasm)
+
+running 16 tests
+test identity_transfer_defects_are_observed_in_leaves_and_containers ... ok
+test multipart_syntax_defects_preserve_every_original_byte ... ok
+test encoded_words_are_checked_only_in_their_actual_header_positions ... ok
+test original_octets_and_repeated_folded_headers_survive ... ok
+test malformed_source_is_typed_without_a_repair ... ok
+test transfer_decoding_is_exact_and_content_identity_ignores_filenames ... ok
+test broken_transfers_refuse_payload_but_preserve_original_cover ... ok
+test nested_multipart_keeps_parent_crlf_and_original_structure ... ok
+test adjacent_delimiters_and_missing_closures_preserve_ranges ... ok
+test conflicting_headers_and_encoded_words_are_explicit ... ok
+test caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted ... ok
+test altered_model_and_different_profile_refuse_publication ... ok
+test graph_mutations_refuse_before_source_bytes_escape ... ok
+test real_sparql_sees_repeated_occurrences_in_original_order ... ok
+test production_rdf_round_trip_is_deterministic_for_original_and_broken_messages ... ok
+test large_original_source_and_header_multiset_have_only_caller_limits ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1h 3min 13.584s
+             CPU time consumed: 3min 47.123s
+                   Memory peak: 333.4M (swap: 0B)

@@ -1,0 +1,103 @@
+{
+  "issue": 521,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Cover law, generalized: identity cover for opaque bytes, a format-neutral emit side, and span references",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0045",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    },
+    {
+      "id": "ADR-0046",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    },
+    {
+      "id": "ADR-0029",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 286,
+      "title": "perf: retain shared dataset views through pipeline bundles and GTS ingestion",
+      "state": "CLOSED"
+    },
+    {
+      "number": 319,
+      "title": "Design: a composition layer over the ranked property-function producers",
+      "state": "CLOSED"
+    },
+    {
+      "number": 210,
+      "title": "bug(cli): make pack execution immutable, first-class, and zero-copy through reasoning",
+      "state": "CLOSED"
+    },
+    {
+      "number": 80,
+      "title": "Add semantic RDF visualization SVG exports and library APIs",
+      "state": "CLOSED"
+    },
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    },
+    {
+      "number": 333,
+      "title": "purrdf-retrieval: fusion refuses a valid stream when fixed-point decay ties adjacent contributions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 167,
+      "title": "Expose OWL-RL materialize in the python library",
+      "state": "CLOSED"
+    },
+    {
+      "number": 18,
+      "title": "Parallel SPARQL evaluation (UNION branches, join probes, FILTER rows)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 106,
+      "title": "feat(cli): the purrdf CLI \u2014 convert / query / reason",
+      "state": "CLOSED"
+    },
+    {
+      "number": 189,
+      "title": "SEP-0002 date/time/duration arithmetic",
+      "state": "CLOSED"
+    },
+    {
+      "number": 17,
+      "title": "Content-addressed term support in the IR (GTS-aligned)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 19,
+    "semantic-identity-loss": 1,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #521 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "ADR-0045 cited by the issue but no file in docs/adr/",
+    "ADR-0046 cited by the issue but no file in docs/adr/",
+    "ADR-0029 cited by the issue but no file in docs/adr/",
+    "ADRs: 3 cited; 0 resolved on disk",
+    "forge search on ['Cover', 'generalized:', 'identity']: 11 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}
