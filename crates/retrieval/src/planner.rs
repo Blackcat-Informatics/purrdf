@@ -434,9 +434,45 @@ pub fn plan(
     registry: &PropertyFunctionRegistry,
     statistics: &impl Statistics,
 ) -> Result<Plan, PlanError> {
+    let parts = plan_read(
+        &request.terms,
+        DepthPolicy::Fused(request.bound),
+        registry,
+        statistics,
+    )?;
+    Ok(Plan {
+        version: Plan::VERSION,
+        request_terms: parts.request_terms,
+        read_bound: request.bound,
+        producer_bindings: parts.producer_bindings,
+        producer_decisions: parts.producer_decisions,
+        unserved_terms: parts.unserved_terms,
+        stratum_depths: parts.stratum_depths,
+        stratum_derivations: parts.stratum_derivations,
+        statistics_snapshot: parts.statistics_snapshot,
+        registry_instance_id: parts.registry_instance_id,
+        registry_content_fingerprint: parts.registry_content_fingerprint,
+        origin: parts.origin,
+    })
+}
+
+/// One native placement kernel, with separately typed depth policies.
+#[derive(Clone, Copy)]
+pub(crate) enum DepthPolicy<'a> {
+    Fused(ReadBound),
+    Candidates(&'a crate::candidate::CandidateDepths),
+}
+
+/// Match and place once; only the depth/evidence policy differs.
+pub(crate) fn plan_read(
+    terms: &[RequestTerm],
+    policy: DepthPolicy<'_>,
+    registry: &PropertyFunctionRegistry,
+    statistics: &impl Statistics,
+) -> Result<crate::plan::PlanParts, PlanError> {
     // 1. A malformed term cannot be planned, and no later stage could repair
     //    it: refuse at the boundary, naming the term.
-    for term in &request.terms {
+    for term in terms {
         validate_term(term)?;
     }
     // Neither can a bound no depth can address. It is checked here, beside the
@@ -446,7 +482,9 @@ pub fn plan(
     // bind would make the refusal a function of which registry the request met —
     // silently served wherever some declaration was smaller than the bound, and
     // silently truncated wherever it was not.
-    validate_bound(request.bound)?;
+    if let DepthPolicy::Fused(bound) = policy {
+        validate_bound(bound)?;
+    }
 
     // 2. Read the registry's own declarations once. `describe` is IRI-sorted, so
     //    every derived vector below is a pure function of the registry's
@@ -480,8 +518,7 @@ pub fn plan(
         // layer's validated, hashable, orderable wrapper.
         let stratum = Iri::from(declaration.stratum.clone());
 
-        let accepted: Vec<u32> = request
-            .terms
+        let accepted: Vec<u32> = terms
             .iter()
             .enumerate()
             .filter(|(_, term)| {
@@ -507,8 +544,7 @@ pub fn plan(
             .iter()
             .copied()
             .filter(|index| {
-                request
-                    .terms
+                terms
                     .get(*index as usize)
                     .is_some_and(|term| carries_content(declaration, term))
             })
@@ -578,13 +614,8 @@ pub fn plan(
         // declared depth placement occupies is occupied whatever number lands in it —
         // so the mode, and therefore the row bound the next step reads at that mode,
         // are knowable before a depth is chosen.
-        let Ok(invocation) = place(
-            &candidate.producer,
-            descriptor,
-            declaration,
-            &request.terms,
-            carried,
-        ) else {
+        let Ok(invocation) = place(&candidate.producer, descriptor, declaration, terms, carried)
+        else {
             decisions.push(ProducerDecision::Rejected {
                 producer: candidate.producer.clone(),
                 reason: RejectionReason::UnsatisfiedConstraint,
@@ -644,81 +675,105 @@ pub fn plan(
     //     acceptor was then rejected. Recorded for every such term, ascending,
     //     so an armed-but-unserved modality is visible as exactly that rather
     //     than as a term that quietly fell out of the plan.
-    let unserved_terms = unserved_terms(&request.terms, &candidates, &bindings);
+    let unserved_terms = unserved_terms(terms, &candidates, &bindings);
 
-    // 5. Per-stratum depth over the SURVIVING set: a producer dropped in step 4
-    //    can lower its stratum's worst-case bound, and recording the wider bound
-    //    would license a depth no remaining producer can fill. The bound is the
-    //    declared row count, capped by a measured cardinality when statistics
-    //    offer one; an unbounded declaration with no statistic to bound it has no
-    //    finite depth to record.
-    // One entry per stratum, never a worst case across several: the registry
-    // refuses a stratum a second producer declares, so each surviving stratum
-    // was placed by exactly one producer and the bound is that producer's.
-    //
-    // Which request terms actually reach each surviving stratum. A selectivity
-    // is a statement about the rows a *term* matches, so only the terms a
-    // stratum's producers were bound to can bound that stratum's depth.
-    let mut reaching: BTreeMap<Iri, BTreeSet<u32>> = BTreeMap::new();
-    for binding in &bindings {
-        reaching
-            .entry(binding.stratum.clone())
-            .or_default()
-            .extend(binding.request_terms.iter().copied());
-    }
-    // Walked as pairs, not as a key set that is then looked up. A lookup has a
-    // miss to answer for, and every answer available to it is a lie about a
-    // number the depth is derived from — which is why the *other* reading of
-    // this same field, at step 4 above, is `PlanError::UndeclaredRowBound`
-    // rather than a default. Here the declaration arrives with its stratum and
-    // no default is expressible, so the refusal has nothing to guard. The map is
-    // a `BTreeMap`, so the walk is ascending by stratum and two plans of one
-    // request visit the strata in one order.
-    let mut stratum_depths: FastMap<Iri, u32> =
-        FastMap::with_capacity_and_hasher(surviving.len(), FastHasher::default());
-    let mut stratum_derivations: BTreeMap<Iri, DepthInputs> = BTreeMap::new();
-    for (stratum, declaration) in &surviving {
-        let reached = terms_at(&request.terms, reaching.get(stratum));
-        // What the request's own bound licenses THIS stratum: `Some(k)` when the
-        // merge argument in this module's header holds for it, `None` when it does
-        // not and the registry's own bound stands. Asked per stratum because the
-        // argument is per stratum — it turns on what this stratum declared and on
-        // which other strata could name the candidates it names, not on whether
-        // some unrelated pair elsewhere in the request happens to overlap. Decided
-        // from the shape of the declarations, with no caller hint in it.
-        let prefix = licensed_prefix(request.bound, stratum, declaration, &surviving);
-        // Consult once, record what was consulted, then derive from the record.
-        // The depth and the evidence beside it are therefore the same numbers
-        // rather than two readings of one oracle that have to agree.
-        let inputs = consult(
-            declaration.declared_rows,
-            stratum,
-            &reached,
-            statistics,
-            prefix,
-        );
-        let depth = depth_from(&inputs);
-        stratum_derivations.insert(stratum.clone(), inputs);
-        stratum_depths.insert(stratum.clone(), depth);
-    }
+    let (stratum_depths, stratum_derivations, declared_rows, statistics_snapshot) = match policy {
+        DepthPolicy::Fused(bound) => {
+            // 5. Per-stratum depth over the SURVIVING set: a producer dropped in step 4
+            //    can lower its stratum's worst-case bound, and recording the wider bound
+            //    would license a depth no remaining producer can fill. The bound is the
+            //    declared row count, capped by a measured cardinality when statistics
+            //    offer one; an unbounded declaration with no statistic to bound it has no
+            //    finite depth to record.
+            // One entry per stratum, never a worst case across several: the registry
+            // refuses a stratum a second producer declares, so each surviving stratum
+            // was placed by exactly one producer and the bound is that producer's.
+            //
+            // Which request terms actually reach each surviving stratum. A selectivity
+            // is a statement about the rows a *term* matches, so only the terms a
+            // stratum's producers were bound to can bound that stratum's depth.
+            let mut reaching: BTreeMap<Iri, BTreeSet<u32>> = BTreeMap::new();
+            for binding in &bindings {
+                reaching
+                    .entry(binding.stratum.clone())
+                    .or_default()
+                    .extend(binding.request_terms.iter().copied());
+            }
+            // Walked as pairs, not as a key set that is then looked up. A lookup has a
+            // miss to answer for, and every answer available to it is a lie about a
+            // number the depth is derived from — which is why the *other* reading of
+            // this same field, at step 4 above, is `PlanError::UndeclaredRowBound`
+            // rather than a default. Here the declaration arrives with its stratum and
+            // no default is expressible, so the refusal has nothing to guard. The map is
+            // a `BTreeMap`, so the walk is ascending by stratum and two plans of one
+            // request visit the strata in one order.
+            let mut stratum_depths: FastMap<Iri, u32> =
+                FastMap::with_capacity_and_hasher(surviving.len(), FastHasher::default());
+            let mut stratum_derivations: BTreeMap<Iri, DepthInputs> = BTreeMap::new();
+            for (stratum, declaration) in &surviving {
+                let reached = terms_at(terms, reaching.get(stratum));
+                // What the request's own bound licenses THIS stratum: `Some(k)` when the
+                // merge argument in this module's header holds for it, `None` when it does
+                // not and the registry's own bound stands. Asked per stratum because the
+                // argument is per stratum — it turns on what this stratum declared and on
+                // which other strata could name the candidates it names, not on whether
+                // some unrelated pair elsewhere in the request happens to overlap. Decided
+                // from the shape of the declarations, with no caller hint in it.
+                let prefix = licensed_prefix(bound, stratum, declaration, &surviving);
+                // Consult once, record what was consulted, then derive from the record.
+                // The depth and the evidence beside it are therefore the same numbers
+                // rather than two readings of one oracle that have to agree.
+                let inputs = consult(
+                    declaration.declared_rows,
+                    stratum,
+                    &reached,
+                    statistics,
+                    prefix,
+                );
+                let depth = depth_from(&inputs);
+                stratum_derivations.insert(stratum.clone(), inputs);
+                stratum_depths.insert(stratum.clone(), depth);
+            }
 
-    // 6. Capture the snapshot of every subject planning consulted: the strata a
-    //    depth was derived for, projected out of the derivations built above, and
-    //    the predicates the request named. The derivations keep the per-depth
-    //    binding; this names, in one place, every subject an answer to this plan
-    //    depended on a provider for.
-    let statistics_snapshot = capture_statistics(request, statistics, &stratum_derivations)?;
+            // 6. Capture the snapshot of every subject planning consulted: the strata a
+            //    depth was derived for, projected out of the derivations built above, and
+            //    the predicates the request named. The derivations keep the per-depth
+            //    binding; this names, in one place, every subject an answer to this plan
+            //    depended on a provider for.
+            let statistics_snapshot = capture_statistics(terms, statistics, &stratum_derivations)?;
+
+            (
+                stratum_depths,
+                stratum_derivations,
+                BTreeMap::new(),
+                statistics_snapshot,
+            )
+        }
+        DepthPolicy::Candidates(depths) => {
+            // Work depths are supplied independently. No cardinality,
+            // selectivity, k or licensed fusion prefix can lower them.
+            let declared_rows = surviving
+                .iter()
+                .map(|(stratum, declaration)| (stratum.clone(), declaration.declared_rows))
+                .collect();
+            let snapshot = StatisticsSnapshot {
+                source: statistics.source().to_owned(),
+                revision: statistics.revision().to_owned(),
+                entries: StatisticsEntries::new(Vec::new())?,
+            };
+            (depths.0.clone(), BTreeMap::new(), declared_rows, snapshot)
+        }
+    };
 
     // 7. Record both registry identities.
-    Ok(Plan {
-        version: Plan::VERSION,
-        request_terms: request.terms.clone(),
-        read_bound: request.bound,
+    Ok(crate::plan::PlanParts {
+        request_terms: terms.to_vec(),
         producer_bindings: bindings,
         producer_decisions: decisions,
         unserved_terms,
         stratum_depths,
         stratum_derivations,
+        declared_rows,
         statistics_snapshot,
         registry_instance_id: registry.instance_id(),
         registry_content_fingerprint: content_fingerprint,
@@ -1493,7 +1548,7 @@ pub(crate) fn term_predicate(term: &RequestTerm) -> Option<&Iri> {
 /// because a constructor the planner is exempt from is a law the planner's own
 /// output is not held to.
 fn capture_statistics(
-    request: &RetrievalRequest,
+    terms: &[RequestTerm],
     statistics: &impl Statistics,
     derivations: &BTreeMap<Iri, DepthInputs>,
 ) -> Result<StatisticsSnapshot, PlanError> {
@@ -1516,8 +1571,8 @@ fn capture_statistics(
         );
     }
 
-    let all_terms = all_indexed_terms(&request.terms);
-    for term in &request.terms {
+    let all_terms = all_indexed_terms(terms);
+    for term in terms {
         let Some(predicate) = term_predicate(term) else {
             continue;
         };

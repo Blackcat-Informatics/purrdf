@@ -137,6 +137,114 @@ impl<E> WorkspaceReservation for NoopReservation<E> {
     }
 }
 
+/// A constants-only id pattern whose chosen read path is being costed.
+///
+/// `None` is an unbound position, and the graph has the same three-way meaning
+/// as every [`DatasetView`] probe. Ids belong to the view being consulted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProbePattern<Id = TermId> {
+    /// A bound subject, or an unbound subject position.
+    pub s: Option<Id>,
+    /// A bound predicate, or an unbound predicate position.
+    pub p: Option<Id>,
+    /// A bound object, or an unbound object position.
+    pub o: Option<Id>,
+    /// The graph scope of the read.
+    pub g: GraphMatch<Id>,
+}
+
+/// Measured residency of a selected access path, including multi-tier reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReadResidency {
+    /// Every page needed by the read is resident.
+    Resident,
+    /// No page needed by the read is resident.
+    NonResident,
+    /// The read touches both resident and nonresident pages.
+    Mixed,
+}
+
+/// The host's measured access work, beside the result-cardinality estimate.
+///
+/// `work` uses one comparable, documented unit throughout a view's statistics
+/// snapshot. The host incorporates its measured row, page and residency effects;
+/// PurRDF supplies no page fee, cold-read multiplier or conversion constant.
+/// `rows` is the number of rows the path examines, which may exceed its output
+/// cardinality. The optimizer still reads [`DatasetView::cardinality_estimate`]
+/// for join selectivity and row forecasts.
+///
+/// This is a ranking estimate, never an allocation certificate or a resource
+/// governor charge. Its values must be deterministic for the same snapshot,
+/// pattern and plan. The cardinality-only fallback deliberately does not invent
+/// a page count or a residency measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AccessCost {
+    work: u64,
+    rows: u64,
+    pages: Option<u64>,
+    residency: Option<ReadResidency>,
+    cardinality_fallback: Option<u64>,
+}
+
+impl AccessCost {
+    /// A measured access cost, in the host's comparable work unit.
+    #[must_use]
+    pub const fn new(work: u64, rows: u64, pages: u64, residency: ReadResidency) -> Self {
+        Self {
+            work,
+            rows,
+            pages: Some(pages),
+            residency: Some(residency),
+            cardinality_fallback: None,
+        }
+    }
+
+    /// The existing row-count cost, with no fabricated physical measurements.
+    ///
+    /// This constructor records that `rows` already came from the view's
+    /// cardinality estimate, so planning need not request that estimate twice.
+    #[must_use]
+    pub const fn from_cardinality(rows: u64) -> Self {
+        Self {
+            work: rows,
+            rows,
+            pages: None,
+            residency: None,
+            cardinality_fallback: Some(rows),
+        }
+    }
+
+    /// The measured comparable work, or cardinality in the fallback model.
+    #[must_use]
+    pub const fn work(self) -> u64 {
+        self.work
+    }
+
+    /// The estimated rows examined by the selected path.
+    #[must_use]
+    pub const fn rows(self) -> u64 {
+        self.rows
+    }
+
+    /// Measured pages touched, or `None` for the cardinality-only fallback.
+    #[must_use]
+    pub const fn pages(self) -> Option<u64> {
+        self.pages
+    }
+
+    /// Measured residency, or `None` for the cardinality-only fallback.
+    #[must_use]
+    pub const fn residency(self) -> Option<ReadResidency> {
+        self.residency
+    }
+
+    /// The cardinality already read by [`Self::from_cardinality`], if selected.
+    #[must_use]
+    pub const fn cardinality_fallback(self) -> Option<u64> {
+        self.cardinality_fallback
+    }
+}
+
 /// The associated id type of a [`DatasetView`]. An id is meaningful only within the
 /// view that minted it (C0.8); these bounds are exactly what the evaluator's
 /// join/index machinery needs of an id (`Copy` to pass by value, `Eq`/`Ord`/`Hash`
@@ -688,6 +796,24 @@ pub trait DatasetView {
         })
     }
 
+    /// Measured work for a constants-only pattern on the selected access path.
+    ///
+    /// The host reports examined rows, pages and residency in the same immutable
+    /// statistics snapshot, and expresses work in one documented comparable unit
+    /// for every path. The optimizer supplies no cold-read fee or conversion
+    /// constant. The fallback uses this view's original cardinality as its work
+    /// surrogate and leaves page/residency measurements unknown.
+    ///
+    /// This ranks candidate join orders; it is neither an allocation certificate
+    /// nor a governor charge. Keep it deterministic for the same pattern and plan,
+    /// and include changed work statistics in the existing statistics fingerprint
+    /// so a retained order cannot conceal a new host cost.
+    fn cost(&self, pattern: ProbePattern<Self::Id>, _plan: &Self::ProbePlan) -> AccessCost {
+        AccessCost::from_cardinality(
+            self.cardinality_estimate(pattern.s, pattern.p, pattern.o, pattern.g),
+        )
+    }
+
     /// The number of distinct interned terms this view addresses.
     fn term_count(&self) -> u64;
 
@@ -711,6 +837,8 @@ pub trait DatasetView {
     /// A cheap, deterministic size fingerprint for a dataset-aware cache key (e.g. a
     /// join-order cache). A *cache discriminator*, not a content digest. The default
     /// is `0` (no discrimination); [`RdfDataset`] hashes its quad and term counts.
+    /// An overriding host includes the measurements used by its access-cost
+    /// model, including residency changes, in this same snapshot discriminator.
     fn stats_fingerprint(&self) -> u64 {
         0
     }
@@ -1571,6 +1699,11 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         g: GraphMatch<Self::Id>,
     ) -> u64 {
         (**self).cardinality_estimate(s, p, o, g)
+    }
+
+    #[inline]
+    fn cost(&self, pattern: ProbePattern<Self::Id>, plan: &Self::ProbePlan) -> AccessCost {
+        (**self).cost(pattern, plan)
     }
 
     #[inline]

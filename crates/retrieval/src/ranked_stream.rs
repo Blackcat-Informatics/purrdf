@@ -85,7 +85,7 @@ use purrdf_sparql_eval::{
 };
 use purrdf_text::Fixed;
 
-use crate::iri::Term;
+use crate::iri::{Iri, Term};
 
 /// The promise a ranked producer makes about one invocation's rows: whether an
 /// item may repeat.
@@ -1530,4 +1530,96 @@ pub trait RankedStream {
             rows_emitted: None,
         })
     }
+}
+
+/// The native contiguous rank law, shared by scored and unscored consumers.
+pub(crate) fn validate_rank(expected: u64, rank: u64) -> Result<(), ProtocolError> {
+    if rank < expected {
+        return Err(ProtocolError::OutOfOrderRanks {
+            expected,
+            got: rank,
+        });
+    }
+    if rank > expected {
+        return Err(ProtocolError::NonContiguousRanks {
+            gap: rank - expected,
+        });
+    }
+    Ok(())
+}
+
+/// Hold a producer's terminal claim against the rows actually consumed.
+pub(crate) fn validate_receipt(
+    receipt: &ProducerReceipt,
+    actual: u64,
+) -> Result<(), ProtocolError> {
+    let declared = match receipt {
+        ProducerReceipt::Exhausted { rows_emitted } => Some(*rows_emitted),
+        ProducerReceipt::DepthReached { rank }
+        | ProducerReceipt::RowBoundReached { rank }
+        | ProducerReceipt::SuppliedQueryEnded { rank } => Some(*rank),
+        ProducerReceipt::TermsRejected | ProducerReceipt::ExecutionFailed { .. } => Some(0),
+        ProducerReceipt::CeilingReached { .. } => None,
+    };
+    if let Some(declared) = declared
+        && declared != actual
+    {
+        return Err(ProtocolError::ForgedReceipt { declared, actual });
+    }
+    Ok(())
+}
+
+/// Original row-domain certificate law. Candidate text is copied only on refusal.
+pub(crate) fn validate_declared_block(
+    stratum: &Iri,
+    domains: &CandidateDomains,
+    block: &RowBlock,
+    rank: u64,
+    item: impl FnOnce() -> Term,
+) -> Result<(), ProtocolError> {
+    let declared = || {
+        domains.tags().map_or_else(Vec::new, |tags| {
+            tags.iter().map(|tag| tag.as_str().to_owned()).collect()
+        })
+    };
+    match block {
+        RowBlock::Undeclared if domains.tags().is_some() => {
+            Err(ProtocolError::UnbackedDomainDeclaration {
+                stratum: stratum.as_str().to_owned(),
+                declared: declared(),
+                rank,
+            })
+        }
+        RowBlock::Declared(tag) if !domains.admits(tag) => {
+            Err(ProtocolError::BlockOutsideDeclaredDomain {
+                item: item().as_str().to_owned(),
+                stratum: stratum.as_str().to_owned(),
+                block: tag.as_str().to_owned(),
+                declared: declared(),
+            })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Original one-block-per-candidate law, shared without a second domain algorithm.
+pub(crate) fn validate_candidate_block(
+    item: &Term,
+    stratum: &Iri,
+    block: &RowBlock,
+    placed: Option<(&Iri, &DomainTag)>,
+) -> Result<(), ProtocolError> {
+    let (Some(tag), Some((named_by, previous))) = (block.tag(), placed) else {
+        return Ok(());
+    };
+    if tag == previous {
+        return Ok(());
+    }
+    Err(ProtocolError::CandidateInTwoBlocks {
+        item: item.as_str().to_owned(),
+        stratum: stratum.as_str().to_owned(),
+        block: tag.as_str().to_owned(),
+        named_by: named_by.as_str().to_owned(),
+        named_by_block: previous.as_str().to_owned(),
+    })
 }

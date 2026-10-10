@@ -2953,19 +2953,7 @@ impl<S: RankedStream> FusionStream<S> {
             };
 
             let expected_rank = self.next_ranks[index];
-            if rank < expected_rank {
-                return Err(ProtocolError::OutOfOrderRanks {
-                    expected: expected_rank,
-                    got: rank,
-                }
-                .into());
-            }
-            if rank > expected_rank {
-                return Err(ProtocolError::NonContiguousRanks {
-                    gap: rank - expected_rank,
-                }
-                .into());
-            }
+            crate::ranked_stream::validate_rank(expected_rank, rank)?;
             // The stratum is read by reference, not cloned: an `Iri` owns its
             // text, so cloning one here would be a heap allocation on every row
             // every stream emits, to serve a lookup that only borrows and an
@@ -3101,36 +3089,7 @@ impl<S: RankedStream> FusionStream<S> {
     /// endings are not `Exhausted`.
     fn finish(&mut self, index: usize, receipt: ProducerReceipt) -> Result<(), FusionError> {
         let actual = self.rows_pulled[index];
-        match &receipt {
-            ProducerReceipt::Exhausted { rows_emitted } if *rows_emitted != actual => {
-                return Err(ProtocolError::ForgedReceipt {
-                    declared: *rows_emitted,
-                    actual,
-                }
-                .into());
-            }
-            ProducerReceipt::DepthReached { rank }
-            | ProducerReceipt::RowBoundReached { rank }
-            | ProducerReceipt::SuppliedQueryEnded { rank }
-                if *rank != actual =>
-            {
-                return Err(ProtocolError::ForgedReceipt {
-                    declared: *rank,
-                    actual,
-                }
-                .into());
-            }
-            ProducerReceipt::TermsRejected | ProducerReceipt::ExecutionFailed { .. }
-                if actual > 0 =>
-            {
-                return Err(ProtocolError::ForgedReceipt {
-                    declared: 0,
-                    actual,
-                }
-                .into());
-            }
-            _ => {}
-        }
+        crate::ranked_stream::validate_receipt(&receipt, actual)?;
         let stratum = self.streams[index].0.clone();
         self.exhausted[index] = true;
         self.heads[index] = None;
@@ -4228,17 +4187,6 @@ impl<S: RankedStream> FusionStream<S> {
         Ok(())
     }
 
-    /// The blocks stream `index` declared, rendered in canonical order for a
-    /// refusal to carry.
-    ///
-    /// Empty for an unrestricted stream, which declared none. Allocated only on
-    /// a refusal path: nothing on the row loop calls this.
-    fn declared_blocks(&self, index: usize) -> Vec<String> {
-        self.domains[index].tags().map_or_else(Vec::new, |tags| {
-            tags.iter().map(|tag| tag.as_str().to_owned()).collect()
-        })
-    }
-
     /// Hold one row's block against the promise its own stream made.
     ///
     /// Two obligations, and they are not symmetric, because the declarations are
@@ -4272,31 +4220,14 @@ impl<S: RankedStream> FusionStream<S> {
         rank: u64,
         item: &S::Item,
     ) -> Result<(), FusionError> {
-        match block {
-            RowBlock::Undeclared => {
-                if self.domains[index].tags().is_some() {
-                    return Err(ProtocolError::UnbackedDomainDeclaration {
-                        stratum: self.streams[index].0.as_str().to_owned(),
-                        declared: self.declared_blocks(index),
-                        rank,
-                    }
-                    .into());
-                }
-            }
-            RowBlock::Declared(tag) => {
-                if !self.domains[index].admits(tag) {
-                    let named: Term = item.clone().into();
-                    return Err(ProtocolError::BlockOutsideDeclaredDomain {
-                        item: named.as_str().to_owned(),
-                        stratum: self.streams[index].0.as_str().to_owned(),
-                        block: tag.as_str().to_owned(),
-                        declared: self.declared_blocks(index),
-                    }
-                    .into());
-                }
-            }
-        }
-        Ok(())
+        crate::ranked_stream::validate_declared_block(
+            &self.streams[index].0,
+            &self.domains[index],
+            block,
+            rank,
+            || item.clone().into(),
+        )
+        .map_err(Into::into)
     }
 
     /// Hold one row's block against the block this candidate has already been
@@ -4321,20 +4252,13 @@ impl<S: RankedStream> FusionStream<S> {
         block: &RowBlock,
         placed: Option<&BlockWitness>,
     ) -> Result<(), FusionError> {
-        let (Some(tag), Some(witness)) = (block.tag(), placed) else {
-            return Ok(());
-        };
-        if *tag == witness.block {
-            return Ok(());
-        }
-        Err(ProtocolError::CandidateInTwoBlocks {
-            item: item.as_str().to_owned(),
-            stratum: self.streams[index].0.as_str().to_owned(),
-            block: tag.as_str().to_owned(),
-            named_by: self.streams[witness.stream].0.as_str().to_owned(),
-            named_by_block: witness.block.as_str().to_owned(),
-        }
-        .into())
+        crate::ranked_stream::validate_candidate_block(
+            item,
+            &self.streams[index].0,
+            block,
+            placed.map(|witness| (&self.streams[witness.stream].0, &witness.block)),
+        )
+        .map_err(Into::into)
     }
 
     /// The block some row has already placed `item` in, wherever that candidate

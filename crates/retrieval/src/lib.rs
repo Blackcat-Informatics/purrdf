@@ -54,7 +54,15 @@
 //! to fuse resumes through the same exported bridge `search` itself uses,
 //! [`RankedStreamAdapter`], so the two compositions cannot drift.
 //!
-//! Every number in the answer those stages assemble is a function of what the
+//! A caller that supplies independent work depths and orders candidates itself
+//! takes the unscored branch: plan_candidates, compile_candidates, the same
+//! execute or execute_within, then union. CandidateDepths names each selected
+//! stratum's own prefix; it consults no fusion k or statistical selectivity.
+//! CandidateUnion deduplicates subjects and keeps every producer's original
+//! ranks, ending, read cost, fidelity and index evidence. Its canonical subject
+//! order encodes a set and adds no relevance order.
+//!
+//! //! Every number in the answer those stages assemble is a function of what the
 //! producers said about themselves, so what a producer owes this layer is
 //! written down in one place: [`producer_contract`]. Sixteen obligations, each
 //! with the failure it prevents and with whether this layer *checks* it — a
@@ -393,6 +401,7 @@
 #![deny(clippy::float_arithmetic)]
 
 mod admission;
+mod candidate;
 mod canonical;
 mod compile;
 mod document;
@@ -415,6 +424,7 @@ mod render;
 mod request;
 mod search;
 mod statistics;
+mod union;
 
 /// The sixteen obligations a ranked producer owes this layer, and who holds it
 /// to each one.
@@ -435,14 +445,19 @@ pub mod producer_contract {}
 pub mod fixture;
 
 pub use admission::{AdmissionEnvironment, AdmissionError, BoundMode};
+pub use candidate::{
+    CandidateDepths, CandidatePlan, CandidatePlanError, CompiledCandidates, compile_candidates,
+    plan_candidates,
+};
 pub use compile::{
-    CompiledRetrieval, PlannedResolution, ReadSchedule, StratumUnit, UnitError, compile,
+    CompiledRead, CompiledRetrieval, PlannedResolution, ReadSchedule, StratumUnit, UnitError,
+    compile,
 };
 pub use embedding::{EmbeddingError, decode_embedding, encode_embedding};
 pub use error::{CanonicalSection, FusionError, PlanError, StatisticsDimension};
 pub use execute::{
-    ExecutionError, ExecutionResult, RankedStreamImpl, StratumStream, StreamEnding, execute,
-    execute_within,
+    CandidateExecutionResult, ExecutionError, ExecutionResult, RankedStreamImpl, ReadStratum,
+    StratumStream, StreamEnding, execute, execute_within,
 };
 pub use executor::block_on;
 pub use fuse::{FusionResult, TopK, fuse};
@@ -474,6 +489,7 @@ pub use render::observed_resolution;
 pub use request::{Metric, ReadBound, RequestTerm, RetrievalRequest};
 pub use search::{RankedStreamAdapter, SearchError, SearchResult, search};
 pub use statistics::Statistics;
+pub use union::{CandidateUnion, UnionCandidate, UnionError, UnionFailure, UnionProducer, union};
 
 // The exact fixed-point type a fusion profile's weights and the fused scores
 // are expressed in, and the fixed-point scale itself. Re-exported so a caller
