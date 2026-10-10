@@ -4429,6 +4429,8 @@ enum FiniteRoleRefusal {
 purrdf_lex::variant_from!(FiniteRoleRefusal { Storage(purrdf_lex::allocation::StorageError) });
 
 struct CompletionView<'a> {
+    /// Universal object property resolved once from the original term table.
+    top_role: Option<u32>,
     /// Least closure of original RBox inclusions on this finite proof graph.
     /// Computed independently of the producer's automaton states and traversal.
     role_relation: Option<Vec<(Role, usize, usize)>>,
@@ -4512,17 +4514,15 @@ impl<'a> CompletionView<'a> {
             }
         }
         let work = Cell::new(0u64);
+        let top_role = kb
+            .interner
+            .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
         let role_relation = if let Some(program) = &kb.role_program {
             let mut resident = purrdf_lex::allocation::Resident;
             let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
             match program.source.close_edges(
                 &edges,
-                (
-                    completion.nodes.len(),
-                    kb.interner
-                        .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
-                        .map(Role::Named),
-                ),
+                (completion.nodes.len(), top_role.map(Role::Named)),
                 |node| !completion.nodes[node].concrete,
                 || {
                     work.set(work.get().saturating_add(1).min(cap));
@@ -4546,6 +4546,7 @@ impl<'a> CompletionView<'a> {
             None
         };
         Ok(Self {
+            top_role,
             role_relation,
             kb,
             nodes: &completion.nodes,
@@ -4616,18 +4617,13 @@ impl<'a> CompletionView<'a> {
     /// The `role`-neighbours of `x`, closed over the role hierarchy, the inverse declarations
     /// and the transitive-role closure — the calculus's own `r`-neighbourhood, recomputed.
     fn neighbors(&self, x: usize, role: Role) -> Vec<usize> {
-        if self
-            .kb
-            .interner
-            .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
-            .is_some_and(|top| {
-                matches!(role, Role::Named(p) | Role::Inv(p) if p == top)
-                    || self
-                        .achievers(role)
-                        .iter()
-                        .any(|&(property, _)| property == top)
-            })
-        {
+        if self.top_role.is_some_and(|top| {
+            matches!(role, Role::Named(p) | Role::Inv(p) if p == top)
+                || self
+                    .achievers(role)
+                    .iter()
+                    .any(|&(property, _)| property == top)
+        }) {
             if self.nodes[x].concrete {
                 return Vec::new();
             }

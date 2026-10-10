@@ -727,6 +727,8 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				role_language_work_exhaustion_is_unknown_never_a_consistency_proof \
 				cancelling_an_existing_regular_role_owner_cannot_publish_a_decision \
 				nominal_merges_and_simple_functionality_preserve_role_obligations \
+				top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling \
+				stopping_during_regular_role_reads_never_publishes_a_completed_answer \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \

@@ -962,9 +962,8 @@ fn a_short_property_chain_is_refused_before_any_certificate() {
     ]);
     assert!(matches!(
         Reasoner::new(&dataset),
-        Err(purrdf_entail::EntailError::RoleHierarchy(
-            purrdf_entail::RoleHierarchyError::ShortChain { .. }
-        ))
+        Err(purrdf_entail::EntailError::RoleHierarchy(error)) if matches!(error.classification(),
+            purrdf_entail::RoleHierarchyError::ShortChain { .. })
     ));
 }
 

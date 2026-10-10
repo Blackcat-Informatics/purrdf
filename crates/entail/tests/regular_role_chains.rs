@@ -94,7 +94,12 @@ fn assertion(subject: &str, property: &str, object: &str) -> DlAxiom {
 fn entailed(reasoner: &mut Reasoner, axiom: &DlAxiom, expected: Verdict) {
     let answer = reasoner.entails(axiom).expect("complete service");
     assert_eq!(*answer.answer(), expected);
-    assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+    assert_eq!(
+        answer.certificate().completeness(),
+        DlCompleteness::Decided,
+        "{:?}",
+        answer.certificate().boundaries()
+    );
     assert_eq!(answer.certificate().boundaries(), []);
     assert!(answer.certificate().storage_refusal().is_none());
 }
@@ -279,10 +284,9 @@ fn printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass() {
         let dataset = o.finish();
         assert!(matches!(
             Reasoner::new(&dataset),
-            Err(EntailError::RoleHierarchy(
+            Err(EntailError::RoleHierarchy(error)) if matches!(error.classification(),
                 RoleHierarchyError::OrderConflict { .. }
-                    | RoleHierarchyError::RecursiveDependency { .. }
-            ))
+                    | RoleHierarchyError::RecursiveDependency { .. })
         ));
     }
 }
@@ -528,9 +532,8 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
         invalid.relation(alias, rdf::TYPE, functional);
         assert!(matches!(
             Reasoner::new(&invalid.finish()),
-            Err(EntailError::RoleHierarchy(
-                RoleHierarchyError::NonSimpleProperty { .. }
-            ))
+            Err(EntailError::RoleHierarchy(error)) if matches!(error.classification(),
+                RoleHierarchyError::NonSimpleProperty { .. })
         ));
     }
 }
@@ -552,9 +555,8 @@ fn non_simple_characteristics_and_malformed_chain_lists_hard_refuse() {
         let dataset = o.finish();
         assert!(matches!(
             Reasoner::new(&dataset),
-            Err(EntailError::RoleHierarchy(
-                RoleHierarchyError::NonSimpleProperty { .. }
-            ))
+            Err(EntailError::RoleHierarchy(error)) if matches!(error.classification(),
+                RoleHierarchyError::NonSimpleProperty { .. })
         ));
     }
     let mut o = Ontology::default();
@@ -567,9 +569,8 @@ fn non_simple_characteristics_and_malformed_chain_lists_hard_refuse() {
     let dataset = o.finish();
     assert!(matches!(
         Reasoner::new(&dataset),
-        Err(EntailError::RoleHierarchy(
-            RoleHierarchyError::MalformedList { .. }
-        ))
+        Err(EntailError::RoleHierarchy(error)) if matches!(error.classification(),
+            RoleHierarchyError::MalformedList { .. })
     ));
 }
 
@@ -666,7 +667,107 @@ fn cancelling_an_existing_regular_role_owner_cannot_publish_a_decision() {
     assert!(answer.proof().is_none());
 }
 
+fn top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling() {
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let q = o.named("q");
+    let r = o.named("r");
+    o.chain(r, &[p, q]);
+    o.edge("a", p, "b");
+    o.edge("b", q, "c");
+    let top = o.standard(owl::TOP_OBJECT_PROPERTY);
+    o.edge("a", top, "d");
+    let dataset = o.finish();
+    let mut reasoner = Reasoner::new(&dataset).expect("top only in ABox, outside role order");
+    assert_eq!(*reasoner.consistency().answer(), Verdict::True);
+    entailed(&mut reasoner, &assertion("a", "r", "c"), Verdict::True);
+    entailed(
+        &mut reasoner,
+        &DlAxiom::ObjectPropertyAssertion {
+            subject: iri("d"),
+            property: TermValue::Iri(owl::TOP_OBJECT_PROPERTY.to_owned()),
+            object: iri("c"),
+        },
+        Verdict::True,
+    );
+
+    let mut invalid = Ontology::default();
+    let r = invalid.named("offendingRole");
+    invalid.chain(r, &[r]);
+    let dataset = invalid.finish();
+    let Err(EntailError::RoleHierarchy(error)) = Reasoner::new(&dataset) else {
+        panic!("one-member chain must refuse before publication");
+    };
+    assert!(matches!(
+        error.classification(),
+        RoleHierarchyError::ShortChain { .. }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("http://example.org/offendingRole")
+    );
+    assert!(error.presentation().is_some());
+}
+
+fn stopping_during_regular_role_reads_never_publishes_a_completed_answer() {
+    #[derive(Debug)]
+    struct Stop {
+        polls: std::sync::atomic::AtomicU64,
+        fire_at: std::sync::atomic::AtomicU64,
+    }
+    impl purrdf_datalog::StopSignal for Stop {
+        fn stopped(&self) -> bool {
+            let poll = self
+                .polls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            poll >= self.fire_at.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let r = o.named("r");
+    o.chain(r, &[r, p]);
+    for (a, b) in [("a", "b"), ("b", "c"), ("c", "d")] {
+        o.edge(a, p, b);
+    }
+    o.edge("a", r, "b");
+    let filler = o.named("C");
+    let restriction = o.restriction(r, owl::ALL_VALUES_FROM, filler);
+    let a = o.named("a");
+    o.relation(a, rdf::TYPE, restriction);
+    let dataset = o.finish();
+    let stop = Arc::new(Stop {
+        polls: std::sync::atomic::AtomicU64::new(0),
+        fire_at: std::sync::atomic::AtomicU64::new(u64::MAX),
+    });
+    let reasoner = Reasoner::with_stop(&dataset, stop.clone()).expect("regular source");
+    stop.polls.store(0, std::sync::atomic::Ordering::Relaxed);
+    let healthy = reasoner.consistency();
+    assert_eq!(*healthy.answer(), Verdict::True);
+    let polls = stop.polls.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(polls > 3, "must exercise reads after entering a round");
+    for fire_at in 1..polls {
+        stop.polls.store(0, std::sync::atomic::Ordering::Relaxed);
+        stop.fire_at
+            .store(fire_at, std::sync::atomic::Ordering::Relaxed);
+        let answer = reasoner.consistency();
+        assert_eq!(
+            *answer.answer(),
+            Verdict::Unknown,
+            "stop at poll {fire_at}/{polls}"
+        );
+        assert!(answer.certificate().stopped());
+        assert!(answer.proof().is_none());
+    }
+    stop.fire_at
+        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(*reasoner.consistency().answer(), Verdict::True);
+}
+
 purrdf_testkit::harness_main!(
+    top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling,
+    stopping_during_regular_role_reads_never_publishes_a_completed_answer,
     all_nine_consumer_shapes_are_exact_and_contradictions_are_detected,
     inverse_heads_nested_dependencies_and_simple_equivalence_cycles,
     universal_obligations_clash_after_recursive_paths_and_blocking,

@@ -1822,6 +1822,13 @@ impl<'a> Graph<'a> {
         self.work.storage_refusal.get()
     }
 
+    /// Latch the original caller stop and inspect the shared read-work refusal.
+    /// Both decision drivers use this after scans and before publishing a verdict.
+    pub(crate) fn refused(&self, stopped: &mut bool) -> bool {
+        *stopped |= self.kb.stopped();
+        *stopped || self.work.exhausted()
+    }
+
     /// A fresh label seeded with the internalized TBox.
     pub(crate) fn seed_label(&self) -> BTreeSet<u32> {
         self.meta.clone()

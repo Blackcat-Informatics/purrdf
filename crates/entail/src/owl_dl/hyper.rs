@@ -574,7 +574,10 @@ impl Hyper<'_> {
                 peak_depth: 0,
             };
         }
-        match self.solve(st) {
+        match self.solve(st).and_then(|answer| {
+            self.check_work()?;
+            Ok(answer)
+        }) {
             Ok(consistent) => Decision {
                 storage_refusal: self.g.storage_refusal(),
                 consistent,
@@ -1186,8 +1189,8 @@ impl<'a> Hyper<'a> {
     /// one place they become a decision. Every enumerator polls the same meter and stops, so
     /// the search reaches this within a bounded amount of work of the cap rather than after
     /// whatever the enumeration in flight would have cost.
-    fn check_work(&self) -> Result<(), Exhausted> {
-        if self.g.work().exhausted() {
+    fn check_work(&mut self) -> Result<(), Exhausted> {
+        if self.g.refused(&mut self.stopped) {
             return Err(Exhausted);
         }
         Ok(())

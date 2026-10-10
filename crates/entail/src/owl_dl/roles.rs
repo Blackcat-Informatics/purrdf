@@ -17,9 +17,38 @@ use crate::interner::Interner;
 use crate::owl_dl::concept::{ConceptTable, Decomp, Role};
 use crate::owl_dl::parser::{TripleIndex, Vocab};
 
+/// Original term Debug script with fallible native scratch and its first cause.
+/// The output destination is admitted separately by `Memory::format`.
+struct SourceTermDisplay<'a> {
+    term: &'a TermValue,
+    refusal: std::cell::Cell<Option<StorageError>>,
+}
+
+impl std::fmt::Display for SourceTermDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        self.term
+            .write_debug_with_memory(f, &mut memory)
+            .map_err(|error| {
+                if let purrdf_lex::walk::DebugWriteError::Storage(original) = error {
+                    self.refusal.set(Some(original));
+                }
+                std::fmt::Error
+            })
+    }
+}
+
 /// A refused property hierarchy, before any reasoning certificate is produced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoleHierarchyError {
+    /// A semantic refusal together with original source-term spelling.
+    Witness {
+        /// Original typed classification and local signed-role identities.
+        original: Box<Self>,
+        /// Admitted diagnostic arguments, retained after the source interner dies.
+        presentation: purrdf_lex::diagnostic::DiagnosticPresentation,
+    },
     /// A chain collection is not a well-formed ordered RDF list.
     MalformedList {
         /// The broken collection's interned node.
@@ -80,6 +109,7 @@ impl From<GraphError> for RoleHierarchyError {
 impl std::fmt::Display for RoleHierarchyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Witness { presentation, .. } => f.write_str(presentation.english()),
             Self::MalformedList { node, kind } => {
                 write!(f, "malformed role-chain collection at term {node}: {kind}")
             }
@@ -116,10 +146,97 @@ impl std::fmt::Display for RoleHierarchyError {
 impl std::error::Error for RoleHierarchyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Witness { original, .. } => Some(original.as_ref()),
             Self::Storage(error) => Some(error),
             Self::Graph(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+impl RoleHierarchyError {
+    /// The original refusal kind, independent of its retained human presentation.
+    #[must_use]
+    pub fn classification(&self) -> &Self {
+        match self {
+            Self::Witness { original, .. } => original,
+            original => original,
+        }
+    }
+
+    /// Typed source spellings usable without access to the private term interner.
+    #[must_use]
+    pub fn presentation(&self) -> Option<&purrdf_lex::diagnostic::DiagnosticPresentation> {
+        match self {
+            Self::Witness { presentation, .. } => Some(presentation),
+            _ => None,
+        }
+    }
+
+    /// Retain a semantic witness through the original fallible diagnostic home.
+    pub(crate) fn with_source(self, interner: &Interner) -> Self {
+        use purrdf_lex::diagnostic::{
+            DiagnosticParameter, DiagnosticPresentation, DiagnosticValue,
+        };
+        let terms = match &self {
+            Self::MalformedList { node, .. } | Self::InvalidProperty { node } => {
+                [Some(*node), None]
+            }
+            Self::ShortChain { head } => [Some(*head), None],
+            Self::NonSimpleProperty { property } | Self::RecursiveDependency { property } => {
+                [Some(*property), None]
+            }
+            Self::OrderConflict { lower, upper, .. } => [Some(*lower), Some(*upper)],
+            Self::Witness { .. } | Self::Storage(_) | Self::Graph(_) | Self::Stopped => {
+                return self;
+            }
+        };
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let result = memory.try_scope(|memory| {
+            let mut parameters = Vec::new();
+            let classification = DiagnosticValue::Text(memory.format(&self)?);
+            let parameter =
+                DiagnosticParameter::try_new_with_memory("classification", classification, memory)?;
+            memory.push(&mut parameters, parameter)?;
+            for (name, term) in ["first", "second"].into_iter().zip(terms) {
+                if let Some(term) = term {
+                    let display = SourceTermDisplay {
+                        term: interner.value(term),
+                        refusal: std::cell::Cell::new(None),
+                    };
+                    let spelling = memory
+                        .format(&display)
+                        .map_err(|error| display.refusal.get().unwrap_or(error))?;
+                    let parameter = DiagnosticParameter::try_new_with_memory(
+                        name,
+                        DiagnosticValue::Text(spelling),
+                        memory,
+                    )?;
+                    memory.push(&mut parameters, parameter)?;
+                }
+            }
+            // These placeholders belong to the validated diagnostic template language.
+            #[allow(clippy::literal_string_with_formatting_args)]
+            let template = if terms[1].is_some() {
+                "{classification}; original lower {first}, upper {second}"
+            } else {
+                "{classification}; original source {first}"
+            };
+            let presentation = DiagnosticPresentation::try_new_with_memory(
+                "entail.role-hierarchy.source",
+                template,
+                parameters,
+                memory,
+            )
+            .map_err(|error| error.fixed_template_storage())?;
+            let original = memory.boxed(self)?;
+            Ok::<_, StorageError>(Self::Witness {
+                original,
+                presentation,
+            })
+        });
+        result.unwrap_or_else(Self::Storage)
     }
 }
 
@@ -856,7 +973,9 @@ impl Hierarchy {
                 top,
                 non_simple: memory.collect(order.roles.iter().copied().filter(|&role| {
                     top.is_some_and(|top| {
-                        order.includes(top, role) || order.includes(top.inverse(), role)
+                        (order.roles.binary_search(&top).is_ok() && order.includes(top, role))
+                            || (order.roles.binary_search(&top.inverse()).is_ok()
+                                && order.includes(top.inverse(), role))
                     }) || self.chains.iter().any(|chain| {
                         order.includes(chain.head, role)
                             || order.includes(chain.head.inverse(), role)

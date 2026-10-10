@@ -109,6 +109,13 @@ remain legal. Inverse heads reverse the whole inclusion, and top/bottom properti
 retain their fixed semantics. Native storage refusal and cancellation remain
 operational causes, never a decided consistency verdict.
 
+Semantic hierarchy refusals retain the original source terms in their typed
+diagnostic presentation, so a caller can identify an offending property after
+the private interner has been destroyed. `RoleHierarchyError::classification()`
+borrows the original syntax/order/dependency refusal; `presentation()` exposes
+the retained arguments and `Display` includes their original term spellings.
+Allocation failures while constructing that witness remain typed storage errors.
+
 ## Rule coverage
 
 The rule tables are data, not prose. `rules(regime)` is what the specification

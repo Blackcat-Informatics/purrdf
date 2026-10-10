@@ -1165,16 +1165,20 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             };
             let mut resident = purrdf_lex::allocation::Resident;
             let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-            Some(memory.try_scope(|memory| {
-                let hierarchy = reader.hierarchy(memory)?;
-                let top = interner
-                    .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
-                    .map(Role::Named);
-                let mut program = hierarchy.compile(top, stop, memory)?;
-                program.source = hierarchy;
-                program.admitted_bytes = memory.admitted_bytes();
-                Ok::<_, super::roles::RoleHierarchyError>(program)
-            })?)
+            Some(
+                memory
+                    .try_scope(|memory| {
+                        let hierarchy = reader.hierarchy(memory)?;
+                        let top = interner
+                            .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
+                            .map(Role::Named);
+                        let mut program = hierarchy.compile(top, stop, memory)?;
+                        program.source = hierarchy;
+                        program.admitted_bytes = memory.admitted_bytes();
+                        Ok::<_, super::roles::RoleHierarchyError>(program)
+                    })
+                    .map_err(|error| error.with_source(&interner))?,
+            )
         } else {
             None
         };
@@ -1227,7 +1231,9 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                         .is_some_and(|program| program.non_simple.contains(&role))
                 {
                     return Err(
-                        super::roles::RoleHierarchyError::NonSimpleProperty { property }.into(),
+                        super::roles::RoleHierarchyError::NonSimpleProperty { property }
+                            .with_source(&interner)
+                            .into(),
                     );
                 }
                 if subrole_satisfies(role, &acc, stop, |id| acc.transitive.contains(&id))? {
@@ -1261,7 +1267,9 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                 });
                 if restricted && non_simple(property)? {
                     return Err(
-                        super::roles::RoleHierarchyError::NonSimpleProperty { property }.into(),
+                        super::roles::RoleHierarchyError::NonSimpleProperty { property }
+                            .with_source(&interner)
+                            .into(),
                     );
                 }
             }
@@ -1271,6 +1279,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                         return Err(super::roles::RoleHierarchyError::NonSimpleProperty {
                             property,
                         }
+                        .with_source(&interner)
                         .into());
                     }
                 }
@@ -1789,7 +1798,9 @@ fn disjoint_union(
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
 fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
-    if bottom_role_index(interner, p).is_some() {
+    if bottom_role_index(interner, p).is_some()
+        || matches!(interner.value(p), TermValue::Iri(iri) if iri == purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
+    {
         acc.abox_roles.push((s, p, o));
         acc.name(interner, s);
         acc.name(interner, o);

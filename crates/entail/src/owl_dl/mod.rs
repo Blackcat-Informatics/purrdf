@@ -999,6 +999,57 @@ mod tests {
     }
 
     #[test]
+    fn both_drivers_refuse_a_stop_during_a_regular_role_round() {
+        let mut b = RdfDatasetBuilder::new();
+        let p = iri(&mut b, "p");
+        let r = iri(&mut b, "r");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let c = iri(&mut b, "c");
+        let cell0 = b.intern_blank("cell0", purrdf_core::BlankScope::DEFAULT);
+        let cell1 = b.intern_blank("cell1", purrdf_core::BlankScope::DEFAULT);
+        let first = vocab(&mut b, RDF_FIRST);
+        let rest = vocab(&mut b, RDF_REST);
+        let nil = vocab(&mut b, RDF_NIL);
+        let chain = vocab(&mut b, purrdf_iri::vocab::owl::PROPERTY_CHAIN_AXIOM);
+        for (s, predicate, o) in [
+            (r, chain, cell0),
+            (cell0, first, r),
+            (cell0, rest, cell1),
+            (cell1, first, p),
+            (cell1, rest, nil),
+            (a, r, bb),
+            (bb, p, c),
+        ] {
+            b.push_quad(s, predicate, o, None);
+        }
+        let restriction = b.intern_blank("restriction", purrdf_core::BlankScope::DEFAULT);
+        let filler = iri(&mut b, "C");
+        let on = vocab(&mut b, purrdf_iri::vocab::owl::ON_PROPERTY);
+        let all = vocab(&mut b, purrdf_iri::vocab::owl::ALL_VALUES_FROM);
+        let ty = vocab(&mut b, RDF_TYPE);
+        b.push_quad(restriction, on, r, None);
+        b.push_quad(restriction, all, filler, None);
+        b.push_quad(a, ty, restriction, None);
+        let dataset = b.freeze().expect("regular source");
+        let mut kb = Kb::from_dataset(&dataset).expect("regular recursive hierarchy");
+        for decide in [hyper::decide, tableau::decide] {
+            let healthy = Arc::new(StopAtPoll::new(u64::MAX));
+            kb.stop = Some(healthy.clone());
+            let answer = decide(&kb, &Assumptions::of_kb(), graph::Budget::for_kb(&kb));
+            assert!(answer.consistent && !answer.undecided());
+            assert!(healthy.polls() > 3);
+            for fire_at in 1..healthy.polls() {
+                kb.stop = Some(Arc::new(StopAtPoll::new(fire_at)));
+                let answer = decide(&kb, &Assumptions::of_kb(), graph::Budget::for_kb(&kb));
+                assert!(answer.stopped, "{fire_at}: {answer:?}");
+                assert!(!answer.consistent && !answer.exhausted);
+                assert!(answer.storage_refusal.is_none());
+            }
+        }
+    }
+
+    #[test]
     fn governed_construction_stops_during_reverse_mapping() {
         // Poll 0 is the API preflight, poll 1 is the parser preflight, and the following
         // polls are dataset cells. Firing at poll 3 therefore proves the signal is observed

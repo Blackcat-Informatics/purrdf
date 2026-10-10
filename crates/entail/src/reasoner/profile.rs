@@ -184,8 +184,8 @@ impl ProfileCertificate {
     /// The original regular-role decision refusal, including malformed syntax
     /// and physical storage failures. A refused scan certifies no DL profile.
     #[must_use]
-    pub const fn role_hierarchy_refusal(&self) -> Option<crate::RoleHierarchyError> {
-        self.role_hierarchy_refusal
+    pub const fn role_hierarchy_refusal(&self) -> Option<&crate::RoleHierarchyError> {
+        self.role_hierarchy_refusal.as_ref()
     }
 
     /// Every certified profile, most restrictive first.
@@ -272,6 +272,7 @@ pub fn profile(ds: &RdfDataset) -> ProfileCertificate {
                 Ok::<_, crate::RoleHierarchyError>(())
             })
             .err()
+            .map(|error| error.with_source(&interner))
     } else {
         None
     };

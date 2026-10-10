@@ -552,10 +552,10 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
         "the exact directional language-string value space",
     ),
     // --- OWL 2: built-in roles ---------------------------------------------------------
-    bounded(
+    handled(
         OWL_TOPOBJECTPROPERTY,
         Shape::RoleDenotation,
-        Construct::BuiltinRole,
+        "the universal object role over all object-domain representatives",
     ),
     handled(
         OWL_BOTTOMOBJECTPROPERTY,
