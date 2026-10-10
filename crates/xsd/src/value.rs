@@ -296,6 +296,7 @@ pub fn parse(lexical: &str, datatype: XsdDatatype) -> Result<XsdValue, XsdError>
         D::Boolean => crate::simple::parse_boolean(lexical).map(XsdValue::Boolean),
         D::String => Ok(XsdValue::String(lexical.to_string())),
         D::DateTime => temporal::parse_datetime(lexical).map(XsdValue::DateTime),
+        D::DateTimeStamp => temporal::parse_datetime_stamp(lexical).map(XsdValue::DateTime),
         D::Date => temporal::parse_date(lexical).map(XsdValue::Date),
         D::Time => temporal::parse_time(lexical).map(XsdValue::Time),
         D::Duration | D::DayTimeDuration | D::YearMonthDuration => {

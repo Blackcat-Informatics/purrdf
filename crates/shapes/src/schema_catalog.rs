@@ -31,25 +31,40 @@ pub(crate) struct SchemaCatalogLimits {
     pub(crate) string_bytes: usize,
 }
 
+impl SchemaCatalogLimits {
+    /// Every JSON value and definition consumes at least one source byte, and
+    /// decoding an escape never grows a string beyond its source byte count.
+    pub(crate) const fn for_source(bytes: usize) -> Self {
+        Self {
+            input_bytes: bytes,
+            definitions: bytes,
+            depth: crate::limits::MAX_SCHEMA_DEPTH,
+            nodes: bytes,
+            string_bytes: bytes,
+        }
+    }
+}
+
 impl CompiledSchemaCatalog {
     pub(crate) fn parse(compiled: &CompiledSchema) -> Result<Self, SchemaCatalogError> {
-        Self::parse_inner(compiled, None)
+        Self::parse_with_limits(
+            compiled,
+            SchemaCatalogLimits::for_source(compiled.schema_json.len()),
+        )
     }
 
     pub(crate) fn parse_with_limits(
         compiled: &CompiledSchema,
         limits: SchemaCatalogLimits,
     ) -> Result<Self, SchemaCatalogError> {
-        Self::parse_inner(compiled, Some(limits))
+        Self::parse_inner(compiled, limits)
     }
 
     fn parse_inner(
         compiled: &CompiledSchema,
-        limits: Option<SchemaCatalogLimits>,
+        limits: SchemaCatalogLimits,
     ) -> Result<Self, SchemaCatalogError> {
-        if let Some(limits) = limits
-            && compiled.schema_json.len() > limits.input_bytes
-        {
+        if compiled.schema_json.len() > limits.input_bytes {
             return Err(SchemaCatalogError::new(format!(
                 "CompiledSchema.schema_json uses {} bytes; limit is {}",
                 compiled.schema_json.len(),
@@ -58,16 +73,7 @@ impl CompiledSchemaCatalog {
         }
         // Bounds remain exact decimals. Both catalog entry points use the same
         // typed-scalar parser, including duplicate rejection and the safety depth cap.
-        let document = parse_bounded_document(
-            &compiled.schema_json,
-            limits.unwrap_or(SchemaCatalogLimits {
-                input_bytes: usize::MAX,
-                definitions: usize::MAX,
-                depth: 128,
-                nodes: usize::MAX,
-                string_bytes: usize::MAX,
-            }),
-        )?;
+        let document = parse_bounded_document(&compiled.schema_json, limits)?;
         let root = document.as_object().ok_or_else(|| {
             SchemaCatalogError::new("CompiledSchema.schema_json root must be a JSON object")
         })?;
@@ -80,9 +86,7 @@ impl CompiledSchemaCatalog {
                 )
             })?;
 
-        if let Some(limits) = limits {
-            validate_definition_limit(definitions.len(), limits)?;
-        }
+        validate_definition_limit(definitions.len(), limits)?;
 
         for (key, definition) in definitions {
             validate_schema(definition, definitions, &definition_path(key))?;
@@ -111,7 +115,7 @@ fn invalid_json_error(error: &purrdf_lex::json::Error) -> SchemaCatalogError {
 /// otherwise mean whichever copy a reader happened to keep.
 ///
 /// `limits.depth` counts open arrays and objects (the root is one) and is
-/// capped at 128.
+/// capped at the shared schema depth ceiling.
 fn parse_bounded_document(
     input: &str,
     limits: SchemaCatalogLimits,
@@ -127,8 +131,9 @@ fn parse_bounded_document(
     let mut document = purrdf_lex::json::read_with(
         input,
         purrdf_lex::json::Limits {
-            max_depth: limits.depth.min(128),
-            max_values: u64::try_from(limits.nodes).unwrap_or(u64::MAX),
+            max_depth: limits.depth.min(crate::limits::MAX_SCHEMA_DEPTH),
+            max_values: u64::try_from(limits.nodes)
+                .map_err(|_| SchemaCatalogError::new("JSON node bound cannot be represented"))?,
             max_string_bytes: limits.string_bytes,
             unique_members: true,
         },

@@ -6464,7 +6464,7 @@
       "classes": [
         {
           "class_iri": "https://example.org/schema/Agent",
-          "precision": "exact",
+          "precision": "representation_approximation",
           "provenance": [
             {
               "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
@@ -6477,7 +6477,7 @@
         },
         {
           "class_iri": "https://example.org/schema/Group",
-          "precision": "exact",
+          "precision": "representation_approximation",
           "provenance": [
             {
               "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
@@ -6490,7 +6490,7 @@
         },
         {
           "class_iri": "https://example.org/schema/Org",
-          "precision": "exact",
+          "precision": "representation_approximation",
           "provenance": [
             {
               "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
@@ -6503,7 +6503,7 @@
         },
         {
           "class_iri": "https://example.org/schema/Person",
-          "precision": "exact",
+          "precision": "representation_approximation",
           "provenance": [
             {
               "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",
@@ -6516,7 +6516,7 @@
         },
         {
           "class_iri": "https://example.org/schema/Team",
-          "precision": "exact",
+          "precision": "representation_approximation",
           "provenance": [
             {
               "object": "<http://www.w3.org/2002/07/owl#AnnotationProperty>",

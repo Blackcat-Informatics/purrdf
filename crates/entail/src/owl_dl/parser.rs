@@ -73,7 +73,7 @@ use purrdf_core::{DatasetView, ListError, TermValue};
 
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
-use purrdf_xsd::range::{DataRange, Facet};
+use purrdf_xsd::range::{DataRange, Facet, TermSpace};
 
 use crate::EntailError;
 use crate::interner::Interner;
@@ -85,18 +85,19 @@ use crate::report::Construct;
 use crate::vocab::{
     OWL_ALLDIFFERENT, OWL_ALLDISJOINTCLASSES, OWL_ALLDISJOINTPROPERTIES, OWL_ALLVALUESFROM,
     OWL_ANNOTATIONPROPERTY, OWL_ASSERTIONPROPERTY, OWL_ASYMMETRICPROPERTY, OWL_AXIOM,
-    OWL_CARDINALITY, OWL_CLASS, OWL_COMPLEMENTOF, OWL_DATARANGE, OWL_DATATYPECOMPLEMENTOF,
-    OWL_DATATYPEPROPERTY, OWL_DIFFERENTFROM, OWL_DISJOINTUNIONOF, OWL_DISJOINTWITH,
-    OWL_DISTINCTMEMBERS, OWL_EQUIVALENTCLASS, OWL_EQUIVALENTPROPERTY, OWL_FUNCTIONALPROPERTY,
-    OWL_HASKEY, OWL_HASSELF, OWL_HASVALUE, OWL_INTERSECTIONOF, OWL_INVERSEFUNCTIONALPROPERTY,
-    OWL_INVERSEOF, OWL_IRREFLEXIVEPROPERTY, OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY,
-    OWL_MEMBERS, OWL_MINCARDINALITY, OWL_MINQUALIFIEDCARDINALITY, OWL_NAMEDINDIVIDUAL,
-    OWL_NEGATIVEPROPERTYASSERTION, OWL_NOTHING, OWL_OBJECTPROPERTY, OWL_ONCLASS, OWL_ONDATARANGE,
-    OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES, OWL_ONPROPERTY, OWL_ONTOLOGY,
-    OWL_ONTOLOGYPROPERTY, OWL_PROPERTYDISJOINTWITH, OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL,
-    OWL_REAL, OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM,
-    OWL_SOURCEINDIVIDUAL, OWL_SYMMETRICPROPERTY, OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING,
-    OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, OWL_WITHRESTRICTIONS, RDF_FIRST, RDF_LANGRANGE, RDF_NIL,
+    OWL_BOTTOMDATAPROPERTY, OWL_BOTTOMOBJECTPROPERTY, OWL_CARDINALITY, OWL_CLASS, OWL_COMPLEMENTOF,
+    OWL_DATARANGE, OWL_DATATYPECOMPLEMENTOF, OWL_DATATYPEPROPERTY, OWL_DIFFERENTFROM,
+    OWL_DISJOINTUNIONOF, OWL_DISJOINTWITH, OWL_DISTINCTMEMBERS, OWL_EQUIVALENTCLASS,
+    OWL_EQUIVALENTPROPERTY, OWL_FUNCTIONALPROPERTY, OWL_HASKEY, OWL_HASSELF, OWL_HASVALUE,
+    OWL_INTERSECTIONOF, OWL_INVERSEFUNCTIONALPROPERTY, OWL_INVERSEOF, OWL_IRREFLEXIVEPROPERTY,
+    OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MEMBERS, OWL_MINCARDINALITY,
+    OWL_MINQUALIFIEDCARDINALITY, OWL_NAMEDINDIVIDUAL, OWL_NEGATIVEPROPERTYASSERTION, OWL_NOTHING,
+    OWL_OBJECTPROPERTY, OWL_ONCLASS, OWL_ONDATARANGE, OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES,
+    OWL_ONPROPERTY, OWL_ONTOLOGY, OWL_ONTOLOGYPROPERTY, OWL_PROPERTYDISJOINTWITH,
+    OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL, OWL_REAL, OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION,
+    OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL, OWL_SYMMETRICPROPERTY,
+    OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING, OWL_TRANSITIVEPROPERTY, OWL_UNIONOF,
+    OWL_WITHRESTRICTIONS, RDF_DIRLANGSTRING, RDF_FIRST, RDF_LANGRANGE, RDF_LANGSTRING, RDF_NIL,
     RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL,
     RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_LENGTH, XSD_MAXEXCLUSIVE,
     XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE, XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS,
@@ -407,8 +408,13 @@ pub(crate) struct CeExtractor<'a> {
     ranges: &'a mut DataRangeTable,
     /// Node id → its class expression (memoized).
     expr_cache: BTreeMap<u32, Concept>,
-    /// Nodes on the current recursion stack (cycle guard).
+    /// Nodes on the current recursion stack.
     in_progress: BTreeSet<u32>,
+    /// Cut points of finite class-expression cycles; their identities are the original
+    /// RDF node ids, never a minted vocabulary or an emitted class declaration.
+    recursive: BTreeSet<u32>,
+    /// Exact equations for cycle cut points, internalized through the ordinary GCI home.
+    definitions: BTreeMap<u32, Concept>,
     /// Boundaries raised while decoding — a class expression read as an opaque atomic
     /// class rather than as what it says.
     boundaries: BTreeSet<Construct>,
@@ -448,6 +454,8 @@ impl<'a> CeExtractor<'a> {
             ranges,
             expr_cache: BTreeMap::new(),
             in_progress: BTreeSet::new(),
+            recursive: BTreeSet::new(),
+            definitions: BTreeMap::new(),
             boundaries: BTreeSet::new(),
             counted_roles: BTreeSet::new(),
             stop,
@@ -462,6 +470,11 @@ impl<'a> CeExtractor<'a> {
     /// The boundaries raised so far.
     pub(crate) fn boundaries(&self) -> &BTreeSet<Construct> {
         &self.boundaries
+    }
+
+    /// The finite defining equations collected while decoding class-expression cycles.
+    pub(crate) fn definitions(&self) -> &BTreeMap<u32, Concept> {
+        &self.definitions
     }
 
     /// The roles a number restriction counted over, for the simple-role check.
@@ -491,12 +504,16 @@ impl<'a> CeExtractor<'a> {
     ///
     /// # Errors
     ///
-    /// [`EntailError::Parse`] on a malformed class-expression graph, on a cyclic one, and on
-    /// one nesting past [`MAX_EXPRESSION_DEPTH`].
+    /// [`EntailError::Parse`] on a malformed class-expression graph or one nesting
+    /// past [`MAX_EXPRESSION_DEPTH`]. Finite cycles are exact defining equations.
     pub(crate) fn expr(&mut self, node: u32) -> Result<Concept, EntailError> {
         self.poll()?;
         if let Some(c) = self.expr_cache.get(&node) {
             return Ok(c.clone());
+        }
+        if self.in_progress.contains(&node) {
+            self.recursive.insert(node);
+            return Ok(Concept::Named(node));
         }
         // `in_progress` holds exactly the nodes on the path from the outermost expression to
         // this one — inserted on entry, removed on the way out — so its size IS the current
@@ -506,11 +523,15 @@ impl<'a> CeExtractor<'a> {
                 "OWL class expression nests deeper than {MAX_EXPRESSION_DEPTH}"
             )));
         }
-        if !self.in_progress.insert(node) {
-            return Err(EntailError::Parse("cyclic OWL class expression".to_owned()));
-        }
+        self.in_progress.insert(node);
         let c = self.build_expr(node)?;
         self.in_progress.remove(&node);
+        let c = if self.recursive.contains(&node) {
+            self.definitions.insert(node, c);
+            Concept::Named(node)
+        } else {
+            c
+        };
         self.expr_cache.insert(node, c.clone());
         Ok(c)
     }
@@ -588,7 +609,10 @@ impl<'a> CeExtractor<'a> {
     /// [`EntailError::Parse`] on a malformed `owl:oneOf` collection.
     fn is_data_range(&self, node: u32) -> Result<bool, EntailError> {
         if let TermValue::Iri(iri) = self.interner.value(node)
-            && (iri.starts_with(XSD_NS) || node == self.v.literal)
+            && (iri.starts_with(XSD_NS)
+                || node == self.v.literal
+                || iri == RDF_LANGSTRING
+                || iri == RDF_DIRLANGSTRING)
         {
             return Ok(true);
         }
@@ -664,6 +688,12 @@ impl<'a> CeExtractor<'a> {
             return Ok(DataRange::Any);
         }
         if let TermValue::Iri(iri) = self.interner.value(node) {
+            if iri == RDF_LANGSTRING {
+                return Ok(DataRange::TermDatatype(TermSpace::LangString));
+            }
+            if iri == RDF_DIRLANGSTRING {
+                return Ok(DataRange::TermDatatype(TermSpace::DirLangString));
+            }
             if let Some(datatype) = XsdDatatype::from_iri(iri) {
                 return Ok(DataRange::Datatype(datatype));
             }
@@ -732,17 +762,34 @@ impl<'a> CeExtractor<'a> {
     fn data_one_of(&self, head: u32) -> Result<DataRange, EntailError> {
         let members = self.node_list(head)?;
         let mut values = Vec::with_capacity(members.len());
+        let mut term_values: [Vec<u32>; 2] = std::array::from_fn(|_| Vec::new());
         for member in members {
             self.poll()?;
             match data::literal_value(self.interner.value(member)) {
                 Some(LiteralValue::Value(value)) => values.push(value),
+                Some(LiteralValue::TermIdentified(space)) => {
+                    term_values[space as usize].push(member);
+                }
                 // An ill-typed member denotes nothing, so it contributes nothing: the
                 // enumeration is exactly the remaining values.
                 Some(LiteralValue::IllTyped) => {}
                 _ => return Ok(DataRange::Opaque),
             }
         }
-        Ok(DataRange::OneOf(values))
+        let mut ranges = vec![DataRange::OneOf(values)];
+        for (space, values) in [TermSpace::LangString, TermSpace::DirLangString]
+            .into_iter()
+            .zip(term_values)
+        {
+            if !values.is_empty() {
+                ranges.push(DataRange::TermOneOf { space, values });
+            }
+        }
+        Ok(if ranges.len() == 1 {
+            ranges.pop().expect("one range")
+        } else {
+            DataRange::Or(ranges)
+        })
     }
 
     /// Decode an `owl:withRestrictions` collection, or `None` when a cell carries a facet this
@@ -1098,6 +1145,11 @@ pub(crate) fn build_until<D: DatasetView>(
                 ce.poll()?;
                 axiom(&mut ce, &mut table, &mut acc, &v, &interner, spo)?;
             }
+            for (&node, body) in ce.definitions() {
+                ce.poll()?;
+                gci(&mut table, &mut acc, Concept::Named(node), body.clone());
+                gci(&mut table, &mut acc, body.clone(), Concept::Named(node));
+            }
             acc.boundaries.extend(ce.boundaries().iter().copied());
             // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
             // axioms are only all known now, so the condition is checked here rather than
@@ -1171,10 +1223,48 @@ pub(crate) fn build_until<D: DatasetView>(
             #[cfg(test)]
             full_rematch: false,
         };
+        constrain_bottom_roles(&mut kb, triples.iter().copied().flat_map(<[_; 3]>::from));
         kb.encode_until(|| poll(stop))?;
         Ok(kb)
     })
     .map_err(EntailError::source_read)?
+}
+
+/// Install the fixed empty extension of each mentioned bottom role through
+/// the ordinary universal-restriction calculus. Unmentioned built-ins add no
+/// work to an unrelated knowledge base; query-only references use this same home.
+pub(crate) fn constrain_bottom_roles(kb: &mut Kb, terms: impl IntoIterator<Item = u32>) -> bool {
+    let mut mentioned = [None; 2];
+    for term in terms {
+        if let Some(index) = bottom_role_index(&kb.interner, term) {
+            mentioned[index] = Some(term);
+        }
+    }
+    let mut changed = false;
+    for role in mentioned.into_iter().flatten() {
+        let filler = kb
+            .table
+            .intern(Concept::All(Role::Named(role), Box::new(Concept::Bottom)));
+        if !kb.tbox.contains(&(kb.top, filler)) {
+            kb.tbox.push((kb.top, filler));
+            kb.encoded = false;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Recognize the authored role identity without interning unused built-ins.
+/// Eagerly adding either name would renumber unrelated proof-contract terms.
+fn bottom_role_index(interner: &Interner, term: u32) -> Option<usize> {
+    let TermValue::Iri(iri) = interner.value(term) else {
+        return None;
+    };
+    match iri.as_str() {
+        OWL_BOTTOMOBJECTPROPERTY => Some(0),
+        OWL_BOTTOMDATAPROPERTY => Some(1),
+        _ => None,
+    }
 }
 
 /// Give every literal that reaches the knowledge base its VALUE, and return the value-class
@@ -1255,7 +1345,11 @@ pub(crate) fn register_literals(
         let range = match value {
             LiteralValue::Value(value) => DataRange::OneOf(vec![value.clone()]),
             LiteralValue::IllTyped => DataRange::OneOf(Vec::new()),
-            LiteralValue::TermIdentified | LiteralValue::Unmodelled => continue,
+            LiteralValue::TermIdentified(space) => DataRange::TermOneOf {
+                space: *space,
+                values: vec![*term],
+            },
+            LiteralValue::Unmodelled => continue,
         };
         let id = ranges.intern(range);
         let concept = table.intern(Concept::Data(id));
@@ -1562,6 +1656,12 @@ fn disjoint_union(
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
 fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
+    if bottom_role_index(interner, p).is_some() {
+        acc.abox_roles.push((s, p, o));
+        acc.name(interner, s);
+        acc.name(interner, o);
+        return;
+    }
     if v.facets.iter().any(|&(facet, _)| facet == p) {
         return;
     }

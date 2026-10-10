@@ -881,14 +881,19 @@ pub enum SchemaCompileError {
         /// Stable diagnostic from the canonicalizer.
         message: String,
     },
-    /// A fixed schema-surface resource ceiling was exceeded.
+    /// A shared depth guard or input-derived schema-surface bound was exceeded.
     LimitExceeded {
         /// Resource whose ceiling was exceeded.
         resource: &'static str,
-        /// Fixed implementation ceiling.
+        /// Shared depth ceiling or bound derived from the current input.
         limit: usize,
         /// Observed input size.
         observed: usize,
+    },
+    /// An input-derived output or storage dimension is not representable on this target.
+    SizeOverflow {
+        /// Resource whose exact input-derived count overflowed.
+        resource: &'static str,
     },
     /// An OWL/RDFS axiom is structurally invalid for the supported expression
     /// fragment.
@@ -940,6 +945,10 @@ impl std::fmt::Display for SchemaCompileError {
             } => write!(
                 f,
                 "schema surface {resource} limit exceeded: observed {observed}, limit {limit}"
+            ),
+            Self::SizeOverflow { resource } => write!(
+                f,
+                "schema surface {resource} count exceeds the target address space"
             ),
             Self::InvalidOntology { subject, reason } => {
                 write!(f, "invalid ontology expression at {subject}: {reason}")
@@ -1093,16 +1102,11 @@ pub struct SchemaCompilation {
 
 const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
 const SCHEMA_POLICY_SALT: &str =
-    "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v2";
-pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;
-pub(crate) const MAX_SCHEMA_CLASSES: usize = 65_536;
-pub(crate) const MAX_SCHEMA_RELATIONS: usize = 1_048_576;
+    "rdf12;json-schema-2020-12;openapi-3.1;input-derived-surface-v2;owl-rdfs-fragment-v2";
 pub(crate) const MAX_OWL_EXPRESSION_DEPTH: usize = 64;
-/// The class memberships the class hierarchy's closure may hold, and the
-/// anonymous conjuncts the classes may inherit: both grow with the square of a
-/// subclass chain's depth (a chain 4,000 deep holds 8 million), so they are
-/// bounded apart from the relation cells.
-pub(crate) const MAX_SCHEMA_CLASS_MEMBERSHIPS: usize = MAX_SCHEMA_RELATIONS * 16;
+/// Existing guard for exponential anonymous-expression expansion, independent
+/// of the input-derived class, property-coverage and emitter width bounds.
+pub(crate) const MAX_OWL_EXPRESSION_NODES: usize = 1_048_576;
 
 fn schema_compilation_key(
     request: &SchemaCompileRequest<'_>,
@@ -1145,15 +1149,16 @@ fn schema_compilation_key(
             .value_vocab
             .map_or(&[][..], |vocab| vocab.abstract_individual_type().as_bytes()),
     );
-    for limit in [
-        MAX_SCHEMA_PROPERTIES,
-        MAX_SCHEMA_CLASSES,
-        MAX_SCHEMA_RELATIONS,
-        MAX_OWL_EXPRESSION_DEPTH,
-        MAX_SCHEMA_CLASS_MEMBERSHIPS,
-    ] {
-        frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
-    }
+    frame_be_labelled(
+        &mut bytes,
+        "expression-depth",
+        &MAX_OWL_EXPRESSION_DEPTH.to_be_bytes(),
+    );
+    frame_be_labelled(
+        &mut bytes,
+        "expression-expansion",
+        &MAX_OWL_EXPRESSION_NODES.to_be_bytes(),
+    );
     Ok(SchemaCompilationKey(
         ::purrdf_rdf::ContentDigest::of(&bytes).to_hex(),
     ))
@@ -4572,6 +4577,93 @@ fn enforced_constraints<'c>(
     enforced
 }
 
+/// Whether an active property shape's emitted constraints exclude the unchecked
+/// XMLLiteral branch. Count constraints apply here to the property's values;
+/// member node shapes discard those counts before compiling a value schema.
+pub(crate) fn property_excludes_xml(property: &PropertyShape) -> bool {
+    !property.deactivated
+        && property.values.is_none()
+        && property.default_value.is_none()
+        && constraints_exclude_xml(
+            &property.constraints,
+            &property.constraint_annotations,
+            &property.severity,
+            XmlConstraintPosition::Property,
+            &ConformanceDisallows::default(),
+        )
+}
+
+#[derive(Clone, Copy)]
+enum XmlConstraintPosition {
+    Property,
+    Member,
+}
+
+/// Share the emitter's effective severity/annotation decision. Only constraints
+/// that actually decide this projection's conformance can prove an exclusion.
+fn constraints_exclude_xml(
+    constraints: &[Constraint],
+    annotations: &[ConstraintAnnotation],
+    severity: &Severity,
+    position: XmlConstraintPosition,
+    disallowed: &ConformanceDisallows,
+) -> bool {
+    constraints.iter().enumerate().any(|(index, constraint)| {
+        disallowed.contains(constraint_severity(annotations, index, severity))
+            && constraint_excludes_xml(constraint, position, disallowed)
+    })
+}
+
+fn member_excludes_xml(shape: &Shape, disallowed: &ConformanceDisallows) -> bool {
+    !shape.deactivated
+        && constraints_exclude_xml(
+            &shape.constraints,
+            &shape.constraint_annotations,
+            &shape.severity,
+            XmlConstraintPosition::Member,
+            disallowed,
+        )
+}
+
+/// A conservative proof over value constraints that the emitter actually keeps.
+/// It annotates precision, rather than implementing another instance validator.
+fn constraint_excludes_xml(
+    constraint: &Constraint,
+    position: XmlConstraintPosition,
+    disallowed: &ConformanceDisallows,
+) -> bool {
+    match constraint {
+        Constraint::Datatype(datatypes) => datatypes
+            .iter()
+            .all(|datatype| datatype.as_str() != rdf::XML_LITERAL),
+        Constraint::NodeKind(kinds) => kinds.iter().all(|kind| {
+            !matches!(
+                kind,
+                NodeKindValue::Literal
+                    | NodeKindValue::BlankNodeOrLiteral
+                    | NodeKindValue::IriOrLiteral
+            )
+        }),
+        Constraint::In(values) => values.iter().all(|value| {
+            !matches!(value,
+                Term::Literal(literal) if literal.datatype_str() == rdf::XML_LITERAL)
+        }),
+        Constraint::LanguageIn(_) => true,
+        Constraint::MaxCount(0) => matches!(position, XmlConstraintPosition::Property),
+        Constraint::Node(shape) => member_excludes_xml(shape, disallowed),
+        Constraint::And(shapes) => shapes
+            .iter()
+            .any(|shape| member_excludes_xml(shape, disallowed)),
+        Constraint::Or(shapes) => shapes
+            .iter()
+            .all(|shape| member_excludes_xml(shape, disallowed)),
+        // Xone and negation are emitted only after their members' exactness and
+        // projection-loss checks. Raw source membership cannot certify that
+        // those checks retained the constraint, so it supplies no proof here.
+        _ => false,
+    }
+}
+
 /// Record what a property shape carries besides its constraints that its value
 /// schema does not project: nested property shapes (`sh:property` on a property
 /// shape, judging each value node's own properties), `sh:reifierShape` and
@@ -5376,8 +5468,9 @@ fn compile_property(
     // single-value alternative with no member judged.
     let requires_value = !has_values.is_empty() || !some_values.is_empty();
     let floor = u64::from(requires_value);
-    let single_beside_array =
-        max_count != Some(1) && min_count.map_or(floor, |n| n.max(floor)) <= 1;
+    let single_beside_array = max_count != Some(1)
+        && max_count.is_none_or(|n| n >= 1)
+        && min_count.map_or(floor, |n| n.max(floor)) <= 1;
     // Only a value schema or an array form that judges something can be bypassed:
     // an unconstrained value beside an unbounded array of unconstrained values
     // accepts every array either way.
@@ -5477,9 +5570,9 @@ fn compile_property(
         }
         let array_form = crate::json_model::object(arr);
 
-        // A single value is permissible exactly when minCount <= 1.
-        let allow_single = min_count.is_none_or(|n| n <= 1);
-        if allow_single {
+        // Both count bounds must admit one before adding the unwrapped form.
+        // In particular, maxCount=0 cannot be bypassed by a bare single value.
+        if single_beside_array {
             json!({ "anyOf": [single, array_form] })
         } else {
             array_form

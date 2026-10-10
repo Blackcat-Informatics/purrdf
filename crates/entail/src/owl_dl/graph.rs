@@ -1864,7 +1864,13 @@ impl<'a> Graph<'a> {
             let rb = self.root(&mut st, b);
             st.push_edge(ra, rb, p);
         }
-        if !fresh_types.is_empty() {
+        // OWL interpretations have a non-empty object domain even with no ABox.
+        // A data-only ABox does not supply an object-domain witness either.
+        if !fresh_types.is_empty()
+            || !(0..st.nodes.len())
+                .any(|index| st.nodes[index].merged.is_none() && !st.nodes[index].concrete)
+        {
+            self.work.charge(self.meta.len() as u64 + 1);
             let mut label = self.seed_label();
             label.extend(fresh_types.iter().copied());
             st.nodes.push(Node {

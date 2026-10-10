@@ -406,12 +406,65 @@ fn bench_linkml_import_scaling(c: &mut Bench) {
     group.finish();
 }
 
+/// Report-only doubling-width lanes. The final fixture crosses both the
+/// historical class and class/property-cell caps; the same emitted schema
+/// then exercises each definition-width consumer.
+fn bench_input_width_scaling(c: &mut Bench) {
+    let typescript = purrdf_shapes::TypeScriptConfig::new("width-types", "x", "y").expect("config");
+    let graphql = purrdf_shapes::GraphqlConfig::new("Width", "x", "y", "RdfValue").expect("config");
+    let pydantic = purrdf_shapes::PydanticConfig::new("width_models", "x", "y").expect("config");
+    let mut group = c.benchmark_group("schema_input_width_scaling");
+    group.sample_size(10);
+    for (classes, properties) in [(16_384, 4), (32_768, 8), (65_537, 17)] {
+        let source = fixture(classes, properties, Density::Sparse, false);
+        let request = SchemaCompileRequest::new(
+            &source.shapes,
+            &source.namespaces,
+            source.ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        );
+        group.bench_function(
+            format!("compile_{classes}_classes_{properties}_properties"),
+            |bencher| {
+                bencher.iter(|| {
+                    black_box(compile_schema(&request).expect("input-derived compilation"))
+                });
+            },
+        );
+        let compiled = compile_schema(&request)
+            .expect("untimed schema compilation")
+            .compiled;
+        group.bench_function(format!("typescript_{classes}_definitions"), |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    purrdf_shapes::emit_typescript(&compiled, &typescript)
+                        .expect("TypeScript width"),
+                )
+            });
+        });
+        group.bench_function(format!("graphql_{classes}_definitions"), |bencher| {
+            bencher.iter(|| {
+                black_box(purrdf_shapes::emit_graphql(&compiled, &graphql).expect("GraphQL width"))
+            });
+        });
+        group.bench_function(format!("pydantic_{classes}_definitions"), |bencher| {
+            bencher.iter(|| {
+                black_box(
+                    purrdf_shapes::emit_pydantic(&compiled, &pydantic).expect("Pydantic width"),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Run the schema-surface benchmark groups.
 pub fn benches() {
     let mut criterion = Bench::default().configure_from_args();
     bench_schema_surface(&mut criterion);
     bench_ontology_emitters(&mut criterion);
     bench_linkml_import_scaling(&mut criterion);
+    bench_input_width_scaling(&mut criterion);
 }
 
 bench_main!(benches);

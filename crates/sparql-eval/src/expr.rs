@@ -4802,7 +4802,7 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // Calendar constructors cast a parsed source value, never its spelling.
     // Parsing the declared source first also refuses ill-typed calendar literals.
     if target.is_calendar() {
-        match calendar_cast_source(lexical, datatype_iri, source_datatype) {
+        match calendar_cast_source(datatype_iri, source_datatype) {
             CalendarSource::Value(source_datatype) => {
                 let Some(value) = parse_xsd10(lexical, source_datatype)
                     .ok()
@@ -4814,7 +4814,11 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                 else {
                     return Ok(None);
                 };
-                return Ok(Some(xsd_to_term(ctx, &value)?));
+                return Ok(Some(typed_term(
+                    ctx,
+                    &value.canonical_lexical(),
+                    target.iri(),
+                )?));
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -4839,6 +4843,11 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     };
     // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
     match parse_xsd10(lexical, target) {
+        Ok(value) if target.is_calendar() => Ok(Some(typed_term(
+            ctx,
+            &value.canonical_lexical(),
+            target.iri(),
+        )?)),
         Ok(value) => governed_xsd_to_term(ctx, &value),
         Err(error) => {
             if target.is_numeric() {
@@ -4911,7 +4920,7 @@ enum CalendarSource {
     Refused,
 }
 
-/// [`CalendarSource`] for a literal spelled `lexical` with datatype IRI `datatype`
+/// [`CalendarSource`] for a literal with datatype IRI `datatype`
 /// (`modelled` is its [`XsdDatatype`], when PurRDF models one).
 ///
 /// * A modelled calendar datatype casts by value, and `xsd:string` by its spelling.
@@ -4922,39 +4931,17 @@ enum CalendarSource {
 ///   lacks the timezone is not a `xsd:dateTimeStamp` value, so it has none to cast.
 /// * Everything else — numbers, booleans, durations, binaries, `xsd:anyURI` — the
 ///   table marks `N`.
-fn calendar_cast_source(
-    lexical: &str,
-    datatype: &str,
-    modelled: Option<XsdDatatype>,
-) -> CalendarSource {
+fn calendar_cast_source(datatype: &str, modelled: Option<XsdDatatype>) -> CalendarSource {
     match modelled {
         Some(from) if from.is_calendar() => CalendarSource::Value(from),
         Some(XsdDatatype::String) => CalendarSource::Lexical,
         Some(_) => CalendarSource::Refused,
         None => match datatype.strip_prefix(purrdf_xsd::datatype::XSD_NS) {
-            Some("dateTimeStamp") if has_timezone(lexical) => {
-                CalendarSource::Value(XsdDatatype::DateTime)
-            }
             Some(local) if matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)) => {
                 CalendarSource::Lexical
             }
             _ => CalendarSource::Refused,
         },
-    }
-}
-
-/// Whether a calendar spelling ends in a timezone: `Z`, or `+hh:mm` / `-hh:mm`.
-fn has_timezone(lexical: &str) -> bool {
-    let bytes = lexical.trim().as_bytes();
-    if bytes.last() == Some(&b'Z') {
-        return true;
-    }
-    match bytes.len().checked_sub(6).map(|at| &bytes[at..]) {
-        Some([sign, h1, h2, b':', m1, m2]) => {
-            matches!(sign, b'+' | b'-')
-                && [h1, h2, m1, m2].iter().all(|digit| digit.is_ascii_digit())
-        }
-        _ => false,
     }
 }
 
@@ -5068,7 +5055,7 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
 ///   (`xsd:token`, `xsd:NCName`, …) take the `str` row like a simple literal;
 ///   `xsd:anyURI`, `xsd:QName` and `xsd:NOTATION` cast to `xsd:string` alone (their
 ///   rows are `N` for every other target, so `xsd:date("2024-01-01"^^xsd:anyURI)` is
-///   an error); and the rest (`xsd:dateTimeStamp`, the list types) cast to no
+///   an error); and the list types cast to no
 ///   numeric or boolean target, exactly like a modelled non-numeric source.
 /// * Every other literal — a language-tagged string, or a datatype that is not an
 ///   XSD built-in — has no row in the table, so the cast is an error rather than a
@@ -5130,7 +5117,7 @@ fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
         "normalizedString" | "token" | "language" | "Name" | "NCName" | "NMTOKEN" | "ID"
         | "IDREF" | "ENTITY" => Some(CastRow::Str),
         "anyURI" | "QName" | "NOTATION" => Some(CastRow::StringOnly),
-        "dateTimeStamp" | "NMTOKENS" | "IDREFS" | "ENTITIES" => Some(CastRow::NonNumeric),
+        "NMTOKENS" | "IDREFS" | "ENTITIES" => Some(CastRow::NonNumeric),
         _ => None,
     }
 }
@@ -8862,6 +8849,33 @@ mod tests {
                 D::Time,
                 Some("12:00:00.125Z"),
             ),
+            (
+                D::DateTime,
+                "2026-10-04T12:00:00Z",
+                D::DateTimeStamp,
+                Some("2026-10-04T12:00:00Z"),
+            ),
+            (D::DateTime, "2026-10-04T12:00:00", D::DateTimeStamp, None),
+            (
+                D::DateTimeStamp,
+                "2026-10-04T12:00:00+05:30",
+                D::DateTime,
+                Some("2026-10-04T12:00:00+05:30"),
+            ),
+            (D::DateTimeStamp, "2026-10-04T12:00:00", D::Date, None),
+            (
+                D::Date,
+                "2026-10-04Z",
+                D::DateTimeStamp,
+                Some("2026-10-04T00:00:00Z"),
+            ),
+            (
+                D::String,
+                "2026-10-04T12:00:00Z",
+                D::DateTimeStamp,
+                Some("2026-10-04T12:00:00Z"),
+            ),
+            (D::String, "2026-10-04T12:00:00", D::DateTimeStamp, None),
             (D::Date, "2026-10-04Z", D::GMonthDay, Some("--10-04Z")),
             (D::String, "2026-10-04Z", D::Date, Some("2026-10-04Z")),
             (D::Integer, "2026", D::GYear, None),
