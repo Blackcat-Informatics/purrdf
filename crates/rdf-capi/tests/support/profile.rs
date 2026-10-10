@@ -62,7 +62,8 @@ fn lane_command(lane: &str) -> IoResult<Command> {
         "capi" => {
             command.arg("capi-check");
         }
-        "lib" | "doc" | "integration-1" | "integration-2" | "integration-3" | "integration-4" => {
+        "lib" | "doc" | "integration-1" | "integration-2" | "integration-3" | "integration-4"
+        | "integration-5" => {
             command.arg("test-shard").arg(format!("SHARD={lane}"));
         }
         "downstream" => {
@@ -1545,12 +1546,13 @@ pub(crate) fn compare(input: &Path) -> IoResult<()> {
             "integration-2",
             "integration-3",
             "integration-4",
+            "integration-5",
             "lib",
         ]
         .map(str::to_owned);
         if before_lanes != expected_before || after_lanes != expected_after {
             return Err(invalid(
-                "partition comparison requires complete monolithic+dedicated C+downstream versus all six shards+dedicated C+downstream",
+                "partition comparison requires complete monolithic+dedicated C+downstream versus all seven shards+dedicated C+downstream",
             ));
         }
         for receipt in before.iter().chain(&after) {
